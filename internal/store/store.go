@@ -87,6 +87,13 @@ type Store interface {
 	TokenByHash(ctx context.Context, tokenHash string) (*Token, error)
 	RevokeToken(ctx context.Context, id int) error
 	CountTokens(ctx context.Context) (int, error)
+
+	EnqueueJob(ctx context.Context, projectID int, jobType string) (int, error)
+	ClaimJob(ctx context.Context) (*Job, error)
+	CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated int) error
+	FailJob(ctx context.Context, id int, errMsg string) error
+	GetJob(ctx context.Context, id int) (*Job, error)
+	GetProjectByID(ctx context.Context, id int) (*Project, error)
 }
 
 // PgStore is the PostgreSQL/pgvector implementation of Store.

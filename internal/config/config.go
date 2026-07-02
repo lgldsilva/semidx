@@ -22,6 +22,7 @@ const (
 	defaultOllamaURL    = "http://localhost:11434"
 	defaultIndexWorkers = 4
 	defaultListenAddr   = ":8080"
+	defaultDataDir      = "/var/lib/semidx"
 )
 
 // Config holds every runtime setting the CLI and MCP server need.
@@ -54,6 +55,8 @@ type Config struct {
 	// BootstrapToken optionally sets the first admin token on an empty server
 	// (SEMIDX_BOOTSTRAP_TOKEN); if empty, one is generated and logged once.
 	BootstrapToken string
+	// DataDir is where the server clones git projects (SEMIDX_DATA_DIR).
+	DataDir string
 }
 
 // Load resolves the configuration. A missing or unreadable .env file is not
@@ -74,6 +77,7 @@ func Load() *Config {
 		IndexWorkers:      atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
 		ListenAddr:        env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
 		BootstrapToken:    env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
+		DataDir:           env.get("SEMIDX_DATA_DIR", defaultDataDir),
 	}
 }
 

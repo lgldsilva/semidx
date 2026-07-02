@@ -199,6 +199,7 @@ func newServeCmd(d *deps) *cobra.Command {
 			if token != "" {
 				fmt.Fprintf(os.Stderr, "bootstrap admin token (shown once — save it): %s\n", token)
 			}
+			srv.StartWorkers(cmd.Context(), d.cfg.IndexWorkers, d.cfg.DataDir)
 			return srv.Run(cmd.Context(), d.cfg.ListenAddr)
 		},
 	}

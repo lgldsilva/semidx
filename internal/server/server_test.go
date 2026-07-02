@@ -15,13 +15,15 @@ import (
 // fakeStore implements just the methods the server touches.
 type fakeStore struct {
 	store.Store
-	pingErr   error
-	token     *store.Token         // TokenByHash result (nil = no active token)
-	project   *store.Project       // GetProject result (nil → ErrNotFound)
-	results   []store.SearchResult // search results
-	createErr error                // CreateProject error
-	listed    []store.Project      // ListProjects result
-	deleteErr error                // DeleteProject error
+	pingErr    error
+	token      *store.Token         // TokenByHash result (nil = no active token)
+	project    *store.Project       // GetProject result (nil → ErrNotFound)
+	results    []store.SearchResult // search results
+	createErr  error                // CreateProject error
+	listed     []store.Project      // ListProjects result
+	deleteErr  error                // DeleteProject error
+	enqueuedID int                  // EnqueueJob result
+	job        *store.Job           // GetJob result (nil → ErrNotFound)
 }
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
@@ -42,6 +44,13 @@ func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gi
 }
 func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) { return f.listed, nil }
 func (f *fakeStore) DeleteProject(context.Context, string) error           { return f.deleteErr }
+func (f *fakeStore) EnqueueJob(context.Context, int, string) (int, error)  { return f.enqueuedID, nil }
+func (f *fakeStore) GetJob(_ context.Context, id int) (*store.Job, error) {
+	if f.job == nil {
+		return nil, store.ErrNotFound
+	}
+	return f.job, nil
+}
 func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]store.SearchResult, error) {
 	return f.results, nil
 }
@@ -231,6 +240,58 @@ func TestDeleteProject(t *testing.T) {
 	ro := New(&fakeStore{token: &store.Token{Scopes: []string{"read"}}}, fakeEmbedder{}, nil)
 	if rec := do(t, ro, "DELETE", "/api/v1/projects/a", "tok", ""); rec.Code != 403 {
 		t.Errorf("read-only delete = %d, want 403", rec.Code)
+	}
+}
+
+func TestEnqueueJob(t *testing.T) {
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	srv := New(&fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", SourceType: "git"}, enqueuedID: 77}, fakeEmbedder{}, nil)
+
+	rec := do(t, srv, "POST", "/api/v1/projects/p/index-jobs", "tok", `{"type":"full"}`)
+	if rec.Code != 202 || !strings.Contains(rec.Body.String(), `"job_id":77`) {
+		t.Errorf("enqueue = %d %s", rec.Code, rec.Body.String())
+	}
+	// empty body defaults to full → 202.
+	if rec := do(t, srv, "POST", "/api/v1/projects/p/index-jobs", "tok", ``); rec.Code != 202 {
+		t.Errorf("empty-body enqueue = %d, want 202", rec.Code)
+	}
+	// bad type → 400.
+	if rec := do(t, srv, "POST", "/api/v1/projects/p/index-jobs", "tok", `{"type":"bogus"}`); rec.Code != 400 {
+		t.Errorf("bad type = %d, want 400", rec.Code)
+	}
+	// unknown project → 404.
+	nf := New(&fakeStore{token: writeTok, project: nil}, fakeEmbedder{}, nil)
+	if rec := do(t, nf, "POST", "/api/v1/projects/ghost/index-jobs", "tok", `{}`); rec.Code != 404 {
+		t.Errorf("unknown project = %d, want 404", rec.Code)
+	}
+	// read-only token → 403.
+	ro := New(&fakeStore{token: &store.Token{Scopes: []string{"read"}}}, fakeEmbedder{}, nil)
+	if rec := do(t, ro, "POST", "/api/v1/projects/p/index-jobs", "tok", `{}`); rec.Code != 403 {
+		t.Errorf("read-only enqueue = %d, want 403", rec.Code)
+	}
+}
+
+func TestGetJob(t *testing.T) {
+	readTok := &store.Token{Scopes: []string{"read"}}
+	srv := New(&fakeStore{token: readTok, job: &store.Job{ID: 5, Type: "full", Status: "succeeded", FilesIndexed: 3, ChunksCreated: 9}}, fakeEmbedder{}, nil)
+
+	rec := do(t, srv, "GET", "/api/v1/jobs/5", "tok", "")
+	if rec.Code != 200 {
+		t.Fatalf("get job = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var jv jobView
+	_ = json.Unmarshal(rec.Body.Bytes(), &jv)
+	if jv.ID != 5 || jv.Status != "succeeded" || jv.FilesIndexed != 3 {
+		t.Errorf("job view = %+v", jv)
+	}
+	// non-integer id → 400.
+	if rec := do(t, srv, "GET", "/api/v1/jobs/abc", "tok", ""); rec.Code != 400 {
+		t.Errorf("bad id = %d, want 400", rec.Code)
+	}
+	// unknown job → 404.
+	nf := New(&fakeStore{token: readTok, job: nil}, fakeEmbedder{}, nil)
+	if rec := do(t, nf, "GET", "/api/v1/jobs/9999", "tok", ""); rec.Code != 404 {
+		t.Errorf("unknown job = %d, want 404", rec.Code)
 	}
 }
 

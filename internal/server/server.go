@@ -24,6 +24,7 @@ import (
 // auth is enforced per route.
 type Server struct {
 	store  store.Store
+	emb    embed.Embedder
 	search *search.Service
 	log    *slog.Logger
 	reg    *prometheus.Registry
@@ -41,7 +42,7 @@ func New(st store.Store, emb embed.Embedder, log *slog.Logger) *Server {
 		Help: "Total HTTP requests by method and status.",
 	}, []string{"method", "status"})
 	reg.MustRegister(reqs)
-	return &Server{store: st, search: search.NewService(st, emb), log: log, reg: reg, reqs: reqs}
+	return &Server{store: st, emb: emb, search: search.NewService(st, emb), log: log, reg: reg, reqs: reqs}
 }
 
 // Handler returns the fully-wired HTTP handler (routing + metrics instrumentation).
@@ -56,6 +57,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/projects/{project}", s.authed("read", s.handleGetProject))
 	mux.Handle("DELETE /api/v1/projects/{project}", s.authed("write", s.handleDeleteProject))
 	mux.Handle("POST /api/v1/projects/{project}/search", s.authed("read", s.handleSearch))
+	mux.Handle("POST /api/v1/projects/{project}/index-jobs", s.authed("write", s.handleEnqueueJob))
+	mux.Handle("GET /api/v1/jobs/{id}", s.authed("read", s.handleGetJob))
 	return s.instrument(mux)
 }
 
