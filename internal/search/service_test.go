@@ -130,3 +130,28 @@ func TestSearchModelOverride(t *testing.T) {
 		t.Errorf("model = %q, want the override", resp.Model)
 	}
 }
+
+// TestSearchKeywordOnly verifies that KeywordOnly skips embedding entirely (even
+// a broken embedder is never called) and does not flag the result as a fallback.
+func TestSearchKeywordOnly(t *testing.T) {
+	fs := &fakeStore{
+		project:   &store.Project{ID: 7, Name: "p", Model: "bge-m3"},
+		kwResults: []store.SearchResult{{FilePath: "a.go", Content: "x", StartLine: 1}},
+	}
+	// A failing embedder: if Search touched it, we'd see a fallback or an error.
+	svc := NewService(fs, &fakeEmbedder{embedErr: errors.New("embedder must not be called")})
+
+	resp, err := svc.Search(context.Background(), Request{Project: "p", Query: "q", TopK: 3, KeywordOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fs.usedKW {
+		t.Error("KeywordOnly did not use keyword search")
+	}
+	if resp.Fallback {
+		t.Error("KeywordOnly should not set Fallback (it's intentional, not a fallback)")
+	}
+	if len(resp.Results) != 1 || resp.Results[0].FilePath != "a.go" {
+		t.Errorf("results = %+v", resp.Results)
+	}
+}

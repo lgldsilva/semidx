@@ -14,6 +14,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/mcpserver"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/server"
+	"github.com/lgldsilva/semidx/internal/store"
 )
 
 // systemDirs must never be indexed (runaway scan / disk blow-up guard).
@@ -49,13 +50,21 @@ func newIndexCmd(d *deps) *cobra.Command {
 				return err
 			}
 			name := projectNameFromPath(projectPath)
-			info, err := d.emb.ModelInfo(ctx, model)
-			if err != nil {
-				return fmt.Errorf("model info for %s: %w", model, err)
-			}
-			fmt.Printf("Indexing project: %s\nPath: %s\nModel: %s (dims=%d)\n", name, projectPath, model, info.Dims)
 
-			if err := db.EnsureChunksTable(ctx, info.Dims); err != nil {
+			// Keyword-only mode needs no model: dims come from the fixed text bucket.
+			dims := store.KeywordDims
+			if !d.cfg.KeywordOnly {
+				info, err := d.emb.ModelInfo(ctx, model)
+				if err != nil {
+					return fmt.Errorf("model info for %s: %w", model, err)
+				}
+				dims = info.Dims
+				fmt.Printf("Indexing project: %s\nPath: %s\nModel: %s (dims=%d)\n", name, projectPath, model, dims)
+			} else {
+				fmt.Printf("Indexing project: %s\nPath: %s\nMode: keyword-only (no embeddings)\n", name, projectPath)
+			}
+
+			if err := db.EnsureChunksTable(ctx, dims); err != nil {
 				return fmt.Errorf("ensure chunks table: %w", err)
 			}
 			projectID, err := db.UpsertProject(ctx, name, projectPath, model)
@@ -63,7 +72,8 @@ func newIndexCmd(d *deps) *cobra.Command {
 				return fmt.Errorf("upsert project: %w", err)
 			}
 
-			indexer := indexing.NewIndexer(db, d.emb, info.Dims, d.cfg.IndexWorkers, verbose, gitMode, gitSince)
+			indexer := indexing.NewIndexer(db, d.emb, dims, d.cfg.IndexWorkers, verbose, gitMode, gitSince).
+				SetKeywordOnly(d.cfg.KeywordOnly)
 			start := time.Now()
 			stats, err := indexer.IndexProject(ctx, projectID, projectPath, model, maxFiles)
 			if err != nil {

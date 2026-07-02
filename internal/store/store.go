@@ -49,6 +49,11 @@ var (
 	ErrUserExists    = errors.New("user already exists")
 )
 
+// KeywordDims is the chunk-table dimension bucket used for keyword-only (no
+// embedding) indexing. Text-only chunks carry a NULL embedding, so the concrete
+// dimension is irrelevant — they all share this single small bucket.
+const KeywordDims = 1
+
 // Token is an API token record (the plaintext is never stored, only its hash).
 // Kind is "opaque" for CLI keys or "jwt" for control tokens; for JWTs the stored
 // hash is the token's jti.

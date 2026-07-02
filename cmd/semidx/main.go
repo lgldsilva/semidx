@@ -93,7 +93,7 @@ func main() {
 
 func newRootCmd() *cobra.Command {
 	d := &deps{}
-	var forceLocal bool
+	var forceLocal, keywordOnly bool
 	root := &cobra.Command{
 		Use:           "semidx",
 		Short:         "Self-hosted semantic code search",
@@ -105,6 +105,9 @@ func newRootCmd() *cobra.Command {
 			// already given via SEMIDX_LOCAL_INDEX.
 			if forceLocal && d.cfg.LocalIndexPath == "" {
 				d.cfg.LocalIndexPath = config.DefaultLocalIndexPath()
+			}
+			if keywordOnly {
+				d.cfg.KeywordOnly = true
 			}
 			d.emb = buildChain(d.cfg)
 			cc, err := clientconfig.Load()
@@ -125,6 +128,8 @@ func newRootCmd() *cobra.Command {
 	}
 	root.PersistentFlags().BoolVar(&forceLocal, "local", false,
 		"Use a standalone local index (no server/Postgres); path from SEMIDX_LOCAL_INDEX or the default data dir")
+	root.PersistentFlags().BoolVar(&keywordOnly, "keyword", false,
+		"Index and search by keyword only, with no embedding model (SEMIDX_EMBED_MODE=none)")
 	root.AddCommand(
 		newLoginCmd(d),
 		newIndexCmd(d),
