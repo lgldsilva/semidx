@@ -1,0 +1,4 @@
+# Gitleaks configuration — extends the default ruleset.
+# Run manually with: gitleaks detect --source . -v
+[extend]
+useDefault = true

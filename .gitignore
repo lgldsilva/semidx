@@ -1,0 +1,17 @@
+# Build artifacts
+semantic-indexer-poc
+semidx
+dist/
+*.test
+coverage.out
+coverage.html
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
+
+# Editor / tooling
+.idea/
+.vscode/
+.claude/
