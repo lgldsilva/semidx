@@ -6,6 +6,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -52,6 +53,7 @@ type Store interface {
 	GetProject(ctx context.Context, name string) (*Project, error)
 	UpdateProjectStatus(ctx context.Context, id int, status string) error
 	UpsertFile(ctx context.Context, projectID int, path, hash string, size int) (int, error)
+	FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error)
 	DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error
 	InsertChunks(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, embeddings [][]float32, dims int) error
 	InsertChunksTextOnly(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, dims int) error
@@ -196,6 +198,35 @@ func (s *PgStore) UpsertFile(ctx context.Context, projectID int, path, hash stri
 		RETURNING id
 	`, projectID, path, hash, size).Scan(&id)
 	return id, err
+}
+
+// FileUpToDate reports whether the file at path is already indexed with the
+// given content hash AND has at least one chunk in the chunks_<dims> table.
+// When true, the indexer can skip re-embedding it (incremental indexing).
+func (s *PgStore) FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error) {
+	table, err := chunksTable(dims)
+	if err != nil {
+		return false, err
+	}
+
+	var fileID int
+	err = s.pool.QueryRow(ctx,
+		`SELECT id FROM files WHERE project_id = $1 AND path = $2 AND hash = $3`,
+		projectID, path, hash).Scan(&fileID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil // absent or hash changed → needs indexing
+	}
+	if err != nil {
+		return false, err
+	}
+
+	var exists bool
+	err = s.pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM %s WHERE file_id = $1)`, table), fileID).Scan(&exists)
+	if err != nil {
+		return false, nil // e.g. table not created yet → treat as needs indexing
+	}
+	return exists, nil
 }
 
 func (s *PgStore) DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error {

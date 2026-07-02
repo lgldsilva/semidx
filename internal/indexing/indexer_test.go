@@ -21,6 +21,11 @@ type fakeStore struct {
 	embedded []string
 	textOnly []string
 	status   string
+	upToDate bool // FileUpToDate returns this (simulates unchanged files)
+}
+
+func (f *fakeStore) FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error) {
+	return f.upToDate, nil
 }
 
 func (f *fakeStore) UpsertProject(ctx context.Context, name, path, model string) (int, error) {
@@ -147,6 +152,34 @@ func TestPrivacyRoutingEmbedsLocallyWhenAvailable(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(fs.embedded, "\n"), "API_KEY=local-embeds-this") {
 		t.Error("sensitive file should be embedded locally")
+	}
+}
+
+// Incremental: when files are already up-to-date, they're skipped (counted as
+// FilesSkipped) and never re-embedded.
+func TestIncrementalSkipsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", "package a\n\nfunc A() {}\n")
+	writeFile(t, dir, "b.go", "package b\n\nfunc B() {}\n")
+
+	fs := &fakeStore{upToDate: true}
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, false, false, "")
+
+	stats, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0)
+	if err != nil {
+		t.Fatalf("IndexProject: %v", err)
+	}
+	if stats.FilesScanned != 2 {
+		t.Errorf("FilesScanned = %d, want 2", stats.FilesScanned)
+	}
+	if stats.FilesSkipped != 2 {
+		t.Errorf("FilesSkipped = %d, want 2", stats.FilesSkipped)
+	}
+	if stats.FilesIndexed != 0 {
+		t.Errorf("FilesIndexed = %d, want 0 (all unchanged)", stats.FilesIndexed)
+	}
+	if len(fs.embedded) != 0 {
+		t.Errorf("embedded %d chunks, want 0 (nothing re-embedded)", len(fs.embedded))
 	}
 }
 
