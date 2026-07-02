@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/store"
 )
 
 // JSON-RPC types
@@ -46,7 +47,7 @@ type mcpToolCallParams struct {
 
 // runMCPServer serves the MCP protocol over stdio, reusing the database
 // pool and embedder chain built in main.
-func runMCPServer(db *DB, emb embed.Embedder) {
+func runMCPServer(db store.Store, emb embed.Embedder) {
 	server := &mcpServer{db: db, emb: emb}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -77,7 +78,7 @@ func runMCPServer(db *DB, emb embed.Embedder) {
 }
 
 type mcpServer struct {
-	db  *DB
+	db  store.Store
 	emb embed.Embedder
 	mu  sync.Mutex
 }
@@ -212,7 +213,7 @@ func (s *mcpServer) doSearch(ctx context.Context, argsRaw json.RawMessage) strin
 		dims = info.Dims
 	}
 
-	var results []SearchResult
+	var results []store.SearchResult
 	emb, err := s.emb.EmbedSingle(ctx, model, args.Query)
 	if err != nil {
 		results, err = s.db.SearchSimilarKeywords(ctx, project.ID, args.Query, dims, args.TopK)

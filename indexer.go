@@ -17,6 +17,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/privacy"
+	"github.com/lgldsilva/semidx/internal/store"
 )
 
 func truncateErr(err error, maxLen int) string {
@@ -39,7 +40,7 @@ const (
 )
 
 type Indexer struct {
-	db       *DB
+	db       store.Store
 	embedder embed.Embedder
 	dims     int
 	verbose  bool
@@ -54,7 +55,7 @@ type IndexStats struct {
 	Errors        int
 }
 
-func NewIndexer(db *DB, emb embed.Embedder, dims int, verbose bool, gitMode bool, gitSince string) *Indexer {
+func NewIndexer(db store.Store, emb embed.Embedder, dims int, verbose bool, gitMode bool, gitSince string) *Indexer {
 	return &Indexer{db: db, embedder: emb, dims: dims, verbose: verbose, gitMode: gitMode, gitSince: gitSince}
 }
 

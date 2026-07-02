@@ -13,6 +13,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/store"
 )
 
 func main() {
@@ -28,7 +29,7 @@ func main() {
 	embedder := buildChain(cfg)
 
 	ctx := context.Background()
-	db, err := NewDB(ctx, cfg.DatabaseURL)
+	db, err := store.NewPgStore(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("failed to connect to db: %v", err)
 	}
@@ -64,7 +65,7 @@ Commands:
 `)
 }
 
-func indexCmd(ctx context.Context, cfg *config.Config, db *DB, emb embed.Embedder) {
+func indexCmd(ctx context.Context, cfg *config.Config, db store.Store, emb embed.Embedder) {
 	fs := flag.NewFlagSet("index", flag.ExitOnError)
 	projectPath := fs.String("project", "", "Path to project directory")
 	model := fs.String("model", "bge-m3", "Embedding model name")
@@ -128,7 +129,7 @@ func indexCmd(ctx context.Context, cfg *config.Config, db *DB, emb embed.Embedde
 	fmt.Printf("Errors: %d\n", stats.Errors)
 }
 
-func searchCmd(ctx context.Context, cfg *config.Config, db *DB, emb embed.Embedder) {
+func searchCmd(ctx context.Context, cfg *config.Config, db store.Store, emb embed.Embedder) {
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
 	projectName := fs.String("project", "", "Project name")
 	query := fs.String("query", "", "Search query")
@@ -168,7 +169,7 @@ func searchCmd(ctx context.Context, cfg *config.Config, db *DB, emb embed.Embedd
 	fmt.Printf("Query: %s\n\n", *query)
 
 	start := time.Now()
-	var results []SearchResult
+	var results []store.SearchResult
 	embedding, err := emb.EmbedSingle(ctx, searchModel, *query)
 	if err != nil {
 		fmt.Printf("[warn] embedding failed (%v), falling back to keyword search...\n\n", err)
@@ -209,7 +210,7 @@ func modelsCmd(emb embed.Embedder) {
 	}
 }
 
-func dropCmd(ctx context.Context, db *DB) {
+func dropCmd(ctx context.Context, db store.Store) {
 	if err := db.DropAll(ctx); err != nil {
 		log.Fatalf("failed to drop data: %v", err)
 	}
@@ -225,7 +226,7 @@ func projectNameFromPath(path string) string {
 	return path
 }
 
-func sgrepCmd(ctx context.Context, cfg *config.Config, db *DB, emb embed.Embedder) {
+func sgrepCmd(ctx context.Context, cfg *config.Config, db store.Store, emb embed.Embedder) {
 	fs := flag.NewFlagSet("sgrep", flag.ExitOnError)
 	projectName := fs.String("project", "", "Project name")
 	query := fs.String("query", "", "Search query")
@@ -261,7 +262,7 @@ func sgrepCmd(ctx context.Context, cfg *config.Config, db *DB, emb embed.Embedde
 		dims = info.Dims
 	}
 
-	var results []SearchResult
+	var results []store.SearchResult
 	embedding, err := emb.EmbedSingle(ctx, searchModel, *query)
 	if err != nil {
 		// Fallback silencioso no sgrep para manter a compatibilidade
