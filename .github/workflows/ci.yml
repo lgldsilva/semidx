@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+# Portable across Gitea Actions (current host) and GitHub Actions (F7 migration):
+# only actions/checkout and actions/setup-go are used; lint and secret-scan run
+# as plain `go run` steps so no GitHub-specific marketplace action is required.
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -18,11 +21,9 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go build ./...
-      - run: go test -race -shuffle=on -coverprofile=coverage.out ./...
-      - uses: actions/upload-artifact@v4
-        with:
-          name: coverage
-          path: coverage.out
+      # The store integration tests skip automatically when no Docker provider
+      # is reachable from the runner (testcontainers SkipIfProviderIsNotHealthy).
+      - run: go test -race -shuffle=on ./...
 
   lint:
     runs-on: ubuntu-latest
@@ -31,9 +32,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v8
-        with:
-          version: latest
+      - run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --timeout 5m ./...
 
   gitleaks:
     runs-on: ubuntu-latest
@@ -41,15 +40,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  commitlint:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          fetch-depth: 0
-      - uses: wagoid/commitlint-github-action@v6
+          go-version-file: go.mod
+      - run: go run github.com/zricethezav/gitleaks/v8@latest detect --source . --no-banner --redact --exit-code 1

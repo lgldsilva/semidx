@@ -1,48 +1,40 @@
 # CI/CD
 
-semidx currently lives in the homelab Gitea and is built by Jenkins. Two CI
-definitions exist in the repo, active at different stages of the roadmap:
-
-| File | Runs on | Status |
-|---|---|---|
-| `Jenkinsfile` | Jenkins (Gitea) | **active now** |
-| `.github/workflows/ci.yml` | GitHub Actions | dormant until the public GitHub migration (roadmap F7) |
+semidx currently lives in the homelab Gitea and is built by **Gitea Actions**,
+which runs the GitHub-Actions-compatible workflow in `.github/workflows/ci.yml`.
+The same workflow will run unchanged on GitHub Actions after the public
+migration (roadmap F7).
 
 ## Flow (current)
 
 ```
-Gitea push ──webhook──► Jenkins @ oracle-desktop (job: semidx)
-   gofmt · go vet · go build · go test -race + coverage · golangci-lint · gitleaks
+Gitea push / PR ──► Gitea Actions ──► self-hosted act_runner (homelab)
+   test:     go vet · go build · go test -race
+   lint:     golangci-lint (via `go run …@v2.12.2`)
+   gitleaks: secret scan (via `go run …gitleaks@latest`)
 ```
 
-Validation gates only. There is deliberately **no** SonarQube quality gate,
-image build, Trivy scan or deploy yet:
+Validation gates only — no image build, scan or deploy yet (there is no server
+image to ship until the `serve` command lands, F4).
 
-- Test coverage currently exists only in `internal/config`; a hard coverage gate
-  would be red by design. It gets wired in once the package restructure (F2)
-  brings real coverage up.
-- There is no server or container image to ship until the `serve` subcommand
-  lands (F4). Image build + Trivy + registry push + Watchtower deploy are added
-  to this `Jenkinsfile` then, following the `jackui` pattern.
+## Portability note
 
-The pipeline runs entirely inside `golang:1.25`; lint and secret-scan tools are
-pinned via `go run <pkg>@<version>`, so nothing extra needs installing on the
-agent.
+The workflow uses **only** `actions/checkout` and `actions/setup-go`, which work
+on both Gitea Actions and GitHub Actions. Lint and secret-scan run as plain
+`go run <tool>@<version>` steps rather than marketplace actions
+(`golangci-lint-action`, `gitleaks-action`, `commitlint-action`), which are
+GitHub-specific and do not run reliably on Gitea Actions. This keeps one
+workflow working on both platforms.
 
-## One-time setup (already done)
+## Runners
 
-- **Jenkins job** `semidx`: `WorkflowJob` reading `Jenkinsfile` from
-  `https://gitea.raspberrypi.lan/lgldsilva/semidx.git` (credential
-  `gitea-git-creds`), all branches, `<lightweight>false</lightweight>` (avoids
-  the stale-Jenkinsfile checkout gotcha), poll trigger `H/2 * * * *` as a
-  backstop.
-- **Gitea webhook** → `http://jenkins.raspberrypi.lan:8091/gitea-webhook/post`
-  (push events) for immediate builds; polling covers any missed webhook.
+CI runs on self-hosted `act_runner`s registered in the homelab Gitea (labels
+include `ubuntu-latest`). Jobs execute in the `act-ubuntu:ca` image (catthehacker
++ the internal CA baked in). The store integration tests require a Docker
+provider inside the job; when none is reachable they skip cleanly
+(`testcontainers.SkipIfProviderIsNotHealthy`), so CI stays green either way and
+those tests run in full locally (the pre-push hook) where Docker is present.
 
-## Gotcha: root-owned workspace leftovers
-
-Stages run as `-u root` inside the container, so files they create
-(`coverage.out`, caches) are root-owned. Left behind, the next build's
-`git clean` fails with "Operation not permitted". The `post { always }` step
-chowns the workspace back to the jenkins uid (1000). Go caches are redirected to
-`/tmp` so they never touch the workspace in the first place.
+> Historical note: an earlier iteration used a Jenkins pipeline; the project
+> pivoted to Gitea Actions because the same YAML is portable to GitHub. The old
+> `Jenkinsfile` has been removed.
