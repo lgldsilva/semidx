@@ -97,7 +97,7 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 			continue
 		}
 		content, err := io.ReadAll(io.LimitReader(f, maxFileSize))
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			stats.Errors++
 			if idx.verbose {
@@ -263,7 +263,9 @@ func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectP
 		if err != nil {
 			continue
 		}
-		idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims)
+		if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
+			continue
+		}
 
 		embedding, err := idx.embedder.EmbedSingle(ctx, model, string(commit))
 		if err != nil {
@@ -271,7 +273,9 @@ func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectP
 		}
 
 		chunk := Chunk{Content: string(commit)}
-		idx.db.InsertChunks(ctx, projectID, fileID, []Chunk{chunk}, [][]float32{embedding}, idx.dims)
+		if err := idx.db.InsertChunks(ctx, projectID, fileID, []Chunk{chunk}, [][]float32{embedding}, idx.dims); err != nil {
+			continue
+		}
 
 		if idx.verbose && i%10 == 0 {
 			fmt.Printf("  [git] processed %d commits\n", i+1)

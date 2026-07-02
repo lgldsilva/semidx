@@ -6,6 +6,7 @@ import (
 )
 
 type contextKey string
+
 const forceLocalKey contextKey = "force-local"
 
 // WithForceLocal insere a flag de forçar provedor local no contexto.

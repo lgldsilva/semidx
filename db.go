@@ -15,10 +15,10 @@ type DB struct {
 }
 
 type Project struct {
-	ID    int
-	Name  string
-	Path  string
-	Model string
+	ID     int
+	Name   string
+	Path   string
+	Model  string
 	Status string
 }
 
@@ -144,7 +144,7 @@ func (db *DB) InsertChunks(ctx context.Context, projectID, fileID int, chunks []
 	}
 
 	br := db.pool.SendBatch(ctx, batch)
-	defer br.Close()
+	defer func() { _ = br.Close() }()
 
 	for range chunks {
 		if _, err := br.Exec(); err != nil {

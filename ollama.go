@@ -58,7 +58,7 @@ func (c *OllamaClient) ModelInfo(ctx context.Context, model string) (*ModelInfo,
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -105,7 +105,7 @@ func (c *OllamaClient) Embed(ctx context.Context, model string, inputs ...string
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
@@ -141,7 +141,7 @@ func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("ollama tags failed: %s", resp.Status)
@@ -165,5 +165,3 @@ func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
 	}
 	return models, nil
 }
-
-

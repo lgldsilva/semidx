@@ -168,7 +168,7 @@ func scanLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
 // IsSensitive verifica se o arquivo é confidencial/segredo.
 func IsSensitive(path string) bool {
 	path = strings.ToLower(path)
-	
+
 	// Divide o caminho em partes para verificar diretórios sensíveis
 	parts := strings.Split(path, string(filepath.Separator))
 	sensitiveKeywords := []string{
@@ -176,7 +176,7 @@ func IsSensitive(path string) bool {
 		"token", "auth", "config", "db", "database",
 		"private", "pem", "jwks", "cert", "ssl",
 	}
-	
+
 	for _, part := range parts {
 		for _, kw := range sensitiveKeywords {
 			if strings.Contains(part, kw) {
@@ -191,10 +191,6 @@ func IsSensitive(path string) bool {
 		".env": true, ".pem": true, ".key": true,
 		".conf": true, ".config": true,
 	}
-	
-	if sensitiveExts[ext] {
-		return true
-	}
-	
-	return false
+
+	return sensitiveExts[ext]
 }

@@ -42,24 +42,9 @@ type mcpToolCallParams struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
-func runMCPServer() {
-	ctx := context.Background()
-
-	db, err := NewDB(ctx, "postgres://semantic:semantic@localhost:55432/semantic_indexer")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mcp: db: %v\n", err)
-		os.Exit(1)
-	}
-	defer db.Close()
-
-	keys := loadEnvKeys()
-	ollamaURL := keys["OLLAMA_URL"]
-	if ollamaURL == "" {
-		ollamaURL = "http://localhost:11434"
-	}
-
-	emb := buildChain(keys, ollamaURL)
-
+// runMCPServer serves the MCP protocol over stdio, reusing the database
+// pool and embedder chain built in main.
+func runMCPServer(db *DB, emb Embedder) {
 	server := &mcpServer{db: db, emb: emb}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -196,7 +181,9 @@ type searchArgs struct {
 
 func (s *mcpServer) doSearch(ctx context.Context, argsRaw json.RawMessage) string {
 	var args searchArgs
-	json.Unmarshal(argsRaw, &args)
+	if err := json.Unmarshal(argsRaw, &args); err != nil {
+		return fmt.Sprintf("error: invalid arguments: %v", err)
+	}
 	if args.TopK == 0 {
 		args.TopK = 5
 	}
@@ -258,7 +245,9 @@ type indexArgs struct {
 
 func (s *mcpServer) doIndex(ctx context.Context, argsRaw json.RawMessage) string {
 	var args indexArgs
-	json.Unmarshal(argsRaw, &args)
+	if err := json.Unmarshal(argsRaw, &args); err != nil {
+		return fmt.Sprintf("error: invalid arguments: %v", err)
+	}
 	if args.Model == "" {
 		args.Model = "bge-m3"
 	}
@@ -316,10 +305,14 @@ func mustMarshal(v interface{}) json.RawMessage {
 
 func writeResult(id interface{}, result interface{}) {
 	resp := jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: result}
-	json.NewEncoder(os.Stdout).Encode(resp)
+	if err := json.NewEncoder(os.Stdout).Encode(resp); err != nil {
+		fmt.Fprintf(os.Stderr, "mcp: encode response: %v\n", err)
+	}
 }
 
 func writeError(id interface{}, code int, message string) {
 	resp := jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: message}}
-	json.NewEncoder(os.Stdout).Encode(resp)
+	if err := json.NewEncoder(os.Stdout).Encode(resp); err != nil {
+		fmt.Fprintf(os.Stderr, "mcp: encode response: %v\n", err)
+	}
 }
