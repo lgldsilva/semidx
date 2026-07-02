@@ -55,37 +55,14 @@ func newTestStore(t *testing.T) *PgStore {
 		t.Fatalf("connection string: %v", err)
 	}
 
+	// NewPgStore applies the goose migrations, so the schema is ready here.
 	s, err := NewPgStore(ctx, dsn)
 	if err != nil {
 		t.Fatalf("NewPgStore: %v", err)
 	}
 	t.Cleanup(s.Close)
-
-	if _, err := s.pool.Exec(ctx, baseSchema); err != nil {
-		t.Fatalf("apply schema: %v", err)
-	}
 	return s
 }
-
-const baseSchema = `
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE TABLE projects (
-	id SERIAL PRIMARY KEY,
-	name TEXT NOT NULL UNIQUE,
-	path TEXT NOT NULL,
-	model TEXT NOT NULL,
-	status TEXT NOT NULL DEFAULT 'indexing',
-	created_at TIMESTAMP DEFAULT NOW()
-);
-CREATE TABLE files (
-	id SERIAL PRIMARY KEY,
-	project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-	path TEXT NOT NULL,
-	hash TEXT NOT NULL,
-	size_bytes INTEGER NOT NULL,
-	indexed_at TIMESTAMP DEFAULT NOW(),
-	UNIQUE(project_id, path)
-);`
 
 func TestProjectLifecycle(t *testing.T) {
 	s := newTestStore(t)

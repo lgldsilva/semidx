@@ -1,3 +1,7 @@
+-- +goose Up
+-- Base schema: the vector extension plus the static projects/files tables.
+-- The per-dimension chunks_<dims> tables are created at index time by
+-- EnsureChunksTable (their column type depends on the model's dimension).
 CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS projects (
@@ -19,5 +23,6 @@ CREATE TABLE IF NOT EXISTS files (
     UNIQUE(project_id, path)
 );
 
--- chunks_* tables are created dynamically by the application
--- based on the embedding model's dimension (e.g. chunks_768, chunks_1024).
+-- +goose Down
+DROP TABLE IF EXISTS files;
+DROP TABLE IF EXISTS projects;

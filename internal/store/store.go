@@ -62,14 +62,20 @@ type PgStore struct {
 // compile-time assertion that PgStore satisfies Store.
 var _ Store = (*PgStore)(nil)
 
-// NewPgStore connects (and pings) a pgxpool at connString.
+// NewPgStore connects (and pings) a pgxpool at connString and applies any
+// pending schema migrations.
 func NewPgStore(ctx context.Context, connString string) (*PgStore, error) {
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
 		return nil, err
 	}
 	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
 		return nil, err
+	}
+	if err := migrate(ctx, connString); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("apply migrations: %w", err)
 	}
 	return &PgStore{pool: pool}, nil
 }

@@ -9,8 +9,9 @@ services:
     ports:
       - "55432:5432"
     volumes:
+      # Schema is owned by the app's goose migrations (applied on startup),
+      # not by an init script — this DB just needs an empty database.
       - pgvector_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U semantic -d semantic_indexer"]
       interval: 5s
