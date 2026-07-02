@@ -4,10 +4,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"runtime/debug"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -25,10 +27,13 @@ type deps struct {
 }
 
 func main() {
-	// Cap the Go runtime heap (replaced by bounded concurrency in a later phase).
-	debug.SetMemoryLimit(2 * 1024 * 1024 * 1024)
+	// Cancel the context on Ctrl-C / SIGTERM so a long index/search stops cleanly.
+	// Memory is bounded via GOMEMLIMIT (a soft limit the runtime respects) — set
+	// it in the environment (e.g. GOMEMLIMIT=450MiB) instead of hardcoding a cap.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	if err := newRootCmd().Execute(); err != nil {
+	if err := newRootCmd().ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
