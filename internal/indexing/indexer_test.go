@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/embed"
@@ -54,6 +55,7 @@ func (f *fakeStore) UpdateProjectStatus(ctx context.Context, id int, status stri
 type fakeEmbedder struct {
 	embed.Embedder
 	localAvailable bool
+	onEmbed        func() // optional hook invoked on each Embed call
 }
 
 func (f *fakeEmbedder) ModelInfo(ctx context.Context, model string) (*embed.ModelInfo, error) {
@@ -63,6 +65,9 @@ func (f *fakeEmbedder) ModelInfo(ctx context.Context, model string) (*embed.Mode
 	return &embed.ModelInfo{Name: model, Dims: 3}, nil
 }
 func (f *fakeEmbedder) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {
+	if f.onEmbed != nil {
+		f.onEmbed()
+	}
 	out := make([][]float32, len(inputs))
 	for i := range out {
 		out[i] = []float32{1, 0, 0}
@@ -165,6 +170,45 @@ func TestSkipsEmptyAndCountsChunks(t *testing.T) {
 	}
 	if stats.ChunksCreated == 0 {
 		t.Error("expected chunks from code.go")
+	}
+}
+
+// A cancelled context stops indexing promptly and returns what was done so far,
+// rather than plowing through every file.
+func TestIndexProjectStopsOnCancel(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"a.go", "b.go", "c.go", "d.go", "e.go"} {
+		writeFile(t, dir, n, "package x\n\nfunc F() {}\n")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel as soon as the first file is embedded; the next loop iteration
+	// must see the cancellation and bail out.
+	emb := &fakeEmbedder{}
+	emb.onEmbed = func() { cancel() }
+	idx := NewIndexer(&fakeStore{}, emb, 3, false, false, "")
+
+	stats, err := idx.IndexProject(ctx, 1, dir, "bge-m3", 0)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if stats.FilesScanned != 5 {
+		t.Errorf("FilesScanned = %d, want 5", stats.FilesScanned)
+	}
+	if stats.FilesIndexed >= 5 {
+		t.Errorf("FilesIndexed = %d, expected to stop early (<5)", stats.FilesIndexed)
+	}
+}
+
+func TestSleepBackoffRespectsCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := sleepBackoff(ctx, 4); !errors.Is(err, context.Canceled) {
+		t.Errorf("sleepBackoff on cancelled ctx = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Errorf("sleepBackoff took %v on a cancelled ctx; should return immediately", elapsed)
 	}
 }
 

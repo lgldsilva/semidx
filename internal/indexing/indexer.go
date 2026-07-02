@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,6 +68,10 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 	stats.FilesScanned = len(files)
 
 	for i, path := range files {
+		// Stop promptly on Ctrl-C / SIGTERM, returning what we have so far.
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
 		rel, _ := filepath.Rel(projectPath, path)
 
 		created, softErrs, ok, err := idx.indexFile(ctx, projectID, path, rel, model)
@@ -82,12 +87,6 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		stats.ChunksCreated += created
 		stats.FilesIndexed++
 		idx.progress(i, len(files), rel, stats)
-
-		// Hint GC periodically to keep backing arrays from accumulating.
-		// (Removed in favor of bounded concurrency in the robustness phase.)
-		if i%10 == 0 {
-			runtime.GC()
-		}
 	}
 
 	if idx.gitMode {
@@ -215,11 +214,15 @@ func (idx *Indexer) embedAndInsert(ctx context.Context, projectID, fileID int, c
 	return created, softErrs
 }
 
+const maxEmbedAttempts = 3
+
 func (idx *Indexer) embedWithRetry(ctx context.Context, model string, inputs []string) ([][]float32, error) {
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < maxEmbedAttempts; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(attempt) * time.Second)
+			if err := sleepBackoff(ctx, attempt); err != nil {
+				return nil, err // context cancelled during backoff
+			}
 		}
 		embeddings, err := idx.embedder.Embed(ctx, model, inputs...)
 		if err == nil {
@@ -231,6 +234,21 @@ func (idx *Indexer) embedWithRetry(ctx context.Context, model string, inputs []s
 		}
 	}
 	return nil, lastErr
+}
+
+// sleepBackoff waits an exponentially growing delay (500ms, 1s, 2s, …) plus up
+// to 50% jitter, returning early with ctx.Err() if the context is cancelled.
+func sleepBackoff(ctx context.Context, attempt int) error {
+	backoff := (500 * time.Millisecond) << (attempt - 1)
+	delay := backoff + time.Duration(rand.Int64N(int64(backoff/2)))
+	t := time.NewTimer(delay)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectPath, model string) error {

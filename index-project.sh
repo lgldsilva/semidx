@@ -36,6 +36,7 @@ docker run --rm \
   --memory 512m \
   --memory-swap 512m \
   --network host \
+  -e GOMEMLIMIT=450MiB \
   -e EMBED_PROVIDER -e EMBED_ENDPOINT -e EMBED_API_KEY \
   -e GEMINI_API_KEY -e GROQ_API_KEY -e OPENROUTER_API_KEY \
   -e OLLAMA_CLOUD_API_KEY -e OLLAMA_URL -e EMBED_PRIVACY \
