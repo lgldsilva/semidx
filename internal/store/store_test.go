@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -245,6 +246,48 @@ func TestFileUpToDate(t *testing.T) {
 	// Unknown file → not up to date.
 	if up, err := s.FileUpToDate(ctx, pid, "other.go", "hash-v1", 3); err != nil || up {
 		t.Errorf("FileUpToDate (unknown file) = %v, err %v; want false", up, err)
+	}
+}
+
+func TestProjectCRUD(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	p, err := s.CreateProject(ctx, "repo", "bge-m3", "git", "https://x/y.git", "main")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if p.SourceType != "git" || p.GitURL != "https://x/y.git" || p.Status != "registered" {
+		t.Errorf("created project = %+v", p)
+	}
+
+	// Duplicate name → ErrProjectExists.
+	if _, err := s.CreateProject(ctx, "repo", "m", "push", "", ""); !errors.Is(err, ErrProjectExists) {
+		t.Errorf("duplicate CreateProject err = %v, want ErrProjectExists", err)
+	}
+
+	// GetProject returns the source fields.
+	got, err := s.GetProject(ctx, "repo")
+	if err != nil || got.GitURL != "https://x/y.git" || got.Branch != "main" {
+		t.Errorf("GetProject = %+v, err %v", got, err)
+	}
+	// Unknown → ErrNotFound.
+	if _, err := s.GetProject(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetProject(ghost) err = %v, want ErrNotFound", err)
+	}
+
+	// List includes it.
+	list, err := s.ListProjects(ctx)
+	if err != nil || len(list) != 1 || list[0].Name != "repo" {
+		t.Errorf("ListProjects = %+v, err %v", list, err)
+	}
+
+	// Delete, then it's gone; deleting again → ErrNotFound.
+	if err := s.DeleteProject(ctx, "repo"); err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if err := s.DeleteProject(ctx, "repo"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second DeleteProject err = %v, want ErrNotFound", err)
 	}
 }
 
