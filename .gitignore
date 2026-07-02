@@ -1,6 +1,6 @@
-# Build artifacts
-semantic-indexer-poc
-semidx
+# Build artifacts (anchored to repo root so they don't match the cmd/semidx/ dir)
+/semantic-indexer-poc
+/semidx
 dist/
 *.test
 coverage.out
