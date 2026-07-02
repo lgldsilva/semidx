@@ -11,6 +11,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/indexing"
+	"github.com/lgldsilva/semidx/internal/mcpserver"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/server"
 )
@@ -222,14 +223,12 @@ func newServeCmd(d *deps) *cobra.Command {
 func newMCPCmd(d *deps) *cobra.Command {
 	return &cobra.Command{
 		Use:   "mcp",
-		Short: "Run the MCP server over stdio (JSON-RPC 2.0)",
+		Short: "Run the MCP server over stdio, proxying to the configured semidx server",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			db, err := d.database(cmd.Context())
-			if err != nil {
-				return err
+			if !d.remote() {
+				return fmt.Errorf("mcp requires a server: run `semidx login` first")
 			}
-			runMCPServer(db, d.emb)
-			return nil
+			return mcpserver.Run(cmd.Context(), d.apiClient())
 		},
 	}
 }
