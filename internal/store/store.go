@@ -51,9 +51,11 @@ var (
 
 // Token is an API token record (the plaintext is never stored, only its hash).
 type Token struct {
-	ID     int
-	Name   string
-	Scopes []string
+	ID         int
+	Name       string
+	Scopes     []string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
 }
 
 // User is a web-UI account. PasswordHash is an argon2id encoded hash.
@@ -100,6 +102,8 @@ type Store interface {
 	CreateUserToken(ctx context.Context, userID int, name, tokenHash string, scopes []string) (int, error)
 	TokenByHash(ctx context.Context, tokenHash string) (*Token, error)
 	RevokeToken(ctx context.Context, id int) error
+	RevokeUserToken(ctx context.Context, userID, id int) error
+	ListUserTokens(ctx context.Context, userID int) ([]Token, error)
 	CountTokens(ctx context.Context) (int, error)
 
 	CreateUser(ctx context.Context, username, passwordHash, role string) (*User, error)
@@ -532,6 +536,41 @@ func (s *PgStore) TokenByHash(ctx context.Context, tokenHash string) (*Token, er
 func (s *PgStore) RevokeToken(ctx context.Context, id int) error {
 	_, err := s.pool.Exec(ctx, `UPDATE api_tokens SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL`, id)
 	return err
+}
+
+// RevokeUserToken revokes a token only if it belongs to userID (authorization is
+// enforced in the query). Returns ErrNotFound when no matching active token exists.
+func (s *PgStore) RevokeUserToken(ctx context.Context, userID, id int) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE api_tokens SET revoked_at = NOW() WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`, id, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListUserTokens returns a user's active (non-revoked) tokens, newest first.
+func (s *PgStore) ListUserTokens(ctx context.Context, userID int) ([]Token, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, name, scopes, created_at, last_used_at FROM api_tokens
+		WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tokens []Token
+	for rows.Next() {
+		var t Token
+		if err := rows.Scan(&t.ID, &t.Name, &t.Scopes, &t.CreatedAt, &t.LastUsedAt); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, t)
+	}
+	return tokens, rows.Err()
 }
 
 // CountTokens returns how many non-revoked tokens exist (used for bootstrap).

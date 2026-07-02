@@ -1,0 +1,294 @@
+package webadmin
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/lgldsilva/semidx/internal/passwd"
+	"github.com/lgldsilva/semidx/internal/search"
+	"github.com/lgldsilva/semidx/internal/store"
+)
+
+// page is the data every rendered template receives.
+type page struct {
+	User   *store.User
+	CSRF   string
+	Active string // nav highlight
+	Flash  string // one-off success message
+	Err    string // one-off error message
+	Data   any    // page-specific payload
+}
+
+func (a *Admin) render(w http.ResponseWriter, name string, p page) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := a.tmpl.ExecuteTemplate(w, name, p); err != nil {
+		a.log.Error("render failed", "template", name, "err", err)
+	}
+}
+
+// --- auth pages --------------------------------------------------------------
+
+func (a *Admin) loginForm(w http.ResponseWriter, r *http.Request) {
+	// Already logged in? Go to the dashboard.
+	if cookie, err := r.Cookie(sessionCookie); err == nil {
+		if _, err := a.store.SessionUser(r.Context(), hashToken(cookie.Value)); err == nil {
+			http.Redirect(w, r, "/admin/", http.StatusSeeOther)
+			return
+		}
+	}
+	a.render(w, "login.html", page{Err: r.URL.Query().Get("err")})
+}
+
+func (a *Admin) loginSubmit(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	now := time.Now()
+
+	if !a.limiter.allowed(username, now) {
+		a.render(w, "login.html", page{Err: "too many attempts — wait a few minutes and try again"})
+		return
+	}
+
+	fail := func() {
+		a.limiter.record(username, now)
+		a.render(w, "login.html", page{Err: "invalid username or password"})
+	}
+
+	user, err := a.store.GetUserByUsername(r.Context(), username)
+	if errors.Is(err, store.ErrNotFound) || (user != nil && user.Disabled) {
+		fail()
+		return
+	}
+	if err != nil {
+		a.log.Error("login lookup failed", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	ok, err := passwd.Verify(password, user.PasswordHash)
+	if err != nil || !ok {
+		fail()
+		return
+	}
+
+	plaintext, hash, err := newSessionToken()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := a.store.CreateSession(r.Context(), hash, user.ID, now.Add(sessionTTL)); err != nil {
+		a.log.Error("create session failed", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	a.limiter.reset(username)
+	a.setSession(w, plaintext)
+	http.Redirect(w, r, "/admin/", http.StatusSeeOther)
+}
+
+func (a *Admin) logout(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	if err := a.store.DeleteSession(r.Context(), hashToken(ac.session)); err != nil {
+		a.log.Error("delete session failed", "err", err)
+	}
+	a.clearSession(w)
+	http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+}
+
+// --- dashboard & search ------------------------------------------------------
+
+func (a *Admin) dashboard(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	projects, err := a.store.ListProjects(r.Context())
+	if err != nil {
+		a.log.Error("list projects failed", "err", err)
+	}
+	a.render(w, "dashboard.html", page{User: ac.user, CSRF: ac.csrf, Active: "projects", Data: projects})
+}
+
+type searchData struct {
+	Project  string
+	Query    string
+	Results  []store.SearchResult
+	Fallback bool
+	Ran      bool
+}
+
+func (a *Admin) searchPage(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	d := searchData{
+		Project: strings.TrimSpace(r.URL.Query().Get("project")),
+		Query:   strings.TrimSpace(r.URL.Query().Get("q")),
+	}
+	p := page{User: ac.user, CSRF: ac.csrf, Active: "search", Data: &d}
+	if d.Project != "" && d.Query != "" {
+		d.Ran = true
+		resp, err := a.search.Search(r.Context(), search.Request{Project: d.Project, Query: d.Query, TopK: 10})
+		if err != nil {
+			p.Err = err.Error()
+		} else {
+			d.Results = resp.Results
+			d.Fallback = resp.Fallback
+		}
+	}
+	a.render(w, "search.html", p)
+}
+
+// --- API keys ----------------------------------------------------------------
+
+type keysData struct {
+	Tokens []store.Token
+	NewKey string // plaintext of a just-created key, shown once
+}
+
+func (a *Admin) keysList(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	a.renderKeys(w, r, ac, "", "", "")
+}
+
+func (a *Admin) renderKeys(w http.ResponseWriter, r *http.Request, ac *authCtx, newKey, flash, errMsg string) {
+	tokens, err := a.store.ListUserTokens(r.Context(), ac.user.ID)
+	if err != nil {
+		a.log.Error("list tokens failed", "err", err)
+		errMsg = "could not load keys"
+	}
+	a.render(w, "keys.html", page{
+		User: ac.user, CSRF: ac.csrf, Active: "keys", Flash: flash, Err: errMsg,
+		Data: keysData{Tokens: tokens, NewKey: newKey},
+	})
+}
+
+func (a *Admin) keysCreate(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		a.renderKeys(w, r, ac, "", "", "a key name is required")
+		return
+	}
+	scopes := r.Form["scopes"]
+	if len(scopes) == 0 {
+		scopes = []string{"read"}
+	}
+	plaintext, hash, err := generateAPIToken()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if _, err := a.store.CreateUserToken(r.Context(), ac.user.ID, name, hash, scopes); err != nil {
+		a.log.Error("create token failed", "err", err)
+		a.renderKeys(w, r, ac, "", "", "could not create key")
+		return
+	}
+	a.renderKeys(w, r, ac, plaintext, "Key created — copy it now, it won't be shown again.", "")
+}
+
+func (a *Admin) keysRevoke(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	id, err := strconv.Atoi(r.FormValue("id"))
+	if err != nil {
+		a.renderKeys(w, r, ac, "", "", "invalid key id")
+		return
+	}
+	switch err := a.store.RevokeUserToken(r.Context(), ac.user.ID, id); {
+	case errors.Is(err, store.ErrNotFound):
+		a.renderKeys(w, r, ac, "", "", "key not found")
+	case err != nil:
+		a.log.Error("revoke token failed", "err", err)
+		a.renderKeys(w, r, ac, "", "", "could not revoke key")
+	default:
+		a.renderKeys(w, r, ac, "", "Key revoked.", "")
+	}
+}
+
+// --- account (self-service password change) ----------------------------------
+
+func (a *Admin) accountForm(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	a.render(w, "account.html", page{User: ac.user, CSRF: ac.csrf, Active: "account"})
+}
+
+func (a *Admin) accountChangePassword(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	current := r.FormValue("current")
+	next := r.FormValue("new")
+	render := func(flash, errMsg string) {
+		a.render(w, "account.html", page{User: ac.user, CSRF: ac.csrf, Active: "account", Flash: flash, Err: errMsg})
+	}
+	if ok, _ := passwd.Verify(current, ac.user.PasswordHash); !ok {
+		render("", "current password is incorrect")
+		return
+	}
+	if len(next) < 8 {
+		render("", "new password must be at least 8 characters")
+		return
+	}
+	hash, err := passwd.Hash(next)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := a.store.SetUserPassword(r.Context(), ac.user.ID, hash); err != nil {
+		a.log.Error("set password failed", "err", err)
+		render("", "could not update password")
+		return
+	}
+	render("Password updated.", "")
+}
+
+// --- users (admin only) ------------------------------------------------------
+
+func (a *Admin) usersList(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	a.renderUsers(w, r, ac, "", "")
+}
+
+func (a *Admin) renderUsers(w http.ResponseWriter, r *http.Request, ac *authCtx, flash, errMsg string) {
+	users, err := a.store.ListUsers(r.Context())
+	if err != nil {
+		a.log.Error("list users failed", "err", err)
+		errMsg = "could not load users"
+	}
+	a.render(w, "users.html", page{User: ac.user, CSRF: ac.csrf, Active: "users", Flash: flash, Err: errMsg, Data: users})
+}
+
+func (a *Admin) usersCreate(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	role := r.FormValue("role")
+	if role != "admin" {
+		role = "member"
+	}
+	if username == "" || len(password) < 8 {
+		a.renderUsers(w, r, ac, "", "username required and password must be at least 8 characters")
+		return
+	}
+	hash, err := passwd.Hash(password)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	switch _, err := a.store.CreateUser(r.Context(), username, hash, role); {
+	case errors.Is(err, store.ErrUserExists):
+		a.renderUsers(w, r, ac, "", "a user with that name already exists")
+	case err != nil:
+		a.log.Error("create user failed", "err", err)
+		a.renderUsers(w, r, ac, "", "could not create user")
+	default:
+		a.renderUsers(w, r, ac, "User "+username+" created.", "")
+	}
+}
+
+func (a *Admin) usersDisable(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	id, err := strconv.Atoi(r.FormValue("id"))
+	if err != nil {
+		a.renderUsers(w, r, ac, "", "invalid user id")
+		return
+	}
+	if id == ac.user.ID {
+		a.renderUsers(w, r, ac, "", "you cannot disable your own account")
+		return
+	}
+	disabled := r.FormValue("disabled") == "true"
+	switch err := a.store.SetUserDisabled(r.Context(), id, disabled); {
+	case errors.Is(err, store.ErrNotFound):
+		a.renderUsers(w, r, ac, "", "user not found")
+	case err != nil:
+		a.log.Error("set user disabled failed", "err", err)
+		a.renderUsers(w, r, ac, "", "could not update user")
+	default:
+		a.renderUsers(w, r, ac, "User updated.", "")
+	}
+}

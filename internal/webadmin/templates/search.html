@@ -1,0 +1,26 @@
+{{define "search.html"}}{{template "head" .}}
+{{$d := .Data}}
+<h1>Search playground</h1>
+{{template "flashes" .}}
+<form method="get" action="/admin/search">
+  <div class="row">
+    <label class="grow">Project<input type="text" name="project" value="{{$d.Project}}" required></label>
+    <label class="grow">Query<input type="search" name="q" value="{{$d.Query}}" required></label>
+    <button type="submit">Search</button>
+  </div>
+</form>
+{{if $d.Ran}}
+  {{if $d.Fallback}}<p class="alert error">Embedding unavailable — showing keyword matches, not semantic ranking.</p>{{end}}
+  {{if $d.Results}}
+    <h2>{{len $d.Results}} result(s)</h2>
+    {{range $d.Results}}
+      <div class="card" style="margin:.6rem 0">
+        <strong>{{.FilePath}}:{{.StartLine}}</strong> <span class="muted">score {{printf "%.3f" .Score}}</span>
+        <pre class="snippet">{{.Content}}</pre>
+      </div>
+    {{end}}
+  {{else}}
+    <p class="muted">No results.</p>
+  {{end}}
+{{end}}
+{{template "foot" .}}{{end}}

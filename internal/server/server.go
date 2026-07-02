@@ -18,6 +18,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/webadmin"
 )
 
 // Server is the HTTP API. It owns the store, embedder and search service; token
@@ -29,6 +30,18 @@ type Server struct {
 	log    *slog.Logger
 	reg    *prometheus.Registry
 	reqs   *prometheus.CounterVec
+	admin  http.Handler // the /admin management UI, nil unless MountAdmin was called
+}
+
+// MountAdmin enables the web management UI at /admin. secureCookies must be true
+// when the server is reached over HTTPS (directly or via a TLS proxy).
+func (s *Server) MountAdmin(secureCookies bool) error {
+	a, err := webadmin.New(s.store, s.emb, s.log, secureCookies)
+	if err != nil {
+		return err
+	}
+	s.admin = a.Handler()
+	return nil
 }
 
 // New builds a Server. A nil logger falls back to slog.Default().
@@ -61,6 +74,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/projects/{project}/files/diff", s.authed("write", s.handleFilesDiff))
 	mux.Handle("POST /api/v1/projects/{project}/files/batch", s.authed("write", s.handleFilesBatch))
 	mux.Handle("GET /api/v1/jobs/{id}", s.authed("read", s.handleGetJob))
+	if s.admin != nil {
+		mux.Handle("/admin/", s.admin)
+	}
 	return s.instrument(mux)
 }
 

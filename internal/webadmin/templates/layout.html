@@ -1,0 +1,70 @@
+{{define "style"}}<style>
+  :root { --fg:#1a1a2e; --muted:#6b7280; --bg:#f6f7fb; --card:#fff; --accent:#3b5bdb; --border:#e5e7eb; --err:#b91c1c; --ok:#166534; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--fg); background:var(--bg); }
+  body.centered { display:flex; min-height:100vh; align-items:center; justify-content:center; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  h1 { font-size:1.4rem; margin:0 0 .3rem; }
+  h2 { font-size:1.1rem; margin:1.5rem 0 .6rem; }
+  .muted { color:var(--muted); }
+  header.nav { background:var(--card); border-bottom:1px solid var(--border); padding:.7rem 1.2rem; display:flex; align-items:center; gap:1.2rem; flex-wrap:wrap; }
+  header.nav .brand { font-weight:700; }
+  header.nav a { color:var(--fg); font-size:.92rem; }
+  header.nav a.active { color:var(--accent); font-weight:600; }
+  header.nav .spacer { flex:1; }
+  main.content { max-width:960px; margin:1.5rem auto; padding:0 1.2rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1.4rem; box-shadow:0 1px 3px rgba(0,0,0,.04); }
+  .card.narrow { width:min(360px,92vw); }
+  label { display:block; margin:.6rem 0; font-size:.9rem; }
+  input[type=text],input[type=password],input[type=search],select { width:100%; padding:.5rem .6rem; border:1px solid var(--border); border-radius:6px; font:inherit; margin-top:.2rem; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:.5rem .9rem; font:inherit; cursor:pointer; }
+  button.danger { background:var(--err); }
+  button.link { background:none; color:var(--accent); padding:0; }
+  table { width:100%; border-collapse:collapse; margin:.5rem 0; }
+  th,td { text-align:left; padding:.5rem .6rem; border-bottom:1px solid var(--border); font-size:.9rem; vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .alert { padding:.6rem .8rem; border-radius:6px; margin:.6rem 0; font-size:.9rem; }
+  .alert.error { background:#fef2f2; color:var(--err); }
+  .alert.ok { background:#f0fdf4; color:var(--ok); }
+  .pill { display:inline-block; padding:.1rem .5rem; border-radius:99px; font-size:.75rem; background:#eef; color:var(--accent); }
+  code.key { display:block; padding:.6rem; background:#0f172a; color:#e2e8f0; border-radius:6px; word-break:break-all; font-size:.82rem; margin:.4rem 0; }
+  .inline { display:inline; }
+  .row { display:flex; gap:1.2rem; flex-wrap:wrap; align-items:flex-end; }
+  .grow { flex:1; min-width:200px; }
+  pre.snippet { background:#f1f5f9; padding:.5rem; border-radius:6px; overflow-x:auto; font-size:.8rem; margin:.3rem 0 0; white-space:pre-wrap; }
+</style>{{end}}
+
+{{define "header"}}
+<header class="nav">
+  <span class="brand">semidx</span>
+  <a href="/admin/" class="{{if eq .Active "projects"}}active{{end}}">Projects</a>
+  <a href="/admin/search" class="{{if eq .Active "search"}}active{{end}}">Search</a>
+  <a href="/admin/keys" class="{{if eq .Active "keys"}}active{{end}}">API keys</a>
+  {{if eq .User.Role "admin"}}<a href="/admin/users" class="{{if eq .Active "users"}}active{{end}}">Users</a>{{end}}
+  <a href="/admin/account" class="{{if eq .Active "account"}}active{{end}}">Account</a>
+  <span class="spacer"></span>
+  <span class="muted">{{.User.Username}} ({{.User.Role}})</span>
+  <form method="post" action="/admin/logout" class="inline">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <button class="link" type="submit">Sign out</button>
+  </form>
+</header>
+{{end}}
+
+{{define "flashes"}}
+  {{if .Flash}}<p class="alert ok">{{.Flash}}</p>{{end}}
+  {{if .Err}}<p class="alert error">{{.Err}}</p>{{end}}
+{{end}}
+
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>semidx · {{.Active}}</title>
+{{template "style" .}}
+</head>
+<body>{{template "header" .}}<main class="content">{{end}}
+
+{{define "foot"}}</main></body></html>{{end}}
