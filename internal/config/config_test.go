@@ -167,3 +167,26 @@ func TestMissingDotEnvIsNotAnError(t *testing.T) {
 		t.Fatal("Load returned nil without a .env file")
 	}
 }
+
+func TestResolveLocalIndex(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/data")
+	cases := map[string]string{
+		"":               "",
+		"true":           "/data/semidx/index.db",
+		"1":              "/data/semidx/index.db",
+		"/custom/idx.db": "/custom/idx.db",
+		"./relative.db":  "./relative.db",
+	}
+	for in, want := range cases {
+		if got := resolveLocalIndex(in); got != want {
+			t.Errorf("resolveLocalIndex(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLoadLocalIndexFromEnv(t *testing.T) {
+	t.Setenv("SEMIDX_LOCAL_INDEX", "/tmp/x.db")
+	if got := Load().LocalIndexPath; got != "/tmp/x.db" {
+		t.Errorf("LocalIndexPath = %q, want /tmp/x.db", got)
+	}
+}

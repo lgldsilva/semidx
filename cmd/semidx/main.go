@@ -16,6 +16,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/clientconfig"
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/localstore"
 	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
@@ -34,9 +35,12 @@ type deps struct {
 	db       store.Store
 	dbErr    error
 	dbOpened bool
+	local    *localstore.SQLiteStore
+	localErr error
 }
 
-// database opens (once) and returns the local store, or the connection error.
+// database opens (once) and returns the full PostgreSQL store, or the connection
+// error. Used by commands that need the server-only surface (serve, mcp).
 func (d *deps) database(ctx context.Context) (store.Store, error) {
 	if !d.dbOpened {
 		d.dbOpened = true
@@ -47,6 +51,23 @@ func (d *deps) database(ctx context.Context) (store.Store, error) {
 		d.db = db
 	}
 	return d.db, d.dbErr
+}
+
+// indexStore returns the store used by the index/search path: a standalone local
+// SQLite file when local mode is on (SEMIDX_LOCAL_INDEX / --local), otherwise the
+// PostgreSQL store. Both satisfy store.IndexStore, so callers stay agnostic.
+func (d *deps) indexStore(ctx context.Context) (store.IndexStore, error) {
+	if d.cfg.LocalIndexPath != "" {
+		if d.local == nil && d.localErr == nil {
+			s, err := localstore.New(d.cfg.LocalIndexPath)
+			if err != nil {
+				d.localErr = fmt.Errorf("open local index %s: %w", d.cfg.LocalIndexPath, err)
+			}
+			d.local = s
+		}
+		return d.local, d.localErr
+	}
+	return d.database(ctx)
 }
 
 // remote reports whether a server is configured (remote mode).
@@ -72,6 +93,7 @@ func main() {
 
 func newRootCmd() *cobra.Command {
 	d := &deps{}
+	var forceLocal bool
 	root := &cobra.Command{
 		Use:           "semidx",
 		Short:         "Self-hosted semantic code search",
@@ -79,6 +101,11 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
 			d.cfg = config.Load()
+			// --local forces standalone mode at the default path unless a path was
+			// already given via SEMIDX_LOCAL_INDEX.
+			if forceLocal && d.cfg.LocalIndexPath == "" {
+				d.cfg.LocalIndexPath = config.DefaultLocalIndexPath()
+			}
 			d.emb = buildChain(d.cfg)
 			cc, err := clientconfig.Load()
 			if err != nil {
@@ -91,8 +118,13 @@ func newRootCmd() *cobra.Command {
 			if d.db != nil {
 				d.db.Close()
 			}
+			if d.local != nil {
+				d.local.Close()
+			}
 		},
 	}
+	root.PersistentFlags().BoolVar(&forceLocal, "local", false,
+		"Use a standalone local index (no server/Postgres); path from SEMIDX_LOCAL_INDEX or the default data dir")
 	root.AddCommand(
 		newLoginCmd(d),
 		newIndexCmd(d),
