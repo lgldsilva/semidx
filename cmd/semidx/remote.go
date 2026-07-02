@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/clientconfig"
 	"github.com/lgldsilva/semidx/internal/search"
+	"github.com/lgldsilva/semidx/internal/skills"
 	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
@@ -103,6 +105,62 @@ func newRepoCmd(d *deps) *cobra.Command {
 	}
 	c.AddCommand(newRepoAddCmd(d))
 	return c
+}
+
+// newSkillsCmd manages the embedded agent skills.
+func newSkillsCmd(_ *deps) *cobra.Command {
+	c := &cobra.Command{
+		Use:   "skills",
+		Short: "Install the agent skills that teach AI assistants to use semidx",
+	}
+	c.AddCommand(newSkillsInstallCmd())
+	return c
+}
+
+func newSkillsInstallCmd() *cobra.Command {
+	var target, dir string
+	c := &cobra.Command{
+		Use:   "install",
+		Short: "Write the bundled skills into a target directory",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			dest, err := resolveSkillsDir(target, dir)
+			if err != nil {
+				return err
+			}
+			written, err := skills.Install(dest)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Installed %d skill file(s) into %s:\n", len(written), dest)
+			for _, w := range written {
+				fmt.Printf("  %s\n", w)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&target, "target", "claude-code", "Install target: claude-code (~/.claude/skills) or project (./.claude/skills)")
+	c.Flags().StringVar(&dir, "dir", "", "Explicit destination directory (overrides --target)")
+	return c
+}
+
+// resolveSkillsDir maps a --target keyword (or an explicit --dir) to a skills
+// directory.
+func resolveSkillsDir(target, dir string) (string, error) {
+	if dir != "" {
+		return dir, nil
+	}
+	switch target {
+	case "claude-code":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, ".claude", "skills"), nil
+	case "project":
+		return filepath.Join(".claude", "skills"), nil
+	default:
+		return "", fmt.Errorf("unknown --target %q (use claude-code or project, or pass --dir)", target)
+	}
 }
 
 func newRepoAddCmd(d *deps) *cobra.Command {
