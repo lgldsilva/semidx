@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/extract"
 	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -161,7 +163,7 @@ func scanFiles(projectPath string, maxFiles int) ([]string, error) {
 			return nil
 		}
 		rel, _ := filepath.Rel(projectPath, path)
-		if chunker.ShouldIndex(rel) {
+		if chunker.ShouldIndex(rel) || extract.Supported(rel) {
 			files = append(files, path)
 		}
 		return nil
@@ -211,9 +213,28 @@ func (idx *Indexer) indexContent(ctx context.Context, projectID int, rel, model 
 
 	hash := fmt.Sprintf("%x", sha256.Sum256(content))
 
-	// Incremental: skip files already indexed with this exact content.
+	// Incremental: skip files already indexed with this exact content. Hashing
+	// the RAW bytes means an unchanged document is skipped without paying the
+	// extraction cost.
 	if upToDate, err := idx.db.FileUpToDate(ctx, projectID, rel, hash, idx.dims); err == nil && upToDate {
 		return 0, 0, outcomeSkippedUnchanged, nil
+	}
+
+	// Documents (PDF/Office/HTML) are converted to text before chunking; code and
+	// plain-text files pass through unchanged. Extraction runs only for new or
+	// changed documents (after the incremental check above).
+	if extract.Supported(rel) {
+		text, err := extract.Extract(rel, content)
+		switch {
+		case errors.Is(err, extract.ErrEncrypted):
+			return 0, 0, outcomeSkippedEmpty, nil // password-protected: expected skip, not an error
+		case err != nil:
+			return 0, 1, outcomeSkippedEmpty, nil // malformed document: soft error, never fatal
+		}
+		content = []byte(text)
+		if len(strings.TrimSpace(text)) == 0 {
+			return 0, 0, outcomeSkippedEmpty, nil // e.g. a scanned, text-less PDF
+		}
 	}
 
 	fileID, err := idx.db.UpsertFile(ctx, projectID, rel, hash, len(content))

@@ -353,3 +353,39 @@ func TestScanFilesRespectsMaxAndIgnores(t *testing.T) {
 		t.Errorf("scanFiles(2) = %d files, want 2", len(capped))
 	}
 }
+
+// TestIndexContentExtractsDocuments proves the document-ingestion wiring: a
+// supported document (HTML here) is converted to text before chunking, so the
+// index holds the readable content — not the markup.
+func TestIndexContentExtractsDocuments(t *testing.T) {
+	fs := &fakeStore{}
+	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: true}, 3, 4, false, false, "")
+
+	html := []byte("<html><body><h1>Payment retry</h1><p>exponential backoff</p></body></html>")
+	created, err := idx.IndexContent(context.Background(), 1, "docs/guide.html", "m", html)
+	if err != nil || created == 0 {
+		t.Fatalf("IndexContent(html) = %d, err %v; want chunks", created, err)
+	}
+	got := strings.Join(fs.embedded, "\n")
+	if strings.Contains(got, "<h1>") || strings.Contains(got, "<body>") {
+		t.Errorf("HTML markup leaked into the index: %q", got)
+	}
+	if !strings.Contains(got, "Payment retry") || !strings.Contains(got, "exponential backoff") {
+		t.Errorf("extracted text missing from index: %q", got)
+	}
+}
+
+// TestIndexContentSkipsUnreadableDocument confirms a corrupt document never
+// crashes the indexer and is skipped without a fatal error.
+func TestIndexContentSkipsUnreadableDocument(t *testing.T) {
+	fs := &fakeStore{}
+	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: true}, 3, 4, false, false, "")
+
+	created, err := idx.IndexContent(context.Background(), 1, "broken.pdf", "m", []byte("this is not a real pdf"))
+	if err != nil {
+		t.Errorf("corrupt pdf should be skipped, not error: %v", err)
+	}
+	if created != 0 {
+		t.Errorf("corrupt pdf produced %d chunks, want 0", created)
+	}
+}
