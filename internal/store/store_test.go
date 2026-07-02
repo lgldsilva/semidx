@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -288,6 +289,85 @@ func TestProjectCRUD(t *testing.T) {
 	}
 	if err := s.DeleteProject(ctx, "repo"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second DeleteProject err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestIndexJobs(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	p, _ := s.CreateProject(ctx, "proj", "bge-m3", "git", "https://x/y.git", "")
+
+	// GetProjectByID round-trips.
+	if got, err := s.GetProjectByID(ctx, p.ID); err != nil || got.Name != "proj" {
+		t.Fatalf("GetProjectByID = %+v, err %v", got, err)
+	}
+
+	id, err := s.EnqueueJob(ctx, p.ID, "full")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	claimed, err := s.ClaimJob(ctx)
+	if err != nil || claimed == nil || claimed.ID != id || claimed.Status != "running" {
+		t.Fatalf("ClaimJob = %+v, err %v; want the queued job running", claimed, err)
+	}
+	// Nothing else queued.
+	if again, _ := s.ClaimJob(ctx); again != nil {
+		t.Errorf("second ClaimJob = %+v, want nil", again)
+	}
+
+	if err := s.CompleteJob(ctx, id, 7, 42); err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+	job, _ := s.GetJob(ctx, id)
+	if job.Status != "succeeded" || job.FilesIndexed != 7 || job.ChunksCreated != 42 {
+		t.Errorf("job after complete = %+v", job)
+	}
+	if _, err := s.GetJob(ctx, 99999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetJob(unknown) err = %v, want ErrNotFound", err)
+	}
+}
+
+// SKIP LOCKED guarantee: concurrent workers claim each job exactly once.
+func TestClaimJobConcurrentNoDoubleClaim(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	p, _ := s.CreateProject(ctx, "proj", "bge-m3", "push", "", "")
+
+	const n = 20
+	for i := 0; i < n; i++ {
+		if _, err := s.EnqueueJob(ctx, p.ID, "full"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var mu sync.Mutex
+	seen := map[int]int{}
+	var wg sync.WaitGroup
+	for w := 0; w < 6; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				job, err := s.ClaimJob(ctx)
+				if err != nil || job == nil {
+					return
+				}
+				mu.Lock()
+				seen[job.ID]++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if len(seen) != n {
+		t.Errorf("claimed %d distinct jobs, want %d", len(seen), n)
+	}
+	for id, count := range seen {
+		if count != 1 {
+			t.Errorf("job %d claimed %d times (want exactly 1)", id, count)
+		}
 	}
 }
 
