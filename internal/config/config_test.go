@@ -14,7 +14,7 @@ func clearEnv(t *testing.T) {
 		"SEMIDX_DB_DSN", "SEMIDX_OLLAMA_URL", "OLLAMA_URL",
 		"EMBED_PROVIDER", "EMBED_ENDPOINT", "EMBED_API_KEY",
 		"GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
-		"OLLAMA_CLOUD_API_KEY", "EMBED_PRIVACY",
+		"OLLAMA_CLOUD_API_KEY", "EMBED_PRIVACY", "SEMIDX_INDEX_WORKERS",
 	} {
 		t.Setenv(key, "")
 	}
@@ -131,6 +131,32 @@ func TestPrivacyParsing(t *testing.T) {
 			t.Errorf("Privacy with EMBED_PRIVACY=%q = %v, want %v", value, got, want)
 		}
 	}
+}
+
+func TestIndexWorkers(t *testing.T) {
+	t.Run("default when unset", func(t *testing.T) {
+		clearEnv(t)
+		t.Chdir(t.TempDir())
+		if got := Load().IndexWorkers; got != defaultIndexWorkers {
+			t.Errorf("IndexWorkers = %d, want default %d", got, defaultIndexWorkers)
+		}
+	})
+	t.Run("env override", func(t *testing.T) {
+		clearEnv(t)
+		t.Chdir(t.TempDir())
+		t.Setenv("SEMIDX_INDEX_WORKERS", "12")
+		if got := Load().IndexWorkers; got != 12 {
+			t.Errorf("IndexWorkers = %d, want 12", got)
+		}
+	})
+	t.Run("invalid falls back to default", func(t *testing.T) {
+		clearEnv(t)
+		t.Chdir(t.TempDir())
+		t.Setenv("SEMIDX_INDEX_WORKERS", "nonsense")
+		if got := Load().IndexWorkers; got != defaultIndexWorkers {
+			t.Errorf("IndexWorkers = %d, want default on invalid input", got)
+		}
+	})
 }
 
 func TestMissingDotEnvIsNotAnError(t *testing.T) {

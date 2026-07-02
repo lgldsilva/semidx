@@ -3,9 +3,11 @@ package indexing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 // fakeStore records how chunks were inserted (embedded vs text-only).
 type fakeStore struct {
 	store.Store
+	mu       sync.Mutex // indexing runs concurrently; guards the fields below
 	nextID   int
 	embedded []string
 	textOnly []string
@@ -32,6 +35,8 @@ func (f *fakeStore) UpsertProject(ctx context.Context, name, path, model string)
 	return 1, nil
 }
 func (f *fakeStore) UpsertFile(ctx context.Context, projectID int, path, hash string, size int) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.nextID++
 	return f.nextID, nil
 }
@@ -39,18 +44,24 @@ func (f *fakeStore) DeleteChunksForFile(ctx context.Context, projectID, fileID, 
 	return nil
 }
 func (f *fakeStore) InsertChunks(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, embeddings [][]float32, dims int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, c := range chunks {
 		f.embedded = append(f.embedded, c.Content)
 	}
 	return nil
 }
 func (f *fakeStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, dims int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, c := range chunks {
 		f.textOnly = append(f.textOnly, c.Content)
 	}
 	return nil
 }
 func (f *fakeStore) UpdateProjectStatus(ctx context.Context, id int, status string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.status = status
 	return nil
 }
@@ -104,7 +115,7 @@ func TestPrivacyRoutingTextOnlyWhenNoLocalProvider(t *testing.T) {
 	writeFile(t, dir, "node_modules/lib.js", "console.log(1)") // must be skipped
 
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: false}, 3, false, false, "")
+	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: false}, 3, 4, false, false, "")
 
 	stats, err := idx.IndexProject(context.Background(), 1, dir, "gemini-embedding-2", 0)
 	if err != nil {
@@ -142,7 +153,7 @@ func TestPrivacyRoutingEmbedsLocallyWhenAvailable(t *testing.T) {
 	writeFile(t, dir, "config/secret.txt", "API_KEY=local-embeds-this\n")
 
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: true}, 3, false, false, "")
+	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: true}, 3, 4, false, false, "")
 
 	if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
 		t.Fatalf("IndexProject: %v", err)
@@ -163,7 +174,7 @@ func TestIncrementalSkipsUnchanged(t *testing.T) {
 	writeFile(t, dir, "b.go", "package b\n\nfunc B() {}\n")
 
 	fs := &fakeStore{upToDate: true}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, false, false, "")
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, false, false, "")
 
 	stats, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0)
 	if err != nil {
@@ -189,7 +200,7 @@ func TestSkipsEmptyAndCountsChunks(t *testing.T) {
 	writeFile(t, dir, "code.go", "package x\n\nfunc A() {}\n\nfunc B() {}\n")
 
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, false, false, "")
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, false, false, "")
 
 	stats, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0)
 	if err != nil {
@@ -219,7 +230,7 @@ func TestIndexProjectStopsOnCancel(t *testing.T) {
 	// must see the cancellation and bail out.
 	emb := &fakeEmbedder{}
 	emb.onEmbed = func() { cancel() }
-	idx := NewIndexer(&fakeStore{}, emb, 3, false, false, "")
+	idx := NewIndexer(&fakeStore{}, emb, 3, 4, false, false, "")
 
 	stats, err := idx.IndexProject(ctx, 1, dir, "bge-m3", 0)
 	if !errors.Is(err, context.Canceled) {
@@ -242,6 +253,58 @@ func TestSleepBackoffRespectsCancel(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
 		t.Errorf("sleepBackoff took %v on a cancelled ctx; should return immediately", elapsed)
+	}
+}
+
+// Many files indexed concurrently: every file is accounted for exactly once and
+// there are no data races (run with -race). Guards the worker-pool correctness.
+func TestConcurrentIndexingIsComplete(t *testing.T) {
+	dir := t.TempDir()
+	const n = 50
+	for i := 0; i < n; i++ {
+		// No blank line → exactly one chunk per file, so embedded count == n.
+		writeFile(t, dir, fmt.Sprintf("pkg%d/file%d.go", i, i), fmt.Sprintf("package p%d\nfunc F%d() {}\n", i, i))
+	}
+
+	fs := &fakeStore{}
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 8, false, false, "")
+
+	stats, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0)
+	if err != nil {
+		t.Fatalf("IndexProject: %v", err)
+	}
+	if stats.FilesScanned != n || stats.FilesIndexed != n {
+		t.Errorf("scanned=%d indexed=%d, want %d each", stats.FilesScanned, stats.FilesIndexed, n)
+	}
+	if stats.Errors != 0 {
+		t.Errorf("Errors = %d, want 0", stats.Errors)
+	}
+	if len(fs.embedded) != n { // one chunk per file
+		t.Errorf("embedded %d chunks, want %d", len(fs.embedded), n)
+	}
+}
+
+// The worker pool actually parallelizes: with an embedder that sleeps per call,
+// 8 workers finish well under half the serial time.
+func TestWorkerPoolParallelizes(t *testing.T) {
+	run := func(workers int) time.Duration {
+		dir := t.TempDir()
+		for i := 0; i < 16; i++ {
+			writeFile(t, dir, fmt.Sprintf("f%d.go", i), fmt.Sprintf("package p%d\nfunc F%d() {}\n", i, i))
+		}
+		emb := &fakeEmbedder{onEmbed: func() { time.Sleep(20 * time.Millisecond) }}
+		idx := NewIndexer(&fakeStore{}, emb, 3, workers, false, false, "")
+		start := time.Now()
+		if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
+			t.Fatalf("IndexProject: %v", err)
+		}
+		return time.Since(start)
+	}
+
+	serial := run(1)
+	parallel := run(8)
+	if parallel > serial/2 {
+		t.Errorf("pool did not parallelize: serial=%v, parallel(8)=%v (want parallel < serial/2)", serial, parallel)
 	}
 }
 
