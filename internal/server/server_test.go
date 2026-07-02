@@ -15,10 +15,13 @@ import (
 // fakeStore implements just the methods the server touches.
 type fakeStore struct {
 	store.Store
-	pingErr error
-	token   *store.Token         // TokenByHash result (nil = no active token)
-	project *store.Project       // GetProject result (nil → not found)
-	results []store.SearchResult // search results
+	pingErr   error
+	token     *store.Token         // TokenByHash result (nil = no active token)
+	project   *store.Project       // GetProject result (nil → ErrNotFound)
+	results   []store.SearchResult // search results
+	createErr error                // CreateProject error
+	listed    []store.Project      // ListProjects result
+	deleteErr error                // DeleteProject error
 }
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
@@ -27,10 +30,18 @@ func (f *fakeStore) TokenByHash(context.Context, string) (*store.Token, error) {
 }
 func (f *fakeStore) GetProject(_ context.Context, name string) (*store.Project, error) {
 	if f.project == nil {
-		return nil, errors.New("no rows")
+		return nil, store.ErrNotFound
 	}
 	return f.project, nil
 }
+func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gitURL, branch string) (*store.Project, error) {
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	return &store.Project{Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch}, nil
+}
+func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) { return f.listed, nil }
+func (f *fakeStore) DeleteProject(context.Context, string) error           { return f.deleteErr }
 func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]store.SearchResult, error) {
 	return f.results, nil
 }
@@ -146,6 +157,80 @@ func TestSearchBadBody(t *testing.T) {
 	}
 	if rec := do(t, srv, "POST", "/api/v1/projects/p/search", "tok", `{"query":""}`); rec.Code != 400 {
 		t.Errorf("empty query = %d, want 400", rec.Code)
+	}
+}
+
+func TestCreateProject(t *testing.T) {
+	writeTok := &store.Token{Scopes: []string{"write"}}
+
+	// git project, valid → 201.
+	srv := New(&fakeStore{token: writeTok}, fakeEmbedder{}, nil)
+	rec := do(t, srv, "POST", "/api/v1/projects", "tok", `{"name":"repo","model":"bge-m3","source":{"type":"git","url":"https://x/y.git"}}`)
+	if rec.Code != 201 {
+		t.Fatalf("create = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var pv projectView
+	_ = json.Unmarshal(rec.Body.Bytes(), &pv)
+	if pv.Name != "repo" || pv.SourceType != "git" || pv.GitURL != "https://x/y.git" {
+		t.Errorf("view = %+v", pv)
+	}
+
+	// duplicate → 409.
+	dup := New(&fakeStore{token: writeTok, createErr: store.ErrProjectExists}, fakeEmbedder{}, nil)
+	if rec := do(t, dup, "POST", "/api/v1/projects", "tok", `{"name":"repo"}`); rec.Code != 409 {
+		t.Errorf("duplicate = %d, want 409", rec.Code)
+	}
+	// missing name → 400.
+	if rec := do(t, srv, "POST", "/api/v1/projects", "tok", `{"model":"m"}`); rec.Code != 400 {
+		t.Errorf("no name = %d, want 400", rec.Code)
+	}
+	// git without url → 400.
+	if rec := do(t, srv, "POST", "/api/v1/projects", "tok", `{"name":"g","source":{"type":"git"}}`); rec.Code != 400 {
+		t.Errorf("git no url = %d, want 400", rec.Code)
+	}
+	// read-only token → 403.
+	ro := New(&fakeStore{token: &store.Token{Scopes: []string{"read"}}}, fakeEmbedder{}, nil)
+	if rec := do(t, ro, "POST", "/api/v1/projects", "tok", `{"name":"x"}`); rec.Code != 403 {
+		t.Errorf("read-only create = %d, want 403", rec.Code)
+	}
+}
+
+func TestListAndGetProject(t *testing.T) {
+	readTok := &store.Token{Scopes: []string{"read"}}
+	srv := New(&fakeStore{
+		token:   readTok,
+		listed:  []store.Project{{Name: "a", Model: "m", Status: "ready", SourceType: "push"}},
+		project: &store.Project{Name: "a", Model: "m", Status: "ready", SourceType: "push"},
+	}, fakeEmbedder{}, nil)
+
+	rec := do(t, srv, "GET", "/api/v1/projects", "tok", "")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"name":"a"`) {
+		t.Errorf("list = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := do(t, srv, "GET", "/api/v1/projects/a", "tok", ""); rec.Code != 200 {
+		t.Errorf("get = %d, want 200", rec.Code)
+	}
+	// unknown project → 404.
+	nf := New(&fakeStore{token: readTok, project: nil}, fakeEmbedder{}, nil)
+	if rec := do(t, nf, "GET", "/api/v1/projects/ghost", "tok", ""); rec.Code != 404 {
+		t.Errorf("get missing = %d, want 404", rec.Code)
+	}
+}
+
+func TestDeleteProject(t *testing.T) {
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	srv := New(&fakeStore{token: writeTok}, fakeEmbedder{}, nil)
+	if rec := do(t, srv, "DELETE", "/api/v1/projects/a", "tok", ""); rec.Code != 204 {
+		t.Errorf("delete = %d, want 204", rec.Code)
+	}
+	nf := New(&fakeStore{token: writeTok, deleteErr: store.ErrNotFound}, fakeEmbedder{}, nil)
+	if rec := do(t, nf, "DELETE", "/api/v1/projects/ghost", "tok", ""); rec.Code != 404 {
+		t.Errorf("delete missing = %d, want 404", rec.Code)
+	}
+	// read-only token → 403.
+	ro := New(&fakeStore{token: &store.Token{Scopes: []string{"read"}}}, fakeEmbedder{}, nil)
+	if rec := do(t, ro, "DELETE", "/api/v1/projects/a", "tok", ""); rec.Code != 403 {
+		t.Errorf("read-only delete = %d, want 403", rec.Code)
 	}
 }
 

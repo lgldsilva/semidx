@@ -50,6 +50,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.Handle("GET /metrics", promhttp.HandlerFor(s.reg, promhttp.HandlerOpts{}))
+
+	mux.Handle("POST /api/v1/projects", s.authed("write", s.handleCreateProject))
+	mux.Handle("GET /api/v1/projects", s.authed("read", s.handleListProjects))
+	mux.Handle("GET /api/v1/projects/{project}", s.authed("read", s.handleGetProject))
+	mux.Handle("DELETE /api/v1/projects/{project}", s.authed("write", s.handleDeleteProject))
 	mux.Handle("POST /api/v1/projects/{project}/search", s.authed("read", s.handleSearch))
 	return s.instrument(mux)
 }

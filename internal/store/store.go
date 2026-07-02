@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	pgvector "github.com/pgvector/pgvector-go"
 
@@ -29,12 +30,22 @@ const hnswVectorLimit = 2000
 
 // Project is an indexed repository's metadata row.
 type Project struct {
-	ID     int
-	Name   string
-	Path   string
-	Model  string
-	Status string
+	ID         int
+	Name       string
+	Path       string
+	Model      string
+	Status     string
+	SourceType string // "push" | "git" | "path"
+	GitURL     string // set when SourceType == "git"
+	Branch     string // optional git branch
 }
+
+// Sentinel errors so callers (e.g. the HTTP layer) can map to status codes
+// without depending on pgx internals.
+var (
+	ErrNotFound      = errors.New("not found")
+	ErrProjectExists = errors.New("project already exists")
+)
 
 // Token is an API token record (the plaintext is never stored, only its hash).
 type Token struct {
@@ -58,7 +69,10 @@ type Store interface {
 	Ping(ctx context.Context) error
 	EnsureChunksTable(ctx context.Context, dims int) error
 	UpsertProject(ctx context.Context, name, path, model string) (int, error)
+	CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*Project, error)
 	GetProject(ctx context.Context, name string) (*Project, error)
+	ListProjects(ctx context.Context) ([]Project, error)
+	DeleteProject(ctx context.Context, name string) error
 	UpdateProjectStatus(ctx context.Context, id int, status string) error
 	UpsertFile(ctx context.Context, projectID int, path, hash string, size int) (int, error)
 	FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error)
@@ -191,15 +205,72 @@ func (s *PgStore) UpsertProject(ctx context.Context, name, path, model string) (
 	return id, err
 }
 
-func (s *PgStore) GetProject(ctx context.Context, name string) (*Project, error) {
+const projectColumns = `id, name, path, model, status, source_type, COALESCE(git_url, ''), COALESCE(branch, '')`
+
+func scanProject(row pgx.Row) (*Project, error) {
 	var p Project
-	err := s.pool.QueryRow(ctx, `
-		SELECT id, name, path, model, status FROM projects WHERE name = $1
-	`, name).Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status)
-	if err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch); err != nil {
 		return nil, err
 	}
 	return &p, nil
+}
+
+func (s *PgStore) GetProject(ctx context.Context, name string) (*Project, error) {
+	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE name = $1`, name))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return p, err
+}
+
+// CreateProject registers a project with its content source. Returns
+// ErrProjectExists if the name is taken.
+func (s *PgStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*Project, error) {
+	var id int
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO projects (name, path, model, status, source_type, git_url, branch)
+		VALUES ($1, '', $2, 'registered', $3, NULLIF($4, ''), NULLIF($5, ''))
+		RETURNING id
+	`, name, model, sourceType, gitURL, branch).Scan(&id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+			return nil, ErrProjectExists
+		}
+		return nil, err
+	}
+	return &Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch}, nil
+}
+
+func (s *PgStore) ListProjects(ctx context.Context) ([]Project, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var projects []Project
+	for rows.Next() {
+		p, err := scanProject(rows)
+		if err != nil {
+			return nil, err
+		}
+		projects = append(projects, *p)
+	}
+	return projects, rows.Err()
+}
+
+// DeleteProject removes a project (files and chunks cascade). Returns
+// ErrNotFound when no such project exists.
+func (s *PgStore) DeleteProject(ctx context.Context, name string) error {
+	ct, err := s.pool.Exec(ctx, `DELETE FROM projects WHERE name = $1`, name)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *PgStore) UpdateProjectStatus(ctx context.Context, id int, status string) error {
