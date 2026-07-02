@@ -1,0 +1,56 @@
+{{define "keys.html"}}{{template "head" .}}
+{{$d := .Data}}
+<h1>API keys</h1>
+{{template "flashes" .}}
+{{if $d.NewKey}}
+  <div class="card" style="margin-bottom:1rem">
+    <strong>Your new API key</strong>
+    <code class="key">{{$d.NewKey}}</code>
+    <p class="muted">Copy it now — it is not stored and will not be shown again. Use it with <code>semidx login &lt;url&gt; --token &lt;key&gt;</code>.</p>
+  </div>
+{{end}}
+
+<div class="card">
+  <h2 style="margin-top:0">Create a key</h2>
+  <form method="post" action="/admin/keys">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <div class="row">
+      <label class="grow">Name<input type="text" name="name" placeholder="laptop, ci, ..." required></label>
+      <label>Scopes
+        <select name="scopes" multiple size="3">
+          <option value="read" selected>read</option>
+          <option value="write">write</option>
+          <option value="admin">admin</option>
+        </select>
+      </label>
+      <button type="submit">Create key</button>
+    </div>
+  </form>
+</div>
+
+<h2>Your keys</h2>
+{{if $d.Tokens}}
+<table>
+  <thead><tr><th>Name</th><th>Scopes</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+  <tbody>
+  {{range $d.Tokens}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td>{{range .Scopes}}<span class="pill">{{.}}</span> {{end}}</td>
+      <td class="muted">{{fmtTime .CreatedAt}}</td>
+      <td class="muted">{{if .LastUsedAt}}{{fmtTime .LastUsedAt.UTC}}{{else}}never{{end}}</td>
+      <td>
+        <form method="post" action="/admin/keys/revoke" class="inline" onsubmit="return confirm('Revoke this key? Clients using it will get 401.')">
+          <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+          <input type="hidden" name="id" value="{{.ID}}">
+          <button class="link" type="submit">Revoke</button>
+        </form>
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="muted">No active keys.</p>
+{{end}}
+{{template "foot" .}}{{end}}

@@ -519,6 +519,24 @@ func TestCreateUserTokenLinksOwner(t *testing.T) {
 	if err != nil || tok == nil || tok.Name != "laptop" {
 		t.Errorf("TokenByHash = %+v, err %v", tok, err)
 	}
+
+	owned, err := s.ListUserTokens(ctx, u.ID)
+	if err != nil || len(owned) != 1 || owned[0].Name != "laptop" || owned[0].CreatedAt.IsZero() {
+		t.Fatalf("ListUserTokens = %+v, err %v", owned, err)
+	}
+
+	// A different user cannot revoke this token.
+	other, _ := s.CreateUser(ctx, "dave", "h", "member")
+	if err := s.RevokeUserToken(ctx, other.ID, id); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cross-user revoke err = %v; want ErrNotFound", err)
+	}
+	// The owner can, after which it disappears from the list.
+	if err := s.RevokeUserToken(ctx, u.ID, id); err != nil {
+		t.Fatalf("RevokeUserToken(owner): %v", err)
+	}
+	if owned, _ := s.ListUserTokens(ctx, u.ID); len(owned) != 0 {
+		t.Errorf("ListUserTokens after revoke = %d; want 0", len(owned))
+	}
 }
 
 func TestListFileHashesAndDeleteByPath(t *testing.T) {

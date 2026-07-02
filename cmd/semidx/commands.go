@@ -221,6 +221,9 @@ func newServeCmd(d *deps) *cobra.Command {
 			if admin != "" {
 				fmt.Fprintf(os.Stderr, "bootstrap web admin user created: %s\n", admin)
 			}
+			if err := srv.MountAdmin(d.cfg.CookieSecure); err != nil {
+				return fmt.Errorf("mount admin UI: %w", err)
+			}
 			srv.StartWorkers(cmd.Context(), d.cfg.IndexWorkers, d.cfg.DataDir)
 			return srv.Run(cmd.Context(), d.cfg.ListenAddr)
 		},

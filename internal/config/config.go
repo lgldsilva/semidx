@@ -63,6 +63,10 @@ type Config struct {
 	// empty.
 	BootstrapAdminUser     string
 	BootstrapAdminPassword string
+	// CookieSecure sets the Secure flag on web-admin cookies
+	// (SEMIDX_COOKIE_SECURE, default true). Set to false ONLY when serving the
+	// admin UI over plain HTTP (e.g. local testing).
+	CookieSecure bool
 }
 
 // Load resolves the configuration. A missing or unreadable .env file is not
@@ -87,6 +91,7 @@ func Load() *Config {
 
 		BootstrapAdminUser:     env.get("SEMIDX_BOOTSTRAP_ADMIN_USER", "admin"),
 		BootstrapAdminPassword: env.get("SEMIDX_BOOTSTRAP_ADMIN_PASSWORD", ""),
+		CookieSecure:           env.get("SEMIDX_COOKIE_SECURE", "true") != "false",
 	}
 }
 

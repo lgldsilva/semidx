@@ -1,0 +1,13 @@
+{{define "account.html"}}{{template "head" .}}
+<h1>Account</h1>
+{{template "flashes" .}}
+<div class="card narrow">
+  <h2 style="margin-top:0">Change password</h2>
+  <form method="post" action="/admin/account">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <label>Current password<input type="password" name="current" autocomplete="current-password" required></label>
+    <label>New password<input type="password" name="new" autocomplete="new-password" minlength="8" required></label>
+    <button type="submit">Update password</button>
+  </form>
+</div>
+{{template "foot" .}}{{end}}
