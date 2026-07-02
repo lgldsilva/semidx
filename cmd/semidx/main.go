@@ -68,6 +68,7 @@ func newRootCmd() *cobra.Command {
 		newSgrepCmd(d),
 		newModelsCmd(d),
 		newDropCmd(d),
+		newServeCmd(d),
 		newMCPCmd(d),
 	)
 	return root

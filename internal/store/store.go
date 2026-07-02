@@ -36,6 +36,13 @@ type Project struct {
 	Status string
 }
 
+// Token is an API token record (the plaintext is never stored, only its hash).
+type Token struct {
+	ID     int
+	Name   string
+	Scopes []string
+}
+
 // SearchResult is one hit from a similarity or keyword search.
 type SearchResult struct {
 	FilePath  string
@@ -48,6 +55,7 @@ type SearchResult struct {
 // Store is the persistence surface the rest of semidx depends on.
 type Store interface {
 	Close()
+	Ping(ctx context.Context) error
 	EnsureChunksTable(ctx context.Context, dims int) error
 	UpsertProject(ctx context.Context, name, path, model string) (int, error)
 	GetProject(ctx context.Context, name string) (*Project, error)
@@ -60,6 +68,11 @@ type Store interface {
 	SearchSimilar(ctx context.Context, projectID int, embedding []float32, dims, topK int) ([]SearchResult, error)
 	SearchSimilarKeywords(ctx context.Context, projectID int, queryText string, dims, topK int) ([]SearchResult, error)
 	DropAll(ctx context.Context) error
+
+	CreateToken(ctx context.Context, name, tokenHash string, scopes []string) (int, error)
+	TokenByHash(ctx context.Context, tokenHash string) (*Token, error)
+	RevokeToken(ctx context.Context, id int) error
+	CountTokens(ctx context.Context) (int, error)
 }
 
 // PgStore is the PostgreSQL/pgvector implementation of Store.
@@ -90,6 +103,11 @@ func NewPgStore(ctx context.Context, connString string) (*PgStore, error) {
 
 func (s *PgStore) Close() {
 	s.pool.Close()
+}
+
+// Ping verifies the database connection (used by /readyz).
+func (s *PgStore) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
 }
 
 // chunksTable returns the safely-quoted table identifier for a dimension, or an
@@ -347,6 +365,49 @@ func scanSearchRows(rows pgx.Rows) ([]SearchResult, error) {
 		results = append(results, r)
 	}
 	return results, rows.Err()
+}
+
+// CreateToken stores a new API token (by hash) and returns its id.
+func (s *PgStore) CreateToken(ctx context.Context, name, tokenHash string, scopes []string) (int, error) {
+	if scopes == nil {
+		scopes = []string{}
+	}
+	var id int
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO api_tokens (name, token_hash, scopes) VALUES ($1, $2, $3) RETURNING id
+	`, name, tokenHash, scopes).Scan(&id)
+	return id, err
+}
+
+// TokenByHash returns the non-revoked token with the given hash and records its
+// use. Returns (nil, nil) when no active token matches.
+func (s *PgStore) TokenByHash(ctx context.Context, tokenHash string) (*Token, error) {
+	var t Token
+	err := s.pool.QueryRow(ctx, `
+		UPDATE api_tokens SET last_used_at = NOW()
+		WHERE token_hash = $1 AND revoked_at IS NULL
+		RETURNING id, name, scopes
+	`, tokenHash).Scan(&t.ID, &t.Name, &t.Scopes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// RevokeToken marks a token revoked (idempotent).
+func (s *PgStore) RevokeToken(ctx context.Context, id int) error {
+	_, err := s.pool.Exec(ctx, `UPDATE api_tokens SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL`, id)
+	return err
+}
+
+// CountTokens returns how many non-revoked tokens exist (used for bootstrap).
+func (s *PgStore) CountTokens(ctx context.Context) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM api_tokens WHERE revoked_at IS NULL`).Scan(&n)
+	return n, err
 }
 
 func (s *PgStore) DropAll(ctx context.Context) error {

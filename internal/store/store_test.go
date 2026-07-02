@@ -248,6 +248,48 @@ func TestFileUpToDate(t *testing.T) {
 	}
 }
 
+func TestAPITokens(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if n, err := s.CountTokens(ctx); err != nil || n != 0 {
+		t.Fatalf("CountTokens on empty = %d, err %v; want 0", n, err)
+	}
+
+	id, err := s.CreateToken(ctx, "ci", "hash-abc", []string{"read", "write"})
+	if err != nil {
+		t.Fatalf("CreateToken: %v", err)
+	}
+
+	tok, err := s.TokenByHash(ctx, "hash-abc")
+	if err != nil || tok == nil {
+		t.Fatalf("TokenByHash = %v, err %v; want a token", tok, err)
+	}
+	if tok.ID != id || tok.Name != "ci" || len(tok.Scopes) != 2 {
+		t.Errorf("token = %+v, unexpected", tok)
+	}
+
+	// Unknown hash → (nil, nil).
+	if tok, err := s.TokenByHash(ctx, "nope"); err != nil || tok != nil {
+		t.Errorf("TokenByHash(unknown) = %v, err %v; want nil", tok, err)
+	}
+
+	if n, _ := s.CountTokens(ctx); n != 1 {
+		t.Errorf("CountTokens = %d, want 1", n)
+	}
+
+	// Revoked tokens are no longer returned and don't count.
+	if err := s.RevokeToken(ctx, id); err != nil {
+		t.Fatalf("RevokeToken: %v", err)
+	}
+	if tok, err := s.TokenByHash(ctx, "hash-abc"); err != nil || tok != nil {
+		t.Errorf("TokenByHash(revoked) = %v, err %v; want nil", tok, err)
+	}
+	if n, _ := s.CountTokens(ctx); n != 0 {
+		t.Errorf("CountTokens after revoke = %d, want 0", n)
+	}
+}
+
 func TestDeleteChunksForFile(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
