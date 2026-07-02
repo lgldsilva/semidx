@@ -67,6 +67,9 @@ type Config struct {
 	// (SEMIDX_COOKIE_SECURE, default true). Set to false ONLY when serving the
 	// admin UI over plain HTTP (e.g. local testing).
 	CookieSecure bool
+	// JWTSecret is the HS256 signing key for control tokens
+	// (SEMIDX_JWT_SECRET). When empty, JWT control tokens are disabled.
+	JWTSecret string
 }
 
 // Load resolves the configuration. A missing or unreadable .env file is not
@@ -92,6 +95,7 @@ func Load() *Config {
 		BootstrapAdminUser:     env.get("SEMIDX_BOOTSTRAP_ADMIN_USER", "admin"),
 		BootstrapAdminPassword: env.get("SEMIDX_BOOTSTRAP_ADMIN_PASSWORD", ""),
 		CookieSecure:           env.get("SEMIDX_COOKIE_SECURE", "true") != "false",
+		JWTSecret:              env.get("SEMIDX_JWT_SECRET", ""),
 	}
 }
 

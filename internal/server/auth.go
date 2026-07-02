@@ -30,7 +30,8 @@ func HashToken(token string) string {
 }
 
 // authed wraps a handler so it requires a valid Bearer token carrying the given
-// scope (or "admin", which grants everything).
+// scope (or "admin", which grants everything). The bearer may be an opaque API
+// key or a JWT control token; both resolve to a set of scopes.
 func (s *Server) authed(scope string, h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw := bearerToken(r)
@@ -38,22 +39,49 @@ func (s *Server) authed(scope string, h http.HandlerFunc) http.Handler {
 			writeJSONError(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
-		tok, err := s.store.TokenByHash(r.Context(), HashToken(raw))
+		scopes, ok, err := s.resolveScopes(r.Context(), raw)
 		if err != nil {
 			s.log.Error("token lookup failed", "err", err)
 			writeJSONError(w, http.StatusInternalServerError, "auth check failed")
 			return
 		}
-		if tok == nil {
+		if !ok {
 			writeJSONError(w, http.StatusUnauthorized, "invalid token")
 			return
 		}
-		if scope != "" && !slices.Contains(tok.Scopes, scope) && !slices.Contains(tok.Scopes, "admin") {
+		if scope != "" && !slices.Contains(scopes, scope) && !slices.Contains(scopes, "admin") {
 			writeJSONError(w, http.StatusForbidden, "token missing required scope: "+scope)
 			return
 		}
 		h(w, r)
 	})
+}
+
+// resolveScopes authenticates a bearer and returns its scopes. A JWT control
+// token is verified (signature, alg, expiry) and then checked for revocation by
+// its jti; an opaque key is looked up by hash. ok=false means invalid or revoked;
+// a non-nil error signals a backend failure (surface 500, not 401).
+func (s *Server) resolveScopes(ctx context.Context, raw string) (scopes []string, ok bool, err error) {
+	if s.jwt != nil {
+		if claims, verr := s.jwt.Verify(raw); verr == nil {
+			tok, terr := s.store.TokenByHash(ctx, claims.ID) // jti stored in token_hash
+			if terr != nil {
+				return nil, false, terr
+			}
+			if tok == nil {
+				return nil, false, nil // revoked or unknown jti
+			}
+			return claims.Scopes, true, nil
+		}
+	}
+	tok, terr := s.store.TokenByHash(ctx, HashToken(raw))
+	if terr != nil {
+		return nil, false, terr
+	}
+	if tok == nil {
+		return nil, false, nil
+	}
+	return tok.Scopes, true, nil
 }
 
 func bearerToken(r *http.Request) string {

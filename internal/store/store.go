@@ -50,12 +50,16 @@ var (
 )
 
 // Token is an API token record (the plaintext is never stored, only its hash).
+// Kind is "opaque" for CLI keys or "jwt" for control tokens; for JWTs the stored
+// hash is the token's jti.
 type Token struct {
 	ID         int
 	Name       string
 	Scopes     []string
+	Kind       string
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
+	ExpiresAt  *time.Time
 }
 
 // User is a web-UI account. PasswordHash is an argon2id encoded hash.
@@ -100,10 +104,11 @@ type Store interface {
 
 	CreateToken(ctx context.Context, name, tokenHash string, scopes []string) (int, error)
 	CreateUserToken(ctx context.Context, userID int, name, tokenHash string, scopes []string) (int, error)
+	CreateJWTToken(ctx context.Context, userID int, name, jti string, scopes []string, expiresAt *time.Time) (int, error)
 	TokenByHash(ctx context.Context, tokenHash string) (*Token, error)
 	RevokeToken(ctx context.Context, id int) error
 	RevokeUserToken(ctx context.Context, userID, id int) error
-	ListUserTokens(ctx context.Context, userID int) ([]Token, error)
+	ListUserTokens(ctx context.Context, userID int, kind string) ([]Token, error)
 	CountTokens(ctx context.Context) (int, error)
 
 	CreateUser(ctx context.Context, username, passwordHash, role string) (*User, error)
@@ -552,12 +557,28 @@ func (s *PgStore) RevokeUserToken(ctx context.Context, userID, id int) error {
 	return nil
 }
 
-// ListUserTokens returns a user's active (non-revoked) tokens, newest first.
-func (s *PgStore) ListUserTokens(ctx context.Context, userID int) ([]Token, error) {
+// CreateJWTToken records an issued control token by its jti (kept in token_hash
+// so the normal revocation/lookup path applies). expiresAt is nil for a
+// non-expiring token.
+func (s *PgStore) CreateJWTToken(ctx context.Context, userID int, name, jti string, scopes []string, expiresAt *time.Time) (int, error) {
+	if scopes == nil {
+		scopes = []string{}
+	}
+	var id int
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO api_tokens (name, token_hash, scopes, user_id, kind, expires_at)
+		VALUES ($1, $2, $3, $4, 'jwt', $5) RETURNING id
+	`, name, jti, scopes, userID, expiresAt).Scan(&id)
+	return id, err
+}
+
+// ListUserTokens returns a user's active (non-revoked) tokens of the given kind
+// ("opaque" or "jwt"), newest first.
+func (s *PgStore) ListUserTokens(ctx context.Context, userID int, kind string) ([]Token, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, scopes, created_at, last_used_at FROM api_tokens
-		WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC
-	`, userID)
+		SELECT id, name, scopes, kind, created_at, last_used_at, expires_at FROM api_tokens
+		WHERE user_id = $1 AND kind = $2 AND revoked_at IS NULL ORDER BY created_at DESC
+	`, userID, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -565,7 +586,7 @@ func (s *PgStore) ListUserTokens(ctx context.Context, userID int) ([]Token, erro
 	var tokens []Token
 	for rows.Next() {
 		var t Token
-		if err := rows.Scan(&t.ID, &t.Name, &t.Scopes, &t.CreatedAt, &t.LastUsedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Scopes, &t.Kind, &t.CreatedAt, &t.LastUsedAt, &t.ExpiresAt); err != nil {
 			return nil, err
 		}
 		tokens = append(tokens, t)
