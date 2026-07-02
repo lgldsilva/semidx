@@ -56,8 +56,8 @@ func TestChunkTextSingleWhenSmall(t *testing.T) {
 	}
 }
 
-// Property: no chunk ever exceeds maxChars, for any content/extension/size.
-// This is the invariant the memory-safe indexer relies on.
+// Property: no chunk ever exceeds maxChars and every chunk carries a valid
+// 1-based line range. These are the invariants the indexer and search rely on.
 func TestChunkNeverExceedsMax(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		content := []byte(rapid.String().Draw(t, "content"))
@@ -65,12 +65,34 @@ func TestChunkNeverExceedsMax(t *testing.T) {
 		ext := rapid.SampledFrom([]string{".go", ".md", ".txt", ".py"}).Draw(t, "ext")
 
 		chunks := ChunkFile("f"+ext, content, maxChars)
+		prevStart := 0
 		for i, c := range chunks {
 			if len(c.Content) > maxChars {
 				t.Fatalf("chunk %d len %d exceeds maxChars %d (ext %s)", i, len(c.Content), maxChars, ext)
 			}
+			if c.StartLine < 1 || c.EndLine < c.StartLine {
+				t.Fatalf("chunk %d has invalid line range [%d,%d]", i, c.StartLine, c.EndLine)
+			}
+			if c.StartLine < prevStart {
+				t.Fatalf("chunk %d StartLine %d < previous %d (not non-decreasing)", i, c.StartLine, prevStart)
+			}
+			prevStart = c.StartLine
 		}
 	})
+}
+
+func TestChunkLineNumbers(t *testing.T) {
+	code := "package main\n\nfunc A() {\n\treturn\n}\n\nfunc B() {}\n"
+	chunks := ChunkFile("x.go", []byte(code), 4000)
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 chunks, got %d: %#v", len(chunks), chunks)
+	}
+	want := []struct{ start, end int }{{1, 1}, {3, 5}, {7, 7}}
+	for i, w := range want {
+		if chunks[i].StartLine != w.start || chunks[i].EndLine != w.end {
+			t.Errorf("chunk %d line range [%d,%d], want [%d,%d]", i, chunks[i].StartLine, chunks[i].EndLine, w.start, w.end)
+		}
+	}
 }
 
 // isSubsequence reports whether sub appears within s in order (gaps allowed).

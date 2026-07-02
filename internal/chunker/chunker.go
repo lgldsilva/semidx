@@ -11,9 +11,13 @@ import (
 	"unicode/utf8"
 )
 
-// Chunk is one indexable slice of a file's content.
+// Chunk is one indexable slice of a file's content, with the 1-based line range
+// it spans in the source file (so search results can point at a line without
+// re-reading the file).
 type Chunk struct {
-	Content string
+	Content   string
+	StartLine int
+	EndLine   int
 }
 
 var (
@@ -83,22 +87,26 @@ func ChunkFile(path string, content []byte, maxChars int) []Chunk {
 }
 
 func chunkCode(content []byte, maxChars int) []Chunk {
-	// Split by blank lines, then merge runs of lines into chunks up to maxChars.
+	// Split by blank lines, then merge runs of lines into chunks up to maxChars,
+	// tracking the 1-based source line range of each chunk.
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 	scanner.Split(scanLines)
 
 	var chunks []Chunk
 	var current strings.Builder
+	curStart, curEnd := 0, 0
+	lineNum := 0
 
 	flush := func() {
 		if current.Len() == 0 {
 			return
 		}
-		chunks = append(chunks, Chunk{Content: strings.TrimSpace(current.String())})
+		chunks = append(chunks, Chunk{Content: strings.TrimSpace(current.String()), StartLine: curStart, EndLine: curEnd})
 		current.Reset()
 	}
 
 	for scanner.Scan() {
+		lineNum++
 		line := scanner.Text()
 		trimmed := strings.TrimSpace(line)
 
@@ -108,12 +116,13 @@ func chunkCode(content []byte, maxChars int) []Chunk {
 		}
 
 		// A single line longer than the budget can't fit any chunk: flush what
-		// we have, then hard-split the line on rune boundaries.
+		// we have, then hard-split the line on rune boundaries (all pieces map
+		// to that one source line).
 		if len(line) > maxChars {
 			flush()
 			for _, piece := range splitRunes(line, maxChars) {
 				if p := strings.TrimSpace(piece); p != "" {
-					chunks = append(chunks, Chunk{Content: p})
+					chunks = append(chunks, Chunk{Content: p, StartLine: lineNum, EndLine: lineNum})
 				}
 			}
 			continue
@@ -122,7 +131,10 @@ func chunkCode(content []byte, maxChars int) []Chunk {
 		if current.Len()+len(line)+1 > maxChars && current.Len() > 0 {
 			flush()
 		}
-
+		if current.Len() == 0 {
+			curStart = lineNum
+		}
+		curEnd = lineNum
 		current.WriteString(line)
 		current.WriteString("\n")
 	}
@@ -140,7 +152,7 @@ func chunkCode(content []byte, maxChars int) []Chunk {
 func chunkText(content []byte, maxChars int) []Chunk {
 	text := string(content)
 	if len(text) <= maxChars {
-		return []Chunk{{Content: strings.TrimSpace(text)}}
+		return []Chunk{{Content: strings.TrimSpace(text), StartLine: 1, EndLine: lineOf(text, len(text))}}
 	}
 
 	var chunks []Chunk
@@ -165,7 +177,11 @@ func chunkText(content []byte, maxChars int) []Chunk {
 			}
 		}
 
-		chunks = append(chunks, Chunk{Content: strings.TrimSpace(text[start:end])})
+		chunks = append(chunks, Chunk{
+			Content:   strings.TrimSpace(text[start:end]),
+			StartLine: lineOf(text, start),
+			EndLine:   lineOf(text, end-1),
+		})
 		if end >= len(text) {
 			break
 		}
@@ -181,6 +197,17 @@ func chunkText(content []byte, maxChars int) []Chunk {
 	}
 
 	return chunks
+}
+
+// lineOf returns the 1-based line number of the byte offset in text.
+func lineOf(text string, offset int) int {
+	if offset > len(text) {
+		offset = len(text)
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return 1 + strings.Count(text[:offset], "\n")
 }
 
 // splitRunes breaks s into pieces of at most maxBytes bytes each, never cutting

@@ -64,9 +64,23 @@ Este documento registra as principais decisões arquiteturais tomadas durante a 
 
 ---
 
+## 6. Índice ANN (HNSW/halfvec) e Números de Linha no Banco
+
+- **Decisão**: Criar um índice **HNSW** de cosseno em cada tabela `chunks_<dims>` e persistir `start_line`/`end_line` de cada chunk no banco (revertendo a decisão original de calcular a linha lendo o arquivo em tempo de busca).
+- **Why**:
+  - Sem índice ANN a busca vetorial fazia *sequential scan* — inaceitável conforme os projetos crescem.
+  - O cálculo de linha lendo o arquivo (`findLineInFile`) exige que o arquivo esteja acessível no host da busca — impossível na arquitetura cliente-servidor (o servidor não tem os arquivos) — e o algoritmo achava a *primeira* ocorrência da linha em qualquer lugar do arquivo (frágil).
+- **How**:
+  - `EnsureChunksTable` cria `CREATE INDEX ... USING hnsw`. **Gotcha do pgvector**: HNSW sobre o tipo `vector` limita a **2000 dimensões**; modelos maiores (Gemini 3072) indexam o cast `halfvec` (`(embedding::halfvec(N)) halfvec_cosine_ops`), e `SearchSimilar` consulta a expressão equivalente para que o índice seja usado.
+  - `Chunk` carrega `StartLine`/`EndLine` (calculados no `chunker`), persistidos em `chunks_<dims>` e retornados no `SearchResult`. O `GrepFormatter` usa a linha do banco; `findLineInFile` foi removido.
+- **Trade-offs**:
+  - `halfvec` reduz a precisão do índice (meia precisão) para modelos >2000d — aceitável para recall aproximado; a distância exata ainda usa o `vector`. Tabelas antigas recebem as colunas via `ALTER TABLE ADD COLUMN IF NOT EXISTS` (upgrade sem `drop`), mas dados pré-migração ficam com linha nula (reindexar para popular).
+
+---
+
 ## 🚫 O que NÃO faremos (por enquanto)
 
-- **Mapeamento de Linhas Preciso no Banco**: Não salvaremos os números das linhas de cada chunk no PostgreSQL para evitar inflar o banco. O cálculo da linha continuará sendo feito em tempo de busca (lendo o arquivo sob demanda via `findLineNumber`), o que é extremamente rápido e consome zero disco extra.
+- **Tabela `models` no banco**: `InferDims` (mapa nome→dimensão) já é fonte única em `internal/embed`; mover para uma tabela no banco acoplaria `embed`→`store` por benefício marginal. Reavaliar se/quando precisar de config por-modelo (provider/local) sem recompilar.
 - **Indexação de Arquivos Grandes (>1MB)**: Arquivos gigantes são ignorados ou truncados. Este projeto é otimizado para código-fonte e documentação estruturada em markdown.
 
 ---

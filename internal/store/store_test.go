@@ -113,8 +113,8 @@ func TestChunkRoundTripAndSearch(t *testing.T) {
 	}
 
 	chunks := []chunker.Chunk{
-		{Content: "alpha auth token handler"},
-		{Content: "beta gamma delta"},
+		{Content: "alpha auth token handler", StartLine: 10, EndLine: 12},
+		{Content: "beta gamma delta", StartLine: 20, EndLine: 20},
 	}
 	embeddings := [][]float32{{1, 0, 0}, {0, 1, 0}}
 	if err := s.InsertChunks(ctx, pid, fid, chunks, embeddings, 3); err != nil {
@@ -137,6 +137,9 @@ func TestChunkRoundTripAndSearch(t *testing.T) {
 	}
 	if res[0].FilePath != "src/auth.go" {
 		t.Errorf("file path = %q, want src/auth.go", res[0].FilePath)
+	}
+	if res[0].StartLine != 10 || res[0].EndLine != 12 {
+		t.Errorf("top hit line range = [%d,%d], want [10,12]", res[0].StartLine, res[0].EndLine)
 	}
 
 	// Keyword fallback: ILIKE on content.

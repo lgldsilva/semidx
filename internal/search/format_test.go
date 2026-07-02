@@ -14,8 +14,8 @@ func sampleResponse() *Response {
 		Project: &store.Project{Name: "demo", Path: "/repo"},
 		Model:   "bge-m3",
 		Results: []store.SearchResult{
-			{FilePath: "src/auth.go", Content: "func Login() {\n  // jwt\n}", Score: 0.9123},
-			{FilePath: "README.md", Content: "  \n# Title\nbody", Score: 0.5},
+			{FilePath: "src/auth.go", Content: "func Login() {\n  // jwt\n}", Score: 0.9123, StartLine: 12, EndLine: 14},
+			{FilePath: "README.md", Content: "  \n# Title\nbody", Score: 0.5, StartLine: 3, EndLine: 5},
 		},
 	}
 }
@@ -37,18 +37,10 @@ func TestHumanFormatterGolden(t *testing.T) {
 }
 
 func TestGrepFormatterGolden(t *testing.T) {
-	// Deterministic line resolution so the golden doesn't depend on files.
-	gf := GrepFormatter{
-		ProjectPath: "/repo",
-		FindLine: func(full, content string) int {
-			if strings.Contains(full, "auth") {
-				return 12
-			}
-			return 3
-		},
-	}
+	// Line numbers come from the stored chunk (SearchResult.StartLine); no file
+	// read. This is the sgrep contract the daily workflow depends on.
 	var buf bytes.Buffer
-	if err := gf.Format(&buf, sampleResponse()); err != nil {
+	if err := (GrepFormatter{ProjectPath: "/repo"}).Format(&buf, sampleResponse()); err != nil {
 		t.Fatal(err)
 	}
 	const want = "/repo/src/auth.go:12:func Login() {\n" +

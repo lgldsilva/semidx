@@ -22,6 +22,10 @@ import (
 // keeps the Sprintf'd identifier provably safe.
 const maxDims = 16000
 
+// hnswVectorLimit is pgvector's max dimension for an HNSW index over the
+// `vector` type. Above it we index (and query) the `halfvec` cast instead.
+const hnswVectorLimit = 2000
+
 // Project is an indexed repository's metadata row.
 type Project struct {
 	ID     int
@@ -33,9 +37,11 @@ type Project struct {
 
 // SearchResult is one hit from a similarity or keyword search.
 type SearchResult struct {
-	FilePath string
-	Content  string
-	Score    float64
+	FilePath  string
+	Content   string
+	Score     float64
+	StartLine int
+	EndLine   int
 }
 
 // Store is the persistence surface the rest of semidx depends on.
@@ -106,6 +112,8 @@ func (s *PgStore) EnsureChunksTable(ctx context.Context, dims int) error {
 			chunk_index INTEGER NOT NULL,
 			content TEXT NOT NULL,
 			embedding vector(%d),
+			start_line INTEGER,
+			end_line INTEGER,
 			created_at TIMESTAMP DEFAULT NOW(),
 			UNIQUE(project_id, file_id, chunk_index),
 			FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
@@ -115,13 +123,41 @@ func (s *PgStore) EnsureChunksTable(ctx context.Context, dims int) error {
 		return err
 	}
 
+	// Upgrade tables created before line tracking existed.
+	for _, col := range []string{"start_line", "end_line"} {
+		if _, err := s.pool.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s INTEGER", table, col)); err != nil {
+			return err
+		}
+	}
+
 	idxFile := pgx.Identifier{fmt.Sprintf("idx_chunks_%d_file", dims)}.Sanitize()
 	if _, err := s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s(file_id)", idxFile, table)); err != nil {
 		return err
 	}
 	idxProj := pgx.Identifier{fmt.Sprintf("idx_chunks_%d_project", dims)}.Sanitize()
-	_, err = s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s(project_id)", idxProj, table))
+	if _, err := s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s(project_id)", idxProj, table)); err != nil {
+		return err
+	}
+
+	// ANN index for cosine similarity. HNSW over `vector` maxes out at 2000
+	// dims, so higher-dimensional models (e.g. Gemini 3072) index the halfvec
+	// cast — SearchSimilar queries the matching expression so the index is used.
+	idxHNSW := pgx.Identifier{fmt.Sprintf("idx_chunks_%d_hnsw", dims)}.Sanitize()
+	opclass := "(embedding vector_cosine_ops)"
+	if dims > hnswVectorLimit {
+		opclass = fmt.Sprintf("((embedding::halfvec(%d)) halfvec_cosine_ops)", dims)
+	}
+	_, err = s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING hnsw %s", idxHNSW, table, opclass))
 	return err
+}
+
+// distanceExpr is the cosine-distance SQL expression against query param $1,
+// matching the HNSW index built for the given dimension.
+func distanceExpr(dims int) string {
+	if dims > hnswVectorLimit {
+		return fmt.Sprintf("c.embedding::halfvec(%d) <=> $1::halfvec(%d)", dims, dims)
+	}
+	return "c.embedding <=> $1"
 }
 
 func (s *PgStore) UpsertProject(ctx context.Context, name, path, model string) (int, error) {
@@ -184,11 +220,12 @@ func (s *PgStore) InsertChunks(ctx context.Context, projectID, fileID int, chunk
 	for i, chunk := range chunks {
 		vec := pgvector.NewVector(embeddings[i])
 		batch.Queue(fmt.Sprintf(`
-			INSERT INTO %s (project_id, file_id, chunk_index, content, embedding)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO %s (project_id, file_id, chunk_index, content, embedding, start_line, end_line)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (project_id, file_id, chunk_index) DO UPDATE
-			SET content = EXCLUDED.content, embedding = EXCLUDED.embedding
-		`, table), projectID, fileID, i, chunk.Content, vec)
+			SET content = EXCLUDED.content, embedding = EXCLUDED.embedding,
+			    start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line
+		`, table), projectID, fileID, i, chunk.Content, vec, chunk.StartLine, chunk.EndLine)
 	}
 
 	br := s.pool.SendBatch(ctx, batch)
@@ -214,11 +251,12 @@ func (s *PgStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID in
 	batch := &pgx.Batch{}
 	for i, chunk := range chunks {
 		batch.Queue(fmt.Sprintf(`
-			INSERT INTO %s (project_id, file_id, chunk_index, content, embedding)
-			VALUES ($1, $2, $3, $4, NULL)
+			INSERT INTO %s (project_id, file_id, chunk_index, content, embedding, start_line, end_line)
+			VALUES ($1, $2, $3, $4, NULL, $5, $6)
 			ON CONFLICT (project_id, file_id, chunk_index) DO UPDATE
-			SET content = EXCLUDED.content, embedding = NULL
-		`, table), projectID, fileID, i, chunk.Content)
+			SET content = EXCLUDED.content, embedding = NULL,
+			    start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line
+		`, table), projectID, fileID, i, chunk.Content, chunk.StartLine, chunk.EndLine)
 	}
 
 	br := s.pool.SendBatch(ctx, batch)
@@ -239,14 +277,15 @@ func (s *PgStore) SearchSimilar(ctx context.Context, projectID int, embedding []
 	}
 	// embedding IS NOT NULL excludes text-only rows (sensitive files stored
 	// without an embedding); those surface via keyword search instead.
+	dist := distanceExpr(dims)
 	query := fmt.Sprintf(`
-		SELECT f.path, c.content, 1 - (c.embedding <=> $1) AS score
+		SELECT f.path, c.content, c.start_line, c.end_line, 1 - (%s) AS score
 		FROM %s c
 		JOIN files f ON f.id = c.file_id
 		WHERE c.project_id = $2 AND c.embedding IS NOT NULL
-		ORDER BY c.embedding <=> $1
+		ORDER BY %s
 		LIMIT $3
-	`, table)
+	`, dist, table, dist)
 
 	vec := pgvector.NewVector(embedding)
 	rows, err := s.pool.Query(ctx, query, vec, projectID, topK)
@@ -255,11 +294,24 @@ func (s *PgStore) SearchSimilar(ctx context.Context, projectID int, embedding []
 	}
 	defer rows.Close()
 
+	return scanSearchRows(rows)
+}
+
+// scanSearchRows reads (path, content, start_line, end_line, score) rows,
+// tolerating NULL line columns (rows indexed before line tracking).
+func scanSearchRows(rows pgx.Rows) ([]SearchResult, error) {
 	var results []SearchResult
 	for rows.Next() {
 		var r SearchResult
-		if err := rows.Scan(&r.FilePath, &r.Content, &r.Score); err != nil {
+		var startLine, endLine *int
+		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score); err != nil {
 			return nil, err
+		}
+		if startLine != nil {
+			r.StartLine = *startLine
+		}
+		if endLine != nil {
+			r.EndLine = *endLine
 		}
 		results = append(results, r)
 	}
@@ -308,7 +360,7 @@ func (s *PgStore) SearchSimilarKeywords(ctx context.Context, projectID int, quer
 	}
 
 	sql := fmt.Sprintf(`
-		SELECT f.path, c.content, 0.5 AS score
+		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score
 		FROM %s c
 		JOIN files f ON f.id = c.file_id
 		WHERE c.project_id = $1 AND (%s)
@@ -322,15 +374,7 @@ func (s *PgStore) SearchSimilarKeywords(ctx context.Context, projectID int, quer
 	}
 	defer rows.Close()
 
-	var results []SearchResult
-	for rows.Next() {
-		var r SearchResult
-		if err := rows.Scan(&r.FilePath, &r.Content, &r.Score); err != nil {
-			return nil, err
-		}
-		results = append(results, r)
-	}
-	return results, rows.Err()
+	return scanSearchRows(rows)
 }
 
 // probeDimsForProject scans existing chunks_<dims> tables for one holding rows

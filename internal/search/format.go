@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -36,21 +35,20 @@ func (f HumanFormatter) Format(w io.Writer, resp *Response) error {
 }
 
 // GrepFormatter renders classic grep output: <fullpath>:<line>:<first line>.
-// This is the format the sgrep workflow depends on. FindLine resolves the line
-// number for a hit; when nil it reads the file on disk (see findLineInFile).
+// This is the format the sgrep workflow depends on. The line number comes from
+// the stored chunk (SearchResult.StartLine), so no file read is needed.
 type GrepFormatter struct {
 	ProjectPath string
-	FindLine    func(fullPath, content string) int
 }
 
 func (f GrepFormatter) Format(w io.Writer, resp *Response) error {
-	find := f.FindLine
-	if find == nil {
-		find = findLineInFile
-	}
 	for _, r := range resp.Results {
 		full := filepath.Join(f.ProjectPath, r.FilePath)
-		if _, err := fmt.Fprintf(w, "%s:%d:%s\n", full, find(full, r.Content), firstNonEmptyLine(r.Content)); err != nil {
+		line := r.StartLine
+		if line < 1 {
+			line = 1
+		}
+		if _, err := fmt.Fprintf(w, "%s:%d:%s\n", full, line, firstNonEmptyLine(r.Content)); err != nil {
 			return err
 		}
 	}
@@ -104,30 +102,4 @@ func truncatePreview(s string, max int) string {
 		end--
 	}
 	return s[:end] + "..."
-}
-
-// findLineInFile locates the 1-based line of a chunk's first non-empty line by
-// reading the file. Returns 1 when the file or line can't be found. (This is the
-// on-demand line mapping the PoC used; the server will supply line numbers
-// directly in a later phase.)
-func findLineInFile(fullPath, content string) int {
-	data, err := os.ReadFile(fullPath)
-	if err != nil {
-		return 1
-	}
-	first := firstNonEmptyLine(content)
-	if first == "" {
-		return 1
-	}
-	idx := strings.Index(string(data), first)
-	if idx < 0 {
-		return 1
-	}
-	line := 1
-	for i := 0; i < idx; i++ {
-		if data[i] == '\n' {
-			line++
-		}
-	}
-	return line
 }

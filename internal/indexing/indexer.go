@@ -270,7 +270,7 @@ func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectP
 		if err != nil {
 			continue
 		}
-		chunk := chunker.Chunk{Content: string(commit)}
+		chunk := chunker.Chunk{Content: string(commit), StartLine: 1, EndLine: 1}
 		if err := idx.db.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{chunk}, [][]float32{embedding}, idx.dims); err != nil {
 			continue
 		}
