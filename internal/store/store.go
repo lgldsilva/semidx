@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -45,6 +46,7 @@ type Project struct {
 var (
 	ErrNotFound      = errors.New("not found")
 	ErrProjectExists = errors.New("project already exists")
+	ErrUserExists    = errors.New("user already exists")
 )
 
 // Token is an API token record (the plaintext is never stored, only its hash).
@@ -52,6 +54,15 @@ type Token struct {
 	ID     int
 	Name   string
 	Scopes []string
+}
+
+// User is a web-UI account. PasswordHash is an argon2id encoded hash.
+type User struct {
+	ID           int
+	Username     string
+	PasswordHash string
+	Role         string // "admin" | "member"
+	Disabled     bool
 }
 
 // SearchResult is one hit from a similarity or keyword search.
@@ -86,9 +97,23 @@ type Store interface {
 	DropAll(ctx context.Context) error
 
 	CreateToken(ctx context.Context, name, tokenHash string, scopes []string) (int, error)
+	CreateUserToken(ctx context.Context, userID int, name, tokenHash string, scopes []string) (int, error)
 	TokenByHash(ctx context.Context, tokenHash string) (*Token, error)
 	RevokeToken(ctx context.Context, id int) error
 	CountTokens(ctx context.Context) (int, error)
+
+	CreateUser(ctx context.Context, username, passwordHash, role string) (*User, error)
+	GetUserByUsername(ctx context.Context, username string) (*User, error)
+	GetUserByID(ctx context.Context, id int) (*User, error)
+	ListUsers(ctx context.Context) ([]User, error)
+	SetUserPassword(ctx context.Context, id int, passwordHash string) error
+	SetUserDisabled(ctx context.Context, id int, disabled bool) error
+	CountUsers(ctx context.Context) (int, error)
+
+	CreateSession(ctx context.Context, tokenHash string, userID int, expiresAt time.Time) error
+	SessionUser(ctx context.Context, tokenHash string) (*User, error)
+	DeleteSession(ctx context.Context, tokenHash string) error
+	DeleteExpiredSessions(ctx context.Context) (int64, error)
 
 	EnqueueJob(ctx context.Context, projectID int, jobType string) (int, error)
 	ClaimJob(ctx context.Context) (*Job, error)
@@ -514,6 +539,154 @@ func (s *PgStore) CountTokens(ctx context.Context) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM api_tokens WHERE revoked_at IS NULL`).Scan(&n)
 	return n, err
+}
+
+// CreateUserToken stores an API token owned by a user.
+func (s *PgStore) CreateUserToken(ctx context.Context, userID int, name, tokenHash string, scopes []string) (int, error) {
+	if scopes == nil {
+		scopes = []string{}
+	}
+	var id int
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO api_tokens (name, token_hash, scopes, user_id) VALUES ($1, $2, $3, $4) RETURNING id
+	`, name, tokenHash, scopes, userID).Scan(&id)
+	return id, err
+}
+
+// CreateUser inserts a user, returning ErrUserExists on a duplicate username.
+func (s *PgStore) CreateUser(ctx context.Context, username, passwordHash, role string) (*User, error) {
+	var u User
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3)
+		RETURNING id, username, password_hash, role, (disabled_at IS NOT NULL)
+	`, username, passwordHash, role).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+		return nil, ErrUserExists
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (s *PgStore) scanUser(row pgx.Row) (*User, error) {
+	var u User
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// GetUserByUsername returns a user by username (including disabled ones; callers
+// decide whether disabled matters).
+func (s *PgStore) GetUserByUsername(ctx context.Context, username string) (*User, error) {
+	return s.scanUser(s.pool.QueryRow(ctx, `
+		SELECT id, username, password_hash, role, (disabled_at IS NOT NULL) FROM users WHERE username = $1
+	`, username))
+}
+
+// GetUserByID returns a user by id.
+func (s *PgStore) GetUserByID(ctx context.Context, id int) (*User, error) {
+	return s.scanUser(s.pool.QueryRow(ctx, `
+		SELECT id, username, password_hash, role, (disabled_at IS NOT NULL) FROM users WHERE id = $1
+	`, id))
+}
+
+// ListUsers returns all users ordered by username.
+func (s *PgStore) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, username, password_hash, role, (disabled_at IS NOT NULL) FROM users ORDER BY username
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// SetUserPassword updates a user's password hash.
+func (s *PgStore) SetUserPassword(ctx context.Context, id int, passwordHash string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, id, passwordHash)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetUserDisabled disables or re-enables a user. Disabling also invalidates their
+// active sessions.
+func (s *PgStore) SetUserDisabled(ctx context.Context, id int, disabled bool) error {
+	col := "NULL"
+	if disabled {
+		col = "NOW()"
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET disabled_at = `+col+` WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	if disabled {
+		_, err = s.pool.Exec(ctx, `DELETE FROM web_sessions WHERE user_id = $1`, id)
+	}
+	return err
+}
+
+// CountUsers returns the total number of users (used for admin bootstrap).
+func (s *PgStore) CountUsers(ctx context.Context) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)
+	return n, err
+}
+
+// CreateSession stores a web session by its token hash.
+func (s *PgStore) CreateSession(ctx context.Context, tokenHash string, userID int, expiresAt time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO web_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)
+	`, tokenHash, userID, expiresAt)
+	return err
+}
+
+// SessionUser returns the user for a live (non-expired, non-disabled) session,
+// or ErrNotFound.
+func (s *PgStore) SessionUser(ctx context.Context, tokenHash string) (*User, error) {
+	return s.scanUser(s.pool.QueryRow(ctx, `
+		SELECT u.id, u.username, u.password_hash, u.role, (u.disabled_at IS NOT NULL)
+		FROM web_sessions s JOIN users u ON u.id = s.user_id
+		WHERE s.token_hash = $1 AND s.expires_at > NOW() AND u.disabled_at IS NULL
+	`, tokenHash))
+}
+
+// DeleteSession removes a session (logout); idempotent.
+func (s *PgStore) DeleteSession(ctx context.Context, tokenHash string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM web_sessions WHERE token_hash = $1`, tokenHash)
+	return err
+}
+
+// DeleteExpiredSessions purges expired sessions and returns how many were removed.
+func (s *PgStore) DeleteExpiredSessions(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM web_sessions WHERE expires_at <= NOW()`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (s *PgStore) DropAll(ctx context.Context) error {

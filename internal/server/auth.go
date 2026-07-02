@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+
+	"github.com/lgldsilva/semidx/internal/passwd"
 )
 
 // GenerateToken returns a new random API token (plaintext, shown once) and its
@@ -84,4 +86,28 @@ func (s *Server) EnsureBootstrapToken(ctx context.Context, envToken string) (str
 		return "", err
 	}
 	return plaintext, nil
+}
+
+// EnsureBootstrapAdmin creates the first web-UI admin on a server that has no
+// users yet, using the configured password. It returns the created username, or
+// "" when skipped (no password set, or users already exist).
+func (s *Server) EnsureBootstrapAdmin(ctx context.Context, username, password string) (string, error) {
+	if password == "" {
+		return "", nil
+	}
+	n, err := s.store.CountUsers(ctx)
+	if err != nil {
+		return "", err
+	}
+	if n > 0 {
+		return "", nil
+	}
+	hash, err := passwd.Hash(password)
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.store.CreateUser(ctx, username, hash, "admin"); err != nil {
+		return "", err
+	}
+	return username, nil
 }

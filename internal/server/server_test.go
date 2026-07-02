@@ -25,6 +25,14 @@ type fakeStore struct {
 	enqueuedID int                  // EnqueueJob result
 	job        *store.Job           // GetJob result (nil → ErrNotFound)
 	fileHashes map[string]string    // ListFileHashes result
+	userCount  int                  // CountUsers result
+	created    *store.User          // last CreateUser call
+}
+
+func (f *fakeStore) CountUsers(context.Context) (int, error) { return f.userCount, nil }
+func (f *fakeStore) CreateUser(_ context.Context, username, hash, role string) (*store.User, error) {
+	f.created = &store.User{Username: username, PasswordHash: hash, Role: role}
+	return f.created, nil
 }
 
 func (f *fakeStore) ListFileHashes(context.Context, int) (map[string]string, error) {
