@@ -48,6 +48,7 @@ type Store interface {
 	UpsertFile(ctx context.Context, projectID int, path, hash string, size int) (int, error)
 	DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error
 	InsertChunks(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, embeddings [][]float32, dims int) error
+	InsertChunksTextOnly(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, dims int) error
 	SearchSimilar(ctx context.Context, projectID int, embedding []float32, dims, topK int) ([]SearchResult, error)
 	SearchSimilarKeywords(ctx context.Context, projectID int, queryText string, dims, topK int) ([]SearchResult, error)
 	DropAll(ctx context.Context) error
@@ -195,16 +196,48 @@ func (s *PgStore) InsertChunks(ctx context.Context, projectID, fileID int, chunk
 	return br.Close()
 }
 
+// InsertChunksTextOnly stores chunk content with a NULL embedding. Used for
+// sensitive files under a cloud-only model: the text stays searchable via the
+// keyword (ILIKE) fallback but is never sent to a cloud embedding provider.
+func (s *PgStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, dims int) error {
+	table, err := chunksTable(dims)
+	if err != nil {
+		return err
+	}
+
+	batch := &pgx.Batch{}
+	for i, chunk := range chunks {
+		batch.Queue(fmt.Sprintf(`
+			INSERT INTO %s (project_id, file_id, chunk_index, content, embedding)
+			VALUES ($1, $2, $3, $4, NULL)
+			ON CONFLICT (project_id, file_id, chunk_index) DO UPDATE
+			SET content = EXCLUDED.content, embedding = NULL
+		`, table), projectID, fileID, i, chunk.Content)
+	}
+
+	br := s.pool.SendBatch(ctx, batch)
+	defer func() { _ = br.Close() }()
+
+	for range chunks {
+		if _, err := br.Exec(); err != nil {
+			return err
+		}
+	}
+	return br.Close()
+}
+
 func (s *PgStore) SearchSimilar(ctx context.Context, projectID int, embedding []float32, dims, topK int) ([]SearchResult, error) {
 	table, err := chunksTable(dims)
 	if err != nil {
 		return nil, err
 	}
+	// embedding IS NOT NULL excludes text-only rows (sensitive files stored
+	// without an embedding); those surface via keyword search instead.
 	query := fmt.Sprintf(`
 		SELECT f.path, c.content, 1 - (c.embedding <=> $1) AS score
 		FROM %s c
 		JOIN files f ON f.id = c.file_id
-		WHERE c.project_id = $2
+		WHERE c.project_id = $2 AND c.embedding IS NOT NULL
 		ORDER BY c.embedding <=> $1
 		LIMIT $3
 	`, table)

@@ -198,6 +198,45 @@ func TestChunkRoundTripAndSearch(t *testing.T) {
 	}
 }
 
+func TestTextOnlyChunksKeywordOnly(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.EnsureChunksTable(ctx, 3); err != nil {
+		t.Fatalf("EnsureChunksTable: %v", err)
+	}
+	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d")
+
+	// One embedded chunk and one text-only (embedding NULL) chunk.
+	efid, _ := s.UpsertFile(ctx, pid, "code.go", "h1", 1)
+	_ = s.InsertChunks(ctx, pid, efid, []chunker.Chunk{{Content: "embedded vector chunk"}}, [][]float32{{1, 0, 0}}, 3)
+
+	tfid, _ := s.UpsertFile(ctx, pid, ".env", "h2", 1)
+	if err := s.InsertChunksTextOnly(ctx, pid, tfid, []chunker.Chunk{{Content: "SECRET_TOKEN plaintext only"}}, 3); err != nil {
+		t.Fatalf("InsertChunksTextOnly: %v", err)
+	}
+
+	// Vector search must NOT return the text-only (NULL embedding) row.
+	vec, err := s.SearchSimilar(ctx, pid, []float32{0, 0, 1}, 3, 10)
+	if err != nil {
+		t.Fatalf("SearchSimilar: %v", err)
+	}
+	for _, r := range vec {
+		if r.FilePath == ".env" {
+			t.Error("SECURITY: text-only chunk leaked into vector search results")
+		}
+	}
+
+	// Keyword search MUST find the text-only content.
+	kw, err := s.SearchSimilarKeywords(ctx, pid, "SECRET_TOKEN", 3, 10)
+	if err != nil {
+		t.Fatalf("SearchSimilarKeywords: %v", err)
+	}
+	if len(kw) != 1 || kw[0].FilePath != ".env" {
+		t.Errorf("keyword search = %+v, want the text-only .env chunk", kw)
+	}
+}
+
 func TestDeleteChunksForFile(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

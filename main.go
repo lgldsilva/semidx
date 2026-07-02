@@ -13,6 +13,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -114,7 +115,7 @@ func indexCmd(ctx context.Context, cfg *config.Config, db store.Store, emb embed
 		log.Fatalf("failed to upsert project: %v", err)
 	}
 
-	indexer := NewIndexer(db, emb, info.Dims, *verbose, *gitMode, *gitSince)
+	indexer := indexing.NewIndexer(db, emb, info.Dims, *verbose, *gitMode, *gitSince)
 
 	start := time.Now()
 	stats, err := indexer.IndexProject(ctx, projectID, *projectPath, *model, *maxFiles)
