@@ -80,14 +80,19 @@ type SearchResult struct {
 	EndLine   int
 }
 
-// Store is the persistence surface the rest of semidx depends on.
-type Store interface {
+// IndexStore is the persistence subset needed to drive indexing and search:
+// project/file/chunk lifecycle plus similarity and keyword lookup. It is
+// deliberately smaller than Store so a standalone, PostgreSQL-free backend (see
+// internal/localstore) can power the CLI's index/search path without
+// implementing the server-only token, user, session and job operations.
+type IndexStore interface {
 	Close()
 	Ping(ctx context.Context) error
 	EnsureChunksTable(ctx context.Context, dims int) error
 	UpsertProject(ctx context.Context, name, path, model string) (int, error)
 	CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*Project, error)
 	GetProject(ctx context.Context, name string) (*Project, error)
+	GetProjectByID(ctx context.Context, id int) (*Project, error)
 	ListProjects(ctx context.Context) ([]Project, error)
 	DeleteProject(ctx context.Context, name string) error
 	UpdateProjectStatus(ctx context.Context, id int, status string) error
@@ -101,6 +106,13 @@ type Store interface {
 	SearchSimilar(ctx context.Context, projectID int, embedding []float32, dims, topK int) ([]SearchResult, error)
 	SearchSimilarKeywords(ctx context.Context, projectID int, queryText string, dims, topK int) ([]SearchResult, error)
 	DropAll(ctx context.Context) error
+}
+
+// Store is the full persistence surface the server depends on: the indexing and
+// search subset (IndexStore) plus the server-only token, user, session and job
+// operations.
+type Store interface {
+	IndexStore
 
 	CreateToken(ctx context.Context, name, tokenHash string, scopes []string) (int, error)
 	CreateUserToken(ctx context.Context, userID int, name, tokenHash string, scopes []string) (int, error)
@@ -129,7 +141,6 @@ type Store interface {
 	CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated int) error
 	FailJob(ctx context.Context, id int, errMsg string) error
 	GetJob(ctx context.Context, id int) (*Job, error)
-	GetProjectByID(ctx context.Context, id int) (*Project, error)
 }
 
 // PgStore is the PostgreSQL/pgvector implementation of Store.
