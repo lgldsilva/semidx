@@ -1,0 +1,10 @@
+.git
+.github
+semidx
+semantic-indexer-poc
+dist
+coverage.out
+coverage.html
+*.test
+docs
+deploy

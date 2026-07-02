@@ -1,0 +1,49 @@
+# Reference deployment: the semidx server + its PostgreSQL/pgvector database.
+#
+# The database has NO published ports — it is reachable only on the internal
+# compose network, so the only way in is the authenticated HTTP API. Bring it up
+# with:  docker compose -f deploy/docker-compose.yml up -d --build
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: semidx
+      POSTGRES_PASSWORD: ${SEMIDX_DB_PASSWORD:-changeme}
+      POSTGRES_DB: semidx
+    # No `ports:` — the database is internal-only.
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U semidx -d semidx"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  semidx:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SEMIDX_DB_DSN: postgres://semidx:${SEMIDX_DB_PASSWORD:-changeme}@db:5432/semidx?sslmode=disable
+      SEMIDX_LISTEN_ADDR: ":8080"
+      SEMIDX_DATA_DIR: /data
+      # Optional: fix the first admin token instead of a generated one.
+      SEMIDX_BOOTSTRAP_TOKEN: ${SEMIDX_BOOTSTRAP_TOKEN:-}
+      # Embedding providers (set what you use). Ollama example:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Soft heap cap so the runtime GCs before the container limit.
+      GOMEMLIMIT: ${GOMEMLIMIT:-900MiB}
+    ports:
+      - "${SEMIDX_HTTP_PORT:-8080}:8080" # only the API is exposed
+    volumes:
+      - semidx_data:/data
+    restart: unless-stopped
+
+volumes:
+  db_data:
+  semidx_data:
