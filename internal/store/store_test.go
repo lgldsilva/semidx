@@ -217,6 +217,37 @@ func TestTextOnlyChunksKeywordOnly(t *testing.T) {
 	}
 }
 
+func TestFileUpToDate(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.EnsureChunksTable(ctx, 3); err != nil {
+		t.Fatalf("EnsureChunksTable: %v", err)
+	}
+	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d")
+	fid, _ := s.UpsertFile(ctx, pid, "x.go", "hash-v1", 10)
+
+	// No chunks yet → not up to date even though the hash matches.
+	if up, err := s.FileUpToDate(ctx, pid, "x.go", "hash-v1", 3); err != nil || up {
+		t.Errorf("FileUpToDate (no chunks) = %v, err %v; want false", up, err)
+	}
+
+	_ = s.InsertChunks(ctx, pid, fid, []chunker.Chunk{{Content: "code"}}, [][]float32{{1, 0, 0}}, 3)
+
+	// Same hash + chunks present → up to date.
+	if up, err := s.FileUpToDate(ctx, pid, "x.go", "hash-v1", 3); err != nil || !up {
+		t.Errorf("FileUpToDate (hash match + chunks) = %v, err %v; want true", up, err)
+	}
+	// Changed hash → not up to date (needs reindex).
+	if up, err := s.FileUpToDate(ctx, pid, "x.go", "hash-v2", 3); err != nil || up {
+		t.Errorf("FileUpToDate (hash changed) = %v, err %v; want false", up, err)
+	}
+	// Unknown file → not up to date.
+	if up, err := s.FileUpToDate(ctx, pid, "other.go", "hash-v1", 3); err != nil || up {
+		t.Errorf("FileUpToDate (unknown file) = %v, err %v; want false", up, err)
+	}
+}
+
 func TestDeleteChunksForFile(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

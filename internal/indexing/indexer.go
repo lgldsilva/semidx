@@ -47,9 +47,19 @@ type Indexer struct {
 type IndexStats struct {
 	FilesScanned  int
 	FilesIndexed  int
+	FilesSkipped  int // unchanged since last index (incremental)
 	ChunksCreated int
 	Errors        int
 }
+
+// fileOutcome is how indexFile handled a single file.
+type fileOutcome int
+
+const (
+	outcomeIndexed          fileOutcome = iota // (re)embedded and stored
+	outcomeSkippedEmpty                        // empty or produced no chunks
+	outcomeSkippedUnchanged                    // already indexed with the same hash
+)
 
 // NewIndexer wires an Indexer. dims is the embedding dimension of model.
 func NewIndexer(db store.Store, emb embed.Embedder, dims int, verbose, gitMode bool, gitSince string) *Indexer {
@@ -74,19 +84,23 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		}
 		rel, _ := filepath.Rel(projectPath, path)
 
-		created, softErrs, ok, err := idx.indexFile(ctx, projectID, path, rel, model)
+		created, softErrs, outcome, err := idx.indexFile(ctx, projectID, path, rel, model)
 		stats.Errors += softErrs
 		if err != nil {
 			stats.Errors++
 			idx.logf("[err] %s: %s", rel, truncateErr(err, 200))
 			continue
 		}
-		if !ok {
-			continue
+		switch outcome {
+		case outcomeIndexed:
+			stats.ChunksCreated += created
+			stats.FilesIndexed++
+			idx.progress(i, len(files), rel, stats)
+		case outcomeSkippedUnchanged:
+			stats.FilesSkipped++
+		case outcomeSkippedEmpty:
+			// nothing to record
 		}
-		stats.ChunksCreated += created
-		stats.FilesIndexed++
-		idx.progress(i, len(files), rel, stats)
 	}
 
 	if idx.gitMode {
@@ -129,39 +143,46 @@ func scanFiles(projectPath string, maxFiles int) ([]string, error) {
 	return files, nil
 }
 
-// indexFile reads, chunks and stores one file. ok is false for empty or
-// chunk-less files (skipped silently); hardErr signals a read/upsert/delete
-// failure (the whole file is dropped); softErrs counts failed embed sub-batches.
-func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, model string) (created, softErrs int, ok bool, hardErr error) {
+// indexFile reads, chunks and stores one file. The outcome distinguishes an
+// indexed file from one skipped because it's empty/chunk-less or unchanged since
+// the last run; hardErr signals a read/upsert/delete failure (the file is
+// dropped); softErrs counts failed embed sub-batches.
+func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, model string) (created, softErrs int, outcome fileOutcome, hardErr error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, outcomeSkippedEmpty, err
 	}
 	content, err := io.ReadAll(io.LimitReader(f, maxFileSize))
 	_ = f.Close()
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, outcomeSkippedEmpty, err
 	}
 	if len(strings.TrimSpace(string(content))) == 0 {
-		return 0, 0, false, nil
+		return 0, 0, outcomeSkippedEmpty, nil
 	}
 
 	hash := fmt.Sprintf("%x", sha256.Sum256(content))
+
+	// Incremental: skip files already indexed with this exact content.
+	if upToDate, err := idx.db.FileUpToDate(ctx, projectID, rel, hash, idx.dims); err == nil && upToDate {
+		return 0, 0, outcomeSkippedUnchanged, nil
+	}
+
 	fileID, err := idx.db.UpsertFile(ctx, projectID, rel, hash, len(content))
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, outcomeSkippedEmpty, err
 	}
 
 	chunks := chunker.ChunkFile(rel, content, maxChunkChars)
 	if len(chunks) == 0 {
-		return 0, 0, false, nil
+		return 0, 0, outcomeSkippedEmpty, nil
 	}
 	if len(chunks) > maxChunksPerFile {
 		chunks = chunks[:maxChunksPerFile]
 	}
 
 	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
-		return 0, 0, false, err
+		return 0, 0, outcomeSkippedEmpty, err
 	}
 
 	// Privacy routing: a sensitive file must never be embedded by a cloud
@@ -173,16 +194,16 @@ func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, mod
 		localCtx := embed.WithForceLocal(ctx, true)
 		if _, err := idx.embedder.ModelInfo(localCtx, model); err != nil {
 			if err := idx.db.InsertChunksTextOnly(ctx, projectID, fileID, chunks, idx.dims); err != nil {
-				return 0, 0, false, err
+				return 0, 0, outcomeSkippedEmpty, err
 			}
 			idx.logf("  [local-text] %s (sensitive; stored text-only, no cloud embedding)", rel)
-			return len(chunks), 0, true, nil
+			return len(chunks), 0, outcomeIndexed, nil
 		}
 		embedCtx = localCtx
 	}
 
 	created, softErrs = idx.embedAndInsert(embedCtx, projectID, fileID, chunks, model, rel)
-	return created, softErrs, true, nil
+	return created, softErrs, outcomeIndexed, nil
 }
 
 // embedAndInsert embeds chunks in sub-batches and inserts each successful batch.

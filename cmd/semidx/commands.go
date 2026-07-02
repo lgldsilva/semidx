@@ -62,8 +62,8 @@ func newIndexCmd(d *deps) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("index project: %w", err)
 			}
-			fmt.Printf("\nDone in %v\nFiles scanned: %d\nFiles indexed: %d\nChunks created: %d\nErrors: %d\n",
-				time.Since(start), stats.FilesScanned, stats.FilesIndexed, stats.ChunksCreated, stats.Errors)
+			fmt.Printf("\nDone in %v\nFiles scanned: %d\nFiles indexed: %d\nFiles skipped (unchanged): %d\nChunks created: %d\nErrors: %d\n",
+				time.Since(start), stats.FilesScanned, stats.FilesIndexed, stats.FilesSkipped, stats.ChunksCreated, stats.Errors)
 			return nil
 		},
 	}
