@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
+
+	"github.com/lgldsilva/semidx/internal/chunker"
 )
 
 type DB struct {
@@ -126,7 +128,7 @@ func (db *DB) DeleteChunksForFile(ctx context.Context, projectID, fileID, dims i
 	return err
 }
 
-func (db *DB) InsertChunks(ctx context.Context, projectID, fileID int, chunks []Chunk, embeddings [][]float32, dims int) error {
+func (db *DB) InsertChunks(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, embeddings [][]float32, dims int) error {
 	if len(chunks) != len(embeddings) {
 		return fmt.Errorf("chunks and embeddings length mismatch: %d vs %d", len(chunks), len(embeddings))
 	}

@@ -1,4 +1,4 @@
-package main
+package embed
 
 import (
 	"bytes"
@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// OpenAIClient implements the Embedder interface for OpenAI-compatible APIs
-// (OpenAI, OpenRouter, etc.).
+// OpenAIClient implements Embedder for OpenAI-compatible APIs (OpenAI, Gemini's
+// OpenAI-compat endpoint, OpenRouter, Ollama Cloud).
 type OpenAIClient struct {
 	baseURL string
 	apiKey  string
@@ -29,7 +29,7 @@ type openAIEmbedResponse struct {
 	} `json:"data"`
 }
 
-// NewOpenAIClient creates a new client for OpenAI-compatible embedding APIs.
+// NewOpenAIClient returns a client for an OpenAI-compatible embedding API.
 func NewOpenAIClient(baseURL, apiKey string) *OpenAIClient {
 	return &OpenAIClient{
 		baseURL: baseURL,
@@ -38,7 +38,6 @@ func NewOpenAIClient(baseURL, apiKey string) *OpenAIClient {
 	}
 }
 
-// Embed generates embeddings for one or more input texts.
 func (c *OpenAIClient) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {
 	if len(inputs) == 0 {
 		return nil, fmt.Errorf("no inputs provided")
@@ -78,7 +77,6 @@ func (c *OpenAIClient) Embed(ctx context.Context, model string, inputs ...string
 	return embeddings, nil
 }
 
-// EmbedSingle generates an embedding for a single text.
 func (c *OpenAIClient) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
 	embeddings, err := c.Embed(ctx, model, text)
 	if err != nil {
@@ -90,13 +88,10 @@ func (c *OpenAIClient) EmbedSingle(ctx context.Context, model, text string) ([]f
 	return embeddings[0], nil
 }
 
-// ModelInfo returns embedding model metadata (dimensions).
 func (c *OpenAIClient) ModelInfo(ctx context.Context, model string) (*ModelInfo, error) {
-	dims := inferDims(model)
-	return &ModelInfo{Name: model, Dims: dims}, nil
+	return &ModelInfo{Name: model, Dims: InferDims(model)}, nil
 }
 
-// ListModels returns a static list of supported OpenAI embedding models.
 func (c *OpenAIClient) ListModels(ctx context.Context) ([]string, error) {
 	return []string{"text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002", "gemini-embedding-2", "gemini-embedding-001"}, nil
 }

@@ -1,12 +1,17 @@
-package main
+// Package chunker decides which files to index and splits their contents into
+// bounded chunks suitable for embedding. It has no dependencies on the database
+// or embedding providers, so it is cheap to unit-test in isolation.
+package chunker
 
 import (
 	"bufio"
 	"bytes"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
+// Chunk is one indexable slice of a file's content.
 type Chunk struct {
 	Content string
 }
@@ -42,8 +47,16 @@ var (
 	}
 )
 
+// IsIgnoredDir reports whether a directory of the given base name should be
+// skipped entirely during a walk (heavy build/vendor/VCS dirs).
+func IsIgnoredDir(name string) bool {
+	return ignoredDirs[name]
+}
+
+// ShouldIndex reports whether the file at the given (relative) path is a source
+// or text file worth indexing, skipping ignored directories and binary/asset
+// extensions.
 func ShouldIndex(path string) bool {
-	// Split the path and check if any directory in the path is ignored
 	parts := strings.Split(path, string(filepath.Separator))
 	for _, part := range parts {
 		if ignoredDirs[part] {
@@ -56,25 +69,21 @@ func ShouldIndex(path string) bool {
 		return false
 	}
 
-	if codeExts[ext] || textExts[ext] {
-		return true
-	}
-
-	return false
+	return codeExts[ext] || textExts[ext]
 }
 
+// ChunkFile splits a file's content into chunks no larger than maxChars,
+// choosing a code- or prose-oriented strategy from the file extension.
 func ChunkFile(path string, content []byte, maxChars int) []Chunk {
 	ext := strings.ToLower(filepath.Ext(path))
-	isCode := codeExts[ext]
-
-	if isCode {
+	if codeExts[ext] {
 		return chunkCode(content, maxChars)
 	}
 	return chunkText(content, maxChars)
 }
 
 func chunkCode(content []byte, maxChars int) []Chunk {
-	// Simple chunking: split by blank lines, then merge into chunks up to maxChars
+	// Split by blank lines, then merge runs of lines into chunks up to maxChars.
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 	scanner.Split(scanLines)
 
@@ -98,6 +107,18 @@ func chunkCode(content []byte, maxChars int) []Chunk {
 			continue
 		}
 
+		// A single line longer than the budget can't fit any chunk: flush what
+		// we have, then hard-split the line on rune boundaries.
+		if len(line) > maxChars {
+			flush()
+			for _, piece := range splitRunes(line, maxChars) {
+				if p := strings.TrimSpace(piece); p != "" {
+					chunks = append(chunks, Chunk{Content: p})
+				}
+			}
+			continue
+		}
+
 		if current.Len()+len(line)+1 > maxChars && current.Len() > 0 {
 			flush()
 		}
@@ -108,7 +129,7 @@ func chunkCode(content []byte, maxChars int) []Chunk {
 
 	flush()
 
-	// If no chunks (e.g. file without blank lines), split by line count
+	// Files without blank lines produce no chunks above; fall back to prose split.
 	if len(chunks) == 0 && len(content) > 0 {
 		return chunkText(content, maxChars)
 	}
@@ -132,10 +153,15 @@ func chunkText(content []byte, maxChars int) []Chunk {
 			end = len(text)
 		}
 
-		// Try to break at newline
+		// Prefer breaking at a newline past the halfway point; otherwise snap the
+		// cut back to a rune boundary so a multi-byte character is never split.
 		if end < len(text) {
 			if nl := strings.LastIndex(text[start:end], "\n"); nl > maxChars/2 {
 				end = start + nl + 1
+			} else {
+				for end > start && !utf8.RuneStart(text[end]) {
+					end--
+				}
 			}
 		}
 
@@ -143,13 +169,42 @@ func chunkText(content []byte, maxChars int) []Chunk {
 		if end >= len(text) {
 			break
 		}
-		start = end - overlap
-		if start >= end {
-			break
+
+		next := end - overlap
+		for next > start && next < len(text) && !utf8.RuneStart(text[next]) {
+			next-- // keep the overlap window on a rune boundary too
 		}
+		if next <= start {
+			next = end // guarantee forward progress even when overlap can't apply
+		}
+		start = next
 	}
 
 	return chunks
+}
+
+// splitRunes breaks s into pieces of at most maxBytes bytes each, never cutting
+// a multi-byte UTF-8 rune.
+func splitRunes(s string, maxBytes int) []string {
+	var out []string
+	for len(s) > maxBytes {
+		end := maxBytes
+		for end > 0 && !utf8.RuneStart(s[end]) {
+			end--
+		}
+		if end == 0 { // a single rune wider than the budget: emit it whole
+			end = maxBytes
+			for end < len(s) && !utf8.RuneStart(s[end]) {
+				end++
+			}
+		}
+		out = append(out, s[:end])
+		s = s[end:]
+	}
+	if len(s) > 0 {
+		out = append(out, s)
+	}
+	return out
 }
 
 func scanLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
@@ -163,34 +218,4 @@ func scanLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		return len(data), data, nil
 	}
 	return 0, nil, nil
-}
-
-// IsSensitive verifica se o arquivo é confidencial/segredo.
-func IsSensitive(path string) bool {
-	path = strings.ToLower(path)
-
-	// Divide o caminho em partes para verificar diretórios sensíveis
-	parts := strings.Split(path, string(filepath.Separator))
-	sensitiveKeywords := []string{
-		"env", "secret", "key", "password", "credential",
-		"token", "auth", "config", "db", "database",
-		"private", "pem", "jwks", "cert", "ssl",
-	}
-
-	for _, part := range parts {
-		for _, kw := range sensitiveKeywords {
-			if strings.Contains(part, kw) {
-				return true
-			}
-		}
-	}
-
-	// Verifica extensões sensíveis
-	ext := filepath.Ext(path)
-	sensitiveExts := map[string]bool{
-		".env": true, ".pem": true, ".key": true,
-		".conf": true, ".config": true,
-	}
-
-	return sensitiveExts[ext]
 }

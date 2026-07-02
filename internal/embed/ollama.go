@@ -1,4 +1,4 @@
-package main
+package embed
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"time"
 )
 
+// OllamaClient talks to a local Ollama server's native embedding API.
 type OllamaClient struct {
 	baseURL string
 	client  *http.Client
@@ -40,6 +41,7 @@ type tagsResponse struct {
 	} `json:"models"`
 }
 
+// NewOllamaClient returns a client for the Ollama server at baseURL.
 func NewOllamaClient(baseURL string) *OllamaClient {
 	return &OllamaClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -78,10 +80,7 @@ func (c *OllamaClient) ModelInfo(ctx context.Context, model string) (*ModelInfo,
 		dims = 1024
 	}
 
-	return &ModelInfo{
-		Name: model,
-		Dims: dims,
-	}, nil
+	return &ModelInfo{Name: model, Dims: dims}, nil
 }
 
 func (c *OllamaClient) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {

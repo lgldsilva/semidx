@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lgldsilva/semidx/internal/config"
+	"github.com/lgldsilva/semidx/internal/embed"
 )
 
 func main() {
@@ -63,7 +64,7 @@ Commands:
 `)
 }
 
-func indexCmd(ctx context.Context, cfg *config.Config, db *DB, emb Embedder) {
+func indexCmd(ctx context.Context, cfg *config.Config, db *DB, emb embed.Embedder) {
 	fs := flag.NewFlagSet("index", flag.ExitOnError)
 	projectPath := fs.String("project", "", "Path to project directory")
 	model := fs.String("model", "bge-m3", "Embedding model name")
@@ -74,7 +75,7 @@ func indexCmd(ctx context.Context, cfg *config.Config, db *DB, emb Embedder) {
 	privacy := fs.Bool("privacy", false, "Force local-only providers (Ollama)")
 	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits on failure
 
-	if ce, ok := emb.(*ChainEmbedder); ok {
+	if ce, ok := emb.(*embed.ChainEmbedder); ok {
 		ce.SetPrivacy(*privacy || cfg.Privacy)
 	}
 
@@ -127,7 +128,7 @@ func indexCmd(ctx context.Context, cfg *config.Config, db *DB, emb Embedder) {
 	fmt.Printf("Errors: %d\n", stats.Errors)
 }
 
-func searchCmd(ctx context.Context, cfg *config.Config, db *DB, emb Embedder) {
+func searchCmd(ctx context.Context, cfg *config.Config, db *DB, emb embed.Embedder) {
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
 	projectName := fs.String("project", "", "Project name")
 	query := fs.String("query", "", "Search query")
@@ -136,7 +137,7 @@ func searchCmd(ctx context.Context, cfg *config.Config, db *DB, emb Embedder) {
 	privacy := fs.Bool("privacy", false, "Force local-only providers (Ollama)")
 	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits on failure
 
-	if ce, ok := emb.(*ChainEmbedder); ok {
+	if ce, ok := emb.(*embed.ChainEmbedder); ok {
 		ce.SetPrivacy(*privacy || cfg.Privacy)
 	}
 
@@ -158,7 +159,7 @@ func searchCmd(ctx context.Context, cfg *config.Config, db *DB, emb Embedder) {
 	var dims int
 	info, err := emb.ModelInfo(ctx, searchModel)
 	if err != nil {
-		dims = inferDims(searchModel)
+		dims = embed.InferDims(searchModel)
 	} else {
 		dims = info.Dims
 	}
@@ -195,7 +196,7 @@ func searchCmd(ctx context.Context, cfg *config.Config, db *DB, emb Embedder) {
 	}
 }
 
-func modelsCmd(emb Embedder) {
+func modelsCmd(emb embed.Embedder) {
 	ctx := context.Background()
 	models, err := emb.ListModels(ctx)
 	if err != nil {
@@ -224,7 +225,7 @@ func projectNameFromPath(path string) string {
 	return path
 }
 
-func sgrepCmd(ctx context.Context, cfg *config.Config, db *DB, emb Embedder) {
+func sgrepCmd(ctx context.Context, cfg *config.Config, db *DB, emb embed.Embedder) {
 	fs := flag.NewFlagSet("sgrep", flag.ExitOnError)
 	projectName := fs.String("project", "", "Project name")
 	query := fs.String("query", "", "Search query")
@@ -233,7 +234,7 @@ func sgrepCmd(ctx context.Context, cfg *config.Config, db *DB, emb Embedder) {
 	privacy := fs.Bool("privacy", false, "Force local-only providers (Ollama)")
 	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits on failure
 
-	if ce, ok := emb.(*ChainEmbedder); ok {
+	if ce, ok := emb.(*embed.ChainEmbedder); ok {
 		ce.SetPrivacy(*privacy || cfg.Privacy)
 	}
 
@@ -255,7 +256,7 @@ func sgrepCmd(ctx context.Context, cfg *config.Config, db *DB, emb Embedder) {
 	var dims int
 	info, err := emb.ModelInfo(ctx, searchModel)
 	if err != nil {
-		dims = inferDims(searchModel)
+		dims = embed.InferDims(searchModel)
 	} else {
 		dims = info.Dims
 	}
@@ -326,49 +327,49 @@ func findLineNumber(projectPath, filePath, content string) int {
 	return lineNum
 }
 
-func buildChain(cfg *config.Config) Embedder {
-	var providers []ProviderInstance
+func buildChain(cfg *config.Config) embed.Embedder {
+	var providers []embed.ProviderInstance
 
 	// 1. Gemini
 	if cfg.GeminiAPIKey != "" {
-		providers = append(providers, ProviderInstance{
+		providers = append(providers, embed.ProviderInstance{
 			Name:     "gemini",
-			Embedder: NewOpenAIClient("https://generativelanguage.googleapis.com/v1beta/openai", cfg.GeminiAPIKey),
+			Embedder: embed.NewOpenAIClient("https://generativelanguage.googleapis.com/v1beta/openai", cfg.GeminiAPIKey),
 			Local:    false,
 		})
 	}
 
 	// 2. Groq
 	if cfg.GroqAPIKey != "" {
-		providers = append(providers, ProviderInstance{
+		providers = append(providers, embed.ProviderInstance{
 			Name:     "groq",
-			Embedder: NewOpenAIClient("https://api.groq.com/openai/v1", cfg.GroqAPIKey),
+			Embedder: embed.NewOpenAIClient("https://api.groq.com/openai/v1", cfg.GroqAPIKey),
 			Local:    false,
 		})
 	}
 
 	// 3. OpenRouter
 	if cfg.OpenRouterAPIKey != "" {
-		providers = append(providers, ProviderInstance{
+		providers = append(providers, embed.ProviderInstance{
 			Name:     "openrouter",
-			Embedder: NewOpenAIClient("https://openrouter.ai/api/v1", cfg.OpenRouterAPIKey),
+			Embedder: embed.NewOpenAIClient("https://openrouter.ai/api/v1", cfg.OpenRouterAPIKey),
 			Local:    false,
 		})
 	}
 
 	// 4. Ollama Cloud
 	if cfg.OllamaCloudAPIKey != "" {
-		providers = append(providers, ProviderInstance{
+		providers = append(providers, embed.ProviderInstance{
 			Name:     "ollama-cloud",
-			Embedder: NewOpenAIClient("https://ollama.com/v1", cfg.OllamaCloudAPIKey),
+			Embedder: embed.NewOpenAIClient("https://ollama.com/v1", cfg.OllamaCloudAPIKey),
 			Local:    false,
 		})
 	}
 
 	// 5. Ollama Local (sempre disponível como fallback)
-	providers = append(providers, ProviderInstance{
+	providers = append(providers, embed.ProviderInstance{
 		Name:     "ollama",
-		Embedder: NewOllamaClient(cfg.OllamaURL),
+		Embedder: embed.NewOllamaClient(cfg.OllamaURL),
 		Local:    true,
 	})
 
@@ -383,33 +384,19 @@ func buildChain(cfg *config.Config) Embedder {
 			}
 		}
 
-		var emb Embedder
+		var emb embed.Embedder
 		if cfg.Provider == "openai" {
-			emb = NewOpenAIClient(endpoint, cfg.APIKey)
+			emb = embed.NewOpenAIClient(endpoint, cfg.APIKey)
 		} else {
-			emb = NewOllamaClient(endpoint)
+			emb = embed.NewOllamaClient(endpoint)
 		}
 
-		providers = append([]ProviderInstance{{
+		providers = append([]embed.ProviderInstance{{
 			Name:     "custom",
 			Embedder: emb,
 			Local:    cfg.Provider == "ollama",
 		}}, providers...)
 	}
 
-	return NewChainEmbedder(providers, cfg.Privacy)
-}
-
-func inferDims(model string) int {
-	model = strings.ToLower(model)
-	switch {
-	case strings.Contains(model, "nomic"):
-		return 768
-	case strings.Contains(model, "bge-m3"), strings.Contains(model, "mxbai"), strings.Contains(model, "qwen3"):
-		return 1024
-	case strings.Contains(model, "gemini-embedding-2"), strings.Contains(model, "text-embedding-3-large"):
-		return 3072
-	default:
-		return 0
-	}
+	return embed.NewChainEmbedder(providers, cfg.Privacy)
 }

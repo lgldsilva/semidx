@@ -13,6 +13,10 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/lgldsilva/semidx/internal/chunker"
+	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/privacy"
 )
 
 func truncateErr(err error, maxLen int) string {
@@ -36,7 +40,7 @@ const (
 
 type Indexer struct {
 	db       *DB
-	embedder Embedder
+	embedder embed.Embedder
 	dims     int
 	verbose  bool
 	gitMode  bool
@@ -50,7 +54,7 @@ type IndexStats struct {
 	Errors        int
 }
 
-func NewIndexer(db *DB, emb Embedder, dims int, verbose bool, gitMode bool, gitSince string) *Indexer {
+func NewIndexer(db *DB, emb embed.Embedder, dims int, verbose bool, gitMode bool, gitSince string) *Indexer {
 	return &Indexer{db: db, embedder: emb, dims: dims, verbose: verbose, gitMode: gitMode, gitSince: gitSince}
 }
 
@@ -63,13 +67,13 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 			return nil // skip unreadable
 		}
 		if d.IsDir() {
-			if ignoredDirs[d.Name()] {
+			if chunker.IsIgnoredDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		rel, _ := filepath.Rel(projectPath, path)
-		if !ShouldIndex(rel) {
+		if !chunker.ShouldIndex(rel) {
 			return nil
 		}
 		files = append(files, path)
@@ -121,7 +125,7 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 			continue
 		}
 
-		chunks := ChunkFile(rel, content, maxChunkChars)
+		chunks := chunker.ChunkFile(rel, content, maxChunkChars)
 		if len(chunks) == 0 {
 			continue
 		}
@@ -140,8 +144,8 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 
 		// Process chunks in sub-batches
 		fileCtx := ctx
-		if IsSensitive(rel) {
-			localCtx := WithForceLocal(ctx, true)
+		if privacy.IsSensitive(rel) {
+			localCtx := embed.WithForceLocal(ctx, true)
 			_, err := idx.embedder.ModelInfo(localCtx, model)
 			if err != nil {
 				if idx.verbose {
@@ -272,8 +276,8 @@ func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectP
 			continue
 		}
 
-		chunk := Chunk{Content: string(commit)}
-		if err := idx.db.InsertChunks(ctx, projectID, fileID, []Chunk{chunk}, [][]float32{embedding}, idx.dims); err != nil {
+		chunk := chunker.Chunk{Content: string(commit)}
+		if err := idx.db.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{chunk}, [][]float32{embedding}, idx.dims); err != nil {
 			continue
 		}
 

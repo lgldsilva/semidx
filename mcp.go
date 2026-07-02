@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/lgldsilva/semidx/internal/embed"
 )
 
 // JSON-RPC types
@@ -44,7 +46,7 @@ type mcpToolCallParams struct {
 
 // runMCPServer serves the MCP protocol over stdio, reusing the database
 // pool and embedder chain built in main.
-func runMCPServer(db *DB, emb Embedder) {
+func runMCPServer(db *DB, emb embed.Embedder) {
 	server := &mcpServer{db: db, emb: emb}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -76,7 +78,7 @@ func runMCPServer(db *DB, emb Embedder) {
 
 type mcpServer struct {
 	db  *DB
-	emb Embedder
+	emb embed.Embedder
 	mu  sync.Mutex
 }
 
@@ -205,7 +207,7 @@ func (s *mcpServer) doSearch(ctx context.Context, argsRaw json.RawMessage) strin
 	var dims int
 	info, err := s.emb.ModelInfo(ctx, model)
 	if err != nil {
-		dims = inferDims(model)
+		dims = embed.InferDims(model)
 	} else {
 		dims = info.Dims
 	}
