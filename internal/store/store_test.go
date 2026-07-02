@@ -413,6 +413,35 @@ func TestAPITokens(t *testing.T) {
 	}
 }
 
+func TestListFileHashesAndDeleteByPath(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.EnsureChunksTable(ctx, 3); err != nil {
+		t.Fatalf("EnsureChunksTable: %v", err)
+	}
+	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d")
+	fidA, _ := s.UpsertFile(ctx, pid, "a.go", "h1", 10)
+	_, _ = s.UpsertFile(ctx, pid, "b.go", "h2", 20)
+	_ = s.InsertChunks(ctx, pid, fidA, []chunker.Chunk{{Content: "alpha"}}, [][]float32{{1, 0, 0}}, 3)
+
+	hashes, err := s.ListFileHashes(ctx, pid)
+	if err != nil || hashes["a.go"] != "h1" || hashes["b.go"] != "h2" || len(hashes) != 2 {
+		t.Fatalf("ListFileHashes = %v, err %v", hashes, err)
+	}
+
+	// Deleting a.go removes it and cascades its chunks.
+	if err := s.DeleteFileByPath(ctx, pid, "a.go"); err != nil {
+		t.Fatalf("DeleteFileByPath: %v", err)
+	}
+	hashes, _ = s.ListFileHashes(ctx, pid)
+	if _, ok := hashes["a.go"]; ok || len(hashes) != 1 {
+		t.Errorf("after delete hashes = %v, want only b.go", hashes)
+	}
+	if res, _ := s.SearchSimilarKeywords(ctx, pid, "alpha", 3, 5); len(res) != 0 {
+		t.Errorf("chunks of deleted file not cascaded: %v", res)
+	}
+}
+
 func TestDeleteChunksForFile(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

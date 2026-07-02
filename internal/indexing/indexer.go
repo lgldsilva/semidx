@@ -175,10 +175,10 @@ func scanFiles(projectPath string, maxFiles int) ([]string, error) {
 	return files, nil
 }
 
-// indexFile reads, chunks and stores one file. The outcome distinguishes an
-// indexed file from one skipped because it's empty/chunk-less or unchanged since
-// the last run; hardErr signals a read/upsert/delete failure (the file is
-// dropped); softErrs counts failed embed sub-batches.
+// indexFile reads a file from disk and indexes its content. The outcome
+// distinguishes an indexed file from one skipped because it's empty/chunk-less
+// or unchanged; hardErr signals a read/upsert/delete failure; softErrs counts
+// failed embed sub-batches.
 func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, model string) (created, softErrs int, outcome fileOutcome, hardErr error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -189,8 +189,24 @@ func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, mod
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, err
 	}
+	return idx.indexContent(ctx, projectID, rel, model, content)
+}
+
+// IndexContent indexes one file's in-memory content (used by the push files API)
+// and returns the number of chunks created.
+func (idx *Indexer) IndexContent(ctx context.Context, projectID int, rel, model string, content []byte) (int, error) {
+	created, _, _, err := idx.indexContent(ctx, projectID, rel, model, content)
+	return created, err
+}
+
+// indexContent chunks, embeds and stores one file's content (shared by disk and
+// push paths).
+func (idx *Indexer) indexContent(ctx context.Context, projectID int, rel, model string, content []byte) (created, softErrs int, outcome fileOutcome, hardErr error) {
 	if len(strings.TrimSpace(string(content))) == 0 {
 		return 0, 0, outcomeSkippedEmpty, nil
+	}
+	if len(content) > maxFileSize {
+		content = content[:maxFileSize]
 	}
 
 	hash := fmt.Sprintf("%x", sha256.Sum256(content))

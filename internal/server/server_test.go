@@ -24,8 +24,12 @@ type fakeStore struct {
 	deleteErr  error                // DeleteProject error
 	enqueuedID int                  // EnqueueJob result
 	job        *store.Job           // GetJob result (nil → ErrNotFound)
+	fileHashes map[string]string    // ListFileHashes result
 }
 
+func (f *fakeStore) ListFileHashes(context.Context, int) (map[string]string, error) {
+	return f.fileHashes, nil
+}
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
 func (f *fakeStore) TokenByHash(context.Context, string) (*store.Token, error) {
 	return f.token, nil
@@ -292,6 +296,52 @@ func TestGetJob(t *testing.T) {
 	nf := New(&fakeStore{token: readTok, job: nil}, fakeEmbedder{}, nil)
 	if rec := do(t, nf, "GET", "/api/v1/jobs/9999", "tok", ""); rec.Code != 404 {
 		t.Errorf("unknown job = %d, want 404", rec.Code)
+	}
+}
+
+func TestFilesDiff(t *testing.T) {
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	srv := New(&fakeStore{
+		token:      writeTok,
+		project:    &store.Project{ID: 1, Name: "p"},
+		fileHashes: map[string]string{"a.go": "h1", "old.go": "h9"}, // indexed already
+	}, fakeEmbedder{}, nil)
+
+	// Client has a.go (unchanged), b.go (new), and dropped old.go.
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/diff", "tok",
+		`{"files":{"a.go":"h1","b.go":"h2"}}`)
+	if rec.Code != 200 {
+		t.Fatalf("diff = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Stale   []string `json:"stale"`
+		Deleted []string `json:"deleted"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Stale) != 1 || out.Stale[0] != "b.go" {
+		t.Errorf("stale = %v, want [b.go]", out.Stale)
+	}
+	if len(out.Deleted) != 1 || out.Deleted[0] != "old.go" {
+		t.Errorf("deleted = %v, want [old.go]", out.Deleted)
+	}
+}
+
+func TestFilesBatchValidation(t *testing.T) {
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	// unknown project → 404 (before touching the embedder).
+	nf := New(&fakeStore{token: writeTok, project: nil}, fakeEmbedder{}, nil)
+	if rec := do(t, nf, "POST", "/api/v1/projects/ghost/files/batch", "tok", `{"files":[]}`); rec.Code != 404 {
+		t.Errorf("unknown project = %d, want 404", rec.Code)
+	}
+	// bad body → 400.
+	ok := New(&fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}}, fakeEmbedder{}, nil)
+	if rec := do(t, ok, "POST", "/api/v1/projects/p/files/batch", "tok", `not json`); rec.Code != 400 {
+		t.Errorf("bad body = %d, want 400", rec.Code)
+	}
+	// read-only token → 403.
+	ro := New(&fakeStore{token: &store.Token{Scopes: []string{"read"}}}, fakeEmbedder{}, nil)
+	if rec := do(t, ro, "POST", "/api/v1/projects/p/files/diff", "tok", `{"files":{}}`); rec.Code != 403 {
+		t.Errorf("read-only diff = %d, want 403", rec.Code)
 	}
 }
 
