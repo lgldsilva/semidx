@@ -57,6 +57,12 @@ type Config struct {
 	BootstrapToken string
 	// DataDir is where the server clones git projects (SEMIDX_DATA_DIR).
 	DataDir string
+	// BootstrapAdminUser/Password create the first web-UI admin on an empty
+	// server (SEMIDX_BOOTSTRAP_ADMIN_USER, default "admin";
+	// SEMIDX_BOOTSTRAP_ADMIN_PASSWORD). No user is created when the password is
+	// empty.
+	BootstrapAdminUser     string
+	BootstrapAdminPassword string
 }
 
 // Load resolves the configuration. A missing or unreadable .env file is not
@@ -78,6 +84,9 @@ func Load() *Config {
 		ListenAddr:        env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
 		BootstrapToken:    env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
 		DataDir:           env.get("SEMIDX_DATA_DIR", defaultDataDir),
+
+		BootstrapAdminUser:     env.get("SEMIDX_BOOTSTRAP_ADMIN_USER", "admin"),
+		BootstrapAdminPassword: env.get("SEMIDX_BOOTSTRAP_ADMIN_PASSWORD", ""),
 	}
 }
 

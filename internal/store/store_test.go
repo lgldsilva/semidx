@@ -413,6 +413,114 @@ func TestAPITokens(t *testing.T) {
 	}
 }
 
+func TestUsers(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if n, err := s.CountUsers(ctx); err != nil || n != 0 {
+		t.Fatalf("CountUsers on empty = %d, err %v; want 0", n, err)
+	}
+
+	admin, err := s.CreateUser(ctx, "admin", "hash1", "admin")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if admin.ID == 0 || admin.Role != "admin" || admin.Disabled {
+		t.Errorf("admin = %+v, unexpected", admin)
+	}
+
+	// Duplicate username → ErrUserExists.
+	if _, err := s.CreateUser(ctx, "admin", "hash2", "member"); !errors.Is(err, ErrUserExists) {
+		t.Errorf("duplicate CreateUser err = %v; want ErrUserExists", err)
+	}
+
+	got, err := s.GetUserByUsername(ctx, "admin")
+	if err != nil || got.ID != admin.ID || got.PasswordHash != "hash1" {
+		t.Errorf("GetUserByUsername = %+v, err %v", got, err)
+	}
+	if _, err := s.GetUserByUsername(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetUserByUsername(ghost) err = %v; want ErrNotFound", err)
+	}
+
+	if err := s.SetUserPassword(ctx, admin.ID, "hash-new"); err != nil {
+		t.Fatalf("SetUserPassword: %v", err)
+	}
+	if got, _ := s.GetUserByID(ctx, admin.ID); got.PasswordHash != "hash-new" {
+		t.Errorf("password not updated: %q", got.PasswordHash)
+	}
+
+	if _, err := s.CreateUser(ctx, "bob", "h", "member"); err != nil {
+		t.Fatalf("CreateUser bob: %v", err)
+	}
+	users, err := s.ListUsers(ctx)
+	if err != nil || len(users) != 2 {
+		t.Fatalf("ListUsers = %d users, err %v; want 2", len(users), err)
+	}
+	if n, _ := s.CountUsers(ctx); n != 2 {
+		t.Errorf("CountUsers = %d, want 2", n)
+	}
+}
+
+func TestSessions(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	u, err := s.CreateUser(ctx, "alice", "hash", "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.CreateSession(ctx, "sess-hash", u.ID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	got, err := s.SessionUser(ctx, "sess-hash")
+	if err != nil || got.ID != u.ID {
+		t.Fatalf("SessionUser = %+v, err %v", got, err)
+	}
+
+	// Expired session → ErrNotFound.
+	if err := s.CreateSession(ctx, "old", u.ID, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SessionUser(ctx, "old"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SessionUser(expired) err = %v; want ErrNotFound", err)
+	}
+	if n, err := s.DeleteExpiredSessions(ctx); err != nil || n != 1 {
+		t.Errorf("DeleteExpiredSessions = %d, err %v; want 1", n, err)
+	}
+
+	// Disabling the user drops their sessions and blocks lookup.
+	if err := s.SetUserDisabled(ctx, u.ID, true); err != nil {
+		t.Fatalf("SetUserDisabled: %v", err)
+	}
+	if _, err := s.SessionUser(ctx, "sess-hash"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SessionUser after disable err = %v; want ErrNotFound", err)
+	}
+
+	// Logout is idempotent.
+	if err := s.DeleteSession(ctx, "sess-hash"); err != nil {
+		t.Errorf("DeleteSession: %v", err)
+	}
+}
+
+func TestCreateUserTokenLinksOwner(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	u, err := s.CreateUser(ctx, "carol", "hash", "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.CreateUserToken(ctx, u.ID, "laptop", "tok-hash", []string{"read"})
+	if err != nil || id == 0 {
+		t.Fatalf("CreateUserToken = %d, err %v", id, err)
+	}
+	tok, err := s.TokenByHash(ctx, "tok-hash")
+	if err != nil || tok == nil || tok.Name != "laptop" {
+		t.Errorf("TokenByHash = %+v, err %v", tok, err)
+	}
+}
+
 func TestListFileHashesAndDeleteByPath(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
