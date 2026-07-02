@@ -99,6 +99,7 @@ func newRootCmd() *cobra.Command {
 		newSearchCmd(d),
 		newSgrepCmd(d),
 		newRepoCmd(d),
+		newSkillsCmd(d),
 		newModelsCmd(d),
 		newDropCmd(d),
 		newServeCmd(d),
