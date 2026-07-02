@@ -259,7 +259,7 @@ func (s *mcpServer) doIndex(ctx context.Context, argsRaw json.RawMessage) string
 		return fmt.Sprintf("error: upsert project: %v", err)
 	}
 
-	indexer := indexing.NewIndexer(s.db, s.emb, info.Dims, false, args.Git, args.GitSince)
+	indexer := indexing.NewIndexer(s.db, s.emb, info.Dims, 0, false, args.Git, args.GitSince)
 	stats, err := indexer.IndexProject(ctx, projectID, args.Project, args.Model, args.MaxFiles)
 	if err != nil {
 		return fmt.Sprintf("error: index: %v", err)

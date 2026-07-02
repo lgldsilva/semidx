@@ -56,7 +56,7 @@ func newIndexCmd(d *deps) *cobra.Command {
 				return fmt.Errorf("upsert project: %w", err)
 			}
 
-			indexer := indexing.NewIndexer(d.db, d.emb, info.Dims, verbose, gitMode, gitSince)
+			indexer := indexing.NewIndexer(d.db, d.emb, info.Dims, d.cfg.IndexWorkers, verbose, gitMode, gitSince)
 			start := time.Now()
 			stats, err := indexer.IndexProject(ctx, projectID, projectPath, model, maxFiles)
 			if err != nil {

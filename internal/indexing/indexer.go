@@ -17,7 +17,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/embed"
@@ -26,11 +29,12 @@ import (
 )
 
 const (
-	maxFileSize      = 1024 * 1024 // 1MB
-	maxChunkChars    = 4000        // ~1000 tokens for bge-m3
-	maxChunksPerFile = 32
-	logEvery         = 10
-	embedBatchSize   = 8
+	maxFileSize         = 1024 * 1024 // 1MB
+	maxChunkChars       = 4000        // ~1000 tokens for bge-m3
+	maxChunksPerFile    = 32
+	logEvery            = 10
+	embedBatchSize      = 8
+	defaultIndexWorkers = 4
 )
 
 // Indexer indexes a project into a Store using an Embedder.
@@ -38,6 +42,7 @@ type Indexer struct {
 	db       store.Store
 	embedder embed.Embedder
 	dims     int
+	workers  int
 	verbose  bool
 	gitMode  bool
 	gitSince string
@@ -61,9 +66,13 @@ const (
 	outcomeSkippedUnchanged                    // already indexed with the same hash
 )
 
-// NewIndexer wires an Indexer. dims is the embedding dimension of model.
-func NewIndexer(db store.Store, emb embed.Embedder, dims int, verbose, gitMode bool, gitSince string) *Indexer {
-	return &Indexer{db: db, embedder: emb, dims: dims, verbose: verbose, gitMode: gitMode, gitSince: gitSince}
+// NewIndexer wires an Indexer. dims is the embedding dimension of model;
+// workers is the file concurrency (<1 falls back to defaultIndexWorkers).
+func NewIndexer(db store.Store, emb embed.Embedder, dims, workers int, verbose, gitMode bool, gitSince string) *Indexer {
+	if workers < 1 {
+		workers = defaultIndexWorkers
+	}
+	return &Indexer{db: db, embedder: emb, dims: dims, workers: workers, verbose: verbose, gitMode: gitMode, gitSince: gitSince}
 }
 
 // IndexProject scans projectPath, indexes each eligible file, optionally indexes
@@ -77,30 +86,53 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 	}
 	stats.FilesScanned = len(files)
 
-	for i, path := range files {
-		// Stop promptly on Ctrl-C / SIGTERM, returning what we have so far.
-		if err := ctx.Err(); err != nil {
-			return stats, err
-		}
-		rel, _ := filepath.Rel(projectPath, path)
+	// Index files concurrently, bounded to idx.workers. Files are independent
+	// (distinct file_id rows, pool-safe DB access); a mutex guards the shared
+	// stats. Per-file errors are counted, not fatal, so goroutines return nil
+	// and errgroup is used purely for the bounded fan-out.
+	var (
+		mu        sync.Mutex
+		processed int
+		g         errgroup.Group
+	)
+	g.SetLimit(idx.workers)
 
-		created, softErrs, outcome, err := idx.indexFile(ctx, projectID, path, rel, model)
-		stats.Errors += softErrs
-		if err != nil {
-			stats.Errors++
-			idx.logf("[err] %s: %s", rel, truncateErr(err, 200))
-			continue
+	for _, path := range files {
+		if ctx.Err() != nil {
+			break // stop scheduling on Ctrl-C / SIGTERM; in-flight files finish
 		}
-		switch outcome {
-		case outcomeIndexed:
-			stats.ChunksCreated += created
-			stats.FilesIndexed++
-			idx.progress(i, len(files), rel, stats)
-		case outcomeSkippedUnchanged:
-			stats.FilesSkipped++
-		case outcomeSkippedEmpty:
-			// nothing to record
-		}
+		path := path
+		g.Go(func() error {
+			if ctx.Err() != nil {
+				return nil
+			}
+			rel, _ := filepath.Rel(projectPath, path)
+			created, softErrs, outcome, ferr := idx.indexFile(ctx, projectID, path, rel, model)
+
+			mu.Lock()
+			stats.Errors += softErrs
+			switch {
+			case ferr != nil:
+				stats.Errors++
+				idx.logf("[err] %s: %s", rel, truncateErr(ferr, 200))
+			case outcome == outcomeIndexed:
+				stats.ChunksCreated += created
+				stats.FilesIndexed++
+			case outcome == outcomeSkippedUnchanged:
+				stats.FilesSkipped++
+			}
+			processed++
+			done, chunks := processed, stats.ChunksCreated
+			mu.Unlock()
+
+			idx.progress(done, len(files), rel, chunks)
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	if err := ctx.Err(); err != nil {
+		return stats, err // cancelled: leave the project as 'indexing'
 	}
 
 	if idx.gitMode {
@@ -327,14 +359,14 @@ func (idx *Indexer) logf(format string, args ...any) {
 	}
 }
 
-func (idx *Indexer) progress(i, total int, rel string, stats *IndexStats) {
+func (idx *Indexer) progress(done, total int, rel string, chunks int) {
 	if idx.verbose {
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)
 		fmt.Printf("  [%d/%d] %s (%d chunks) | HeapAlloc: %d MB, Sys: %d MB\n",
-			i+1, total, rel, stats.ChunksCreated, m.Alloc/1024/1024, m.Sys/1024/1024)
-	} else if (i+1)%logEvery == 0 || i == total-1 {
-		fmt.Printf("  ...%d/%d arquivos (%d chunks)\n", i+1, total, stats.ChunksCreated)
+			done, total, rel, chunks, m.Alloc/1024/1024, m.Sys/1024/1024)
+	} else if done%logEvery == 0 || done == total {
+		fmt.Printf("  ...%d/%d arquivos (%d chunks)\n", done, total, chunks)
 	}
 }
 

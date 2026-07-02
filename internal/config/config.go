@@ -13,12 +13,14 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
 const (
-	defaultDatabaseURL = "postgres://semantic:semantic@localhost:55432/semantic_indexer"
-	defaultOllamaURL   = "http://localhost:11434"
+	defaultDatabaseURL  = "postgres://semantic:semantic@localhost:55432/semantic_indexer"
+	defaultOllamaURL    = "http://localhost:11434"
+	defaultIndexWorkers = 4
 )
 
 // Config holds every runtime setting the CLI and MCP server need.
@@ -41,6 +43,10 @@ type Config struct {
 
 	// Privacy forces local-only embedding providers (EMBED_PRIVACY=true).
 	Privacy bool
+
+	// IndexWorkers is how many files are indexed concurrently
+	// (SEMIDX_INDEX_WORKERS). Defaults to defaultIndexWorkers.
+	IndexWorkers int
 }
 
 // Load resolves the configuration. A missing or unreadable .env file is not
@@ -58,7 +64,16 @@ func Load() *Config {
 		OpenRouterAPIKey:  env.get("OPENROUTER_API_KEY", ""),
 		OllamaCloudAPIKey: env.get("OLLAMA_CLOUD_API_KEY", ""),
 		Privacy:           env.get("EMBED_PRIVACY", "") == "true",
+		IndexWorkers:      atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
 	}
+}
+
+// atoiDefault parses s as a positive int, returning def when empty or invalid.
+func atoiDefault(s string, def int) int {
+	if n, err := strconv.Atoi(s); err == nil && n > 0 {
+		return n
+	}
+	return def
 }
 
 // resolver looks a key up in the real environment first, then in the parsed
