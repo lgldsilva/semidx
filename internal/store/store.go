@@ -76,6 +76,8 @@ type Store interface {
 	UpdateProjectStatus(ctx context.Context, id int, status string) error
 	UpsertFile(ctx context.Context, projectID int, path, hash string, size int) (int, error)
 	FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error)
+	ListFileHashes(ctx context.Context, projectID int) (map[string]string, error)
+	DeleteFileByPath(ctx context.Context, projectID int, path string) error
 	DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error
 	InsertChunks(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, embeddings [][]float32, dims int) error
 	InsertChunksTextOnly(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, dims int) error
@@ -323,6 +325,32 @@ func (s *PgStore) FileUpToDate(ctx context.Context, projectID int, path, hash st
 		return false, nil // e.g. table not created yet → treat as needs indexing
 	}
 	return exists, nil
+}
+
+// ListFileHashes returns path→hash for every indexed file of a project (used by
+// the push files/diff endpoint to decide what changed).
+func (s *PgStore) ListFileHashes(ctx context.Context, projectID int) (map[string]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT path, hash FROM files WHERE project_id = $1`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]string)
+	for rows.Next() {
+		var path, hash string
+		if err := rows.Scan(&path, &hash); err != nil {
+			return nil, err
+		}
+		out[path] = hash
+	}
+	return out, rows.Err()
+}
+
+// DeleteFileByPath removes a file and its chunks (FK cascade) by path.
+func (s *PgStore) DeleteFileByPath(ctx context.Context, projectID int, path string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM files WHERE project_id = $1 AND path = $2`, projectID, path)
+	return err
 }
 
 func (s *PgStore) DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error {

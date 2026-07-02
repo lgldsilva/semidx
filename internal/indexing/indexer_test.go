@@ -308,6 +308,28 @@ func TestWorkerPoolParallelizes(t *testing.T) {
 	}
 }
 
+// IndexContent (the push path) indexes in-memory content without touching disk.
+func TestIndexContent(t *testing.T) {
+	fs := &fakeStore{}
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, false, false, "")
+
+	created, err := idx.IndexContent(context.Background(), 1, "x.go", "bge-m3", []byte("package x\nfunc F() {}\n"))
+	if err != nil {
+		t.Fatalf("IndexContent: %v", err)
+	}
+	if created != 1 {
+		t.Errorf("created = %d, want 1 chunk", created)
+	}
+	if len(fs.embedded) != 1 || !strings.Contains(fs.embedded[0], "func F") {
+		t.Errorf("embedded = %v", fs.embedded)
+	}
+
+	// Empty content is a no-op.
+	if c, _ := idx.IndexContent(context.Background(), 1, "empty.go", "bge-m3", []byte("  \n\t")); c != 0 {
+		t.Errorf("empty content created = %d, want 0", c)
+	}
+}
+
 func TestScanFilesRespectsMaxAndIgnores(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a.go", "x")

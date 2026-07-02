@@ -58,6 +58,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/projects/{project}", s.authed("write", s.handleDeleteProject))
 	mux.Handle("POST /api/v1/projects/{project}/search", s.authed("read", s.handleSearch))
 	mux.Handle("POST /api/v1/projects/{project}/index-jobs", s.authed("write", s.handleEnqueueJob))
+	mux.Handle("POST /api/v1/projects/{project}/files/diff", s.authed("write", s.handleFilesDiff))
+	mux.Handle("POST /api/v1/projects/{project}/files/batch", s.authed("write", s.handleFilesBatch))
 	mux.Handle("GET /api/v1/jobs/{id}", s.authed("read", s.handleGetJob))
 	return s.instrument(mux)
 }
