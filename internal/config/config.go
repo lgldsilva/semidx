@@ -21,6 +21,7 @@ const (
 	defaultDatabaseURL  = "postgres://semantic:semantic@localhost:55432/semantic_indexer"
 	defaultOllamaURL    = "http://localhost:11434"
 	defaultIndexWorkers = 4
+	defaultListenAddr   = ":8080"
 )
 
 // Config holds every runtime setting the CLI and MCP server need.
@@ -47,6 +48,12 @@ type Config struct {
 	// IndexWorkers is how many files are indexed concurrently
 	// (SEMIDX_INDEX_WORKERS). Defaults to defaultIndexWorkers.
 	IndexWorkers int
+
+	// ListenAddr is the server bind address (SEMIDX_LISTEN_ADDR, e.g. ":8080").
+	ListenAddr string
+	// BootstrapToken optionally sets the first admin token on an empty server
+	// (SEMIDX_BOOTSTRAP_TOKEN); if empty, one is generated and logged once.
+	BootstrapToken string
 }
 
 // Load resolves the configuration. A missing or unreadable .env file is not
@@ -65,6 +72,8 @@ func Load() *Config {
 		OllamaCloudAPIKey: env.get("OLLAMA_CLOUD_API_KEY", ""),
 		Privacy:           env.get("EMBED_PRIVACY", "") == "true",
 		IndexWorkers:      atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
+		ListenAddr:        env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
+		BootstrapToken:    env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
 	}
 }
 

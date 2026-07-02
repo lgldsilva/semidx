@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/search"
+	"github.com/lgldsilva/semidx/internal/server"
 )
 
 // systemDirs must never be indexed (runaway scan / disk blow-up guard).
@@ -178,6 +180,26 @@ func newDropCmd(d *deps) *cobra.Command {
 			}
 			fmt.Println("All indexed data dropped.")
 			return nil
+		},
+	}
+}
+
+func newServeCmd(d *deps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "serve",
+		Short: "Run the HTTP API server",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+			srv := server.New(d.db, d.emb, log)
+
+			token, err := srv.EnsureBootstrapToken(cmd.Context(), d.cfg.BootstrapToken)
+			if err != nil {
+				return fmt.Errorf("bootstrap token: %w", err)
+			}
+			if token != "" {
+				fmt.Fprintf(os.Stderr, "bootstrap admin token (shown once — save it): %s\n", token)
+			}
+			return srv.Run(cmd.Context(), d.cfg.ListenAddr)
 		},
 	}
 }
