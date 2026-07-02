@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -187,55 +189,28 @@ func (s *mcpServer) doSearch(ctx context.Context, argsRaw json.RawMessage) strin
 	if err := json.Unmarshal(argsRaw, &args); err != nil {
 		return fmt.Sprintf("error: invalid arguments: %v", err)
 	}
-	if args.TopK == 0 {
-		args.TopK = 5
-	}
 
+	// Guard against searching a half-indexed project (unique to the MCP flow).
 	project, err := s.db.GetProject(ctx, args.Project)
 	if err != nil {
 		return fmt.Sprintf("error: project not found: %s", args.Project)
 	}
-
 	if project.Status == "indexing" {
 		return fmt.Sprintf("warning: O projeto '%s' ainda está sendo indexado em background. Por favor, use a busca/grep convencional enquanto a indexação semântica é concluída.", args.Project)
 	}
 
-	model := project.Model
-	if args.Model != "" {
-		model = args.Model
-	}
-
-	var dims int
-	info, err := s.emb.ModelInfo(ctx, model)
+	resp, err := search.NewService(s.db, s.emb).Search(ctx, search.Request{
+		Project: args.Project, Query: args.Query, Model: args.Model, TopK: args.TopK,
+	})
 	if err != nil {
-		dims = embed.InferDims(model)
-	} else {
-		dims = info.Dims
+		return fmt.Sprintf("error: %v", err)
 	}
 
-	var results []store.SearchResult
-	emb, err := s.emb.EmbedSingle(ctx, model, args.Query)
-	if err != nil {
-		results, err = s.db.SearchSimilarKeywords(ctx, project.ID, args.Query, dims, args.TopK)
-		if err != nil {
-			return fmt.Sprintf("error: search fallback: %v", err)
-		}
-	} else {
-		results, err = s.db.SearchSimilar(ctx, project.ID, emb, dims, args.TopK)
-		if err != nil {
-			return fmt.Sprintf("error: search: %v", err)
-		}
+	var buf strings.Builder
+	if err := (search.HumanFormatter{Preview: 300}).Format(&buf, resp); err != nil {
+		return fmt.Sprintf("error: %v", err)
 	}
-
-	var out string
-	for i, r := range results {
-		preview := r.Content
-		if len(preview) > 300 {
-			preview = preview[:300] + "..."
-		}
-		out += fmt.Sprintf("--- %d. %s (score: %.4f) ---\n%s\n\n", i+1, r.FilePath, r.Score, preview)
-	}
-	return out
+	return buf.String()
 }
 
 type indexArgs struct {

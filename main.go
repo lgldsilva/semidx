@@ -13,6 +13,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -136,6 +137,7 @@ func searchCmd(ctx context.Context, cfg *config.Config, db store.Store, emb embe
 	topK := fs.Int("top-k", 5, "Number of results")
 	model := fs.String("model", "", "Override embedding model (default: project model)")
 	privacy := fs.Bool("privacy", false, "Force local-only providers (Ollama)")
+	asJSON := fs.Bool("json", false, "Output results as JSON")
 	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits on failure
 
 	if ce, ok := emb.(*embed.ChainEmbedder); ok {
@@ -147,54 +149,27 @@ func searchCmd(ctx context.Context, cfg *config.Config, db store.Store, emb embe
 		os.Exit(1)
 	}
 
-	project, err := db.GetProject(ctx, *projectName)
-	if err != nil {
-		log.Fatalf("failed to get project: %v", err)
-	}
-
-	searchModel := project.Model
-	if *model != "" {
-		searchModel = *model
-	}
-
-	var dims int
-	info, err := emb.ModelInfo(ctx, searchModel)
-	if err != nil {
-		dims = embed.InferDims(searchModel)
-	} else {
-		dims = info.Dims
-	}
-
-	fmt.Printf("Searching project: %s (model: %s)\n", project.Name, searchModel)
-	fmt.Printf("Query: %s\n\n", *query)
-
+	svc := search.NewService(db, emb)
 	start := time.Now()
-	var results []store.SearchResult
-	embedding, err := emb.EmbedSingle(ctx, searchModel, *query)
+	resp, err := svc.Search(ctx, search.Request{Project: *projectName, Query: *query, Model: *model, TopK: *topK})
 	if err != nil {
-		fmt.Printf("[warn] embedding failed (%v), falling back to keyword search...\n\n", err)
-		results, err = db.SearchSimilarKeywords(ctx, project.ID, *query, dims, *topK)
-		if err != nil {
-			log.Fatalf("failed to search: %v", err)
-		}
-	} else {
-		results, err = db.SearchSimilar(ctx, project.ID, embedding, dims, *topK)
-		if err != nil {
-			log.Fatalf("failed to search: %v", err)
-		}
+		log.Fatalf("failed to search: %v", err)
 	}
 	elapsed := time.Since(start)
 
-	fmt.Printf("Found %d results in %v\n\n", len(results), elapsed)
-	for i, r := range results {
-		fmt.Printf("--- Result %d (score: %.4f) ---\n", i+1, r.Score)
-		fmt.Printf("File: %s\n", r.FilePath)
-		preview := strings.TrimSpace(r.Content)
-		if len(preview) > 500 {
-			preview = preview[:500] + "..."
+	if *asJSON {
+		if err := (search.JSONFormatter{}).Format(os.Stdout, resp); err != nil {
+			log.Fatalf("failed to format results: %v", err)
 		}
-		fmt.Printf("%s\n\n", preview)
+		return
 	}
+
+	fmt.Printf("Searching project: %s (model: %s)\nQuery: %s\n\n", resp.Project.Name, resp.Model, *query)
+	if resp.Fallback {
+		fmt.Print("[warn] embedding unavailable — used keyword search\n\n")
+	}
+	fmt.Printf("Found %d results in %v\n\n", len(resp.Results), elapsed)
+	_ = (search.HumanFormatter{}).Format(os.Stdout, resp)
 }
 
 func modelsCmd(emb embed.Embedder) {
@@ -233,6 +208,7 @@ func sgrepCmd(ctx context.Context, cfg *config.Config, db store.Store, emb embed
 	topK := fs.Int("top-k", 5, "Number of results")
 	model := fs.String("model", "", "Override embedding model (default: project model)")
 	privacy := fs.Bool("privacy", false, "Force local-only providers (Ollama)")
+	asJSON := fs.Bool("json", false, "Output results as JSON")
 	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits on failure
 
 	if ce, ok := emb.(*embed.ChainEmbedder); ok {
@@ -244,88 +220,19 @@ func sgrepCmd(ctx context.Context, cfg *config.Config, db store.Store, emb embed
 		os.Exit(1)
 	}
 
-	project, err := db.GetProject(ctx, *projectName)
+	svc := search.NewService(db, emb)
+	resp, err := svc.Search(ctx, search.Request{Project: *projectName, Query: *query, Model: *model, TopK: *topK})
 	if err != nil {
-		log.Fatalf("failed to get project: %v", err)
+		log.Fatalf("failed to search: %v", err)
 	}
 
-	searchModel := project.Model
-	if *model != "" {
-		searchModel = *model
+	var f search.Formatter = search.GrepFormatter{ProjectPath: resp.Project.Path}
+	if *asJSON {
+		f = search.JSONFormatter{}
 	}
-
-	var dims int
-	info, err := emb.ModelInfo(ctx, searchModel)
-	if err != nil {
-		dims = embed.InferDims(searchModel)
-	} else {
-		dims = info.Dims
+	if err := f.Format(os.Stdout, resp); err != nil {
+		log.Fatalf("failed to format results: %v", err)
 	}
-
-	var results []store.SearchResult
-	embedding, err := emb.EmbedSingle(ctx, searchModel, *query)
-	if err != nil {
-		// Fallback silencioso no sgrep para manter a compatibilidade
-		results, err = db.SearchSimilarKeywords(ctx, project.ID, *query, dims, *topK)
-		if err != nil {
-			log.Fatalf("failed to search: %v", err)
-		}
-	} else {
-		results, err = db.SearchSimilar(ctx, project.ID, embedding, dims, *topK)
-		if err != nil {
-			log.Fatalf("failed to search: %v", err)
-		}
-	}
-
-	for _, r := range results {
-		lineNum := findLineNumber(project.Path, r.FilePath, r.Content)
-		lines := strings.Split(r.Content, "\n")
-		firstLine := ""
-		for _, line := range lines {
-			if strings.TrimSpace(line) != "" {
-				firstLine = strings.TrimSpace(line)
-				break
-			}
-		}
-		fmt.Printf("%s:%d:%s\n", filepath.Join(project.Path, r.FilePath), lineNum, firstLine)
-	}
-}
-
-func findLineNumber(projectPath, filePath, content string) int {
-	fullPath := filepath.Join(projectPath, filePath)
-	data, err := os.ReadFile(fullPath)
-	if err != nil {
-		return 1
-	}
-
-	lines := strings.Split(content, "\n")
-	if len(lines) == 0 {
-		return 1
-	}
-	firstLine := ""
-	for _, l := range lines {
-		if strings.TrimSpace(l) != "" {
-			firstLine = strings.TrimSpace(l)
-			break
-		}
-	}
-	if firstLine == "" {
-		return 1
-	}
-
-	fileContent := string(data)
-	idx := strings.Index(fileContent, firstLine)
-	if idx < 0 {
-		return 1
-	}
-
-	lineNum := 1
-	for i := 0; i < idx; i++ {
-		if fileContent[i] == '\n' {
-			lineNum++
-		}
-	}
-	return lineNum
 }
 
 func buildChain(cfg *config.Config) embed.Embedder {
