@@ -13,17 +13,48 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/lgldsilva/semidx/internal/clientconfig"
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/pkg/client"
 )
 
 // deps are the runtime dependencies shared by all subcommands, built in the
 // root command's PersistentPreRunE and torn down in PersistentPostRun.
+//
+// The database connection is LAZY: a pure remote client (a machine with no local
+// Postgres) must be able to run `login`, `search`, `repo add`, etc. without ever
+// dialing a database. Commands that genuinely need local storage call
+// d.database(); the connection is opened on first use and cached.
 type deps struct {
-	cfg *config.Config
-	db  store.Store
-	emb embed.Embedder
+	cfg      *config.Config
+	client   *clientconfig.Config
+	emb      embed.Embedder
+	db       store.Store
+	dbErr    error
+	dbOpened bool
+}
+
+// database opens (once) and returns the local store, or the connection error.
+func (d *deps) database(ctx context.Context) (store.Store, error) {
+	if !d.dbOpened {
+		d.dbOpened = true
+		db, err := store.NewPgStore(ctx, d.cfg.DatabaseURL)
+		if err != nil {
+			d.dbErr = fmt.Errorf("connect to database: %w", err)
+		}
+		d.db = db
+	}
+	return d.db, d.dbErr
+}
+
+// remote reports whether a server is configured (remote mode).
+func (d *deps) remote() bool { return d.client != nil && d.client.ServerURL != "" }
+
+// apiClient returns an SDK client for the configured server.
+func (d *deps) apiClient() *client.Client {
+	return client.New(d.client.ServerURL, d.client.Token)
 }
 
 func main() {
@@ -46,14 +77,14 @@ func newRootCmd() *cobra.Command {
 		Short:         "Self-hosted semantic code search",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
 			d.cfg = config.Load()
 			d.emb = buildChain(d.cfg)
-			db, err := store.NewPgStore(cmd.Context(), d.cfg.DatabaseURL)
+			cc, err := clientconfig.Load()
 			if err != nil {
-				return fmt.Errorf("connect to database: %w", err)
+				return fmt.Errorf("load client config: %w", err)
 			}
-			d.db = db
+			d.client = cc
 			return nil
 		},
 		PersistentPostRun: func(_ *cobra.Command, _ []string) {
@@ -63,9 +94,11 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 	root.AddCommand(
+		newLoginCmd(d),
 		newIndexCmd(d),
 		newSearchCmd(d),
 		newSgrepCmd(d),
+		newRepoCmd(d),
 		newModelsCmd(d),
 		newDropCmd(d),
 		newServeCmd(d),
