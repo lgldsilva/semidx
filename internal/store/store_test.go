@@ -520,9 +520,12 @@ func TestCreateUserTokenLinksOwner(t *testing.T) {
 		t.Errorf("TokenByHash = %+v, err %v", tok, err)
 	}
 
-	owned, err := s.ListUserTokens(ctx, u.ID)
+	owned, err := s.ListUserTokens(ctx, u.ID, "opaque")
 	if err != nil || len(owned) != 1 || owned[0].Name != "laptop" || owned[0].CreatedAt.IsZero() {
 		t.Fatalf("ListUserTokens = %+v, err %v", owned, err)
+	}
+	if owned[0].Kind != "opaque" {
+		t.Errorf("opaque token Kind = %q", owned[0].Kind)
 	}
 
 	// A different user cannot revoke this token.
@@ -534,8 +537,34 @@ func TestCreateUserTokenLinksOwner(t *testing.T) {
 	if err := s.RevokeUserToken(ctx, u.ID, id); err != nil {
 		t.Fatalf("RevokeUserToken(owner): %v", err)
 	}
-	if owned, _ := s.ListUserTokens(ctx, u.ID); len(owned) != 0 {
+	if owned, _ := s.ListUserTokens(ctx, u.ID, "opaque"); len(owned) != 0 {
 		t.Errorf("ListUserTokens after revoke = %d; want 0", len(owned))
+	}
+}
+
+func TestJWTTokenRecord(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	u, err := s.CreateUser(ctx, "svc", "h", "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A non-expiring JWT record (expiresAt nil).
+	if _, err := s.CreateJWTToken(ctx, u.ID, "deploy", "jti-1", []string{"write"}, nil); err != nil {
+		t.Fatalf("CreateJWTToken: %v", err)
+	}
+	// JWTs are listed under kind "jwt", not "opaque".
+	if opaque, _ := s.ListUserTokens(ctx, u.ID, "opaque"); len(opaque) != 0 {
+		t.Errorf("JWT leaked into opaque list: %d", len(opaque))
+	}
+	jwts, err := s.ListUserTokens(ctx, u.ID, "jwt")
+	if err != nil || len(jwts) != 1 || jwts[0].Kind != "jwt" || jwts[0].ExpiresAt != nil {
+		t.Fatalf("ListUserTokens(jwt) = %+v, err %v", jwts, err)
+	}
+	// The jti is looked up like any token hash (this is the revocation check).
+	if tok, _ := s.TokenByHash(ctx, "jti-1"); tok == nil {
+		t.Error("TokenByHash(jti) = nil; want the active JWT record")
 	}
 }
 

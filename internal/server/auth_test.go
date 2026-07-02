@@ -3,9 +3,56 @@ package server
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/passwd"
+	"github.com/lgldsilva/semidx/internal/store"
 )
+
+func TestResolveScopesJWT(t *testing.T) {
+	iss, _ := jwtauth.New("secret")
+	minted, _ := iss.Mint("alice", []string{"read", "admin"}, 0, time.Now())
+
+	t.Run("valid JWT authorizes from its claims (jti active)", func(t *testing.T) {
+		// TokenByHash returns non-nil → the jti is active (not revoked).
+		srv := New(&fakeStore{token: &store.Token{Scopes: []string{"read"}}}, fakeEmbedder{}, nil)
+		if err := srv.EnableJWT("secret"); err != nil {
+			t.Fatal(err)
+		}
+		scopes, ok, err := srv.resolveScopes(context.Background(), minted.Token)
+		if err != nil || !ok {
+			t.Fatalf("resolveScopes = ok %v, err %v; want ok", ok, err)
+		}
+		// Scopes come from the JWT claims, not the DB row.
+		if len(scopes) != 2 || scopes[0] != "read" || scopes[1] != "admin" {
+			t.Errorf("scopes = %v; want [read admin]", scopes)
+		}
+	})
+
+	t.Run("revoked jti is rejected", func(t *testing.T) {
+		// TokenByHash returns nil → the jti was revoked/never recorded.
+		srv := New(&fakeStore{token: nil}, fakeEmbedder{}, nil)
+		if err := srv.EnableJWT("secret"); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, _ := srv.resolveScopes(context.Background(), minted.Token); ok {
+			t.Error("resolveScopes accepted a revoked JWT")
+		}
+	})
+
+	t.Run("JWT signed with another secret falls through to opaque lookup", func(t *testing.T) {
+		other, _ := jwtauth.New("different")
+		bad, _ := other.Mint("mallory", []string{"admin"}, 0, time.Now())
+		// Our server can't verify it as a JWT, so it tries the opaque path; the
+		// fake has no matching token → rejected.
+		srv := New(&fakeStore{token: nil}, fakeEmbedder{}, nil)
+		_ = srv.EnableJWT("secret")
+		if _, ok, _ := srv.resolveScopes(context.Background(), bad.Token); ok {
+			t.Error("accepted a JWT signed with the wrong secret")
+		}
+	})
+}
 
 func TestEnsureBootstrapAdmin(t *testing.T) {
 	t.Run("creates admin on empty server", func(t *testing.T) {

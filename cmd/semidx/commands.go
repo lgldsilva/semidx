@@ -221,6 +221,11 @@ func newServeCmd(d *deps) *cobra.Command {
 			if admin != "" {
 				fmt.Fprintf(os.Stderr, "bootstrap web admin user created: %s\n", admin)
 			}
+			if d.cfg.JWTSecret != "" {
+				if err := srv.EnableJWT(d.cfg.JWTSecret); err != nil {
+					return fmt.Errorf("enable JWT control tokens: %w", err)
+				}
+			}
 			if err := srv.MountAdmin(d.cfg.CookieSecure); err != nil {
 				return fmt.Errorf("mount admin UI: %w", err)
 			}

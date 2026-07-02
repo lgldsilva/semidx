@@ -145,7 +145,7 @@ func (a *Admin) keysList(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 }
 
 func (a *Admin) renderKeys(w http.ResponseWriter, r *http.Request, ac *authCtx, newKey, flash, errMsg string) {
-	tokens, err := a.store.ListUserTokens(r.Context(), ac.user.ID)
+	tokens, err := a.store.ListUserTokens(r.Context(), ac.user.ID, "opaque")
 	if err != nil {
 		a.log.Error("list tokens failed", "err", err)
 		errMsg = "could not load keys"

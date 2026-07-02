@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/passwd"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -128,15 +129,22 @@ func (f *fakeStore) DeleteSession(_ context.Context, hash string) error {
 
 func (f *fakeStore) CreateUserToken(_ context.Context, userID int, name, hash string, scopes []string) (int, error) {
 	f.nextTok++
-	f.tokens[f.nextTok] = &store.Token{ID: f.nextTok, Name: name, Scopes: scopes, CreatedAt: time.Unix(1, 0)}
+	f.tokens[f.nextTok] = &store.Token{ID: f.nextTok, Name: name, Scopes: scopes, Kind: "opaque", CreatedAt: time.Unix(1, 0)}
 	f.tokenOwner[f.nextTok] = userID
 	return f.nextTok, nil
 }
 
-func (f *fakeStore) ListUserTokens(_ context.Context, userID int) ([]store.Token, error) {
+func (f *fakeStore) CreateJWTToken(_ context.Context, userID int, name, jti string, scopes []string, expiresAt *time.Time) (int, error) {
+	f.nextTok++
+	f.tokens[f.nextTok] = &store.Token{ID: f.nextTok, Name: name, Scopes: scopes, Kind: "jwt", CreatedAt: time.Unix(1, 0), ExpiresAt: expiresAt}
+	f.tokenOwner[f.nextTok] = userID
+	return f.nextTok, nil
+}
+
+func (f *fakeStore) ListUserTokens(_ context.Context, userID int, kind string) ([]store.Token, error) {
 	var out []store.Token
 	for id, owner := range f.tokenOwner {
-		if owner == userID {
+		if owner == userID && f.tokens[id].Kind == kind {
 			out = append(out, *f.tokens[id])
 		}
 	}
@@ -161,7 +169,8 @@ var csrfRe = regexp.MustCompile(`name="csrf_token" value="([0-9a-f]+)"`)
 func newTestAdmin(t *testing.T) (*httptest.Server, *fakeStore) {
 	t.Helper()
 	fs := newFakeStore()
-	a, err := New(fs, nil, nil, false)
+	iss, _ := jwtauth.New("test-secret")
+	a, err := New(fs, nil, nil, false, iss)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,6 +326,50 @@ func TestAdminCreatesMemberAndDisable(t *testing.T) {
 	if admin.Disabled {
 		t.Error("admin disabled their own account — should be blocked")
 	}
+}
+
+func TestControlTokenLifecycle(t *testing.T) {
+	srv, fs := newTestAdmin(t)
+	fs.addUser("admin", "supersecret", "admin")
+	c := newClient(t)
+	login(t, c, srv.URL, "admin", "supersecret")
+
+	// Issue a non-expiring control token and confirm the JWT is shown once.
+	csrf := csrfFrom(t, c, srv.URL+"/admin/tokens")
+	resp, _ := c.PostForm(srv.URL+"/admin/tokens", url.Values{
+		"csrf_token": {csrf}, "name": {"deploy"}, "scopes": {"read", "write"},
+	})
+	_, body := readAll(resp)
+	// A JWT has three dot-separated segments.
+	if strings.Count(firstToken(body), ".") != 2 {
+		t.Fatalf("expected a JWT in the response body")
+	}
+	if len(fs.tokens) != 1 {
+		t.Fatalf("expected 1 control token recorded, got %d", len(fs.tokens))
+	}
+
+	// It shows under the jwt list, and revoking removes it.
+	var id int
+	for tid := range fs.tokens {
+		id = tid
+	}
+	csrf = csrfFrom(t, c, srv.URL+"/admin/tokens")
+	resp, _ = c.PostForm(srv.URL+"/admin/tokens/revoke", url.Values{"csrf_token": {csrf}, "id": {strconv.Itoa(id)}})
+	_ = resp.Body.Close()
+	if len(fs.tokens) != 0 {
+		t.Errorf("control token not revoked: %d remain", len(fs.tokens))
+	}
+}
+
+// firstToken returns the first whitespace-delimited chunk containing two dots
+// (a heuristic for pulling the JWT out of the rendered page).
+func firstToken(body string) string {
+	for _, f := range strings.Fields(body) {
+		if strings.Count(f, ".") == 2 && len(f) > 40 {
+			return f
+		}
+	}
+	return ""
 }
 
 func readAll(resp *http.Response) (int, string) {

@@ -41,6 +41,7 @@
   <a href="/admin/" class="{{if eq .Active "projects"}}active{{end}}">Projects</a>
   <a href="/admin/search" class="{{if eq .Active "search"}}active{{end}}">Search</a>
   <a href="/admin/keys" class="{{if eq .Active "keys"}}active{{end}}">API keys</a>
+  <a href="/admin/tokens" class="{{if eq .Active "tokens"}}active{{end}}">Control tokens</a>
   {{if eq .User.Role "admin"}}<a href="/admin/users" class="{{if eq .Active "users"}}active{{end}}">Users</a>{{end}}
   <a href="/admin/account" class="{{if eq .Active "account"}}active{{end}}">Account</a>
   <span class="spacer"></span>

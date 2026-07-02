@@ -19,6 +19,7 @@ import (
 	"time"
 
 	embedpkg "github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -42,11 +43,13 @@ type Admin struct {
 	secure  bool // set the Secure flag on cookies (serve behind HTTPS)
 	csrfKey []byte
 	limiter *loginLimiter
+	jwt     *jwtauth.Issuer // nil when control tokens are disabled
 }
 
 // New builds the admin UI. secureCookies must be true when the server is reached
-// over HTTPS (directly or via a TLS-terminating proxy).
-func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies bool) (*Admin, error) {
+// over HTTPS (directly or via a TLS-terminating proxy). jwt may be nil, which
+// hides the control-tokens feature.
+func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies bool, jwt *jwtauth.Issuer) (*Admin, error) {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(discard{}, nil))
 	}
@@ -73,6 +76,7 @@ func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies 
 		secure:  secureCookies,
 		csrfKey: key,
 		limiter: &loginLimiter{tries: map[string][]time.Time{}},
+		jwt:     jwt,
 	}, nil
 }
 
@@ -87,6 +91,9 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/keys", a.protect("", a.keysList))
 	mux.HandleFunc("POST /admin/keys", a.protect("", a.keysCreate))
 	mux.HandleFunc("POST /admin/keys/revoke", a.protect("", a.keysRevoke))
+	mux.HandleFunc("GET /admin/tokens", a.protect("", a.tokensList))
+	mux.HandleFunc("POST /admin/tokens", a.protect("", a.tokensCreate))
+	mux.HandleFunc("POST /admin/tokens/revoke", a.protect("", a.tokensRevoke))
 	mux.HandleFunc("GET /admin/account", a.protect("", a.accountForm))
 	mux.HandleFunc("POST /admin/account", a.protect("", a.accountChangePassword))
 	mux.HandleFunc("GET /admin/users", a.protect("admin", a.usersList))

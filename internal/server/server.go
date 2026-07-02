@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/internal/webadmin"
@@ -30,13 +31,26 @@ type Server struct {
 	log    *slog.Logger
 	reg    *prometheus.Registry
 	reqs   *prometheus.CounterVec
-	admin  http.Handler // the /admin management UI, nil unless MountAdmin was called
+	admin  http.Handler    // the /admin management UI, nil unless MountAdmin was called
+	jwt    *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
+}
+
+// EnableJWT turns on JWT control tokens using secret as the HS256 signing key.
+// With it set, the API accepts JWT bearers and the web UI can mint them.
+func (s *Server) EnableJWT(secret string) error {
+	iss, err := jwtauth.New(secret)
+	if err != nil {
+		return err
+	}
+	s.jwt = iss
+	return nil
 }
 
 // MountAdmin enables the web management UI at /admin. secureCookies must be true
-// when the server is reached over HTTPS (directly or via a TLS proxy).
+// when the server is reached over HTTPS (directly or via a TLS proxy). If JWT is
+// enabled (EnableJWT), the UI can also mint control tokens.
 func (s *Server) MountAdmin(secureCookies bool) error {
-	a, err := webadmin.New(s.store, s.emb, s.log, secureCookies)
+	a, err := webadmin.New(s.store, s.emb, s.log, secureCookies, s.jwt)
 	if err != nil {
 		return err
 	}
