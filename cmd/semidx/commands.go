@@ -43,6 +43,10 @@ func newIndexCmd(d *deps) *cobra.Command {
 			}
 
 			ctx := cmd.Context()
+			db, err := d.database(ctx)
+			if err != nil {
+				return err
+			}
 			name := projectNameFromPath(projectPath)
 			info, err := d.emb.ModelInfo(ctx, model)
 			if err != nil {
@@ -50,15 +54,15 @@ func newIndexCmd(d *deps) *cobra.Command {
 			}
 			fmt.Printf("Indexing project: %s\nPath: %s\nModel: %s (dims=%d)\n", name, projectPath, model, info.Dims)
 
-			if err := d.db.EnsureChunksTable(ctx, info.Dims); err != nil {
+			if err := db.EnsureChunksTable(ctx, info.Dims); err != nil {
 				return fmt.Errorf("ensure chunks table: %w", err)
 			}
-			projectID, err := d.db.UpsertProject(ctx, name, projectPath, model)
+			projectID, err := db.UpsertProject(ctx, name, projectPath, model)
 			if err != nil {
 				return fmt.Errorf("upsert project: %w", err)
 			}
 
-			indexer := indexing.NewIndexer(d.db, d.emb, info.Dims, d.cfg.IndexWorkers, verbose, gitMode, gitSince)
+			indexer := indexing.NewIndexer(db, d.emb, info.Dims, d.cfg.IndexWorkers, verbose, gitMode, gitSince)
 			start := time.Now()
 			stats, err := indexer.IndexProject(ctx, projectID, projectPath, model, maxFiles)
 			if err != nil {
@@ -90,11 +94,7 @@ func newSearchCmd(d *deps) *cobra.Command {
 		Use:   "search",
 		Short: "Semantic search over an indexed project",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			d.applyPrivacy(privacy)
-			start := time.Now()
-			resp, err := search.NewService(d.db, d.emb).Search(cmd.Context(), search.Request{
-				Project: project, Query: query, Model: model, TopK: topK,
-			})
+			resp, took, err := d.runSearch(cmd, project, query, model, topK, privacy)
 			if err != nil {
 				return err
 			}
@@ -105,7 +105,7 @@ func newSearchCmd(d *deps) *cobra.Command {
 			if resp.Fallback {
 				fmt.Print("[warn] embedding unavailable — used keyword search\n\n")
 			}
-			fmt.Printf("Found %d results in %v\n\n", len(resp.Results), time.Since(start))
+			fmt.Printf("Found %d results in %v\n\n", len(resp.Results), took)
 			return search.HumanFormatter{}.Format(os.Stdout, resp)
 		},
 	}
@@ -123,14 +123,20 @@ func newSgrepCmd(d *deps) *cobra.Command {
 		Use:   "sgrep",
 		Short: "Semantic search with classic grep output (file:line:content)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			d.applyPrivacy(privacy)
-			resp, err := search.NewService(d.db, d.emb).Search(cmd.Context(), search.Request{
-				Project: project, Query: query, Model: model, TopK: topK,
-			})
+			resp, _, err := d.runSearch(cmd, project, query, model, topK, privacy)
 			if err != nil {
 				return err
 			}
-			var f search.Formatter = search.GrepFormatter{ProjectPath: resp.Project.Path}
+			// Remote results carry no server-side path; anchor them at the local
+			// working directory so `file:line` stays clickable (the sgrep wrapper
+			// runs from the project root).
+			projectPath := resp.Project.Path
+			if d.remote() {
+				if wd, err := os.Getwd(); err == nil {
+					projectPath = wd
+				}
+			}
+			var f search.Formatter = search.GrepFormatter{ProjectPath: projectPath}
 			if asJSON {
 				f = search.JSONFormatter{}
 			}
@@ -175,7 +181,11 @@ func newDropCmd(d *deps) *cobra.Command {
 		Use:   "drop",
 		Short: "Drop all indexed data",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := d.db.DropAll(cmd.Context()); err != nil {
+			db, err := d.database(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if err := db.DropAll(cmd.Context()); err != nil {
 				return err
 			}
 			fmt.Println("All indexed data dropped.")
@@ -189,8 +199,12 @@ func newServeCmd(d *deps) *cobra.Command {
 		Use:   "serve",
 		Short: "Run the HTTP API server",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			db, err := d.database(cmd.Context())
+			if err != nil {
+				return err
+			}
 			log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-			srv := server.New(d.db, d.emb, log)
+			srv := server.New(db, d.emb, log)
 
 			token, err := srv.EnsureBootstrapToken(cmd.Context(), d.cfg.BootstrapToken)
 			if err != nil {
@@ -209,8 +223,12 @@ func newMCPCmd(d *deps) *cobra.Command {
 	return &cobra.Command{
 		Use:   "mcp",
 		Short: "Run the MCP server over stdio (JSON-RPC 2.0)",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			runMCPServer(d.db, d.emb)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			db, err := d.database(cmd.Context())
+			if err != nil {
+				return err
+			}
+			runMCPServer(db, d.emb)
 			return nil
 		},
 	}
