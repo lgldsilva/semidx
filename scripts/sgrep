@@ -7,7 +7,7 @@
 # Configuration comes from the environment or from ~/.config/semidx/env
 # (a plain shell file you own, chmod 600), e.g.:
 #   export GEMINI_API_KEY=...
-#   export SEMIDX_BIN=/path/to/semantic-indexer-poc
+#   export SEMIDX_BIN=/path/to/semidx
 # No secrets live in this script.
 set -euo pipefail
 
@@ -23,12 +23,12 @@ CONF="$HOME/.config/semidx/env"
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
 
-BIN="${SEMIDX_BIN:-$(command -v semantic-indexer-poc || true)}"
+BIN="${SEMIDX_BIN:-$(command -v semidx || true)}"
 if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
-  echo "sgrep: indexer binary not found — set SEMIDX_BIN in $CONF or add it to PATH" >&2
+  echo "sgrep: semidx binary not found — set SEMIDX_BIN in $CONF or add it to PATH" >&2
   exit 2
 fi
 
 PROJECT=$(basename "$(pwd)")
 
-exec "$BIN" sgrep -project "$PROJECT" -query "$QUERY" -top-k "$TOP_K"
+exec "$BIN" sgrep --project "$PROJECT" --query "$QUERY" --top-k "$TOP_K"

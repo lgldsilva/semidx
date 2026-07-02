@@ -25,7 +25,7 @@ echo "Model:   $MODEL"
 
 # Static build so the binary runs on the Alpine (musl) container
 cd "$SCRIPT_DIR"
-CGO_ENABLED=0 GOOS=linux go build -o semantic-indexer-poc .
+CGO_ENABLED=0 GOOS=linux go build -o semidx ./cmd/semidx
 
 # --network host: reaches Postgres (localhost:55432) and Ollama (localhost:11434)
 # -e VAR (no value): forwards the variable from the host env only when it is set
@@ -39,4 +39,4 @@ docker run --rm \
   -e EMBED_PROVIDER -e EMBED_ENDPOINT -e EMBED_API_KEY \
   -e GEMINI_API_KEY -e GROQ_API_KEY -e OPENROUTER_API_KEY \
   -e OLLAMA_CLOUD_API_KEY -e OLLAMA_URL -e EMBED_PRIVACY \
-  alpine sh -c "apk add --no-cache git >/dev/null && git config --global --add safe.directory '*' && /app/semantic-indexer-poc index -project \"$PROJECT_PATH\" -model \"$MODEL\" --git --git-since=7.days -verbose"
+  alpine sh -c "apk add --no-cache git >/dev/null && git config --global --add safe.directory '*' && /app/semidx index --project \"$PROJECT_PATH\" --model \"$MODEL\" --git --git-since=7.days --verbose"
