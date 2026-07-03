@@ -143,6 +143,7 @@ func newRootCmd() *cobra.Command {
 		newConfigCmd(d),
 		newIndexCmd(d),
 		newUnlockCmd(d),
+		newMigrateCmd(d),
 		newSearchCmd(d),
 		newSgrepCmd(d),
 		newRepoCmd(d),
