@@ -99,11 +99,39 @@ var (
 )
 
 func newRootCmd() *cobra.Command {
+	// Show commands grouped by workflow (below) instead of one flat alphabetical
+	// list, so the natural path index → search is obvious and the destructive
+	// commands are visually separated.
+	cobra.EnableCommandSorting = false
+
 	d := &deps{}
 	var forceLocal, keywordOnly bool
 	root := &cobra.Command{
-		Use:           "semidx",
-		Short:         "Self-hosted semantic code search",
+		Use:   "semidx",
+		Short: "Self-hosted semantic code search",
+		Long: `semidx is self-hosted semantic code search: it chunks your code and docs,
+embeds the chunks, and answers natural-language queries with ranked file:line
+matches — as a CLI, an HTTP server, or an MCP server for AI agents.
+
+Quickstart (zero-config — no server or API key required):
+
+  semidx index --project .                     # index the current repo
+  semidx search --query "where is auth handled"
+
+For better results, configure an embedding provider once:
+
+  semidx config set GEMINI_API_KEY <key>
+
+Run "semidx <command> --help" for details on any command.`,
+		Example: `  # Index the current project, then search it
+  semidx index --project .
+  semidx search --query "rate limiting middleware"
+
+  # Classic grep-style output (file:line:content)
+  semidx sgrep --query "database connection pool"
+
+  # No provider configured? Run fully local, keyword-only
+  semidx search --query "auth" --keyword --local`,
 		Version:       fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -138,22 +166,22 @@ func newRootCmd() *cobra.Command {
 		"Use a standalone local index (no server/Postgres); path from SEMIDX_LOCAL_INDEX or the default data dir")
 	root.PersistentFlags().BoolVar(&keywordOnly, "keyword", false,
 		"Index and search by keyword only, with no embedding model (SEMIDX_EMBED_MODE=none)")
-	root.AddCommand(
-		newLoginCmd(d),
-		newConfigCmd(d),
-		newIndexCmd(d),
-		newUnlockCmd(d),
-		newMigrateCmd(d),
-		newSearchCmd(d),
-		newSgrepCmd(d),
-		newRepoCmd(d),
-		newSkillsCmd(d),
-		newModelsCmd(d),
-		newDropCmd(d),
-		newServeCmd(d),
-		newMCPCmd(d),
-		newUpgradeCmd(d),
+	root.AddGroup(
+		&cobra.Group{ID: "primary", Title: "Primary workflow:"},
+		&cobra.Group{ID: "setup", Title: "Setup:"},
+		&cobra.Group{ID: "advanced", Title: "Server & advanced:"},
+		&cobra.Group{ID: "maintenance", Title: "Maintenance & danger zone:"},
 	)
+	addGroup := func(id string, cmds ...*cobra.Command) {
+		for _, c := range cmds {
+			c.GroupID = id
+			root.AddCommand(c)
+		}
+	}
+	addGroup("primary", newIndexCmd(d), newSearchCmd(d), newSgrepCmd(d), newUnlockCmd(d))
+	addGroup("setup", newConfigCmd(d), newLoginCmd(d), newModelsCmd(d))
+	addGroup("advanced", newServeCmd(d), newMCPCmd(d), newRepoCmd(d), newSkillsCmd(d))
+	addGroup("maintenance", newMigrateCmd(d), newUpgradeCmd(d), newDropCmd(d))
 	return root
 }
 

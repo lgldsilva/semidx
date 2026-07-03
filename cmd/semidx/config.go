@@ -24,6 +24,9 @@ func newConfigCmd(d *deps) *cobra.Command {
 			"  • Postgres       — `semidx config set SEMIDX_DB_DSN postgres://...`\n\n" +
 			"Values are stored in the user config file and layered below a project .env\n" +
 			"and the real environment. Run `semidx config keys` for the full key reference.",
+		Example: `  semidx config set GEMINI_API_KEY <key>
+  semidx config set SEMIDX_DB_DSN postgres://user:pass@host:5432/db
+  semidx config list`,
 	}
 	c.AddCommand(
 		newConfigSetCmd(),
@@ -38,9 +41,10 @@ func newConfigCmd(d *deps) *cobra.Command {
 
 func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "set <KEY> <VALUE>",
-		Short: "Persist a config value (e.g. GEMINI_API_KEY, SEMIDX_DB_DSN)",
-		Args:  cobra.ExactArgs(2),
+		Use:     "set <KEY> <VALUE>",
+		Short:   "Persist a config value (e.g. GEMINI_API_KEY, SEMIDX_DB_DSN)",
+		Example: "  semidx config set GEMINI_API_KEY AIza...",
+		Args:    cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			key, value := args[0], args[1]
 			if !isKnownKey(key) {
@@ -58,9 +62,10 @@ func newConfigSetCmd() *cobra.Command {
 
 func newConfigUnsetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "unset <KEY>",
-		Short: "Remove a persisted config value",
-		Args:  cobra.ExactArgs(1),
+		Use:     "unset <KEY>",
+		Short:   "Remove a persisted config value",
+		Example: "  semidx config unset GEMINI_API_KEY",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			if err := config.UnsetUserEnv(args[0]); err != nil {
 				return err
@@ -73,9 +78,10 @@ func newConfigUnsetCmd() *cobra.Command {
 
 func newConfigGetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "get <KEY>",
-		Short: "Print the effective value of a key (env > .env > user config)",
-		Args:  cobra.ExactArgs(1),
+		Use:     "get <KEY>",
+		Short:   "Print the effective value of a key (env > .env > user config)",
+		Example: "  semidx config get SEMIDX_DB_DSN",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			v := config.EffectiveValue(args[0])
 			if v == "" {
@@ -92,6 +98,8 @@ func newConfigListCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "Show the effective configuration (secrets masked) and the active backend",
+		Example: `  semidx config list
+  semidx config list --show-secrets`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			fmt.Printf("Active backend: %s\n\n", activeBackend(d))
 			fmt.Println("Settings (effective; env > .env > user config):")
@@ -113,8 +121,9 @@ func newConfigListCmd(d *deps) *cobra.Command {
 
 func newConfigKeysCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "keys",
-		Short: "List the configuration keys semidx understands",
+		Use:     "keys",
+		Short:   "List the configuration keys semidx understands",
+		Example: "  semidx config keys",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			for _, k := range config.KnownKeys {
 				tag := ""
@@ -130,8 +139,9 @@ func newConfigKeysCmd() *cobra.Command {
 
 func newConfigPathCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "path",
-		Short: "Print the user config file location",
+		Use:     "path",
+		Short:   "Print the user config file location",
+		Example: "  semidx config path",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			p, err := config.UserEnvPath()
 			if err != nil {
