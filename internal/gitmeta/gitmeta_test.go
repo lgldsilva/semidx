@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/lgldsilva/semidx/internal/gitenv"
 )
 
 func TestNormalizeRemote(t *testing.T) {
@@ -35,7 +37,7 @@ func gitInit(t *testing.T, dir string, args ...[]string) {
 	}
 	for _, a := range append(base, args...) {
 		cmd := exec.Command("git", append([]string{"-C", dir}, a...)...)
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd.Env = append(gitenv.Clean(os.Environ()), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", a, err, out)
 		}
@@ -88,7 +90,7 @@ func TestWorktreesShareIdentity(t *testing.T) {
 
 	wt := filepath.Join(t.TempDir(), "wt")
 	cmd := exec.Command("git", "-C", repo, "worktree", "add", "-q", "-b", "feat", wt)
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	cmd.Env = append(gitenv.Clean(os.Environ()), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("worktree add: %v\n%s", err, out)
 	}
