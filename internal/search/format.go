@@ -26,8 +26,9 @@ func (f HumanFormatter) Format(w io.Writer, resp *Response) error {
 		preview = 500
 	}
 	for i, r := range resp.Results {
-		if _, err := fmt.Fprintf(w, "--- Result %d (score: %.4f) ---\nFile: %s\n%s\n\n",
-			i+1, r.Score, r.FilePath, truncatePreview(r.Content, preview)); err != nil {
+		if _, err := fmt.Fprintf(w, "--- Result %d (%s) ---\nFile: %s\n%s\n\n",
+			i+1, matchLabel(resp.Keyword, r.Score), formatLoc(r.FilePath, r.StartLine, r.EndLine),
+			truncatePreview(r.Content, preview)); err != nil {
 			return err
 		}
 	}
@@ -79,6 +80,28 @@ func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+// matchLabel renders the per-result relevance label: cosine similarity as a
+// percentage for a vector match, or "keyword match" when the response came from
+// keyword search (its scores are a constant placeholder, not a similarity).
+func matchLabel(keyword bool, score float64) string {
+	if keyword {
+		return "keyword match"
+	}
+	return fmt.Sprintf("%.0f%%", score*100)
+}
+
+// formatLoc renders "path:line" (or "path:start-end" for a multi-line chunk),
+// clamping an unknown/zero start line to 1 to match the grep output contract.
+func formatLoc(path string, start, end int) string {
+	if start < 1 {
+		start = 1
+	}
+	if end > start {
+		return fmt.Sprintf("%s:%d-%d", path, start, end)
+	}
+	return fmt.Sprintf("%s:%d", path, start)
 }
 
 // firstNonEmptyLine returns the first non-blank line of content, trimmed.

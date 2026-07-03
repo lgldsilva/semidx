@@ -3,11 +3,17 @@ package search
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/lgldsilva/semidx/internal/store"
 )
+
+// failWriter fails every Write, to exercise formatter error propagation.
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 
 func sampleResponse() *Response {
 	return &Response{
@@ -25,14 +31,41 @@ func TestHumanFormatterGolden(t *testing.T) {
 	if err := (HumanFormatter{}).Format(&buf, sampleResponse()); err != nil {
 		t.Fatal(err)
 	}
-	const want = "--- Result 1 (score: 0.9123) ---\n" +
-		"File: src/auth.go\n" +
+	const want = "--- Result 1 (91%) ---\n" +
+		"File: src/auth.go:12-14\n" +
 		"func Login() {\n  // jwt\n}\n\n" +
-		"--- Result 2 (score: 0.5000) ---\n" +
-		"File: README.md\n" +
+		"--- Result 2 (50%) ---\n" +
+		"File: README.md:3-5\n" +
 		"# Title\nbody\n\n"
 	if got := buf.String(); got != want {
 		t.Errorf("human output mismatch:\n--- got ---\n%q\n--- want ---\n%q", got, want)
+	}
+}
+
+func TestHumanFormatterKeywordGolden(t *testing.T) {
+	// A keyword response labels every result "keyword match" (its 0.5 scores are a
+	// placeholder, not a similarity) and still shows file:line. Also covers a
+	// single-line chunk and a zero start line clamped to 1.
+	resp := &Response{
+		Model:   "bge-m3",
+		Keyword: true,
+		Results: []store.SearchResult{
+			{FilePath: "src/auth.go", Content: "func Login() {}", Score: 0.5, StartLine: 7, EndLine: 7},
+			{FilePath: "notes.txt", Content: "todo", Score: 0.5, StartLine: 0, EndLine: 0},
+		},
+	}
+	var buf bytes.Buffer
+	if err := (HumanFormatter{}).Format(&buf, resp); err != nil {
+		t.Fatal(err)
+	}
+	const want = "--- Result 1 (keyword match) ---\n" +
+		"File: src/auth.go:7\n" +
+		"func Login() {}\n\n" +
+		"--- Result 2 (keyword match) ---\n" +
+		"File: notes.txt:1\n" +
+		"todo\n\n"
+	if got := buf.String(); got != want {
+		t.Errorf("keyword human output mismatch:\n--- got ---\n%q\n--- want ---\n%q", got, want)
 	}
 }
 
@@ -47,6 +80,12 @@ func TestGrepFormatterGolden(t *testing.T) {
 		"/repo/README.md:3:# Title\n"
 	if got := buf.String(); got != want {
 		t.Errorf("grep output mismatch:\n--- got ---\n%q\n--- want ---\n%q", got, want)
+	}
+}
+
+func TestHumanFormatterWriteError(t *testing.T) {
+	if err := (HumanFormatter{}).Format(failWriter{}, sampleResponse()); err == nil {
+		t.Fatal("expected the write error to propagate")
 	}
 }
 
