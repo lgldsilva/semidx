@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lgldsilva/semidx/internal/clientconfig"
+	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/skills"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -56,11 +58,25 @@ func (d *deps) runSearch(cmd *cobra.Command, project, query, model string, topK 
 	if err != nil {
 		return nil, 0, err
 	}
+	// In a git worktree, restrict results to the versions this worktree has
+	// checked out (a git project may span several worktrees with divergent files).
+	req := search.Request{Project: project, Query: query, Model: model, TopK: topK, KeywordOnly: d.cfg.KeywordOnly}
+	if gi := gitmeta.Resolve(ctx, "."); gi.IsGit {
+		req.Worktree = gi.Toplevel
+	}
 	start := time.Now()
-	resp, err := search.NewService(db, d.emb).Search(ctx, search.Request{
-		Project: project, Query: query, Model: model, TopK: topK, KeywordOnly: d.cfg.KeywordOnly,
-	})
+	resp, err := search.NewService(db, d.emb).Search(ctx, req)
 	return resp, time.Since(start), err
+}
+
+// currentWorktreeRoot returns the current git worktree's toplevel, or "" if the
+// working directory is not in a git repo. sgrep uses it to anchor result paths at
+// the caller's worktree rather than the (possibly different) indexed checkout.
+func currentWorktreeRoot(ctx context.Context) string {
+	if gi := gitmeta.Resolve(ctx, "."); gi.IsGit {
+		return gi.Toplevel
+	}
+	return ""
 }
 
 // newLoginCmd stores the server URL + token in the client config and verifies the

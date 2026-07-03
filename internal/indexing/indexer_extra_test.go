@@ -147,7 +147,7 @@ func TestIndexProjectGitHistoryErrorNonRepo(t *testing.T) {
 // TestIndexFileOpenError covers the os.Open failure branch of indexFile.
 func TestIndexFileOpenError(t *testing.T) {
 	idx := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, 4, false, false, "")
-	_, _, outcome, err := idx.indexFile(context.Background(), 1, "/does/not/exist.go", "exist.go", "m")
+	_, _, outcome, _, err := idx.indexFile(context.Background(), 1, "/does/not/exist.go", "exist.go", "m")
 	if err == nil {
 		t.Error("indexFile on a missing path should return an error")
 	}

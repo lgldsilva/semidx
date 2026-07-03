@@ -33,6 +33,9 @@ type Request struct {
 	// KeywordOnly forces keyword search with no embedding (used when the index
 	// was built without a model). It is not a fallback, so Fallback stays false.
 	KeywordOnly bool
+	// Worktree, when set, restricts results to the file versions that worktree
+	// currently has checked out (git projects indexed from multiple worktrees).
+	Worktree string
 }
 
 // Response is the outcome of a search, independent of output format.
@@ -70,7 +73,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 
 	// Keyword-only mode: skip embedding entirely and search the text bucket.
 	if req.KeywordOnly {
-		results, err := s.store.SearchSimilarKeywords(ctx, project.ID, req.Query, store.KeywordDims, req.TopK)
+		results, err := s.keywordSearch(ctx, project.ID, req.Query, store.KeywordDims, req.TopK, req.Worktree)
 		if err != nil {
 			return nil, err
 		}
@@ -81,7 +84,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	vec, err := s.emb.EmbedSingle(ctx, model, req.Query)
 	if err != nil {
 		resp.Fallback = true
-		results, kerr := s.store.SearchSimilarKeywords(ctx, project.ID, req.Query, dims, req.TopK)
+		results, kerr := s.keywordSearch(ctx, project.ID, req.Query, dims, req.TopK, req.Worktree)
 		if kerr != nil {
 			return nil, kerr
 		}
@@ -89,10 +92,27 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		return resp, nil
 	}
 
-	results, serr := s.store.SearchSimilar(ctx, project.ID, vec, dims, req.TopK)
+	results, serr := s.vectorSearch(ctx, project.ID, vec, dims, req.TopK, req.Worktree)
 	if serr != nil {
 		return nil, serr
 	}
 	resp.Results = results
 	return resp, nil
+}
+
+// vectorSearch runs a vector similarity search, scoped to a worktree's checked-out
+// versions when worktree is set.
+func (s *Service) vectorSearch(ctx context.Context, projectID int, vec []float32, dims, topK int, worktree string) ([]store.SearchResult, error) {
+	if worktree != "" {
+		return s.store.SearchSimilarWorktree(ctx, projectID, vec, dims, topK, worktree)
+	}
+	return s.store.SearchSimilar(ctx, projectID, vec, dims, topK)
+}
+
+// keywordSearch runs a keyword search, scoped to a worktree when set.
+func (s *Service) keywordSearch(ctx context.Context, projectID int, query string, dims, topK int, worktree string) ([]store.SearchResult, error) {
+	if worktree != "" {
+		return s.store.SearchSimilarKeywordsWorktree(ctx, projectID, query, dims, topK, worktree)
+	}
+	return s.store.SearchSimilarKeywords(ctx, projectID, query, dims, topK)
 }

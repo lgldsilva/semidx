@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/mcpserver"
 	"github.com/lgldsilva/semidx/internal/search"
@@ -34,6 +35,7 @@ func newIndexCmd(d *deps) *cobra.Command {
 		projectPath, model, gitSince string
 		maxFiles                     int
 		gitMode, verbose, privacy    bool
+		docs                         bool
 	)
 	c := &cobra.Command{
 		Use:   "index",
@@ -49,7 +51,27 @@ func newIndexCmd(d *deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			name := projectNameFromPath(projectPath)
+
+			// A git project is one logical index keyed by repo identity: any
+			// worktree updates the same project, indexing is rooted at the repo
+			// toplevel, and the worktree is tracked so divergent checkouts stay
+			// searchable. A non-git directory (or --docs) is a plain document
+			// folder keyed by its absolute path, with no worktree semantics.
+			indexPath, worktree := projectPath, ""
+			gi := gitmeta.Resolve(ctx, projectPath)
+			var identity, sourceType, name string
+			if gi.IsGit && !docs {
+				indexPath, worktree = gi.Toplevel, gi.Toplevel
+				identity, sourceType = gi.Identity, "git"
+				name = projectNameFromPath(gi.Toplevel)
+			} else {
+				abs, aerr := filepath.Abs(projectPath)
+				if aerr != nil {
+					abs = projectPath
+				}
+				identity, sourceType = "path:"+abs, "docs"
+				name = projectNameFromPath(projectPath)
+			}
 
 			// Keyword-only mode needs no model: dims come from the fixed text bucket.
 			dims := store.KeywordDims
@@ -59,23 +81,24 @@ func newIndexCmd(d *deps) *cobra.Command {
 					return fmt.Errorf("model info for %s: %w", model, err)
 				}
 				dims = info.Dims
-				fmt.Printf("Indexing project: %s\nPath: %s\nModel: %s (dims=%d)\n", name, projectPath, model, dims)
+				fmt.Printf("Indexing project: %s\nPath: %s (%s)\nModel: %s (dims=%d)\n", name, indexPath, sourceType, model, dims)
 			} else {
-				fmt.Printf("Indexing project: %s\nPath: %s\nMode: keyword-only (no embeddings)\n", name, projectPath)
+				fmt.Printf("Indexing project: %s\nPath: %s (%s)\nMode: keyword-only (no embeddings)\n", name, indexPath, sourceType)
 			}
 
 			if err := db.EnsureChunksTable(ctx, dims); err != nil {
 				return fmt.Errorf("ensure chunks table: %w", err)
 			}
-			projectID, err := db.UpsertProject(ctx, name, projectPath, model)
+			projectID, err := db.EnsureProjectIdentity(ctx, identity, name, indexPath, model, sourceType)
 			if err != nil {
-				return fmt.Errorf("upsert project: %w", err)
+				return fmt.Errorf("register project: %w", err)
 			}
 
 			indexer := indexing.NewIndexer(db, d.emb, dims, d.cfg.IndexWorkers, verbose, gitMode, gitSince).
-				SetKeywordOnly(d.cfg.KeywordOnly)
+				SetKeywordOnly(d.cfg.KeywordOnly).
+				SetWorktree(worktree)
 			start := time.Now()
-			stats, err := indexer.IndexProject(ctx, projectID, projectPath, model, maxFiles)
+			stats, err := indexer.IndexProject(ctx, projectID, indexPath, model, maxFiles)
 			if err != nil {
 				return fmt.Errorf("index project: %w", err)
 			}
@@ -87,6 +110,7 @@ func newIndexCmd(d *deps) *cobra.Command {
 	c.Flags().StringVar(&projectPath, "project", "", "Path to project directory")
 	c.Flags().StringVar(&model, "model", "bge-m3", "Embedding model name")
 	c.Flags().IntVar(&maxFiles, "max-files", 0, "Limit number of files to index (0 = all)")
+	c.Flags().BoolVar(&docs, "docs", false, "Treat the path as a document folder (absolute-path identity), even inside a git repo")
 	c.Flags().BoolVar(&gitMode, "git", false, "Also index git history (git log -p)")
 	c.Flags().StringVar(&gitSince, "git-since", "30.days", "git log --since duration (e.g. 7.days)")
 	c.Flags().BoolVar(&verbose, "verbose", false, "Show detailed progress and errors")
@@ -138,14 +162,17 @@ func newSgrepCmd(d *deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Remote results carry no server-side path; anchor them at the local
-			// working directory so `file:line` stays clickable (the sgrep wrapper
-			// runs from the project root).
+			// Anchor result paths for clickable file:line. Remote results carry no
+			// server-side path (use cwd); for a local git project, use the CURRENT
+			// worktree root (results may come from a different indexed checkout);
+			// otherwise the stored project path.
 			projectPath := resp.Project.Path
 			if d.remote() {
 				if wd, err := os.Getwd(); err == nil {
 					projectPath = wd
 				}
+			} else if wt := currentWorktreeRoot(cmd.Context()); wt != "" {
+				projectPath = wt
 			}
 			var f search.Formatter = search.GrepFormatter{ProjectPath: projectPath}
 			if asJSON {
