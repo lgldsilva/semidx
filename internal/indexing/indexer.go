@@ -48,7 +48,8 @@ type Indexer struct {
 	verbose     bool
 	gitMode     bool
 	gitSince    string
-	keywordOnly bool // when true, store text-only (no embeddings) for keyword search
+	keywordOnly bool   // when true, store text-only (no embeddings) for keyword search
+	worktree    string // when set, record this worktree's manifest + prune after indexing
 }
 
 // IndexStats summarizes an indexing run.
@@ -86,6 +87,15 @@ func (idx *Indexer) SetKeywordOnly(v bool) *Indexer {
 	return idx
 }
 
+// SetWorktree marks the indexed tree as a specific git worktree. After indexing,
+// the indexer records that worktree's (path -> hash) manifest and prunes file
+// versions no worktree references. Empty (the default) disables worktree tracking
+// (document folders and push indexing).
+func (idx *Indexer) SetWorktree(worktree string) *Indexer {
+	idx.worktree = worktree
+	return idx
+}
+
 // IndexProject scans projectPath, indexes each eligible file, optionally indexes
 // git history, and marks the project ready.
 func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath, model string, maxFiles int) (*IndexStats, error) {
@@ -105,6 +115,7 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		mu        sync.Mutex
 		processed int
 		g         errgroup.Group
+		manifest  = map[string]string{} // rel -> hash of files present in this worktree
 	)
 	g.SetLimit(idx.workers)
 
@@ -118,7 +129,7 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 				return nil
 			}
 			rel, _ := filepath.Rel(projectPath, path)
-			created, softErrs, outcome, ferr := idx.indexFile(ctx, projectID, path, rel, model)
+			created, softErrs, outcome, hash, ferr := idx.indexFile(ctx, projectID, path, rel, model)
 
 			mu.Lock()
 			stats.Errors += softErrs
@@ -132,6 +143,9 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 			case outcome == outcomeSkippedUnchanged:
 				stats.FilesSkipped++
 			}
+			if hash != "" {
+				manifest[rel] = hash
+			}
 			processed++
 			done, chunks := processed, stats.ChunksCreated
 			mu.Unlock()
@@ -144,6 +158,17 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 
 	if err := ctx.Err(); err != nil {
 		return stats, err // cancelled: leave the project as 'indexing'
+	}
+
+	// Worktree tracking: record this worktree's manifest, then prune file versions
+	// no worktree still references (bounding growth). Best-effort — a manifest
+	// failure shouldn't fail an otherwise-successful index.
+	if idx.worktree != "" {
+		if err := idx.db.SetWorktreeFiles(ctx, projectID, idx.worktree, manifest); err != nil {
+			idx.logf("[warn] worktree manifest: %s", truncateErr(err, 200))
+		} else if _, err := idx.db.PruneUnreferencedFiles(ctx, projectID); err != nil {
+			idx.logf("[warn] prune: %s", truncateErr(err, 200))
+		}
 	}
 
 	if idx.gitMode {
@@ -190,18 +215,25 @@ func scanFiles(projectPath string, maxFiles int) ([]string, error) {
 // distinguishes an indexed file from one skipped because it's empty/chunk-less
 // or unchanged; hardErr signals a read/upsert/delete failure; softErrs counts
 // failed embed sub-batches.
-func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, model string) (created, softErrs int, outcome fileOutcome, hardErr error) {
+func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, model string) (created, softErrs int, outcome fileOutcome, hash string, hardErr error) {
 	// #nosec G304 -- indexing a file the caller pointed us at is the whole job; path comes from the project walk.
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, 0, outcomeSkippedEmpty, err
+		return 0, 0, outcomeSkippedEmpty, "", err
 	}
 	content, err := io.ReadAll(io.LimitReader(f, maxFileSize))
 	_ = f.Close()
 	if err != nil {
-		return 0, 0, outcomeSkippedEmpty, err
+		return 0, 0, outcomeSkippedEmpty, "", err
 	}
-	return idx.indexContent(ctx, projectID, rel, model, content)
+	created, softErrs, outcome, hardErr = idx.indexContent(ctx, projectID, rel, model, content)
+	// The content hash (over the raw, already length-capped bytes) matches what
+	// indexContent stored; surface it for the worktree manifest, but only for
+	// files that are actually present/searchable (indexed or unchanged).
+	if outcome == outcomeIndexed || outcome == outcomeSkippedUnchanged {
+		hash = fmt.Sprintf("%x", sha256.Sum256(content))
+	}
+	return created, softErrs, outcome, hash, hardErr
 }
 
 // IndexContent indexes one file's in-memory content (used by the push files API)
