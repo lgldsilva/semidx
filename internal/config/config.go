@@ -13,6 +13,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -70,6 +71,36 @@ type Config struct {
 	// JWTSecret is the HS256 signing key for control tokens
 	// (SEMIDX_JWT_SECRET). When empty, JWT control tokens are disabled.
 	JWTSecret string
+	// LocalIndexPath, when non-empty, makes the CLI index and search a local
+	// SQLite file instead of PostgreSQL (SEMIDX_LOCAL_INDEX: a path, or a truthy
+	// value to use the default location). Empty means server/Postgres mode.
+	LocalIndexPath string
+}
+
+// DefaultLocalIndexPath is the standalone index location, honoring XDG_DATA_HOME.
+func DefaultLocalIndexPath() string {
+	dir := os.Getenv("XDG_DATA_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "semidx-index.db"
+		}
+		dir = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(dir, "semidx", "index.db")
+}
+
+// resolveLocalIndex maps SEMIDX_LOCAL_INDEX to a path: empty → "" (server mode);
+// a truthy flag → the default path; anything else → that literal path.
+func resolveLocalIndex(v string) string {
+	switch v {
+	case "":
+		return ""
+	case "1", "true", "yes", "on":
+		return DefaultLocalIndexPath()
+	default:
+		return v
+	}
 }
 
 // Load resolves the configuration. A missing or unreadable .env file is not
@@ -96,6 +127,7 @@ func Load() *Config {
 		BootstrapAdminPassword: env.get("SEMIDX_BOOTSTRAP_ADMIN_PASSWORD", ""),
 		CookieSecure:           env.get("SEMIDX_COOKIE_SECURE", "true") != "false",
 		JWTSecret:              env.get("SEMIDX_JWT_SECRET", ""),
+		LocalIndexPath:         resolveLocalIndex(env.get("SEMIDX_LOCAL_INDEX", "")),
 	}
 }
 

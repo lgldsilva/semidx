@@ -52,7 +52,7 @@ func (d *deps) runSearch(cmd *cobra.Command, project, query, model string, topK 
 	}
 
 	d.applyPrivacy(forcePrivacy)
-	db, err := d.database(ctx)
+	db, err := d.indexStore(ctx)
 	if err != nil {
 		return nil, 0, err
 	}

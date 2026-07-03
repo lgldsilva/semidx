@@ -44,7 +44,7 @@ func newIndexCmd(d *deps) *cobra.Command {
 			}
 
 			ctx := cmd.Context()
-			db, err := d.database(ctx)
+			db, err := d.indexStore(ctx)
 			if err != nil {
 				return err
 			}
@@ -182,7 +182,7 @@ func newDropCmd(d *deps) *cobra.Command {
 		Use:   "drop",
 		Short: "Drop all indexed data",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			db, err := d.database(cmd.Context())
+			db, err := d.indexStore(cmd.Context())
 			if err != nil {
 				return err
 			}
