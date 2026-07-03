@@ -27,9 +27,12 @@ func NewService(s store.IndexStore, e embed.Embedder) *Service {
 // Request describes one search.
 type Request struct {
 	Project string
-	Query   string
-	Model   string // optional; overrides the project's stored model
-	TopK    int    // <= 0 defaults to 5
+	// Identity, when set, resolves the project by its unique identity (git
+	// identity or "path:<abs>") instead of the collision-prone Project name.
+	Identity string
+	Query    string
+	Model    string // optional; overrides the project's stored model
+	TopK     int    // <= 0 defaults to 5
 	// KeywordOnly forces keyword search with no embedding (used when the index
 	// was built without a model). It is not a fallback, so Fallback stays false.
 	KeywordOnly bool
@@ -53,9 +56,13 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		req.TopK = 5
 	}
 
-	project, err := s.store.GetProject(ctx, req.Project)
+	project, err := s.resolveProject(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("project not found: %s", req.Project)
+		ref := req.Project
+		if req.Identity != "" {
+			ref = req.Identity
+		}
+		return nil, fmt.Errorf("project not found: %s", ref)
 	}
 
 	model := project.Model
@@ -106,6 +113,15 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	}
 	resp.Results = results
 	return resp, nil
+}
+
+// resolveProject looks the project up by unique identity when the request carries
+// one, else by name (backward-compatible).
+func (s *Service) resolveProject(ctx context.Context, req Request) (*store.Project, error) {
+	if req.Identity != "" {
+		return s.store.GetProjectByIdentity(ctx, req.Identity)
+	}
+	return s.store.GetProject(ctx, req.Project)
 }
 
 // vectorSearch runs a vector similarity search, scoped to a worktree's checked-out

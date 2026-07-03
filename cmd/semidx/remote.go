@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -41,33 +40,9 @@ func remoteToResponse(cr *client.SearchResponse) *search.Response {
 	}
 }
 
-// runSearch executes a query against the configured server (remote mode) or the
-// local database (embedded), returning a uniform response plus how long it took.
-func (d *deps) runSearch(cmd *cobra.Command, project, query, model string, topK int, forcePrivacy bool) (*search.Response, time.Duration, error) {
-	ctx := cmd.Context()
-	if d.remote() {
-		resp, err := d.apiClient().Search(ctx, project, query, model, topK)
-		if err != nil {
-			return nil, 0, err
-		}
-		return remoteToResponse(resp), time.Duration(resp.TookMS) * time.Millisecond, nil
-	}
-
-	d.applyPrivacy(forcePrivacy)
-	db, err := d.indexStore(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	// In a git worktree, restrict results to the versions this worktree has
-	// checked out (a git project may span several worktrees with divergent files).
-	req := search.Request{Project: project, Query: query, Model: model, TopK: topK, KeywordOnly: d.cfg.KeywordOnly}
-	if gi := gitmeta.Resolve(ctx, "."); gi.IsGit {
-		req.Worktree = gi.Toplevel
-	}
-	start := time.Now()
-	resp, err := search.NewService(db, d.emb).Search(ctx, req)
-	return resp, time.Since(start), err
-}
+// Search resolution now lives in searchtargets.go (runSearchTargets): a --project
+// path resolves by unique identity, no --project auto-detects the enclosing
+// project (or searches all), and results can span several projects.
 
 // currentWorktreeRoot returns the current git worktree's toplevel, or "" if the
 // working directory is not in a git repo. sgrep uses it to anchor result paths at

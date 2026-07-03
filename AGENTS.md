@@ -38,7 +38,10 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
     archives (`.zip/.tar`).
 - **Search** semantically, with an automatic, **explicit** keyword fallback when
   embeddings are unavailable (`fallback: true`), plus a no-embeddings
-  keyword-only mode (`--keyword`).
+  keyword-only mode (`--keyword`). `--project` accepts a **path** (resolved by
+  unique identity, so same-basename folders never collide) or a name; with no
+  `--project`, search resolves the project enclosing the current directory, and
+  falls back to searching **all** projects (labeled per project).
 - **Embedding chain** with privacy routing: Gemini → Groq → OpenRouter → Ollama
   Cloud → local Ollama (fallback). Sensitive files are routed local or stored
   text-only.
