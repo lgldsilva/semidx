@@ -71,7 +71,7 @@ credentials stay within infrastructure you control.
 ### Supply-chain and code-quality gates
 
 CI enforces the following on every pull request and push to `main`
-(`.github/workflows/ci.yml`):
+(`.gitea/workflows/ci.yml`):
 
 - **`govulncheck`** — fails on known CVEs in dependencies or the Go stdlib that
   reach reachable code paths.

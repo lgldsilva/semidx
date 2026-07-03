@@ -25,7 +25,7 @@ func newConfigCmd(d *deps) *cobra.Command {
 			"Values are stored in the user config file and layered below a project .env\n" +
 			"and the real environment. Run `semidx config keys` for the full key reference.",
 		Example: `  semidx config set GEMINI_API_KEY <key>
-  semidx config set SEMIDX_DB_DSN postgres://user:pass@host:5432/db
+  semidx config set SEMIDX_DB_DSN postgres://localhost:5432/semidx
   semidx config list`,
 	}
 	c.AddCommand(
