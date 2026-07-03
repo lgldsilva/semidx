@@ -1,6 +1,6 @@
 # Build a static semidx binary, then run it on a minimal image that still has
 # git (for server-side git-sync) and CA certificates (for cloud embedders).
-FROM golang:1.25 AS build
+FROM golang:1.25.11 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
