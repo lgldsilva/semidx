@@ -80,7 +80,7 @@ func projectsHandler(c *client.Client) mcp.ToolHandlerFor[projectsInput, any] {
 
 type reindexInput struct {
 	Project string `json:"project" jsonschema:"the registered project to re-index"`
-	Type    string `json:"type,omitempty" jsonschema:"job type: full or incremental (default full)"`
+	Type    string `json:"type,omitempty" jsonschema:"job type: full or git_history (default full)"`
 }
 
 func reindexHandler(c *client.Client) mcp.ToolHandlerFor[reindexInput, any] {
