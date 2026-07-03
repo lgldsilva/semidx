@@ -61,7 +61,12 @@ func newLoginCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "login <server-url>",
 		Short: "Save credentials for a semidx server and verify reachability",
-		Args:  cobra.ExactArgs(1),
+		Long: `Save the URL and API token for a remote semidx server (health-checking it
+first) so search/sgrep/repo run against that server instead of a local index.
+The token comes from --token or the SEMIDX_TOKEN environment variable.`,
+		Example: `  semidx login https://semidx.example.com --token "$SEMIDX_TOKEN"
+  semidx login https://semidx.example.com --token abc --default-project my-repo`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if token == "" {
 				token = os.Getenv("SEMIDX_TOKEN")
@@ -93,6 +98,9 @@ func newRepoCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "repo",
 		Short: "Manage git repositories indexed by the server",
+		Long: `Manage git repositories the server clones and indexes itself (server-side
+indexing). Requires "semidx login". See "semidx repo add".`,
+		Example: "  semidx repo add https://github.com/org/project.git",
 	}
 	c.AddCommand(newRepoAddCmd(d))
 	return c
@@ -103,6 +111,9 @@ func newSkillsCmd(_ *deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "skills",
 		Short: "Install the agent skills that teach AI assistants to use semidx",
+		Long: `Manage the bundled agent skills that teach AI assistants how to use semidx.
+See "semidx skills install".`,
+		Example: "  semidx skills install --target claude-code",
 	}
 	c.AddCommand(newSkillsInstallCmd())
 	return c
@@ -113,6 +124,10 @@ func newSkillsInstallCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "install",
 		Short: "Write the bundled skills into a target directory",
+		Long: `Write semidx's bundled agent skills into a target directory: claude-code
+(~/.claude/skills), project (./.claude/skills), or an explicit --dir.`,
+		Example: `  semidx skills install --target claude-code
+  semidx skills install --dir ./.claude/skills`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			dest, err := resolveSkillsDir(target, dir)
 			if err != nil {
@@ -160,7 +175,11 @@ func newRepoAddCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "add <git-url>",
 		Short: "Register a git repository and (optionally) start indexing it",
-		Args:  cobra.ExactArgs(1),
+		Long: `Register a git repository with the server and, unless --index=false, queue a
+full index job the server runs itself. Requires "semidx login".`,
+		Example: `  semidx repo add https://github.com/org/project.git
+  semidx repo add https://github.com/org/project.git --branch main --index=false`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !d.remote() {
 				return fmt.Errorf("repo add requires a server: run `semidx login` first")

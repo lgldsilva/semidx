@@ -46,6 +46,7 @@ func newUpgradeCmd(_ *deps) *cobra.Command {
 			"against checksums.txt, and atomically replaces the running executable.\n\n" +
 			"Source is the homelab Gitea by default; point it elsewhere (e.g. a public\n" +
 			"GitHub release) with `semidx config set SEMIDX_UPDATE_API/SEMIDX_UPDATE_URL`.",
+		Example: "  semidx upgrade\n  semidx upgrade --check\n  semidx upgrade --version v0.2.0",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			apiURL := valueOr("SEMIDX_UPDATE_API", defaultUpdateAPI)
