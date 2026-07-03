@@ -315,7 +315,7 @@ func (s *SQLiteStore) UpsertFile(ctx context.Context, projectID int, path, hash 
 
 // FileUpToDate reports whether the file at path is already indexed with the
 // given hash AND has at least one chunk, so the indexer can skip re-embedding it.
-func (s *SQLiteStore) FileUpToDate(ctx context.Context, projectID int, path, hash string, _ int) (bool, error) {
+func (s *SQLiteStore) FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error) {
 	var fileID int
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id FROM files WHERE project_id = ? AND path = ? AND hash = ?`,
@@ -327,9 +327,13 @@ func (s *SQLiteStore) FileUpToDate(ctx context.Context, projectID int, path, has
 		return false, err
 	}
 
+	// Scope the check to the requested embedding dimension: the same file may
+	// already have chunks under a DIFFERENT model/dims (e.g. keyword-only, or a
+	// prior model). Ignoring dims would wrongly skip re-embedding for the new
+	// bucket, leaving semantic search for that model empty.
 	var exists bool
 	err = s.db.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM chunks WHERE file_id = ?)`, fileID).Scan(&exists)
+		`SELECT EXISTS(SELECT 1 FROM chunks WHERE file_id = ? AND dims = ?)`, fileID, dims).Scan(&exists)
 	if err != nil {
 		return false, err
 	}

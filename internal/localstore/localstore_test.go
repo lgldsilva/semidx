@@ -184,6 +184,13 @@ func TestIncrementalFileUpToDate(t *testing.T) {
 	if up, err := s.FileUpToDate(ctx, projectID, "a.go", "h1", 2); err != nil || !up {
 		t.Fatalf("FileUpToDate(indexed) = %v err=%v, want true", up, err)
 	}
+	// Dims-aware: the file has chunks at dims=2 but NOT at dims=3, so re-indexing
+	// under a different model/dimension must NOT be skipped. Regression: this used
+	// to ignore dims and skip the new bucket, leaving semantic search empty when
+	// switching model (or keyword → semantic) on the same local index.
+	if up, err := s.FileUpToDate(ctx, projectID, "a.go", "h1", 3); err != nil || up {
+		t.Fatalf("FileUpToDate(other dims) = %v err=%v, want false", up, err)
+	}
 	// Changed hash → not up to date.
 	if up, err := s.FileUpToDate(ctx, projectID, "a.go", "h2", 2); err != nil || up {
 		t.Fatalf("FileUpToDate(changed) = %v err=%v, want false", up, err)
