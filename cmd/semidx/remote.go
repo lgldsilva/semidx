@@ -58,7 +58,7 @@ func (d *deps) runSearch(cmd *cobra.Command, project, query, model string, topK 
 	}
 	start := time.Now()
 	resp, err := search.NewService(db, d.emb).Search(ctx, search.Request{
-		Project: project, Query: query, Model: model, TopK: topK,
+		Project: project, Query: query, Model: model, TopK: topK, KeywordOnly: d.cfg.KeywordOnly,
 	})
 	return resp, time.Since(start), err
 }

@@ -30,6 +30,9 @@ type Request struct {
 	Query   string
 	Model   string // optional; overrides the project's stored model
 	TopK    int    // <= 0 defaults to 5
+	// KeywordOnly forces keyword search with no embedding (used when the index
+	// was built without a model). It is not a fallback, so Fallback stays false.
+	KeywordOnly bool
 }
 
 // Response is the outcome of a search, independent of output format.
@@ -64,6 +67,16 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	}
 
 	resp := &Response{Project: project, Model: model}
+
+	// Keyword-only mode: skip embedding entirely and search the text bucket.
+	if req.KeywordOnly {
+		results, err := s.store.SearchSimilarKeywords(ctx, project.ID, req.Query, store.KeywordDims, req.TopK)
+		if err != nil {
+			return nil, err
+		}
+		resp.Results = results
+		return resp, nil
+	}
 
 	vec, err := s.emb.EmbedSingle(ctx, model, req.Query)
 	if err != nil {

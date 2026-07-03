@@ -75,6 +75,10 @@ type Config struct {
 	// SQLite file instead of PostgreSQL (SEMIDX_LOCAL_INDEX: a path, or a truthy
 	// value to use the default location). Empty means server/Postgres mode.
 	LocalIndexPath string
+	// KeywordOnly indexes and searches without any embedding model — text is
+	// stored and matched by keyword (SEMIDX_EMBED_MODE=none). The zero-dependency
+	// baseline for a machine with no GPU, API key or Ollama.
+	KeywordOnly bool
 }
 
 // DefaultLocalIndexPath is the standalone index location, honoring XDG_DATA_HOME.
@@ -128,6 +132,7 @@ func Load() *Config {
 		CookieSecure:           env.get("SEMIDX_COOKIE_SECURE", "true") != "false",
 		JWTSecret:              env.get("SEMIDX_JWT_SECRET", ""),
 		LocalIndexPath:         resolveLocalIndex(env.get("SEMIDX_LOCAL_INDEX", "")),
+		KeywordOnly:            env.get("SEMIDX_EMBED_MODE", "") == "none",
 	}
 }
 

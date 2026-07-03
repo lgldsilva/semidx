@@ -41,13 +41,14 @@ const (
 
 // Indexer indexes a project into an IndexStore using an Embedder.
 type Indexer struct {
-	db       store.IndexStore
-	embedder embed.Embedder
-	dims     int
-	workers  int
-	verbose  bool
-	gitMode  bool
-	gitSince string
+	db          store.IndexStore
+	embedder    embed.Embedder
+	dims        int
+	workers     int
+	verbose     bool
+	gitMode     bool
+	gitSince    string
+	keywordOnly bool // when true, store text-only (no embeddings) for keyword search
 }
 
 // IndexStats summarizes an indexing run.
@@ -75,6 +76,14 @@ func NewIndexer(db store.IndexStore, emb embed.Embedder, dims, workers int, verb
 		workers = defaultIndexWorkers
 	}
 	return &Indexer{db: db, embedder: emb, dims: dims, workers: workers, verbose: verbose, gitMode: gitMode, gitSince: gitSince}
+}
+
+// SetKeywordOnly switches the indexer to keyword-only mode: chunks are stored as
+// text (embedding NULL) and no embedding provider is called. Returns the indexer
+// for chaining.
+func (idx *Indexer) SetKeywordOnly(v bool) *Indexer {
+	idx.keywordOnly = v
+	return idx
 }
 
 // IndexProject scans projectPath, indexes each eligible file, optionally indexes
@@ -252,6 +261,15 @@ func (idx *Indexer) indexContent(ctx context.Context, projectID int, rel, model 
 
 	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
 		return 0, 0, outcomeSkippedEmpty, err
+	}
+
+	// Keyword-only mode: no embedding provider at all — store the chunks as text
+	// so they stay searchable by keyword (FTS/ILIKE) without any model.
+	if idx.keywordOnly {
+		if err := idx.db.InsertChunksTextOnly(ctx, projectID, fileID, chunks, idx.dims); err != nil {
+			return 0, 0, outcomeSkippedEmpty, err
+		}
+		return len(chunks), 0, outcomeIndexed, nil
 	}
 
 	// Privacy routing: a sensitive file must never be embedded by a cloud

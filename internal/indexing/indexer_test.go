@@ -389,3 +389,26 @@ func TestIndexContentSkipsUnreadableDocument(t *testing.T) {
 		t.Errorf("corrupt pdf produced %d chunks, want 0", created)
 	}
 }
+
+// TestKeywordOnlyStoresTextWithoutEmbedding proves keyword-only mode never calls
+// the embedder and stores chunks as text-only, so it works with no model at all.
+func TestKeywordOnlyStoresTextWithoutEmbedding(t *testing.T) {
+	fs := &fakeStore{}
+	embedCalls := 0
+	emb := &fakeEmbedder{localAvailable: true, onEmbed: func() { embedCalls++ }}
+	idx := NewIndexer(fs, emb, 1, 4, false, false, "").SetKeywordOnly(true)
+
+	created, err := idx.IndexContent(context.Background(), 1, "notes.txt", "", []byte("exponential backoff and jitter"))
+	if err != nil || created == 0 {
+		t.Fatalf("IndexContent = %d, err %v; want chunks", created, err)
+	}
+	if embedCalls != 0 {
+		t.Errorf("embedder called %d times in keyword-only mode; want 0", embedCalls)
+	}
+	if len(fs.embedded) != 0 {
+		t.Errorf("keyword-only stored %d embedded chunks; want 0", len(fs.embedded))
+	}
+	if len(fs.textOnly) == 0 || !strings.Contains(strings.Join(fs.textOnly, " "), "exponential backoff") {
+		t.Errorf("keyword-only did not store text-only chunks: %v", fs.textOnly)
+	}
+}
