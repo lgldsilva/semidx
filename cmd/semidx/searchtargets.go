@@ -138,7 +138,7 @@ func (d *deps) resolveSearchProjects(ctx context.Context, db store.IndexStore, p
 	}
 	// Nothing encloses the cwd → search everything.
 	if len(projects) == 0 {
-		return nil, fmt.Errorf("no indexed projects found")
+		return nil, fmt.Errorf("no indexed projects found — run 'semidx index --project .' first")
 	}
 	all := make([]*store.Project, len(projects))
 	for i := range projects {
