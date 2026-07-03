@@ -48,7 +48,7 @@ func stubServer(t *testing.T) *httptest.Server {
 func connect(t *testing.T) *mcp.ClientSession {
 	t.Helper()
 	http := stubServer(t)
-	server := New(client.New(http.URL, "tok"))
+	server := New(NewClientBackend(client.New(http.URL, "tok")))
 
 	serverT, clientT := mcp.NewInMemoryTransports()
 	ctx := context.Background()

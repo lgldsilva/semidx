@@ -1,0 +1,48 @@
+package mcpserver
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/lgldsilva/semidx/pkg/client"
+)
+
+// clientBackend adapts the HTTP API client to the Backend interface (remote mode).
+type clientBackend struct{ c *client.Client }
+
+// NewClientBackend wraps a semidx API client as an MCP Backend (remote mode).
+func NewClientBackend(c *client.Client) Backend { return &clientBackend{c: c} }
+
+func (b *clientBackend) Search(ctx context.Context, project, query, model string, topK int) (*SearchOutput, error) {
+	resp, err := b.c.Search(ctx, project, query, model, topK)
+	if err != nil {
+		return nil, err
+	}
+	out := &SearchOutput{Project: resp.Project, Fallback: resp.Fallback}
+	for _, r := range resp.Results {
+		out.Results = append(out.Results, Hit{Path: r.Path, StartLine: r.StartLine, Score: r.Score, Content: r.Content})
+	}
+	return out, nil
+}
+
+func (b *clientBackend) Projects(ctx context.Context) ([]ProjectInfo, error) {
+	projects, err := b.c.ListProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ProjectInfo, 0, len(projects))
+	for _, p := range projects {
+		out = append(out, ProjectInfo{
+			Name: p.Name, SourceType: p.SourceType, GitURL: p.GitURL, Status: p.Status, Model: p.Model,
+		})
+	}
+	return out, nil
+}
+
+func (b *clientBackend) Reindex(ctx context.Context, project, jobType string) (string, error) {
+	id, err := b.c.EnqueueJob(ctx, project, jobType)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Queued %s re-index job #%d for project %q.", jobType, id, project), nil
+}

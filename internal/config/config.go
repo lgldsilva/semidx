@@ -3,7 +3,9 @@
 // Precedence, highest first:
 //  1. real environment variables
 //  2. a .env file in the current working directory
-//  3. built-in defaults
+//  3. the persistent user config file (~/.config/semidx/semidx.env), written
+//     by `semidx config set`
+//  4. built-in defaults
 //
 // The .env parser intentionally mirrors the PoC's legacy behavior: one
 // KEY=VALUE per line, blank lines and "#" comments skipped, no quote
@@ -12,8 +14,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -107,9 +111,14 @@ func resolveLocalIndex(v string) string {
 }
 
 // Load resolves the configuration. A missing or unreadable .env file is not
-// an error; malformed lines in it are skipped.
+// an error; malformed lines in it are skipped. The persistent user config
+// file (see UserEnvPath) is layered in at the lowest file precedence.
 func Load() *Config {
-	env := newResolver(".env")
+	paths := []string{".env"}
+	if p, err := UserEnvPath(); err == nil {
+		paths = append(paths, p)
+	}
+	env := newResolver(paths...)
 	return &Config{
 		DatabaseURL:       env.get("SEMIDX_DB_DSN", defaultDatabaseURL),
 		OllamaURL:         env.first("SEMIDX_OLLAMA_URL", "OLLAMA_URL", defaultOllamaURL),
@@ -135,6 +144,144 @@ func Load() *Config {
 	}
 }
 
+// KeySpec documents a configuration key the CLI knows how to manage.
+type KeySpec struct {
+	Name   string
+	Desc   string
+	Secret bool // true → masked in listings, stored under 0600
+}
+
+// KnownKeys is the curated set surfaced by `semidx config` for discoverability.
+// Any other key can still be set (with a warning); this list drives help,
+// validation hints and secret masking. It spans the three CLI storage backends
+// (Postgres DSN, local SQLite, remote server), the embedding providers, and the
+// server-only (serve) settings.
+var KnownKeys = []KeySpec{
+	// Storage backend — pick ONE; precedence at run time is remote > SQLite > Postgres.
+	{"SEMIDX_DB_DSN", "PostgreSQL/pgvector DSN — connect the CLI straight to Postgres", true},
+	{"SEMIDX_LOCAL_INDEX", "Standalone SQLite index (a path, or 1/true for the default location)", false},
+	{"SEMIDX_EMBED_MODE", "Set to \"none\" for keyword-only indexing (no embedding model)", false},
+	// Embedding providers (chain, highest priority first; local Ollama is the fallback).
+	{"GEMINI_API_KEY", "Google Gemini embedding key", true},
+	{"GROQ_API_KEY", "Groq embedding key", true},
+	{"OPENROUTER_API_KEY", "OpenRouter embedding key", true},
+	{"OLLAMA_CLOUD_API_KEY", "Ollama Cloud embedding key", true},
+	{"SEMIDX_OLLAMA_URL", "Local Ollama endpoint (embedding fallback)", false},
+	{"EMBED_PROVIDER", "Custom provider prepended to the chain (openai|ollama)", false},
+	{"EMBED_ENDPOINT", "Custom provider endpoint URL", false},
+	{"EMBED_API_KEY", "Custom provider API key", true},
+	{"EMBED_PRIVACY", "Force local-only embedding providers (true)", false},
+	{"SEMIDX_INDEX_WORKERS", "Concurrent index workers (positive int)", false},
+	{"SEMIDX_JAVA_DECOMPILER", "External Java decompiler command for .class in JARs", false},
+	// Server-only (semidx serve).
+	{"SEMIDX_LISTEN_ADDR", "Server bind address, e.g. :8080 (serve)", false},
+	{"SEMIDX_DATA_DIR", "Where the server clones git projects (serve)", false},
+	{"SEMIDX_JWT_SECRET", "HS256 secret enabling JWT control tokens (serve)", true},
+	{"SEMIDX_COOKIE_SECURE", "Secure flag on web-admin cookies; false only over HTTP (serve)", false},
+}
+
+// IsSecret reports whether a key holds a credential (masked in listings). Known
+// keys use their spec; unknown keys are treated as secret when the name hints
+// at one, erring toward masking.
+func IsSecret(key string) bool {
+	for _, k := range KnownKeys {
+		if k.Name == key {
+			return k.Secret
+		}
+	}
+	up := strings.ToUpper(key)
+	for _, hint := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "DSN"} {
+		if strings.Contains(up, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+// UserEnvPath is the persistent per-user config file (KEY=VALUE), honoring
+// XDG_CONFIG_HOME (usually ~/.config/semidx/semidx.env). It is the lowest-
+// precedence file layer, below a project .env and the real environment.
+func UserEnvPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "semidx", "semidx.env"), nil
+}
+
+// LoadUserEnv returns the persisted key/value pairs (empty when the file is
+// absent).
+func LoadUserEnv() (map[string]string, error) {
+	p, err := UserEnvPath()
+	if err != nil {
+		return nil, err
+	}
+	return parseEnvFile(p), nil
+}
+
+// SetUserEnv persists key=value in the user config file, preserving the other
+// entries. The file is written 0600 (it may hold secrets) under a 0700 dir.
+func SetUserEnv(key, value string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("empty config key")
+	}
+	if strings.ContainsAny(key, "=\n") || strings.Contains(value, "\n") {
+		return fmt.Errorf("key/value must not contain '=' or newlines")
+	}
+	m, err := LoadUserEnv()
+	if err != nil {
+		return err
+	}
+	m[key] = value
+	return writeUserEnv(m)
+}
+
+// UnsetUserEnv removes a key from the user config file. Removing an absent key
+// is a no-op (no error).
+func UnsetUserEnv(key string) error {
+	m, err := LoadUserEnv()
+	if err != nil {
+		return err
+	}
+	if _, ok := m[key]; !ok {
+		return nil
+	}
+	delete(m, key)
+	return writeUserEnv(m)
+}
+
+func writeUserEnv(m map[string]string) error {
+	p, err := UserEnvPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString("# semidx config — managed by `semidx config`; edits are preserved by key.\n")
+	for _, k := range keys {
+		fmt.Fprintf(&b, "%s=%s\n", k, m[k])
+	}
+	return os.WriteFile(p, []byte(b.String()), 0o600)
+}
+
+// EffectiveValue resolves a key through the full precedence chain (real env >
+// project .env > user config file), returning "" when unset at every level.
+func EffectiveValue(key string) string {
+	paths := []string{".env"}
+	if p, err := UserEnvPath(); err == nil {
+		paths = append(paths, p)
+	}
+	return newResolver(paths...).get(key, "")
+}
+
 // atoiDefault parses s as a positive int, returning def when empty or invalid.
 func atoiDefault(s string, def int) int {
 	if n, err := strconv.Atoi(s); err == nil && n > 0 {
@@ -143,19 +290,29 @@ func atoiDefault(s string, def int) int {
 	return def
 }
 
-// resolver looks a key up in the real environment first, then in the parsed
-// .env file, then falls back to the given default. Empty values count as
-// unset at every level.
+// resolver looks a key up in the real environment first, then in each parsed
+// env-file layer in precedence order, then falls back to the given default.
+// Empty values count as unset at every level.
 type resolver struct {
-	fileVars map[string]string
+	layers []map[string]string // highest file precedence first
 }
 
-func newResolver(path string) *resolver {
+func newResolver(paths ...string) *resolver {
+	r := &resolver{}
+	for _, p := range paths {
+		r.layers = append(r.layers, parseEnvFile(p))
+	}
+	return r
+}
+
+// parseEnvFile reads a KEY=VALUE file into a map. A missing or unreadable file
+// yields an empty map; malformed lines and comments are skipped.
+func parseEnvFile(path string) map[string]string {
 	vars := make(map[string]string)
-	// #nosec G304 -- reads the .env from the working directory by design (12-factor config).
+	// #nosec G304 -- reads a semidx config/.env file at a path chosen by semidx itself.
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return &resolver{fileVars: vars}
+		return vars
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
@@ -168,22 +325,24 @@ func newResolver(path string) *resolver {
 		}
 		vars[strings.TrimSpace(key)] = strings.TrimSpace(value)
 	}
-	return &resolver{fileVars: vars}
+	return vars
 }
 
 func (r *resolver) get(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
-	if v := r.fileVars[key]; v != "" {
-		return v
+	for _, m := range r.layers {
+		if v := m[key]; v != "" {
+			return v
+		}
 	}
 	return def
 }
 
 // first returns the value of the first key that resolves at the highest
-// available level, checking all keys against the real environment before
-// falling back to the .env file.
+// available level, checking both keys against the real environment before
+// descending through the file layers.
 func (r *resolver) first(primary, legacy, def string) string {
 	if v := os.Getenv(primary); v != "" {
 		return v
@@ -191,11 +350,13 @@ func (r *resolver) first(primary, legacy, def string) string {
 	if v := os.Getenv(legacy); v != "" {
 		return v
 	}
-	if v := r.fileVars[primary]; v != "" {
-		return v
-	}
-	if v := r.fileVars[legacy]; v != "" {
-		return v
+	for _, m := range r.layers {
+		if v := m[primary]; v != "" {
+			return v
+		}
+		if v := m[legacy]; v != "" {
+			return v
+		}
 	}
 	return def
 }

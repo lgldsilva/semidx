@@ -22,7 +22,7 @@ func connectErr(t *testing.T) *mcp.ClientSession {
 	}))
 	t.Cleanup(httpSrv.Close)
 
-	server := New(client.New(httpSrv.URL, "tok"))
+	server := New(NewClientBackend(client.New(httpSrv.URL, "tok")))
 	serverT, clientT := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err := server.Connect(ctx, serverT, nil); err != nil {
@@ -66,17 +66,17 @@ func TestSearchHandlerError(t *testing.T) {
 
 func TestFormatSearch(t *testing.T) {
 	t.Run("no results", func(t *testing.T) {
-		got := formatSearch(&client.SearchResponse{Project: "proj", Results: nil})
+		got := formatSearch(&SearchOutput{Project: "proj", Results: nil})
 		if got != `No results in project "proj" for that query.` {
 			t.Errorf("empty formatSearch = %q", got)
 		}
 	})
 
 	t.Run("fallback warning is prepended", func(t *testing.T) {
-		got := formatSearch(&client.SearchResponse{
+		got := formatSearch(&SearchOutput{
 			Project:  "proj",
 			Fallback: true,
-			Results:  []client.SearchHit{{Path: "a.go", StartLine: 1, Score: 0.5, Content: "x"}},
+			Results:  []Hit{{Path: "a.go", StartLine: 1, Score: 0.5, Content: "x"}},
 		})
 		if !strings.HasPrefix(got, "[warning] embedding was unavailable") {
 			t.Errorf("fallback warning missing; got %q", got)
@@ -87,9 +87,9 @@ func TestFormatSearch(t *testing.T) {
 	})
 
 	t.Run("ranked results are numbered with scores", func(t *testing.T) {
-		got := formatSearch(&client.SearchResponse{
+		got := formatSearch(&SearchOutput{
 			Project: "proj",
-			Results: []client.SearchHit{
+			Results: []Hit{
 				{Path: "a.go", StartLine: 10, Score: 0.912, Content: "alpha"},
 				{Path: "b.go", StartLine: 20, Score: 0.5, Content: "beta"},
 			},
@@ -105,13 +105,13 @@ func TestFormatSearch(t *testing.T) {
 
 func TestFormatProjects(t *testing.T) {
 	t.Run("no projects", func(t *testing.T) {
-		if got := formatProjects(nil); got != "No projects are registered on the server." {
+		if got := formatProjects(nil); got != "No projects are registered in this index." {
 			t.Errorf("empty formatProjects = %q", got)
 		}
 	})
 
 	t.Run("git source shows the URL, push source does not", func(t *testing.T) {
-		got := formatProjects([]client.Project{
+		got := formatProjects([]ProjectInfo{
 			{Name: "app", SourceType: "git", GitURL: "https://x/y.git", Status: "ready", Model: "bge-m3"},
 			{Name: "docs", SourceType: "push", Status: "registered", Model: "bge-m3"},
 		})
