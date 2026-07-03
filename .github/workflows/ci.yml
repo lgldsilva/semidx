@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual trigger: the homelab Gitea does not fire a push run for PR merges, so
+  # `workflow_dispatch` lets the gates (incl. the main-only Sonar) be run on
+  # demand for a main commit until that Gitea behavior is fixed server-side.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -74,7 +78,9 @@ jobs:
   # mergeability on a PR is the rest of this file (build, test, lint, gitleaks,
   # govulncheck, gosec, image-scan). Skips without SONAR_TOKEN so forks stay green.
   sonar:
-    if: ${{ github.event_name == 'push' }}
+    # Main-only (Community edition): run on push to main and on manual dispatch,
+    # never on a PR.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
