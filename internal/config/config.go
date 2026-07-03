@@ -82,15 +82,13 @@ type Config struct {
 	KeywordOnly bool
 }
 
-// DefaultLocalIndexPath is the standalone index location, honoring XDG_DATA_HOME.
+// DefaultLocalIndexPath is the standalone index location. It uses the OS-native
+// per-user data dir (os.UserCacheDir: %LocalAppData% on Windows, ~/Library/Caches
+// on macOS, $XDG_CACHE_HOME or ~/.cache on Linux), so semidx works cross-platform.
 func DefaultLocalIndexPath() string {
-	dir := os.Getenv("XDG_DATA_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "semidx-index.db"
-		}
-		dir = filepath.Join(home, ".local", "share")
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "semidx-index.db"
 	}
 	return filepath.Join(dir, "semidx", "index.db")
 }

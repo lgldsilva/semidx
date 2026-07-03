@@ -129,7 +129,7 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 				return nil
 			}
 			rel, _ := filepath.Rel(projectPath, path)
-			created, softErrs, outcome, hash, ferr := idx.indexFile(ctx, projectID, path, rel, model)
+			created, softErrs, outcome, units, ferr := idx.indexFile(ctx, projectID, path, rel, model)
 
 			mu.Lock()
 			stats.Errors += softErrs
@@ -143,8 +143,10 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 			case outcome == outcomeSkippedUnchanged:
 				stats.FilesSkipped++
 			}
-			if hash != "" {
-				manifest[rel] = hash
+			// Record every searchable unit (a file, or an archive's entries) in the
+			// worktree manifest so pruning matches the actual stored paths.
+			for _, u := range units {
+				manifest[u.path] = u.hash
 			}
 			processed++
 			done, chunks := processed, stats.ChunksCreated
@@ -215,94 +217,121 @@ func scanFiles(projectPath string, maxFiles int) ([]string, error) {
 // distinguishes an indexed file from one skipped because it's empty/chunk-less
 // or unchanged; hardErr signals a read/upsert/delete failure; softErrs counts
 // failed embed sub-batches.
-func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, model string) (created, softErrs int, outcome fileOutcome, hash string, hardErr error) {
+func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, model string) (created, softErrs int, outcome fileOutcome, units []indexedUnit, hardErr error) {
 	// #nosec G304 -- indexing a file the caller pointed us at is the whole job; path comes from the project walk.
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, 0, outcomeSkippedEmpty, "", err
+		return 0, 0, outcomeSkippedEmpty, nil, err
 	}
 	content, err := io.ReadAll(io.LimitReader(f, maxFileSize))
 	_ = f.Close()
 	if err != nil {
-		return 0, 0, outcomeSkippedEmpty, "", err
+		return 0, 0, outcomeSkippedEmpty, nil, err
 	}
-	created, softErrs, outcome, hardErr = idx.indexContent(ctx, projectID, rel, model, content)
-	// The content hash (over the raw, already length-capped bytes) matches what
-	// indexContent stored; surface it for the worktree manifest, but only for
-	// files that are actually present/searchable (indexed or unchanged).
-	if outcome == outcomeIndexed || outcome == outcomeSkippedUnchanged {
-		hash = fmt.Sprintf("%x", sha256.Sum256(content))
-	}
-	return created, softErrs, outcome, hash, hardErr
+	return idx.indexContent(ctx, projectID, rel, model, content)
 }
 
 // IndexContent indexes one file's in-memory content (used by the push files API)
 // and returns the number of chunks created.
 func (idx *Indexer) IndexContent(ctx context.Context, projectID int, rel, model string, content []byte) (int, error) {
-	created, _, _, err := idx.indexContent(ctx, projectID, rel, model, content)
+	created, _, _, _, err := idx.indexContent(ctx, projectID, rel, model, content)
 	return created, err
 }
 
-// indexContent chunks, embeds and stores one file's content (shared by disk and
-// push paths).
-func (idx *Indexer) indexContent(ctx context.Context, projectID int, rel, model string, content []byte) (created, softErrs int, outcome fileOutcome, hardErr error) {
+// indexedUnit is one stored, searchable unit (a file, or an archive entry) and
+// its content hash — collected into the worktree manifest.
+type indexedUnit struct {
+	path string
+	hash string
+}
+
+// indexContent expands one input into searchable units and indexes each. A code
+// or plain-text file is a single unit; a document (PDF/Office/HTML) is its
+// extracted text; an archive (.jar/.war) fans out to one unit per entry
+// (class API surface + source/text resources). Shared by the disk and push paths.
+func (idx *Indexer) indexContent(ctx context.Context, projectID int, rel, model string, content []byte) (created, softErrs int, outcome fileOutcome, units []indexedUnit, hardErr error) {
 	if len(strings.TrimSpace(string(content))) == 0 {
-		return 0, 0, outcomeSkippedEmpty, nil
+		return 0, 0, outcomeSkippedEmpty, nil, nil
 	}
 	if len(content) > maxFileSize {
 		content = content[:maxFileSize]
 	}
 
-	hash := fmt.Sprintf("%x", sha256.Sum256(content))
-
-	// Incremental: skip files already indexed with this exact content. Hashing
-	// the RAW bytes means an unchanged document is skipped without paying the
-	// extraction cost.
-	if upToDate, err := idx.db.FileUpToDate(ctx, projectID, rel, hash, idx.dims); err == nil && upToDate {
-		return 0, 0, outcomeSkippedUnchanged, nil
-	}
-
-	// Documents (PDF/Office/HTML) are converted to text before chunking; code and
-	// plain-text files pass through unchanged. Extraction runs only for new or
-	// changed documents (after the incremental check above).
 	if extract.Supported(rel) {
-		text, err := extract.Extract(rel, content)
+		docs, err := extract.ExtractAll(rel, content)
 		switch {
 		case errors.Is(err, extract.ErrEncrypted):
-			return 0, 0, outcomeSkippedEmpty, nil // password-protected: expected skip, not an error
+			return 0, 0, outcomeSkippedEmpty, nil, nil // password-protected: expected skip
 		case err != nil:
-			return 0, 1, outcomeSkippedEmpty, nil // malformed document: soft error, never fatal
+			return 0, 1, outcomeSkippedEmpty, nil, nil // malformed: soft error, never fatal
 		}
-		content = []byte(text)
-		if len(strings.TrimSpace(text)) == 0 {
-			return 0, 0, outcomeSkippedEmpty, nil // e.g. a scanned, text-less PDF
+		outcome = outcomeSkippedEmpty
+		for _, d := range docs {
+			c, s, o, h, e := idx.indexUnit(ctx, projectID, d.Path, model, []byte(d.Text))
+			if e != nil {
+				return created, softErrs, outcomeSkippedEmpty, units, e
+			}
+			created += c
+			softErrs += s
+			if h != "" {
+				units = append(units, indexedUnit{d.Path, h})
+			}
+			switch o {
+			case outcomeIndexed:
+				outcome = outcomeIndexed
+			case outcomeSkippedUnchanged:
+				if outcome != outcomeIndexed {
+					outcome = outcomeSkippedUnchanged
+				}
+			}
 		}
+		return created, softErrs, outcome, units, nil
+	}
+
+	c, s, o, h, e := idx.indexUnit(ctx, projectID, rel, model, content)
+	if h != "" {
+		units = []indexedUnit{{rel, h}}
+	}
+	return c, s, o, units, e
+}
+
+// indexUnit chunks, embeds and stores one already-textual unit (a file's content
+// or an archive entry's text), returning its content hash for the manifest.
+func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model string, content []byte) (created, softErrs int, outcome fileOutcome, hash string, hardErr error) {
+	if len(strings.TrimSpace(string(content))) == 0 {
+		return 0, 0, outcomeSkippedEmpty, "", nil
+	}
+	hash = fmt.Sprintf("%x", sha256.Sum256(content))
+
+	// Incremental: skip a unit already indexed with this exact content.
+	if upToDate, err := idx.db.FileUpToDate(ctx, projectID, rel, hash, idx.dims); err == nil && upToDate {
+		return 0, 0, outcomeSkippedUnchanged, hash, nil
 	}
 
 	fileID, err := idx.db.UpsertFile(ctx, projectID, rel, hash, len(content))
 	if err != nil {
-		return 0, 0, outcomeSkippedEmpty, err
+		return 0, 0, outcomeSkippedEmpty, "", err
 	}
 
 	chunks := chunker.ChunkFile(rel, content, maxChunkChars)
 	if len(chunks) == 0 {
-		return 0, 0, outcomeSkippedEmpty, nil
+		return 0, 0, outcomeSkippedEmpty, "", nil
 	}
 	if len(chunks) > maxChunksPerFile {
 		chunks = chunks[:maxChunksPerFile]
 	}
 
 	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
-		return 0, 0, outcomeSkippedEmpty, err
+		return 0, 0, outcomeSkippedEmpty, "", err
 	}
 
 	// Keyword-only mode: no embedding provider at all — store the chunks as text
 	// so they stay searchable by keyword (FTS/ILIKE) without any model.
 	if idx.keywordOnly {
 		if err := idx.db.InsertChunksTextOnly(ctx, projectID, fileID, chunks, idx.dims); err != nil {
-			return 0, 0, outcomeSkippedEmpty, err
+			return 0, 0, outcomeSkippedEmpty, "", err
 		}
-		return len(chunks), 0, outcomeIndexed, nil
+		return len(chunks), 0, outcomeIndexed, hash, nil
 	}
 
 	// Privacy routing: a sensitive file must never be embedded by a cloud
@@ -314,16 +343,16 @@ func (idx *Indexer) indexContent(ctx context.Context, projectID int, rel, model 
 		localCtx := embed.WithForceLocal(ctx, true)
 		if _, err := idx.embedder.ModelInfo(localCtx, model); err != nil {
 			if err := idx.db.InsertChunksTextOnly(ctx, projectID, fileID, chunks, idx.dims); err != nil {
-				return 0, 0, outcomeSkippedEmpty, err
+				return 0, 0, outcomeSkippedEmpty, "", err
 			}
 			idx.logf("  [local-text] %s (sensitive; stored text-only, no cloud embedding)", rel)
-			return len(chunks), 0, outcomeIndexed, nil
+			return len(chunks), 0, outcomeIndexed, hash, nil
 		}
 		embedCtx = localCtx
 	}
 
 	created, softErrs = idx.embedAndInsert(embedCtx, projectID, fileID, chunks, model, rel)
-	return created, softErrs, outcomeIndexed, nil
+	return created, softErrs, outcomeIndexed, hash, nil
 }
 
 // embedAndInsert embeds chunks in sub-batches and inserts each successful batch.

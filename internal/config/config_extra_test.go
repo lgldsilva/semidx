@@ -6,24 +6,26 @@ import (
 )
 
 func TestDefaultLocalIndexPath(t *testing.T) {
-	t.Run("honors XDG_DATA_HOME", func(t *testing.T) {
-		t.Setenv("XDG_DATA_HOME", "/data")
+	// The path uses the OS-native per-user cache dir (os.UserCacheDir), which is
+	// cross-platform; on Linux it honors XDG_CACHE_HOME, else ~/.cache.
+	t.Run("honors the cache dir", func(t *testing.T) {
+		t.Setenv("XDG_CACHE_HOME", "/data")
 		if got, want := DefaultLocalIndexPath(), filepath.Join("/data", "semidx", "index.db"); got != want {
 			t.Errorf("DefaultLocalIndexPath() = %q, want %q", got, want)
 		}
 	})
 
-	t.Run("falls back to the home directory", func(t *testing.T) {
-		t.Setenv("XDG_DATA_HOME", "")
+	t.Run("falls back to the home cache directory", func(t *testing.T) {
+		t.Setenv("XDG_CACHE_HOME", "")
 		t.Setenv("HOME", "/home/tester")
-		want := filepath.Join("/home/tester", ".local", "share", "semidx", "index.db")
+		want := filepath.Join("/home/tester", ".cache", "semidx", "index.db")
 		if got := DefaultLocalIndexPath(); got != want {
 			t.Errorf("DefaultLocalIndexPath() = %q, want %q", got, want)
 		}
 	})
 
-	t.Run("uses a relative name when no home is resolvable", func(t *testing.T) {
-		t.Setenv("XDG_DATA_HOME", "")
+	t.Run("uses a relative name when no cache dir is resolvable", func(t *testing.T) {
+		t.Setenv("XDG_CACHE_HOME", "")
 		t.Setenv("HOME", "")
 		if got := DefaultLocalIndexPath(); got != "semidx-index.db" {
 			t.Errorf("DefaultLocalIndexPath() = %q, want fallback semidx-index.db", got)

@@ -86,10 +86,12 @@ func Extract(name string, data []byte) (out string, err error) {
 	return decode(data)
 }
 
-// Supported reports whether Extract can handle a file by its extension.
+// Supported reports whether ExtractAll can handle a file by its extension —
+// either a single document or an archive that fans out to many Docs.
 func Supported(name string) bool {
-	_, ok := byExt[strings.ToLower(filepath.Ext(name))]
-	return ok
+	ext := strings.ToLower(filepath.Ext(name))
+	_, ok := byExt[ext]
+	return ok || archiveExts[ext]
 }
 
 // passthrough returns already-textual formats (.txt, .md, .markdown) as-is,
