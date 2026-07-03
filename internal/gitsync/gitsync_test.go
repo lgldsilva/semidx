@@ -6,14 +6,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/lgldsilva/semidx/internal/gitenv"
 )
 
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	// Isolate from any global/system git config (e.g. a core.hooksPath that would
-	// run unrelated commit hooks) so the test is hermetic on every host.
-	cmd.Env = append(os.Environ(),
+	// run unrelated commit hooks) and from any inherited GIT_DIR/GIT_WORK_TREE (so
+	// the command targets dir, not an ambient repo leaked by a hook/bare worktree).
+	cmd.Env = append(gitenv.Clean(os.Environ()),
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
