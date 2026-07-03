@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/lgldsilva/semidx/internal/gitenv"
 )
 
 // Info describes the git context of a directory.
@@ -78,9 +80,11 @@ func run(ctx context.Context, dir string, args ...string) (string, error) {
 	full := append([]string{"-C", dir}, args...)
 	// #nosec G204 -- fixed "git" executable; args are literal subcommands and a caller dir.
 	cmd := exec.CommandContext(ctx, "git", full...)
+	// Strip any inherited GIT_DIR/GIT_WORK_TREE so `git -C dir` resolves the repo
+	// from dir (not an ambient repo leaked by a hook or bare-repo worktree).
 	// os.DevNull is "/dev/null" on Unix and "NUL" on Windows, so hermetic config
 	// works cross-platform.
-	cmd.Env = append(cmd.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
+	cmd.Env = append(gitenv.Clean(cmd.Environ()), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err

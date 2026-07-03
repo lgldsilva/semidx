@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/lgldsilva/semidx/internal/gitenv"
 )
 
 // Sync ensures dataDir/repos/<name> holds an up-to-date checkout of url and
@@ -57,6 +59,9 @@ func run(ctx context.Context, dir string, args ...string) error {
 	if dir != "" {
 		cmd = exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) // #nosec G204 -- see above
 	}
+	// Drop any inherited GIT_DIR/GIT_WORK_TREE so the command targets dir (or the
+	// clone destination), not an ambient repo leaked by a hook or bare worktree.
+	cmd.Env = gitenv.Clean(cmd.Environ())
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}

@@ -26,6 +26,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/extract"
+	"github.com/lgldsilva/semidx/internal/gitenv"
 	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -475,6 +476,9 @@ func sleepBackoff(ctx context.Context, attempt int) error {
 func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectPath, model string) error {
 	// #nosec G204 -- fixed "git" executable; projectPath is a local dir and gitSince a bounded flag value.
 	cmd := exec.Command("git", "-C", projectPath, "log", "-p", "--since="+idx.gitSince)
+	// Strip any inherited GIT_DIR/GIT_WORK_TREE so `git -C projectPath` reads that
+	// repo's history, not an ambient repo leaked by a hook or bare-repo worktree.
+	cmd.Env = gitenv.Clean(cmd.Environ())
 	out, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("git log -p: %w", err)
