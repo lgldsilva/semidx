@@ -68,6 +68,7 @@ func Verify(password, encoded string) (bool, error) {
 	if err != nil {
 		return false, ErrMalformedHash
 	}
+	// #nosec G115 -- len(want) is a decoded hash length (a small positive int), never overflows uint32.
 	got := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }

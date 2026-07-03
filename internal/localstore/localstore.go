@@ -87,7 +87,7 @@ CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);
 // so ON DELETE CASCADE actually fires.
 func New(path string) (*SQLiteStore, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, fmt.Errorf("create data dir: %w", err)
 		}
 	}
@@ -391,6 +391,8 @@ func (s *SQLiteStore) SearchSimilarKeywords(ctx context.Context, projectID int, 
 	}
 	args = append(args, topK)
 
+	// #nosec G201 -- the only interpolated fragment is a join of the constant
+	// literal "c.content LIKE ?"; every user value is bound via ? parameters.
 	query := fmt.Sprintf(`
 		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score
 		FROM chunks c JOIN files f ON f.id = c.file_id
