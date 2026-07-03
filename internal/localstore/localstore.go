@@ -38,7 +38,7 @@ var _ store.IndexStore = (*SQLiteStore)(nil)
 
 // projectColumns is the canonical projection order shared by the project
 // getters so scanProject can read any of them.
-const projectColumns = `id, name, path, model, status, source_type, git_url, branch`
+const projectColumns = `id, name, path, model, status, source_type, git_url, branch, COALESCE(identity, '')`
 
 // schema mirrors the pgvector layout conceptually as plain tables: an embedding
 // BLOB replaces the vector column and there is one chunks table instead of the
@@ -53,8 +53,10 @@ CREATE TABLE IF NOT EXISTS projects (
     status      TEXT NOT NULL DEFAULT '',
     source_type TEXT NOT NULL DEFAULT 'path',
     git_url     TEXT NOT NULL DEFAULT '',
-    branch      TEXT NOT NULL DEFAULT ''
+    branch      TEXT NOT NULL DEFAULT '',
+    identity    TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_identity ON projects(identity);
 CREATE TABLE IF NOT EXISTS files (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -62,8 +64,16 @@ CREATE TABLE IF NOT EXISTS files (
     hash       TEXT NOT NULL,
     size_bytes INTEGER NOT NULL DEFAULT 0,
     indexed_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(project_id, path)
+    UNIQUE(project_id, path, hash)
 );
+CREATE TABLE IF NOT EXISTS worktree_files (
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    worktree   TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    hash       TEXT NOT NULL,
+    PRIMARY KEY (project_id, worktree, path)
+);
+CREATE INDEX IF NOT EXISTS idx_worktree_files ON worktree_files(project_id, worktree);
 CREATE TABLE IF NOT EXISTS chunks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -92,18 +102,47 @@ func New(path string) (*SQLiteStore, error) {
 		}
 	}
 
-	// _pragma params are applied by modernc on every pooled connection, so
-	// foreign-key enforcement and a busy timeout hold across the whole pool.
-	dsn := path + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
+	// Anti-corruption for concurrent access (multiple semidx processes / the
+	// indexer's worker pool share one file): WAL is crash-resilient and allows
+	// concurrent readers with one writer; synchronous=NORMAL is durable enough for
+	// a re-derivable index (a crash at worst loses the last transaction); a long
+	// busy_timeout makes writers wait instead of racing. _pragma params apply on
+	// every pooled connection.
+	dsn := path + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	if _, err := db.Exec(schema); err != nil {
+	// Serialize writes through a single connection: SQLite allows one writer at a
+	// time, so a single conn removes lock contention entirely (fine at laptop
+	// scale) and guarantees no corruption from concurrent goroutines/processes.
+	db.SetMaxOpenConns(1)
+	if err := ensureSchema(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 	return &SQLiteStore{db: db}, nil
+}
+
+// ensureSchema creates the tables, and — because the local index is a
+// re-derivable cache with no migration tooling — transparently rebuilds an older
+// pre-F11 database (a projects table without the content-addressing 'identity'
+// column) by dropping and recreating it. Re-indexing repopulates it.
+func ensureSchema(db *sql.DB) error {
+	var cols, hasIdentity int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects')`).Scan(&cols)
+	if cols > 0 {
+		_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='identity'`).Scan(&hasIdentity)
+		if hasIdentity == 0 {
+			for _, tbl := range []string{"chunks", "worktree_files", "files", "projects"} {
+				if _, err := db.Exec("DROP TABLE IF EXISTS " + tbl); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	_, err := db.Exec(schema)
+	return err
 }
 
 func (s *SQLiteStore) Close() { _ = s.db.Close() }
@@ -126,6 +165,58 @@ func (s *SQLiteStore) UpsertProject(ctx context.Context, name, path, model strin
 	return id, err
 }
 
+// EnsureProjectIdentity upserts a project keyed by its stable identity so all
+// worktrees of a repo map to one row.
+func (s *SQLiteStore) EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string) (int, error) {
+	var id int
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO projects (name, path, model, status, source_type, identity)
+		VALUES (?, ?, ?, 'indexing', ?, ?)
+		ON CONFLICT(identity) DO UPDATE SET path = excluded.path, model = excluded.model, status = 'indexing'
+		RETURNING id
+	`, name, path, model, sourceType, identity).Scan(&id)
+	return id, err
+}
+
+// SetWorktreeFiles replaces a worktree's manifest (its path->hash set) atomically.
+func (s *SQLiteStore) SetWorktreeFiles(ctx context.Context, projectID int, worktree string, files map[string]string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM worktree_files WHERE project_id = ? AND worktree = ?`, projectID, worktree); err != nil {
+		return err
+	}
+	for path, hash := range files {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO worktree_files (project_id, worktree, path, hash) VALUES (?, ?, ?, ?)`,
+			projectID, worktree, path, hash); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// PruneUnreferencedFiles deletes files (and, via ON DELETE CASCADE, chunks) that
+// no worktree of the project still references, bounding index growth. Returns the
+// number of files removed.
+func (s *SQLiteStore) PruneUnreferencedFiles(ctx context.Context, projectID int) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM files
+		WHERE project_id = ?
+		  AND NOT EXISTS (
+		    SELECT 1 FROM worktree_files w
+		    WHERE w.project_id = files.project_id AND w.path = files.path AND w.hash = files.hash
+		  )
+	`, projectID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // CreateProject registers a project with its content source, returning
 // ErrProjectExists when the name is already taken.
 func (s *SQLiteStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*store.Project, error) {
@@ -146,7 +237,7 @@ func (s *SQLiteStore) CreateProject(ctx context.Context, name, model, sourceType
 
 func scanProject(row interface{ Scan(...any) error }) (*store.Project, error) {
 	var p store.Project
-	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity); err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -210,11 +301,13 @@ func (s *SQLiteStore) UpdateProjectStatus(ctx context.Context, id int, status st
 
 func (s *SQLiteStore) UpsertFile(ctx context.Context, projectID int, path, hash string, size int) (int, error) {
 	var id int
+	// Content-addressed: (project, path, hash) is unique so divergent versions of
+	// the same path coexist across worktrees.
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO files (project_id, path, hash, size_bytes)
 		VALUES (?, ?, ?, ?)
-		ON CONFLICT(project_id, path) DO UPDATE
-		SET hash = excluded.hash, size_bytes = excluded.size_bytes, indexed_at = datetime('now')
+		ON CONFLICT(project_id, path, hash) DO UPDATE
+		SET size_bytes = excluded.size_bytes, indexed_at = datetime('now')
 		RETURNING id
 	`, projectID, path, hash, size).Scan(&id)
 	return id, err
@@ -333,13 +426,29 @@ func (s *SQLiteStore) projectModel(ctx context.Context, projectID int) string {
 // similarity to the query in Go. Brute force is acceptable at laptop scale; a
 // large corpus should use the server's pgvector-backed ANN index instead.
 func (s *SQLiteStore) SearchSimilar(ctx context.Context, projectID int, embedding []float32, _, topK int) ([]store.SearchResult, error) {
+	return s.searchSimilar(ctx, projectID, embedding, topK, "")
+}
+
+// SearchSimilarWorktree restricts the scan to a worktree's checked-out versions.
+func (s *SQLiteStore) SearchSimilarWorktree(ctx context.Context, projectID int, embedding []float32, _, topK int, worktree string) ([]store.SearchResult, error) {
+	return s.searchSimilar(ctx, projectID, embedding, topK, worktree)
+}
+
+func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embedding []float32, topK int, worktree string) ([]store.SearchResult, error) {
 	// embedding IS NOT NULL excludes text-only rows (sensitive files stored
 	// without an embedding); those surface via keyword search instead.
+	join := "JOIN files f ON f.id = c.file_id"
+	args := []any{projectID}
+	if worktree != "" {
+		join = "JOIN files f ON f.id = c.file_id JOIN worktree_files w ON w.project_id = c.project_id AND w.path = f.path AND w.hash = f.hash AND w.worktree = ?"
+		args = []any{worktree, projectID}
+	}
+	// #nosec G201 -- join is one of two constant literals; all values are bound as ? params.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT f.path, c.content, c.start_line, c.end_line, c.embedding
-		FROM chunks c JOIN files f ON f.id = c.file_id
+		FROM chunks c `+join+`
 		WHERE c.project_id = ? AND c.embedding IS NOT NULL
-	`, projectID)
+	`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -375,13 +484,30 @@ func (s *SQLiteStore) SearchSimilar(ctx context.Context, projectID int, embeddin
 // SearchSimilarKeywords finds chunks whose content matches every query word via
 // SQL LIKE. Score is a constant 0.5, matching PgStore's keyword fallback.
 func (s *SQLiteStore) SearchSimilarKeywords(ctx context.Context, projectID int, queryText string, _, topK int) ([]store.SearchResult, error) {
+	return s.searchKeywords(ctx, projectID, queryText, topK, "")
+}
+
+// SearchSimilarKeywordsWorktree restricts the keyword search to a worktree's versions.
+func (s *SQLiteStore) SearchSimilarKeywordsWorktree(ctx context.Context, projectID int, queryText string, _, topK int, worktree string) ([]store.SearchResult, error) {
+	return s.searchKeywords(ctx, projectID, queryText, topK, worktree)
+}
+
+func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryText string, topK int, worktree string) ([]store.SearchResult, error) {
 	words := strings.Fields(queryText)
 	if len(words) == 0 {
 		return nil, nil
 	}
 
+	// The worktree JOIN's placeholder appears first positionally when present.
+	join := "JOIN files f ON f.id = c.file_id"
+	var args []any
+	if worktree != "" {
+		join = "JOIN files f ON f.id = c.file_id JOIN worktree_files w ON w.project_id = c.project_id AND w.path = f.path AND w.hash = f.hash AND w.worktree = ?"
+		args = append(args, worktree)
+	}
+	args = append(args, projectID)
+
 	clauses := make([]string, 0, len(words))
-	args := []any{projectID}
 	for _, w := range words {
 		clauses = append(clauses, "c.content LIKE ?")
 		args = append(args, "%"+w+"%")
@@ -391,14 +517,13 @@ func (s *SQLiteStore) SearchSimilarKeywords(ctx context.Context, projectID int, 
 	}
 	args = append(args, topK)
 
-	// #nosec G201 -- the only interpolated fragment is a join of the constant
-	// literal "c.content LIKE ?"; every user value is bound via ? parameters.
+	// #nosec G201 -- interpolated fragments are constant literals; all values are bound as ? params.
 	query := fmt.Sprintf(`
 		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score
-		FROM chunks c JOIN files f ON f.id = c.file_id
+		FROM chunks c `+"%s"+`
 		WHERE c.project_id = ? AND (%s)
 		LIMIT ?
-	`, strings.Join(clauses, " OR "))
+	`, join, strings.Join(clauses, " OR "))
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

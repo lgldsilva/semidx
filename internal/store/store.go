@@ -36,9 +36,10 @@ type Project struct {
 	Path       string
 	Model      string
 	Status     string
-	SourceType string // "push" | "git" | "path"
+	SourceType string // "push" | "git" | "path" | "docs"
 	GitURL     string // set when SourceType == "git"
 	Branch     string // optional git branch
+	Identity   string // stable dedup key (git remote/common-dir, or absolute path)
 }
 
 // Sentinel errors so callers (e.g. the HTTP layer) can map to status codes
@@ -95,6 +96,9 @@ type IndexStore interface {
 	Ping(ctx context.Context) error
 	EnsureChunksTable(ctx context.Context, dims int) error
 	UpsertProject(ctx context.Context, name, path, model string) (int, error)
+	EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string) (int, error)
+	SetWorktreeFiles(ctx context.Context, projectID int, worktree string, files map[string]string) error
+	PruneUnreferencedFiles(ctx context.Context, projectID int) (int64, error)
 	CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*Project, error)
 	GetProject(ctx context.Context, name string) (*Project, error)
 	GetProjectByID(ctx context.Context, id int) (*Project, error)
@@ -110,6 +114,8 @@ type IndexStore interface {
 	InsertChunksTextOnly(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, dims int) error
 	SearchSimilar(ctx context.Context, projectID int, embedding []float32, dims, topK int) ([]SearchResult, error)
 	SearchSimilarKeywords(ctx context.Context, projectID int, queryText string, dims, topK int) ([]SearchResult, error)
+	SearchSimilarWorktree(ctx context.Context, projectID int, embedding []float32, dims, topK int, worktree string) ([]SearchResult, error)
+	SearchSimilarKeywordsWorktree(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]SearchResult, error)
 	DropAll(ctx context.Context) error
 }
 
@@ -264,14 +270,69 @@ func (s *PgStore) UpsertProject(ctx context.Context, name, path, model string) (
 	return id, err
 }
 
-const projectColumns = `id, name, path, model, status, source_type, COALESCE(git_url, ''), COALESCE(branch, '')`
+const projectColumns = `id, name, path, model, status, source_type, COALESCE(git_url, ''), COALESCE(branch, ''), COALESCE(identity, '')`
 
 func scanProject(row pgx.Row) (*Project, error) {
 	var p Project
-	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity); err != nil {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// EnsureProjectIdentity upserts a project keyed by its stable identity, so any
+// worktree or clone of the same repo maps to one project row. It returns the
+// project id and sets status to "indexing".
+func (s *PgStore) EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string) (int, error) {
+	var id int
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO projects (name, path, model, status, source_type, identity)
+		VALUES ($1, $2, $3, 'indexing', $4, $5)
+		ON CONFLICT (identity) DO UPDATE
+		  SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing'
+		RETURNING id
+	`, name, path, model, sourceType, identity).Scan(&id)
+	return id, err
+}
+
+// SetWorktreeFiles replaces a worktree's manifest — the (path -> hash) set it
+// currently has checked out — in one transaction.
+func (s *PgStore) SetWorktreeFiles(ctx context.Context, projectID int, worktree string, files map[string]string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `DELETE FROM worktree_files WHERE project_id = $1 AND worktree = $2`, projectID, worktree); err != nil {
+		return err
+	}
+	for path, hash := range files {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO worktree_files (project_id, worktree, path, hash) VALUES ($1, $2, $3, $4)`,
+			projectID, worktree, path, hash); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// PruneUnreferencedFiles deletes files (and, via ON DELETE CASCADE, their chunks)
+// that no worktree of the project still references — bounding index growth to the
+// union of all worktrees' current checkouts. Returns how many files were removed.
+func (s *PgStore) PruneUnreferencedFiles(ctx context.Context, projectID int) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM files f
+		WHERE f.project_id = $1
+		  AND NOT EXISTS (
+		    SELECT 1 FROM worktree_files w
+		    WHERE w.project_id = f.project_id AND w.path = f.path AND w.hash = f.hash
+		  )
+	`, projectID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (s *PgStore) GetProject(ctx context.Context, name string) (*Project, error) {
@@ -339,10 +400,13 @@ func (s *PgStore) UpdateProjectStatus(ctx context.Context, id int, status string
 
 func (s *PgStore) UpsertFile(ctx context.Context, projectID int, path, hash string, size int) (int, error) {
 	var id int
+	// Content-addressed: (project, path, hash) is unique, so divergent versions of
+	// the same path (across worktrees) coexist. Re-inserting an existing version
+	// just refreshes its metadata.
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO files (project_id, path, hash, size_bytes)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (project_id, path) DO UPDATE SET hash = EXCLUDED.hash, size_bytes = EXCLUDED.size_bytes, indexed_at = NOW()
+		ON CONFLICT (project_id, path, hash) DO UPDATE SET size_bytes = EXCLUDED.size_bytes, indexed_at = NOW()
 		RETURNING id
 	`, projectID, path, hash, size).Scan(&id)
 	return id, err
@@ -476,6 +540,17 @@ func (s *PgStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID in
 }
 
 func (s *PgStore) SearchSimilar(ctx context.Context, projectID int, embedding []float32, dims, topK int) ([]SearchResult, error) {
+	return s.searchSimilar(ctx, projectID, embedding, dims, topK, "")
+}
+
+// SearchSimilarWorktree is SearchSimilar restricted to the file versions a given
+// worktree currently has checked out (via the worktree_files manifest), so each
+// worktree sees its own content when the same path diverges across worktrees.
+func (s *PgStore) SearchSimilarWorktree(ctx context.Context, projectID int, embedding []float32, dims, topK int, worktree string) ([]SearchResult, error) {
+	return s.searchSimilar(ctx, projectID, embedding, dims, topK, worktree)
+}
+
+func (s *PgStore) searchSimilar(ctx context.Context, projectID int, embedding []float32, dims, topK int, worktree string) ([]SearchResult, error) {
 	table, err := chunksTable(dims)
 	if err != nil {
 		return nil, err
@@ -483,17 +558,22 @@ func (s *PgStore) SearchSimilar(ctx context.Context, projectID int, embedding []
 	// embedding IS NOT NULL excludes text-only rows (sensitive files stored
 	// without an embedding); those surface via keyword search instead.
 	dist := distanceExpr(dims)
+	join := "JOIN files f ON f.id = c.file_id"
+	args := []any{pgvector.NewVector(embedding), projectID, topK} // $1 vec, $2 project, $3 topK
+	if worktree != "" {
+		join += " JOIN worktree_files w ON w.project_id = c.project_id AND w.path = f.path AND w.hash = f.hash AND w.worktree = $4"
+		args = append(args, worktree)
+	}
 	query := fmt.Sprintf(`
 		SELECT f.path, c.content, c.start_line, c.end_line, 1 - (%s) AS score
 		FROM %s c
-		JOIN files f ON f.id = c.file_id
+		%s
 		WHERE c.project_id = $2 AND c.embedding IS NOT NULL
 		ORDER BY %s
 		LIMIT $3
-	`, dist, table, dist)
+	`, dist, table, join, dist)
 
-	vec := pgvector.NewVector(embedding)
-	rows, err := s.pool.Query(ctx, query, vec, projectID, topK)
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -782,6 +862,16 @@ func (s *PgStore) DropAll(ctx context.Context) error {
 }
 
 func (s *PgStore) SearchSimilarKeywords(ctx context.Context, projectID int, queryText string, dims, topK int) ([]SearchResult, error) {
+	return s.searchKeywords(ctx, projectID, queryText, dims, topK, "")
+}
+
+// SearchSimilarKeywordsWorktree is the keyword search restricted to a worktree's
+// checked-out file versions (see SearchSimilarWorktree).
+func (s *PgStore) SearchSimilarKeywordsWorktree(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]SearchResult, error) {
+	return s.searchKeywords(ctx, projectID, queryText, dims, topK, worktree)
+}
+
+func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]SearchResult, error) {
 	if dims <= 0 {
 		dims = s.probeDimsForProject(ctx, projectID)
 	}
@@ -806,14 +896,21 @@ func (s *PgStore) SearchSimilarKeywords(ctx context.Context, projectID int, quer
 		args = append(args, "%"+w+"%")
 	}
 
+	join := "JOIN files f ON f.id = c.file_id"
+	topKIdx := len(args) + 1
+	args = append(args, topK)
+	if worktree != "" {
+		args = append(args, worktree)
+		join += fmt.Sprintf(" JOIN worktree_files w ON w.project_id = c.project_id AND w.path = f.path AND w.hash = f.hash AND w.worktree = $%d", len(args))
+	}
+
 	sql := fmt.Sprintf(`
 		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score
 		FROM %s c
-		JOIN files f ON f.id = c.file_id
+		%s
 		WHERE c.project_id = $1 AND (%s)
 		LIMIT $%d
-	`, table, strings.Join(clauses, " OR "), len(args)+1)
-	args = append(args, topK)
+	`, table, join, strings.Join(clauses, " OR "), topKIdx)
 
 	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
