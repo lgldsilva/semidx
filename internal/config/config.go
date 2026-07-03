@@ -173,6 +173,11 @@ var KnownKeys = []KeySpec{
 	{"EMBED_PRIVACY", "Force local-only embedding providers (true)", false},
 	{"SEMIDX_INDEX_WORKERS", "Concurrent index workers (positive int)", false},
 	{"SEMIDX_JAVA_DECOMPILER", "External Java decompiler command for .class in JARs", false},
+	// Self-update (semidx upgrade) — override to point at a different release host.
+	{"SEMIDX_UPDATE_API", "Releases API base for `semidx upgrade` (default: homelab Gitea)", false},
+	{"SEMIDX_UPDATE_URL", "Release download base for `semidx upgrade` (default: homelab Gitea)", false},
+	{"SEMIDX_UPDATE_TOKEN", "Token for `semidx upgrade` against a private release host", true},
+	{"SEMIDX_INSECURE", "Skip TLS verification for update downloads (1 = self-signed CA)", false},
 	// Server-only (semidx serve).
 	{"SEMIDX_LISTEN_ADDR", "Server bind address, e.g. :8080 (serve)", false},
 	{"SEMIDX_DATA_DIR", "Where the server clones git projects (serve)", false},
