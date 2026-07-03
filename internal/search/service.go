@@ -47,6 +47,11 @@ type Response struct {
 	Model    string
 	Results  []store.SearchResult
 	Fallback bool // true when embedding was unavailable and keyword search was used
+	// Keyword is true when the results came from keyword search — either an
+	// explicit keyword-only request or an embedding fallback. Keyword scores are a
+	// constant placeholder, not a similarity, so formatters label such results
+	// "keyword match" instead of a misleading percentage.
+	Keyword bool
 }
 
 // Search resolves the model, embeds the query and runs a vector search,
@@ -93,12 +98,14 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 			return nil, err
 		}
 		resp.Results = results
+		resp.Keyword = true
 		return resp, nil
 	}
 
 	vec, err := s.emb.EmbedSingle(ctx, model, req.Query)
 	if err != nil {
 		resp.Fallback = true
+		resp.Keyword = true
 		results, kerr := s.keywordSearch(ctx, project.ID, req.Query, dims, req.TopK, worktree)
 		if kerr != nil {
 			return nil, kerr
