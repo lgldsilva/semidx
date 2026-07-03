@@ -30,6 +30,7 @@ func newUnlockCmd(d *deps) *cobra.Command {
 			"prompted for passwords with no echo; each password is tried against every\n" +
 			"still-locked file, so one password unlocks all files that share it. Passwords\n" +
 			"are never stored. Press Enter on an empty prompt to stop and keep the rest pending.",
+		Example: "  semidx unlock --project .\n  semidx unlock --project ./docs --docs",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			if d.remote() {
