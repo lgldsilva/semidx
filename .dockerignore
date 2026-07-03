@@ -8,3 +8,6 @@ coverage.html
 *.test
 docs
 deploy
+# …but the agentics test image (built from the repo root) needs its harness files.
+# This only widens the build context; the final server image copies just the binary.
+!deploy/agentics-test

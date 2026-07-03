@@ -18,6 +18,9 @@ func clearEnv(t *testing.T) {
 	} {
 		t.Setenv(key, "")
 	}
+	// Isolate the user config layer (os.UserConfigDir honors XDG_CONFIG_HOME on
+	// Linux) so the developer's real ~/.config/semidx/semidx.env can't leak in.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 }
 
 func writeDotEnv(t *testing.T, content string) {

@@ -5,8 +5,19 @@ self-hosted `act_runner`s. There are **two workflows** with different jobs:
 
 | Workflow | File | Triggers | Purpose |
 |---|---|---|---|
-| **CI** | `.github/workflows/ci.yml` | every push to `main`, every pull request | fast validation gate — no infra needed |
-| **Release** | `.gitea/workflows/release.yml` | version tags (`v*`) and manual dispatch | Sonar + SBOM + Trivy + image build/push |
+| **CI (gates)** | `.github/workflows/ci.yml` | every push to `main`, every pull request | **quality/security gates** — build, test, lint, gitleaks, govulncheck, gosec, Trivy image scan (all on PR + main); SonarQube **on main only** |
+| **Release (deploy)** | `.gitea/workflows/release.yml` | version tags (`v*`) and manual dispatch | **publishes** the release — pushes the image and uploads the SBOM to Dependency-Track |
+
+The split is deliberate: **a PR runs every gate that predicts what may enter
+`main`; the only thing the release adds is the deploy** (image push + SBOM
+publish). The release commit is already gated by the PR it came from, so the
+gates are not re-run at release time.
+
+> **SonarQube is main-only.** The homelab SonarQube is **Community edition**,
+> which analyses a single branch and has no PR/branch analysis. So the `sonar`
+> job runs only on push to `main` — a post-merge quality gate on main, not a PR
+> gate. PR-time prediction comes from the other gates (a red gate there blocks
+> the merge before it ever reaches main).
 
 The CI workflow is intentionally left in `.github/workflows/` so the same YAML
 also runs unchanged on GitHub Actions after the public migration (roadmap F7).
@@ -14,48 +25,52 @@ The release workflow lives in `.gitea/workflows/` because it targets homelab
 infrastructure (SonarQube, Dependency-Track, the Gitea registry) that only
 exists behind the WireGuard network.
 
-## CI gate (`.github/workflows/ci.yml`)
+## CI gates (`.github/workflows/ci.yml`)
 
-Runs on `ubuntu-latest` runners; needs no secrets or homelab services.
+The gate pipeline. Runs on every PR and every push to `main`.
 
 ```
 Gitea push / PR ──► Gitea Actions ──► self-hosted act_runner
-   test:       go vet · go build · go test -race -shuffle=on
-   lint:       golangci-lint (via `go run …@v2.12.2`)
-   gitleaks:   secret scan (via `go run …gitleaks@latest`)
+   test:        go vet · go build · go test -race -shuffle=on
+   lint:        golangci-lint (via `go run …@v2.12.2`)
+   gitleaks:    secret scan (via `go run …gitleaks@latest`)
    govulncheck: CVE scan of reachable deps + stdlib (via `go run …`)
+   gosec:       SAST (via `go run …gosec@v2.27.1`)
+   sonar:       SonarQube quality gate — MAIN ONLY (Community edition has no PR
+                analysis). Runs only on push to main; sonar.qualitygate.wait=true
+                fails the job when main's gate fails. Skips without SONAR_TOKEN.
+   image-scan:  docker build + Trivy CRITICAL gate on the local image (no push).
+                Skips if the runner has no Docker.
 ```
 
-Uses only `actions/checkout` and `actions/setup-go`; every tool runs as a plain
-`go run <tool>@<version>` step, so the workflow is portable to GitHub Actions.
-This file is the sole PR gate and is **not** touched by the release pipeline.
+The Go tool gates use only `actions/checkout` and `actions/setup-go` and run
+each tool as a plain `go run <tool>@<version>` step, so they stay portable to
+GitHub Actions. The `sonar` gate needs the homelab `SONAR_TOKEN` and pins the
+Sonar host IP into `/etc/hosts` (act_runner has no LAN DNS); it degrades to a
+skip when the secret is absent, so forked/secret-less runs stay green.
 
-## Release pipeline (`.gitea/workflows/release.yml`)
+## Release / deploy pipeline (`.gitea/workflows/release.yml`)
 
-Triggers **only** on `push: tags: ['v*']` and on `workflow_dispatch` — never on
-ordinary pushes to `main`, so it does not duplicate the CI gate. Jobs run on the
-generic `[self-hosted]` runner pool.
+Triggers **only** on `push: tags: ['v*']` and on `workflow_dispatch` — this is
+the DEPLOY, not a gate. Jobs run on the generic `[self-hosted]` runner pool.
 
 ```
-build-test ──┬──► sonar          (SonarQube quality gate)
-             ├──► sbom            (CycloneDX ──► Dependency-Track, continue-on-error)
-             └──► image           (docker build ──► Trivy CRITICAL gate ──► push)
+build-test ──┬──► sbom            (CycloneDX ──► Dependency-Track, continue-on-error)
+             └──► image           (docker build ──► Trivy CRITICAL ──► push = deploy)
                        notify-failure  (Telegram, only if a real job failed)
 ```
 
 Job graph (`needs` edges):
 
-- `build-test` — go build, `go test -race -coverprofile=coverage.out ./...`,
-  uploads `coverage.out` as an artifact. Always runs.
-- `sonar` — **needs** `build-test`. Downloads the coverage artifact and runs
-  `sonarqube-scanner` against SonarQube; waits on the server-side quality gate.
+- `build-test` — pre-publish sanity: `go build` + `go test -race ./...` on the
+  tagged commit. The full gate set already ran on the PR that merged it.
 - `sbom` — **needs** `build-test`, `continue-on-error: true`. Generates a
   CycloneDX SBOM (`scripts/sbom-upload.sh`) and uploads it to Dependency-Track.
   Never fails the pipeline.
 - `image` — **needs** `build-test`. Builds the Docker image, runs **Trivy on the
   LOCAL image before any push** (fails on a fixable CRITICAL), then pushes to the
-  Gitea registry.
-- `notify-failure` — **needs** `[build-test, sonar, sbom, image]`,
+  Gitea registry — the actual publish/deploy step.
+- `notify-failure` — **needs** `[build-test, sbom, image]`,
   `if: failure()`. Sends a Telegram message. Because `sbom` is
   continue-on-error, an SBOM failure alone does not trigger it.
 
@@ -67,7 +82,7 @@ Job-level `if:` cannot read secrets, so each secret is mapped into an `env:` and
 the dependent step is guarded with `if: ${{ env.THESECRET != '' }}`. When the
 secret is empty the step is skipped and the job succeeds:
 
-- no `SONAR_TOKEN` ⇒ the SonarQube analysis step is skipped;
+- no `SONAR_TOKEN` ⇒ the SonarQube gate (in `ci.yml`) is skipped;
 - no `DT_API` ⇒ the SBOM upload is skipped (and it is continue-on-error anyway);
 - no `REGISTRY_TOKEN` ⇒ the image is still built **and Trivy-scanned locally**,
   but not pushed;
@@ -83,7 +98,7 @@ them unset and that stage is skipped cleanly.
 
 | Secret | Lights up | Notes |
 |---|---|---|
-| `SONAR_TOKEN` | `sonar` job | SonarQube analysis token (server URL is hard-coded to `https://sonar.raspberrypi.lan`). |
+| `SONAR_TOKEN` | `sonar` gate in `ci.yml` (PR + push) | SonarQube analysis token (server URL is hard-coded to `https://sonar.raspberrypi.lan`). |
 | `DT_API` | `sbom` job | Dependency-Track base URL, e.g. `https://dtrack.raspberrypi.lan`. Presence of `DT_API` gates the job. |
 | `DT_USER` | `sbom` job | Dependency-Track user with `BOM_UPLOAD` permission. |
 | `DT_PASS` | `sbom` job | password for `DT_USER`. |
@@ -96,7 +111,7 @@ them unset and that stage is skipped cleanly.
 | Variable | Used by | Default if unset |
 |---|---|---|
 | `REGISTRY_USER` | `image` push | `lgldsilva` |
-| `SONAR_HOST_IP` | `sonar` | (none) — when set and DNS has no record, the runner appends `<ip> sonar.raspberrypi.lan` to `/etc/hosts` before scanning. |
+| `SONAR_HOST_IP` | `sonar` | `192.168.0.100` — when the runner can't resolve `sonar.raspberrypi.lan` (the usual act_runner case), it appends `<ip> sonar.raspberrypi.lan` to `/etc/hosts` before scanning. Override only if the server moves. |
 
 The internal CA is handled without extra config: the Node-based artifact and
 Sonar steps set `NODE_TLS_REJECT_UNAUTHORIZED=0`, and `scripts/sbom-upload.sh`

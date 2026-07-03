@@ -1,8 +1,10 @@
-// Package mcpserver exposes a semidx server to AI agents over the Model Context
-// Protocol. It is a THIN client: every tool is a call to the HTTP API via
-// pkg/client — there is no local database or embedder. Because tools only accept
-// project names (never filesystem paths), an agent can never trigger indexing of
-// an arbitrary path; only projects already registered on the server are reachable.
+// Package mcpserver exposes semidx to AI agents over the Model Context Protocol.
+// It is backend-agnostic: the three tools call a Backend, which is either a THIN
+// client over the HTTP API (remote mode, pkg/client) or a local adapter over the
+// standalone index (local mode, search.Service + the local store). Either way the
+// tools only accept project NAMES (never filesystem paths), so an agent can never
+// trigger indexing of an arbitrary path — only already-registered/indexed projects
+// are reachable.
 package mcpserver
 
 import (
@@ -11,38 +13,69 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/lgldsilva/semidx/pkg/client"
 )
 
 const version = "0.1.0"
 
-// New builds an MCP server whose tools proxy to the given semidx client.
-func New(c *client.Client) *mcp.Server {
+// Hit is one ranked search result, independent of the backend that produced it.
+type Hit struct {
+	Path      string
+	StartLine int
+	Score     float64
+	Content   string
+}
+
+// SearchOutput is a backend-neutral search result set.
+type SearchOutput struct {
+	Project  string
+	Fallback bool
+	Results  []Hit
+}
+
+// ProjectInfo is a backend-neutral project summary.
+type ProjectInfo struct {
+	Name       string
+	SourceType string
+	GitURL     string
+	Status     string
+	Model      string
+}
+
+// Backend is the data source the MCP tools call. Implemented by the remote HTTP
+// client (NewClientBackend) and the local index (NewLocalBackend).
+type Backend interface {
+	Search(ctx context.Context, project, query, model string, topK int) (*SearchOutput, error)
+	Projects(ctx context.Context) ([]ProjectInfo, error)
+	// Reindex returns a human-readable status message on success.
+	Reindex(ctx context.Context, project, jobType string) (string, error)
+}
+
+// New builds an MCP server whose tools call the given backend.
+func New(b Backend) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "semidx", Version: version}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "semantic_search",
 		Description: "Search a registered project's indexed code semantically with a natural-language query. Returns ranked file:line matches with a content preview. Prefer this over plain grep when the query is about intent or behavior rather than an exact string.",
-	}, searchHandler(c))
+	}, searchHandler(b))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "semantic_projects",
-		Description: "List the projects registered on the semidx server, with their indexing status.",
-	}, projectsHandler(c))
+		Description: "List the projects registered in this semidx index, with their indexing status.",
+	}, projectsHandler(b))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "semantic_reindex",
-		Description: "Queue a re-index job for a project already registered on the server. Only registered projects can be re-indexed; arbitrary paths are not accepted.",
-	}, reindexHandler(c))
+		Description: "Queue a re-index job for a project already registered on the server. Only registered projects can be re-indexed; arbitrary paths are not accepted. In standalone (local) mode, reindex via the `semidx index` CLI instead.",
+	}, reindexHandler(b))
 
 	return s
 }
 
 // Run serves the MCP protocol over stdio until the client disconnects or ctx is
 // cancelled.
-func Run(ctx context.Context, c *client.Client) error {
-	return New(c).Run(ctx, &mcp.StdioTransport{})
+func Run(ctx context.Context, b Backend) error {
+	return New(b).Run(ctx, &mcp.StdioTransport{})
 }
 
 type searchInput struct {
@@ -52,25 +85,25 @@ type searchInput struct {
 	TopK    int    `json:"top_k,omitempty" jsonschema:"number of results to return (default 5)"`
 }
 
-func searchHandler(c *client.Client) mcp.ToolHandlerFor[searchInput, any] {
+func searchHandler(b Backend) mcp.ToolHandlerFor[searchInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, any, error) {
 		topK := in.TopK
 		if topK == 0 {
 			topK = 5
 		}
-		resp, err := c.Search(ctx, in.Project, in.Query, in.Model, topK)
+		out, err := b.Search(ctx, in.Project, in.Query, in.Model, topK)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(formatSearch(resp)), nil, nil
+		return textResult(formatSearch(out)), nil, nil
 	}
 }
 
 type projectsInput struct{}
 
-func projectsHandler(c *client.Client) mcp.ToolHandlerFor[projectsInput, any] {
+func projectsHandler(b Backend) mcp.ToolHandlerFor[projectsInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, _ projectsInput) (*mcp.CallToolResult, any, error) {
-		projects, err := c.ListProjects(ctx)
+		projects, err := b.Projects(ctx)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
@@ -83,37 +116,37 @@ type reindexInput struct {
 	Type    string `json:"type,omitempty" jsonschema:"job type: full or git_history (default full)"`
 }
 
-func reindexHandler(c *client.Client) mcp.ToolHandlerFor[reindexInput, any] {
+func reindexHandler(b Backend) mcp.ToolHandlerFor[reindexInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in reindexInput) (*mcp.CallToolResult, any, error) {
 		jobType := in.Type
 		if jobType == "" {
 			jobType = "full"
 		}
-		id, err := c.EnqueueJob(ctx, in.Project, jobType)
+		msg, err := b.Reindex(ctx, in.Project, jobType)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(fmt.Sprintf("Queued %s re-index job #%d for project %q.", jobType, id, in.Project)), nil, nil
+		return textResult(msg), nil, nil
 	}
 }
 
-func formatSearch(resp *client.SearchResponse) string {
-	if len(resp.Results) == 0 {
-		return fmt.Sprintf("No results in project %q for that query.", resp.Project)
+func formatSearch(out *SearchOutput) string {
+	if len(out.Results) == 0 {
+		return fmt.Sprintf("No results in project %q for that query.", out.Project)
 	}
 	var b strings.Builder
-	if resp.Fallback {
+	if out.Fallback {
 		b.WriteString("[warning] embedding was unavailable — results come from keyword search, not semantic ranking.\n\n")
 	}
-	for i, r := range resp.Results {
+	for i, r := range out.Results {
 		fmt.Fprintf(&b, "%d. %s:%d  (score %.3f)\n%s\n\n", i+1, r.Path, r.StartLine, r.Score, preview(r.Content, 300))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func formatProjects(projects []client.Project) string {
+func formatProjects(projects []ProjectInfo) string {
 	if len(projects) == 0 {
-		return "No projects are registered on the server."
+		return "No projects are registered in this index."
 	}
 	var b strings.Builder
 	for _, p := range projects {

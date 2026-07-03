@@ -132,6 +132,7 @@ func newRootCmd() *cobra.Command {
 		"Index and search by keyword only, with no embedding model (SEMIDX_EMBED_MODE=none)")
 	root.AddCommand(
 		newLoginCmd(d),
+		newConfigCmd(d),
 		newIndexCmd(d),
 		newSearchCmd(d),
 		newSgrepCmd(d),

@@ -12,6 +12,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/indexing"
+	"github.com/lgldsilva/semidx/internal/mcpinstall"
 	"github.com/lgldsilva/semidx/internal/mcpserver"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/server"
@@ -273,14 +274,91 @@ func newServeCmd(d *deps) *cobra.Command {
 }
 
 func newMCPCmd(d *deps) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "mcp",
-		Short: "Run the MCP server over stdio, proxying to the configured semidx server",
+		Short: "Run the MCP server over stdio (proxying to a server, or over the local index)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !d.remote() {
-				return fmt.Errorf("mcp requires a server: run `semidx login` first")
+			ctx := cmd.Context()
+			// Remote mode when a server is configured; otherwise serve the standalone
+			// local index directly, so MCP works without a server (like the CLI).
+			if d.remote() {
+				return mcpserver.Run(ctx, mcpserver.NewClientBackend(d.apiClient()))
 			}
-			return mcpserver.Run(cmd.Context(), d.apiClient())
+			db, err := d.indexStore(ctx)
+			if err != nil {
+				return err
+			}
+			backend := mcpserver.NewLocalBackend(search.NewService(db, d.emb), db, d.cfg.KeywordOnly)
+			return mcpserver.Run(ctx, backend)
 		},
 	}
+	cmd.AddCommand(newMCPInstallCmd())
+	return cmd
+}
+
+// newMCPInstallCmd registers semidx's stdio MCP server in an agent's config,
+// modeled on ai-memory's `install-mcp`: print a snippet by default, or --apply
+// it idempotently (backup + replace the named entry, preserving the rest).
+func newMCPInstallCmd() *cobra.Command {
+	var (
+		clientID   string
+		name       string
+		apply      bool
+		configFile string
+		list       bool
+	)
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Register the semidx MCP server in an agent's config (Claude Code, Cursor, Gemini CLI, VS Code, OpenCode, Codex)",
+		Long: "Register semidx's stdio MCP server in a coding agent's configuration.\n\n" +
+			"By default it PRINTS the config snippet and its target path; pass --apply to\n" +
+			"merge it in place (a timestamped .bak is written first and other servers are\n" +
+			"preserved). Supported clients:\n\n" + mcpinstall.ClientList(),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if list {
+				fmt.Print(mcpinstall.ClientList())
+				return nil
+			}
+			exe, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("resolve semidx path: %w", err)
+			}
+			if abs, aerr := filepath.Abs(exe); aerr == nil {
+				exe = abs
+			}
+			home, _ := os.UserHomeDir()
+			configDir, _ := os.UserConfigDir()
+			project, _ := os.Getwd()
+			opts := mcpinstall.Options{
+				Client:    clientID,
+				Name:      name,
+				ExePath:   exe,
+				Home:      home,
+				ConfigDir: configDir,
+				Project:   project,
+				FilePath:  configFile,
+			}
+			path, snippet, err := mcpinstall.Snippet(opts)
+			if err != nil {
+				return err
+			}
+			if !apply {
+				fmt.Printf("# %s — add to %s:\n\n%s\n", clientID, path, snippet)
+				fmt.Print("Re-run with --apply to write this automatically.\n")
+				return nil
+			}
+			written, err := mcpinstall.Apply(opts)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Registered MCP server %q for %s in %s\n", name, clientID, written)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&clientID, "client", "claude-code", "target agent client (see --list)")
+	cmd.Flags().StringVar(&name, "name", "semidx", "server entry name in the client config")
+	cmd.Flags().BoolVar(&apply, "apply", false, "write the config in place (default: print the snippet)")
+	cmd.Flags().StringVar(&configFile, "config-file", "", "override the client's config file path")
+	cmd.Flags().BoolVar(&list, "list", false, "list supported clients and exit")
+	return cmd
 }
