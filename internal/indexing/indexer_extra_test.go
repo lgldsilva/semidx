@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/lgldsilva/semidx/internal/chunker"
+	"github.com/lgldsilva/semidx/internal/gitenv"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -20,7 +21,9 @@ import (
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(),
+	// Also strip any inherited GIT_DIR/GIT_WORK_TREE so the command targets dir,
+	// not an ambient repo leaked by a hook or bare-repo worktree.
+	cmd.Env = append(gitenv.Clean(os.Environ()),
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
