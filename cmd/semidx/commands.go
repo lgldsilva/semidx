@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/mcpinstall"
 	"github.com/lgldsilva/semidx/internal/mcpserver"
+	"github.com/lgldsilva/semidx/internal/pending"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/server"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -29,6 +31,39 @@ func (d *deps) applyPrivacy(force bool) {
 	if ce, ok := d.emb.(*embed.ChainEmbedder); ok {
 		ce.SetPrivacy(force || d.cfg.Privacy)
 	}
+}
+
+// indexTarget is how a --project path resolves into the store's identity model:
+// a git project (keyed by repo identity, rooted at the worktree toplevel) or a
+// document folder (keyed by its absolute path). Shared by index and unlock so
+// both agree on the same project.
+type indexTarget struct {
+	indexPath  string // walk root (repo toplevel for git; the path for docs)
+	worktree   string // current worktree toplevel for git; "" for docs
+	identity   string // stable key: git identity, or "path:<abs>" for docs
+	sourceType string // "git" | "docs"
+	name       string // display name (repo/dir basename)
+}
+
+func resolveTarget(ctx context.Context, projectPath string, docs bool) indexTarget {
+	gi := gitmeta.Resolve(ctx, projectPath)
+	if gi.IsGit && !docs {
+		return indexTarget{gi.Toplevel, gi.Toplevel, gi.Identity, "git", projectNameFromPath(gi.Toplevel)}
+	}
+	abs, err := filepath.Abs(projectPath)
+	if err != nil {
+		abs = projectPath
+	}
+	return indexTarget{projectPath, "", "path:" + abs, "docs", projectNameFromPath(projectPath)}
+}
+
+// docsFlagHint echoes " --docs" when the docs flag was used, so a printed
+// unlock hint reproduces the same invocation.
+func docsFlagHint(docs bool) string {
+	if docs {
+		return " --docs"
+	}
+	return ""
 }
 
 func newIndexCmd(d *deps) *cobra.Command {
@@ -53,26 +88,9 @@ func newIndexCmd(d *deps) *cobra.Command {
 				return err
 			}
 
-			// A git project is one logical index keyed by repo identity: any
-			// worktree updates the same project, indexing is rooted at the repo
-			// toplevel, and the worktree is tracked so divergent checkouts stay
-			// searchable. A non-git directory (or --docs) is a plain document
-			// folder keyed by its absolute path, with no worktree semantics.
-			indexPath, worktree := projectPath, ""
-			gi := gitmeta.Resolve(ctx, projectPath)
-			var identity, sourceType, name string
-			if gi.IsGit && !docs {
-				indexPath, worktree = gi.Toplevel, gi.Toplevel
-				identity, sourceType = gi.Identity, "git"
-				name = projectNameFromPath(gi.Toplevel)
-			} else {
-				abs, aerr := filepath.Abs(projectPath)
-				if aerr != nil {
-					abs = projectPath
-				}
-				identity, sourceType = "path:"+abs, "docs"
-				name = projectNameFromPath(projectPath)
-			}
+			// A git project is one logical index keyed by repo identity; a non-git
+			// dir (or --docs) is a document folder keyed by its absolute path.
+			tgt := resolveTarget(ctx, projectPath, docs)
 
 			// Keyword-only mode needs no model: dims come from the fixed text bucket.
 			dims := store.KeywordDims
@@ -82,29 +100,43 @@ func newIndexCmd(d *deps) *cobra.Command {
 					return fmt.Errorf("model info for %s: %w", model, err)
 				}
 				dims = info.Dims
-				fmt.Printf("Indexing project: %s\nPath: %s (%s)\nModel: %s (dims=%d)\n", name, indexPath, sourceType, model, dims)
+				fmt.Printf("Indexing project: %s\nPath: %s (%s)\nModel: %s (dims=%d)\n", tgt.name, tgt.indexPath, tgt.sourceType, model, dims)
 			} else {
-				fmt.Printf("Indexing project: %s\nPath: %s (%s)\nMode: keyword-only (no embeddings)\n", name, indexPath, sourceType)
+				fmt.Printf("Indexing project: %s\nPath: %s (%s)\nMode: keyword-only (no embeddings)\n", tgt.name, tgt.indexPath, tgt.sourceType)
 			}
 
 			if err := db.EnsureChunksTable(ctx, dims); err != nil {
 				return fmt.Errorf("ensure chunks table: %w", err)
 			}
-			projectID, err := db.EnsureProjectIdentity(ctx, identity, name, indexPath, model, sourceType)
+			projectID, err := db.EnsureProjectIdentity(ctx, tgt.identity, tgt.name, tgt.indexPath, model, tgt.sourceType)
 			if err != nil {
 				return fmt.Errorf("register project: %w", err)
 			}
 
 			indexer := indexing.NewIndexer(db, d.emb, dims, d.cfg.IndexWorkers, verbose, gitMode, gitSince).
 				SetKeywordOnly(d.cfg.KeywordOnly).
-				SetWorktree(worktree)
+				SetWorktree(tgt.worktree)
 			start := time.Now()
-			stats, err := indexer.IndexProject(ctx, projectID, indexPath, model, maxFiles)
+			stats, err := indexer.IndexProject(ctx, projectID, tgt.indexPath, model, maxFiles)
 			if err != nil {
 				return fmt.Errorf("index project: %w", err)
 			}
 			fmt.Printf("\nDone in %v\nFiles scanned: %d\nFiles indexed: %d\nFiles skipped (unchanged): %d\nChunks created: %d\nErrors: %d\n",
 				time.Since(start), stats.FilesScanned, stats.FilesIndexed, stats.FilesSkipped, stats.ChunksCreated, stats.Errors)
+
+			// Record password-protected files so `semidx unlock` can find them, and
+			// point the user at it.
+			if stats.FilesEncrypted > 0 {
+				abs := make([]string, 0, len(stats.EncryptedPaths))
+				for _, rel := range stats.EncryptedPaths {
+					abs = append(abs, filepath.Join(tgt.indexPath, rel))
+				}
+				if err := pending.Save(tgt.identity, &pending.Registry{Project: tgt.name, Model: model, Files: abs}); err != nil {
+					fmt.Fprintf(os.Stderr, "[warn] could not record encrypted files: %v\n", err)
+				}
+				fmt.Printf("Files needing a password: %d\n  → run: semidx unlock --project %s%s\n",
+					stats.FilesEncrypted, projectPath, docsFlagHint(docs))
+			}
 			return nil
 		},
 	}

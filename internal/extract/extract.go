@@ -180,6 +180,12 @@ func extractPDF(data []byte) (string, error) {
 		}
 		return "", fmt.Errorf("extract: open pdf: %w", err)
 	}
+	return pdfText(r)
+}
+
+// pdfText pulls the plain text from an already-opened pdf.Reader (shared by the
+// unencrypted path and the password path in crypto.go).
+func pdfText(r *pdf.Reader) (string, error) {
 	rc, err := r.GetPlainText()
 	if err != nil {
 		if isPDFEncrypted(err) {
