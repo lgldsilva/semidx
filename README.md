@@ -1,136 +1,217 @@
-# semantic-indexer-poc
+# semidx
 
-A memory-efficient, secure CLI tool and MCP server for local semantic code search.
-[![status: stable](https://img.shields.io/badge/status-stable-green.svg)](#)
-[![go: 1.25.0](https://img.shields.io/badge/go-1.25.0-blue.svg)](#)
-[![license: Apache--2.0](https://img.shields.io/badge/license-Apache--2.0-lightgrey.svg)](#)
+Self-hosted semantic search for your code and documents.
 
-> [!NOTE]
-> Este projeto é uma Prova de Conceito (POC) criada para fornecer indexação incremental e busca semântica em repositórios locais sem vazamento de memória e com salvaguardas de privacidade rígidas para dados sensíveis.
+[![status](https://img.shields.io/badge/status-v0.x-orange.svg)](#)
+[![go](https://img.shields.io/badge/go-1.25%2B-blue.svg)](#)
+[![license](https://img.shields.io/badge/license-Apache--2.0-lightgrey.svg)](#)
 
-## Como Funciona
+`semidx` indexes a codebase (and documents like PDF, DOCX, XLSX, HTML) into a
+vector store and searches it by *meaning*, not literal text. A query like
+"where is the retry backoff implemented" finds the code even when it never
+contains the words "retry" or "backoff".
 
-O indexador varre os arquivos do projeto (ignorando pastas pesadas como `node_modules` e `.git`), divide o código em chunks inteligentes e gera vetores de embedding usando o Gemini (nuvem, veloz) ou Ollama (local, offline). Os vetores são gravados no PostgreSQL com a extensão `pgvector`.
+It runs two ways from one binary:
 
-```
-                    [ sgrep / MCP Search ]
-                               │
-                               ▼ (Query)
- ┌──────────────────────────────────────────────────────────┐
- │                  ChainEmbedder (Go CLI)                  │
- └─────────────────────────────┬────────────────────────────┘
-                               │
-            ┌──────────────────┴──────────────────┐
-            ▼ (Se Nuvem & Segredos)              ▼ (Se Local ou Livre)
-      [ SQL Fallback ]                     [ Provedor de Embedding ]
-      (Pesquisa Textual)                   (Gemini/Ollama/Groq)
-            │                                     │
-            └──────────────────┬──────────────────┘
-                               │
-                               ▼
-                    [ PostgreSQL + pgvector ]
-```
+- **Central server** — one shared index that a whole team (and their AI agents)
+  query over an authenticated HTTP API. Embeddings, provider API keys and the
+  database all live on the server; clients never touch them.
+- **Standalone** — a single machine indexing into a local SQLite file, with no
+  server and no database to run.
 
----
+## The niche it fills
 
-## Instalação & Dependências
+Most "semantic code search" tools are either a hosted SaaS you send your code
+to, or a local-only helper with no sharing story. semidx is deliberately the
+**self-hosted middle**:
 
-### 1. Requisitos
-- **Go 1.25+**
-- **Docker** (para rodar o banco pgvector de forma isolada)
-- **Git** (para indexação de histórico)
+- **Central and shared.** Index a repository once on the server; every developer
+  and agent searches the same index. No per-machine re-indexing.
+- **Credentials stay put.** Embedding provider keys live only on the server (or
+  only on your laptop, in standalone mode). Clients send text to *your* server,
+  not to a third party.
+- **Privacy routing built in.** Files that look like secrets (`.env`, `.pem`,
+  paths containing `secret`/`key`/`token`/`password`, …) are never sent to a
+  cloud embedding provider — they are embedded locally, or stored as
+  keyword-only text if no local model is available.
+- **Git-sync.** Point the server at a git URL; it clones, indexes, and
+  re-indexes on demand — clients upload nothing.
+- **Works with no model at all.** Keyword-only mode indexes and searches with
+  zero embedding dependencies, so you can start on a machine with no GPU, no API
+  key, and no Ollama.
+- **Documents, not just code.** PDF, DOCX, XLSX and HTML are extracted to text
+  and indexed alongside source files.
+- **MCP + agent skills.** A thin MCP server exposes search to AI assistants, and
+  bundled skills teach them when to use it.
 
-### 2. Configurar o Banco de Dados
-Suba o container do PostgreSQL com suporte a vetores usando o Docker Compose:
+For the full design, see [docs/architecture.md](docs/architecture.md).
+
+## Model modes and stores
+
+semidx separates *how it embeds* from *where it stores*.
+
+| Model mode | How to select it | What it needs | Notes |
+|---|---|---|---|
+| Local (Ollama) | default fallback; `--privacy` forces it | a running Ollama with an embedding model | Fully offline. Always the last link in the chain. |
+| External API | set a provider key (`GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_CLOUD_API_KEY`) or `EMBED_PROVIDER=openai` | network + an API key | Fastest; sensitive files still routed local/text-only. |
+| None (keyword) | `--keyword` flag or `SEMIDX_EMBED_MODE=none` | nothing | No embeddings; literal keyword matching only. |
+
+| Store | How to select it | Backend | Best for |
+|---|---|---|---|
+| PostgreSQL / pgvector | default; used by the server and by `semidx index` | pgvector with per-dimension HNSW indexes | The shared server, large corpora. |
+| SQLite (local) | `--local` flag or `SEMIDX_LOCAL_INDEX` | a single SQLite file, brute-force cosine in Go | A single machine / one repo, no server. |
+
+## Quickstart (server)
+
+Bring up the server and its database (the database is **not** published to the
+host — only the API is):
+
 ```bash
-cd /home/lgldsilva/poc-semantic-indexer
-docker compose up -d
-```
-Isso criará a instância `semantic-indexer-pg` escutando na porta `55432`.
-
-### 3. Compilar o Projeto
-Para rodar nativamente ou dentro de containers, compile o executável estaticamente:
-```bash
-CGO_ENABLED=0 GOOS=linux go build -o semantic-indexer-poc .
+docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
----
-
-## Executando Indexações Seguras (Docker Sandbox)
-
-Para evitar vazamentos de memória e sobrecarga do sistema operacional, **nunca execute a indexação diretamente no host**. Use o script de sandbox que limita o uso de RAM do container a 512MB e monta as pastas de forma segura:
+On first start with an empty database, the server prints a one-time bootstrap
+admin token to its logs. Grab it:
 
 ```bash
-./index-project.sh /storage/Projetos/jackui [modelo]
+docker compose -f deploy/docker-compose.yml logs semidx | grep "bootstrap admin token"
 ```
-- **Modelo Padrão**: `gemini-embedding-2` (3072 dimensões, executado em segundos via nuvem).
-- **Modelo Local**: `bge-m3` ou `nomic-embed-text` (Ollama local, executado no seu hardware).
 
----
+(Alternatively, set `SEMIDX_BOOTSTRAP_TOKEN` before the first start to choose
+the token yourself.)
 
-## Uso & Comandos da CLI
+Log in from any machine and register a git repository — the server clones and
+indexes it, so nothing is uploaded from the client:
 
-### Comandos Principais
-| Comando | Parâmetros | Descrição |
-|---|---|---|
-| `index` | `-project <path> -model <model> [--git] [--verbose] [--privacy]` | Varrer e indexar o diretório de um projeto |
-| `search` | `-project <name> -query <text> [-top-k <num>]` | Busca semântica estruturada com score de cosseno |
-| `sgrep` | `-project <name> -query <text> [-top-k <num>]` | Busca semântica com output formatado no padrão clássico do grep |
-| `models` | *(nenhum)* | Lista todos os modelos de embedding ativos na chain |
-| `drop` | *(nenhum)* | Limpa todo o banco de dados (tabelas e projetos) |
-| `mcp` | *(nenhum)* | Inicia o servidor MCP local em stdio (JSON-RPC 2.0) |
-
-### Exemplos de Uso
-
-#### Buscar termos usando Grep Semântico (`sgrep`)
-Use o script wrapper `sgrep` para buscar de qualquer pasta do seu projeto. Ele detecta o nome do projeto automaticamente e formata a saída como `caminho:linha:conteudo`:
 ```bash
-cd /storage/Projetos/jackui
-sgrep "autenticação JWT" 3
+semidx login https://semidx.example.com --token semidx_xxxxxxxx
+semidx repo add https://github.com/acme/myapp.git --name myapp
 ```
 
-#### Buscar diretamente via executável
+`repo add` queues a full index job and prints the job id. Once it finishes,
+search it:
+
 ```bash
-./semantic-indexer-poc search -project jackui -query "ffmpeg HLS transcoder" -top-k 3
+semidx sgrep --project myapp --query "verify auth token"
 ```
 
----
+`sgrep` prints classic `file:line:content` lines. Use `search` for ranked
+results with a relevance score, and add `--json` to either for machine-readable
+output.
 
-## Configuração & Variáveis de Ambiente
+## Quickstart (standalone, no server)
 
-As chaves e endpoints são lidos automaticamente do arquivo `/home/lgldsilva/Projetos/immich-classifier/.env` se disponível, ou do ambiente:
+No server, no Postgres — index a directory into a local SQLite file and search
+it. `--local` puts the index under your data dir (e.g.
+`~/.local/share/semidx/index.db`):
 
-| Variável | Padrão | Descrição |
-|---|---|---|
-| `EMBED_PROVIDER` | `ollama` | Provedor de embedding ativo: `ollama` ou `openai` |
-| `EMBED_ENDPOINT` | *(auto)* | Endpoint do provedor (ex: `https://generativelanguage.googleapis.com/v1beta/openai`) |
-| `EMBED_API_KEY` | *(vazio)* | Chave de autenticação Bearer do provedor |
-| `EMBED_PRIVACY` | `false` | Se `true`, força o uso estrito de provedores locais (Ollama) |
-| `OLLAMA_URL` | `http://localhost:11434` | Endpoint do Ollama local |
+```bash
+semidx --local index --project .
+semidx --local sgrep --project . --query "how are sessions expired"
+```
 
----
+The project name defaults to the directory's base name, so indexing
+`--project ./myapp` creates a project called `myapp` you then search with
+`--project myapp`.
 
-## Segurança & Privacidade
+### No embedding model? Use keyword mode
 
-### Proteções Ativas (Nuvem vs. Local)
-1. **Filtro de Arquivos Sensíveis**: Arquivos confidenciais (ex: `.env`, `.pem`, ou caminhos contendo `auth`, `secret`, `key`, `password`) são monitorados. Se você rodar a indexação apontando para um modelo na nuvem (como o Gemini), o indexador **não enviará estes arquivos para a API**. Eles serão indexados estritamente na forma de **texto puro no banco local** (sem embedding) para que continuem pesquisáveis apenas no modo de fallback.
-2. **Pre-Checks de Sistema**: O indexador recusa indexar pastas raiz do sistema operacional (`/`, `/home`, `/etc`, etc.) para evitar vazamentos e consumo de disco descontrolado.
-3. **Sandbox Cgroup**: O script `index-project.sh` garante limite de **512MB RAM** físico, eliminando qualquer risco de OOM/thrashing no homelab.
+`--keyword` indexes and searches with no embedding provider at all — nothing to
+install, no API key:
 
-### O que este projeto NÃO protege
-- **Comunicação em Texto Puro**: A API do banco de dados (PostgreSQL) roda em porta exposta na rede local (`55432`). Certifique-se de que a porta está protegida por firewall caso exponha o servidor.
-- **Tráfego SSL/TLS local**: A comunicação entre o CLI e o container PostgreSQL na máquina local não usa encriptação SSL por padrão.
+```bash
+semidx --local --keyword index --project .
+semidx --local --keyword sgrep --project . --query "database migration"
+```
 
----
+### Local embeddings with Ollama
 
-## Arquitetura & Documentação
+If you have [Ollama](https://ollama.com) running with an embedding model
+(e.g. `bge-m3`), semidx uses it automatically as the local provider — point at a
+non-default host with `SEMIDX_OLLAMA_URL`:
 
-Para detalhes de arquitetura de software e decisões de design:
-- Veja [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- Veja [docs/design-decisions.md](docs/design-decisions.md)
+```bash
+export SEMIDX_OLLAMA_URL=http://localhost:11434
+semidx --local index --project . --model bge-m3
+```
 
----
+### External embedding provider
 
-## Licença
+Set the key for the provider you want and semidx prepends it to the chain
+(cloud providers are skipped for sensitive files):
 
-Este projeto é distribuído sob a licença Apache 2.0. Veja o arquivo LICENSE para detalhes.
+```bash
+export GEMINI_API_KEY=...      # Gemini's OpenAI-compatible endpoint
+semidx --local index --project . --model gemini-embedding-2
+```
+
+`GROQ_API_KEY`, `OPENROUTER_API_KEY` and `OLLAMA_CLOUD_API_KEY` are wired the
+same way. For any other OpenAI-compatible service, set `EMBED_PROVIDER=openai`,
+`EMBED_ENDPOINT=https://…/v1` and `EMBED_API_KEY=…`. See
+[docs/self-hosting.md](docs/self-hosting.md) for the full list.
+
+## MCP setup (AI agents)
+
+The `mcp` subcommand runs a thin MCP server over stdio that proxies to the
+semidx server you logged in to. It exposes `semantic_search`,
+`semantic_projects` and `semantic_reindex`. Tools accept **project names only**,
+never filesystem paths, so an agent can never index an arbitrary directory.
+
+Log in once, then register the MCP server with your agent. Example
+Claude Code / MCP client config entry:
+
+```json
+{
+  "mcpServers": {
+    "semidx": {
+      "command": "semidx",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Install the bundled agent skills (which teach an assistant when semantic search
+beats grep) into `~/.claude/skills`:
+
+```bash
+semidx skills install
+```
+
+Use `--target project` to install into `./.claude/skills`, or `--dir <path>` for
+an explicit location.
+
+## Web admin
+
+`semidx serve` mounts a server-rendered management UI at `/admin`
+(`https://semidx.example.com/admin`). To create the first admin user, set a
+password before the first start:
+
+```bash
+export SEMIDX_BOOTSTRAP_ADMIN_USER=admin       # default: admin
+export SEMIDX_BOOTSTRAP_ADMIN_PASSWORD='choose-a-strong-one'
+```
+
+From the UI you can browse and search projects, manage users, and issue two
+kinds of credentials:
+
+- **API keys** — opaque bearer tokens (`semidx_…`), shown once, used by the CLI
+  and SDK. Only their hash is stored; revoke any time.
+- **JWT control tokens** — revocable HS256 tokens for UI-driven access, enabled
+  by setting `SEMIDX_JWT_SECRET`. Each carries a unique id so it can be revoked
+  even if it never expires.
+
+See [docs/self-hosting.md](docs/self-hosting.md) to run the server and
+[docs/api.md](docs/api.md) for the REST surface.
+
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md) — how it is built.
+- [docs/self-hosting.md](docs/self-hosting.md) — running the server.
+- [docs/api.md](docs/api.md) — the REST v1 API.
+- [SECURITY.md](SECURITY.md) — the security model and how to report issues.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — development setup and ground rules.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
