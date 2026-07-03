@@ -27,6 +27,35 @@ type fakeStore struct {
 	fileHashes map[string]string    // ListFileHashes result
 	userCount  int                  // CountUsers result
 	created    *store.User          // last CreateUser call
+
+	// error-injection fields (all nil/zero = success path)
+	listErr     error // ListProjects error
+	getErr      error // GetProject generic (non-NotFound) error
+	tokenErr    error // TokenByHash error
+	fileHashErr error // ListFileHashes error
+	enqueueErr  error // EnqueueJob error
+	jobErr      error // GetJob generic (non-NotFound) error
+	ensureErr   error // EnsureChunksTable error
+
+	// bootstrap-token fields
+	tokenCount    int    // CountTokens result
+	countTokErr   error  // CountTokens error
+	createTokErr  error  // CreateToken error
+	lastTokName   string // last CreateToken name
+	lastTokHash   string // last CreateToken hash
+	lastTokScopes []string
+
+	// job-worker fields
+	claimJob    *store.Job // ClaimJob result (returned once, then nil)
+	claimErr    error      // ClaimJob error
+	projByID    *store.Project
+	projByIDErr error
+	failMsg     string // last FailJob message
+	failCalled  bool
+	failCh      chan string // if set, FailJob sends its message (for async worker tests)
+	compFiles   int         // last CompleteJob filesIndexed
+	compChunks  int         // last CompleteJob chunksCreated
+	compCalled  bool
 }
 
 func (f *fakeStore) CountUsers(context.Context) (int, error) { return f.userCount, nil }
@@ -36,13 +65,16 @@ func (f *fakeStore) CreateUser(_ context.Context, username, hash, role string) (
 }
 
 func (f *fakeStore) ListFileHashes(context.Context, int) (map[string]string, error) {
-	return f.fileHashes, nil
+	return f.fileHashes, f.fileHashErr
 }
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
 func (f *fakeStore) TokenByHash(context.Context, string) (*store.Token, error) {
-	return f.token, nil
+	return f.token, f.tokenErr
 }
 func (f *fakeStore) GetProject(_ context.Context, name string) (*store.Project, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	if f.project == nil {
 		return nil, store.ErrNotFound
 	}
@@ -54,10 +86,17 @@ func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gi
 	}
 	return &store.Project{Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch}, nil
 }
-func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) { return f.listed, nil }
-func (f *fakeStore) DeleteProject(context.Context, string) error           { return f.deleteErr }
-func (f *fakeStore) EnqueueJob(context.Context, int, string) (int, error)  { return f.enqueuedID, nil }
+func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) {
+	return f.listed, f.listErr
+}
+func (f *fakeStore) DeleteProject(context.Context, string) error { return f.deleteErr }
+func (f *fakeStore) EnqueueJob(context.Context, int, string) (int, error) {
+	return f.enqueuedID, f.enqueueErr
+}
 func (f *fakeStore) GetJob(_ context.Context, id int) (*store.Job, error) {
+	if f.jobErr != nil {
+		return nil, f.jobErr
+	}
 	if f.job == nil {
 		return nil, store.ErrNotFound
 	}
