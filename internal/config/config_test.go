@@ -169,7 +169,7 @@ func TestMissingDotEnvIsNotAnError(t *testing.T) {
 }
 
 func TestResolveLocalIndex(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", "/data")
+	t.Setenv("XDG_CACHE_HOME", "/data") // os.UserCacheDir honors this on Linux
 	cases := map[string]string{
 		"":               "",
 		"true":           "/data/semidx/index.db",
