@@ -59,6 +59,11 @@ type IndexStats struct {
 	FilesSkipped  int // unchanged since last index (incremental)
 	ChunksCreated int
 	Errors        int
+	// FilesEncrypted counts password-protected files that were skipped but CAN be
+	// unlocked with a password; EncryptedPaths lists their project-relative paths
+	// so the caller can offer `semidx unlock`.
+	FilesEncrypted int
+	EncryptedPaths []string
 }
 
 // fileOutcome is how indexFile handled a single file.
@@ -68,6 +73,7 @@ const (
 	outcomeIndexed          fileOutcome = iota // (re)embedded and stored
 	outcomeSkippedEmpty                        // empty or produced no chunks
 	outcomeSkippedUnchanged                    // already indexed with the same hash
+	outcomeEncrypted                           // password-protected; skipped, unlockable
 )
 
 // NewIndexer wires an Indexer. dims is the embedding dimension of model;
@@ -142,6 +148,9 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 				stats.FilesIndexed++
 			case outcome == outcomeSkippedUnchanged:
 				stats.FilesSkipped++
+			case outcome == outcomeEncrypted:
+				stats.FilesEncrypted++
+				stats.EncryptedPaths = append(stats.EncryptedPaths, rel)
 			}
 			// Record every searchable unit (a file, or an archive's entries) in the
 			// worktree manifest so pruning matches the actual stored paths.
@@ -245,6 +254,42 @@ type indexedUnit struct {
 	hash string
 }
 
+// IndexEncryptedFile decrypts a password-protected file with the given password
+// and indexes it. It returns unlocked=false with a nil error when the password
+// is wrong (so the caller can try another candidate); a non-nil error is a real
+// failure (read/parse/store). On success it returns the stored units so the
+// caller can add them to the worktree manifest. Used by `semidx unlock`.
+func (idx *Indexer) IndexEncryptedFile(ctx context.Context, projectID int, path, rel, model, password string) (unlocked bool, units []indexedUnit, err error) {
+	// #nosec G304 -- path comes from the project walk / pending list, like indexFile.
+	f, err := os.Open(path)
+	if err != nil {
+		return false, nil, err
+	}
+	content, err := io.ReadAll(io.LimitReader(f, maxFileSize))
+	_ = f.Close()
+	if err != nil {
+		return false, nil, err
+	}
+
+	docs, err := extract.ExtractAllWithPassword(rel, content, password)
+	switch {
+	case errors.Is(err, extract.ErrWrongPassword), errors.Is(err, extract.ErrEncrypted):
+		return false, nil, nil // wrong/again-needed password — let the caller try another
+	case err != nil:
+		return false, nil, err
+	}
+	for _, d := range docs {
+		_, _, _, h, e := idx.indexUnit(ctx, projectID, d.Path, model, []byte(d.Text))
+		if e != nil {
+			return false, units, e
+		}
+		if h != "" {
+			units = append(units, indexedUnit{d.Path, h})
+		}
+	}
+	return true, units, nil
+}
+
 // indexContent expands one input into searchable units and indexes each. A code
 // or plain-text file is a single unit; a document (PDF/Office/HTML) is its
 // extracted text; an archive (.jar/.war) fans out to one unit per entry
@@ -261,7 +306,12 @@ func (idx *Indexer) indexContent(ctx context.Context, projectID int, rel, model 
 		docs, err := extract.ExtractAll(rel, content)
 		switch {
 		case errors.Is(err, extract.ErrEncrypted):
-			return 0, 0, outcomeSkippedEmpty, nil, nil // password-protected: expected skip
+			// Password-protected: skip now, but if the type is one we can decrypt,
+			// flag it so the caller can prompt for a password (`semidx unlock`).
+			if extract.CanBeEncrypted(rel) {
+				return 0, 0, outcomeEncrypted, nil, nil
+			}
+			return 0, 0, outcomeSkippedEmpty, nil, nil
 		case err != nil:
 			return 0, 1, outcomeSkippedEmpty, nil, nil // malformed: soft error, never fatal
 		}
