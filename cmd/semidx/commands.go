@@ -162,19 +162,31 @@ func newSearchCmd(d *deps) *cobra.Command {
 		Use:   "search",
 		Short: "Semantic search over an indexed project",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			resp, took, err := d.runSearch(cmd, project, query, model, topK, privacy)
+			results, err := d.runSearchTargets(cmd, project, query, model, topK, privacy)
 			if err != nil {
 				return err
 			}
 			if asJSON {
-				return search.JSONFormatter{}.Format(os.Stdout, resp)
+				return renderSearchJSON(os.Stdout, results)
 			}
-			fmt.Printf("Searching project: %s (model: %s)\nQuery: %s\n\n", resp.Project.Name, resp.Model, query)
-			if resp.Fallback {
-				fmt.Print("[warn] embedding unavailable — used keyword search\n\n")
+			if len(results) > 1 {
+				fmt.Printf("Query: %s (searching %d projects)\n\n", query, len(results))
 			}
-			fmt.Printf("Found %d results in %v\n\n", len(resp.Results), took)
-			return search.HumanFormatter{}.Format(os.Stdout, resp)
+			for _, ps := range results {
+				if len(results) > 1 {
+					fmt.Printf("=== project: %s ===\n", ps.name)
+				} else {
+					fmt.Printf("Searching project: %s (model: %s)\nQuery: %s\n\n", ps.resp.Project.Name, ps.resp.Model, query)
+				}
+				if ps.resp.Fallback {
+					fmt.Print("[warn] embedding unavailable — used keyword search\n\n")
+				}
+				fmt.Printf("Found %d results in %v\n\n", len(ps.resp.Results), ps.took)
+				if err := (search.HumanFormatter{}).Format(os.Stdout, ps.resp); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	}
 	addSearchFlags(c, &project, &query, &model, &topK, &privacy, &asJSON)
@@ -191,27 +203,36 @@ func newSgrepCmd(d *deps) *cobra.Command {
 		Use:   "sgrep",
 		Short: "Semantic search with classic grep output (file:line:content)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			resp, _, err := d.runSearch(cmd, project, query, model, topK, privacy)
+			results, err := d.runSearchTargets(cmd, project, query, model, topK, privacy)
 			if err != nil {
 				return err
 			}
-			// Anchor result paths for clickable file:line. Remote results carry no
-			// server-side path (use cwd); for a local git project, use the CURRENT
-			// worktree root (results may come from a different indexed checkout);
-			// otherwise the stored project path.
-			projectPath := resp.Project.Path
-			if d.remote() {
-				if wd, err := os.Getwd(); err == nil {
-					projectPath = wd
-				}
-			} else if wt := currentWorktreeRoot(cmd.Context()); wt != "" {
-				projectPath = wt
-			}
-			var f search.Formatter = search.GrepFormatter{ProjectPath: projectPath}
 			if asJSON {
-				f = search.JSONFormatter{}
+				return renderSearchJSON(os.Stdout, results)
 			}
-			return f.Format(os.Stdout, resp)
+			// Single project: keep the exact classic anchoring (protects the sgrep
+			// golden). Remote → cwd; local git → the current worktree root; else the
+			// stored project path.
+			if len(results) == 1 {
+				resp := results[0].resp
+				projectPath := resp.Project.Path
+				if d.remote() {
+					if wd, e := os.Getwd(); e == nil {
+						projectPath = wd
+					}
+				} else if wt := currentWorktreeRoot(cmd.Context()); wt != "" {
+					projectPath = wt
+				}
+				return search.GrepFormatter{ProjectPath: projectPath}.Format(os.Stdout, resp)
+			}
+			// Multiple projects: anchor each result at its own project's path so the
+			// absolute file:line stays correct and shows which project it came from.
+			for _, ps := range results {
+				if err := (search.GrepFormatter{ProjectPath: ps.resp.Project.Path}).Format(os.Stdout, ps.resp); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	}
 	addSearchFlags(c, &project, &query, &model, &topK, &privacy, &asJSON)
@@ -219,13 +240,12 @@ func newSgrepCmd(d *deps) *cobra.Command {
 }
 
 func addSearchFlags(c *cobra.Command, project, query, model *string, topK *int, privacy, asJSON *bool) {
-	c.Flags().StringVar(project, "project", "", "Project name")
+	c.Flags().StringVar(project, "project", "", "Project path or name (default: the project enclosing the current directory, else all)")
 	c.Flags().StringVar(query, "query", "", "Search query")
 	c.Flags().IntVar(topK, "top-k", 5, "Number of results")
 	c.Flags().StringVar(model, "model", "", "Override embedding model (default: project model)")
 	c.Flags().BoolVar(privacy, "privacy", false, "Force local-only providers (Ollama)")
 	c.Flags().BoolVar(asJSON, "json", false, "Output results as JSON")
-	_ = c.MarkFlagRequired("project")
 	_ = c.MarkFlagRequired("query")
 }
 

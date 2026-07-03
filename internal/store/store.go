@@ -102,6 +102,7 @@ type IndexStore interface {
 	CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*Project, error)
 	GetProject(ctx context.Context, name string) (*Project, error)
 	GetProjectByID(ctx context.Context, id int) (*Project, error)
+	GetProjectByIdentity(ctx context.Context, identity string) (*Project, error)
 	ListProjects(ctx context.Context) ([]Project, error)
 	DeleteProject(ctx context.Context, name string) error
 	UpdateProjectStatus(ctx context.Context, id int, status string) error
@@ -261,10 +262,12 @@ func distanceExpr(dims int) string {
 
 func (s *PgStore) UpsertProject(ctx context.Context, name, path, model string) (int, error) {
 	var id int
+	// name is no longer UNIQUE (F14), so upsert on identity instead — for this
+	// legacy by-name API the identity is the name, keeping it idempotent per name.
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO projects (name, path, model, status)
-		VALUES ($1, $2, $3, 'indexing')
-		ON CONFLICT (name) DO UPDATE SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing'
+		INSERT INTO projects (name, path, model, status, identity)
+		VALUES ($1, $2, $3, 'indexing', $1)
+		ON CONFLICT (identity) DO UPDATE SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing'
 		RETURNING id
 	`, name, path, model).Scan(&id)
 	return id, err
@@ -343,23 +346,38 @@ func (s *PgStore) GetProject(ctx context.Context, name string) (*Project, error)
 	return p, err
 }
 
+// GetProjectByIdentity looks a project up by its stable identity (git identity
+// or "path:<abs>"), which is unique — unlike the name, which is just a basename
+// and can collide across folders.
+func (s *PgStore) GetProjectByIdentity(ctx context.Context, identity string) (*Project, error) {
+	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE identity = $1`, identity))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return p, err
+}
+
 // CreateProject registers a project with its content source. Returns
 // ErrProjectExists if the name is taken.
 func (s *PgStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*Project, error) {
 	var id int
+	// identity = name: server-registered projects are keyed by their (user-chosen,
+	// unique) name via the identity unique index — the UNIQUE(name) constraint is
+	// gone (F14, so index-path projects can share a basename), so name uniqueness
+	// for API projects is preserved through identity instead.
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, git_url, branch)
-		VALUES ($1, '', $2, 'registered', $3, NULLIF($4, ''), NULLIF($5, ''))
+		INSERT INTO projects (name, path, model, status, source_type, git_url, branch, identity)
+		VALUES ($1, '', $2, 'registered', $3, NULLIF($4, ''), NULLIF($5, ''), $1)
 		RETURNING id
 	`, name, model, sourceType, gitURL, branch).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation (identity)
 			return nil, ErrProjectExists
 		}
 		return nil, err
 	}
-	return &Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch}, nil
+	return &Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name}, nil
 }
 
 func (s *PgStore) ListProjects(ctx context.Context) ([]Project, error) {

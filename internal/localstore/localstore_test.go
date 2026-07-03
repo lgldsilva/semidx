@@ -321,3 +321,32 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestSameBasenameProjectsCoexist is the F14 regression: two document folders
+// that share a basename (e.g. two ".../backend") must both index, keyed by their
+// distinct identities — the dropped UNIQUE(name) no longer collides them.
+func TestSameBasenameProjectsCoexist(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+
+	id1, err := s.EnsureProjectIdentity(ctx, "path:/one/backend", "backend", "/one/backend", "bge-m3", "docs")
+	if err != nil {
+		t.Fatalf("first backend: %v", err)
+	}
+	id2, err := s.EnsureProjectIdentity(ctx, "path:/two/backend", "backend", "/two/backend", "bge-m3", "docs")
+	if err != nil {
+		t.Fatalf("second backend (same name) must not collide: %v", err)
+	}
+	if id1 == id2 {
+		t.Fatalf("same-basename projects share id %d; want distinct", id1)
+	}
+	// Each resolves by its unique identity.
+	p1, err := s.GetProjectByIdentity(ctx, "path:/one/backend")
+	if err != nil || p1.ID != id1 || p1.Path != "/one/backend" {
+		t.Errorf("GetProjectByIdentity(one) = %+v, %v", p1, err)
+	}
+	p2, err := s.GetProjectByIdentity(ctx, "path:/two/backend")
+	if err != nil || p2.ID != id2 || p2.Path != "/two/backend" {
+		t.Errorf("GetProjectByIdentity(two) = %+v, %v", p2, err)
+	}
+}

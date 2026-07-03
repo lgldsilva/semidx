@@ -47,7 +47,7 @@ const projectColumns = `id, name, path, model, status, source_type, git_url, bra
 const schema = `
 CREATE TABLE IF NOT EXISTS projects (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL UNIQUE,
+    name        TEXT NOT NULL,
     path        TEXT NOT NULL DEFAULT '',
     model       TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL DEFAULT '',
@@ -129,11 +129,17 @@ func New(path string) (*SQLiteStore, error) {
 // pre-F11 database (a projects table without the content-addressing 'identity'
 // column) by dropping and recreating it. Re-indexing repopulates it.
 func ensureSchema(db *sql.DB) error {
-	var cols, hasIdentity int
+	var cols int
 	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects')`).Scan(&cols)
 	if cols > 0 {
+		var hasIdentity int
 		_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='identity'`).Scan(&hasIdentity)
-		if hasIdentity == 0 {
+		var ddl string
+		_ = db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='projects'`).Scan(&ddl)
+		// Rebuild an older DB: missing the 'identity' column (pre-F11), OR still
+		// enforcing UNIQUE on the projects table — i.e. UNIQUE(name) (pre-F14),
+		// which wrongly blocks two projects that share a basename.
+		if hasIdentity == 0 || strings.Contains(strings.ToUpper(ddl), "UNIQUE") {
 			for _, tbl := range []string{"chunks", "worktree_files", "files", "projects"} {
 				if _, err := db.Exec("DROP TABLE IF EXISTS " + tbl); err != nil {
 					return err
@@ -156,12 +162,14 @@ func (s *SQLiteStore) EnsureChunksTable(_ context.Context, _ int) error { return
 
 func (s *SQLiteStore) UpsertProject(ctx context.Context, name, path, model string) (int, error) {
 	var id int
+	// name is no longer UNIQUE (F14), so upsert on identity instead — for this
+	// legacy by-name API the identity is the name, keeping it idempotent per name.
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type)
-		VALUES (?, ?, ?, 'indexing', 'path')
-		ON CONFLICT(name) DO UPDATE SET path = excluded.path, model = excluded.model, status = 'indexing'
+		INSERT INTO projects (name, path, model, status, source_type, identity)
+		VALUES (?, ?, ?, 'indexing', 'path', ?)
+		ON CONFLICT(identity) DO UPDATE SET path = excluded.path, model = excluded.model, status = 'indexing'
 		RETURNING id
-	`, name, path, model).Scan(&id)
+	`, name, path, model, name).Scan(&id)
 	return id, err
 }
 
@@ -221,18 +229,20 @@ func (s *SQLiteStore) PruneUnreferencedFiles(ctx context.Context, projectID int)
 // ErrProjectExists when the name is already taken.
 func (s *SQLiteStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*store.Project, error) {
 	var id int
+	// identity = name (see PgStore.CreateProject): name uniqueness for registered
+	// projects is enforced via the identity unique index, since UNIQUE(name) is gone.
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, git_url, branch)
-		VALUES (?, '', ?, 'registered', ?, ?, ?)
+		INSERT INTO projects (name, path, model, status, source_type, git_url, branch, identity)
+		VALUES (?, '', ?, 'registered', ?, ?, ?, ?)
 		RETURNING id
-	`, name, model, sourceType, gitURL, branch).Scan(&id)
+	`, name, model, sourceType, gitURL, branch, name).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrProjectExists
 		}
 		return nil, err
 	}
-	return &store.Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch}, nil
+	return &store.Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name}, nil
 }
 
 func scanProject(row interface{ Scan(...any) error }) (*store.Project, error) {
@@ -253,6 +263,16 @@ func (s *SQLiteStore) GetProject(ctx context.Context, name string) (*store.Proje
 
 func (s *SQLiteStore) GetProjectByID(ctx context.Context, id int) (*store.Project, error) {
 	p, err := scanProject(s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	return p, err
+}
+
+// GetProjectByIdentity looks a project up by its unique identity (git identity
+// or "path:<abs>") rather than the collision-prone basename.
+func (s *SQLiteStore) GetProjectByIdentity(ctx context.Context, identity string) (*store.Project, error) {
+	p, err := scanProject(s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE identity = ?`, identity))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}
