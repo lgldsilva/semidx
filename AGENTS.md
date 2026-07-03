@@ -29,9 +29,13 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
   - Git projects are one logical index keyed by **repo identity**; content is
     **addressed by hash**, so the same file across worktrees embeds once, and
     each worktree searches the version it has checked out.
-  - Documents (`--docs`) are keyed by absolute path. Extractors cover text/code,
-    Markdown/HTML, PDF, Word, Excel, and `.class` inside JARs (structural
-    baseline + optional external decompiler via `SEMIDX_JAVA_DECOMPILER`).
+  - Documents (`--docs`) are keyed by absolute path. Extractors (pluggable
+    registry) cover: code + text/config (`.csv/.tsv/.log/.ini/.cfg/.conf`),
+    Markdown/HTML, PDF, Word/Excel/PowerPoint (`.docx/.xlsx/.pptx`), OpenDocument
+    (`.odt/.ods/.odp`), EPUB, Jupyter (`.ipynb`, cell-aware), RTF, and `.class`
+    inside JARs (baseline + optional decompiler via `SEMIDX_JAVA_DECOMPILER`).
+    Not yet covered: legacy Office (`.doc/.xls/.ppt`), email, images/OCR, generic
+    archives (`.zip/.tar`).
 - **Search** semantically, with an automatic, **explicit** keyword fallback when
   embeddings are unavailable (`fallback: true`), plus a no-embeddings
   keyword-only mode (`--keyword`).
