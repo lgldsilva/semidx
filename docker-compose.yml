@@ -17,6 +17,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
 
 volumes:
   pgvector_data:

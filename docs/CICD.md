@@ -55,8 +55,9 @@ Triggers **only** on `push: tags: ['v*']` and on `workflow_dispatch` — this is
 the DEPLOY, not a gate. Jobs run on the generic `[self-hosted]` runner pool.
 
 ```
-build-test ──┬──► sbom            (CycloneDX ──► Dependency-Track, continue-on-error)
-             └──► image           (docker build ──► Trivy CRITICAL ──► push = deploy)
+build-test ──┬──► sbom              (CycloneDX ──► Dependency-Track, continue-on-error)
+             ├──► image ──► deploy   (push image → trigger Watchtower redeploy)
+             └──► release-artifacts  (GoReleaser: multi-arch tar.gz/zip + checksums + changelog)
                        notify-failure  (Telegram, only if a real job failed)
 ```
 
@@ -68,9 +69,18 @@ Job graph (`needs` edges):
   CycloneDX SBOM (`scripts/sbom-upload.sh`) and uploads it to Dependency-Track.
   Never fails the pipeline.
 - `image` — **needs** `build-test`. Builds the Docker image, runs **Trivy on the
-  LOCAL image before any push** (fails on a fixable CRITICAL), then pushes to the
-  Gitea registry — the actual publish/deploy step.
-- `notify-failure` — **needs** `[build-test, sbom, image]`,
+  LOCAL image before any push** (fails on a fixable CRITICAL), then pushes it to
+  the Gitea registry.
+- `deploy` — **needs** `image`. Triggers the homelab instance to roll out the new
+  image (see **Deploy** below). Skips cleanly when the trigger isn't configured.
+- `release-artifacts` — **needs** `build-test`. Runs **GoReleaser** (`.goreleaser.yaml`)
+  to cross-build linux/darwin/windows × amd64/arm64, package tar.gz/zip with
+  SHA-256 checksums + a grouped changelog, and publish them to the Gitea release.
+  goreleaser is pinned to **v2.13.0** (the newest that builds with go.mod's Go —
+  `@latest` needs Go 1.26+, which `GOTOOLCHAIN=local` blocks). Without `GITEA_TOKEN`
+  it builds a snapshot to validate the config without publishing. `install.sh`
+  consumes these assets.
+- `notify-failure` — **needs** `[build-test, sbom, image, deploy, release-artifacts]`,
   `if: failure()`. Sends a Telegram message. Because `sbom` is
   continue-on-error, an SBOM failure alone does not trigger it.
 
@@ -102,7 +112,9 @@ them unset and that stage is skipped cleanly.
 | `DT_API` | `sbom` job | Dependency-Track base URL, e.g. `https://dtrack.raspberrypi.lan`. Presence of `DT_API` gates the job. |
 | `DT_USER` | `sbom` job | Dependency-Track user with `BOM_UPLOAD` permission. |
 | `DT_PASS` | `sbom` job | password for `DT_USER`. |
-| `REGISTRY_TOKEN` | push step of `image` | Token/password for the Gitea container registry (`gitea.raspberrypi.lan`). Without it the image is built + scanned but not pushed. |
+| `REGISTRY_TOKEN` | push step of `image` | Token/password for the Gitea container registry (`gitea.raspberrypi.lan`), scope `write:package`. Without it the image is built + scanned but not pushed (and nothing to deploy). |
+| `WATCHTOWER_TOKEN` | `deploy` job | Bearer token for Watchtower's HTTP API (`WATCHTOWER_HTTP_API_TOKEN` on the host). Triggers an immediate redeploy. |
+| `GITEA_TOKEN` | `release-artifacts` job | Gitea token with repo write scope, used by GoReleaser to publish the release + upload the artifacts. Without it, artifacts are built as a snapshot but not published. |
 | `TELEGRAM_BOT_TOKEN` | `notify-failure` | Telegram bot token. |
 | `TELEGRAM_CHAT_ID` | `notify-failure` | Telegram chat id. Both Telegram secrets must be set for a notification. |
 
@@ -112,20 +124,39 @@ them unset and that stage is skipped cleanly.
 |---|---|---|
 | `REGISTRY_USER` | `image` push | `lgldsilva` |
 | `SONAR_HOST_IP` | `sonar` | `192.168.0.100` — when the runner can't resolve `sonar.raspberrypi.lan` (the usual act_runner case), it appends `<ip> sonar.raspberrypi.lan` to `/etc/hosts` before scanning. Override only if the server moves. |
+| `WATCHTOWER_URL` | `deploy` | (none) — Watchtower HTTP-API base URL, e.g. `https://watchtower.raspberrypi.lan`. Set (with `WATCHTOWER_TOKEN`) to redeploy immediately on release. |
+| `SEMIDX_HEALTH_URL` | `deploy` | (none) — optional health URL polled after redeploy, e.g. `https://semidx.raspberrypi.lan/readyz`. |
 
 The internal CA is handled without extra config: the Node-based artifact and
 Sonar steps set `NODE_TLS_REJECT_UNAUTHORIZED=0`, and `scripts/sbom-upload.sh`
 calls `curl --insecure` against Dependency-Track.
 
-## Deploy is deferred
+## Deploy
 
-There is **no running semidx instance to deploy to yet**. The `image` job
-therefore stops at build + scan + (optional) push; it does **not** run a compose
-deploy, create a release git tag, prune old registry packages, or send a success
-notification. When a semidx host is provisioned, add a `deploy` job (ideally on a
-dedicated `deploy` runner label, which also needs provisioning) that runs
-`docker compose -f deploy/docker-compose.yml up -d` on that host, gated on
-`REGISTRY_TOKEN` the same way as the push step.
+Deploy is **pull-based**, matching the rest of the homelab: the release pipeline
+publishes the image and the target host's **Watchtower** rolls it out — the CI
+never needs SSH or a deploy runner. The `deploy` job just asks Watchtower to do
+it **immediately** instead of waiting for its poll interval.
+
+Flow: `image` pushes `…/semidx:latest` → `deploy` calls Watchtower's HTTP API on
+the host → Watchtower pulls `:latest` and recreates the `semidx` container →
+(optional) the job polls `SEMIDX_HEALTH_URL` until it is serving.
+
+One-time host setup (raspberrypi-srv):
+
+1. `docker login gitea.raspberrypi.lan` so Watchtower can pull the private image.
+2. Put `deploy/homelab/docker-compose.yml` + a filled `.env` (from
+   `.env.example`) on the host and `docker compose up -d`. The `semidx` service
+   carries the `com.centurylinklabs.watchtower.enable=true` label.
+3. Run Watchtower with its HTTP API enabled
+   (`--http-api-update` + `WATCHTOWER_HTTP_API_TOKEN=<token>`), reachable over
+   WireGuard, and set the repo variable `WATCHTOWER_URL` + secret
+   `WATCHTOWER_TOKEN` (below).
+
+Without `WATCHTOWER_URL`/`WATCHTOWER_TOKEN` the `deploy` job is a no-op that
+notes the image was published and Watchtower will pick it up on its own interval.
+Watchtower only swaps the image — env/port/volume changes still require editing
+the host compose + `docker compose up -d`.
 
 ## Runners
 

@@ -91,12 +91,20 @@ func main() {
 	}
 }
 
+// Build metadata, injected at release time via -ldflags -X (see .goreleaser.yaml).
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func newRootCmd() *cobra.Command {
 	d := &deps{}
 	var forceLocal, keywordOnly bool
 	root := &cobra.Command{
 		Use:           "semidx",
 		Short:         "Self-hosted semantic code search",
+		Version:       fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {

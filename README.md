@@ -61,6 +61,27 @@ semidx separates *how it embeds* from *where it stores*.
 | PostgreSQL / pgvector | default; used by the server and by `semidx index` | pgvector with per-dimension HNSW indexes | The shared server, large corpora. |
 | SQLite (local) | `--local` flag or `SEMIDX_LOCAL_INDEX` | a single SQLite file, brute-force cosine in Go | A single machine / one repo, no server. |
 
+## Install
+
+Prebuilt binaries for **linux / macOS / windows × amd64 / arm64** are attached to
+each release as `tar.gz` (`zip` on Windows) with SHA-256 `checksums.txt`.
+
+```sh
+# detect your OS/arch, download + verify the checksum, and install:
+curl -fsSL https://gitea.raspberrypi.lan/lgldsilva/semidx/raw/branch/main/install.sh | sh
+
+# a specific version, or a specific platform without installing:
+./install.sh --version v0.2.0
+./install.sh --os windows --arch arm64 --dest ./dl   # just fetch that archive
+./install.sh --all --dest ./dist                     # download every artifact + checksums
+```
+
+Or build from source with Go:
+
+```sh
+go install github.com/lgldsilva/semidx/cmd/semidx@latest
+```
+
 ## Quickstart (server)
 
 Bring up the server and its database (the database is **not** published to the
