@@ -78,8 +78,9 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
 ## Architecture & layout
 
 ```
-cmd/semidx/        CLI (cobra): index, search, sgrep, config, mcp[/install],
-                   skills, models, repo, login, drop, serve; main.go wires deps.
+cmd/semidx/        CLI (cobra): index, unlock (password docs), search, sgrep,
+                   migrate (SQLite→Postgres), config, mcp[/install], skills,
+                   models, repo, login, drop, serve; main.go wires deps.
 pkg/client/        public Go SDK for the HTTP API (DTOs + client).
 internal/
   config/          SEMIDX_* resolution: env > cwd .env > ~/.config/semidx/semidx.env > default

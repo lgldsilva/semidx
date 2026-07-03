@@ -594,6 +594,49 @@ func (s *SQLiteStore) DropAll(ctx context.Context) error {
 	return tx.Commit()
 }
 
+// ExportedChunk is one stored chunk with its file metadata and raw embedding —
+// enough to re-insert into another store without re-embedding.
+type ExportedChunk struct {
+	FilePath  string
+	FileHash  string
+	FileSize  int
+	Content   string
+	Embedding []float32 // nil for text-only (sensitive) chunks
+	Dims      int
+	StartLine int
+	EndLine   int
+}
+
+// ExportChunks returns every stored chunk of a project (file metadata + decoded
+// embedding), ordered by file, dims, then chunk index, so `semidx migrate` can
+// copy the index into Postgres without recomputing embeddings.
+func (s *SQLiteStore) ExportChunks(ctx context.Context, projectID int) ([]ExportedChunk, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT f.path, f.hash, f.size_bytes, c.content, c.embedding, c.dims, c.start_line, c.end_line
+		FROM chunks c JOIN files f ON f.id = c.file_id
+		WHERE c.project_id = ?
+		ORDER BY f.path, c.dims, c.chunk_index
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []ExportedChunk
+	for rows.Next() {
+		var e ExportedChunk
+		var blob []byte
+		if err := rows.Scan(&e.FilePath, &e.FileHash, &e.FileSize, &e.Content, &blob, &e.Dims, &e.StartLine, &e.EndLine); err != nil {
+			return nil, err
+		}
+		if len(blob) > 0 {
+			e.Embedding = decodeEmbedding(blob)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // encodeEmbedding serializes a float32 vector as little-endian bytes.
 func encodeEmbedding(vec []float32) []byte {
 	buf := make([]byte, len(vec)*4)
