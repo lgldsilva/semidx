@@ -191,6 +191,7 @@ func scanFiles(projectPath string, maxFiles int) ([]string, error) {
 // or unchanged; hardErr signals a read/upsert/delete failure; softErrs counts
 // failed embed sub-batches.
 func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, model string) (created, softErrs int, outcome fileOutcome, hardErr error) {
+	// #nosec G304 -- indexing a file the caller pointed us at is the whole job; path comes from the project walk.
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, err
@@ -348,6 +349,7 @@ func (idx *Indexer) embedWithRetry(ctx context.Context, model string, inputs []s
 // to 50% jitter, returning early with ctx.Err() if the context is cancelled.
 func sleepBackoff(ctx context.Context, attempt int) error {
 	backoff := (500 * time.Millisecond) << (attempt - 1)
+	// #nosec G404 -- jitter for retry backoff, not security-sensitive; math/rand is fine.
 	delay := backoff + time.Duration(rand.Int64N(int64(backoff/2)))
 	t := time.NewTimer(delay)
 	defer t.Stop()
@@ -360,6 +362,7 @@ func sleepBackoff(ctx context.Context, attempt int) error {
 }
 
 func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectPath, model string) error {
+	// #nosec G204 -- fixed "git" executable; projectPath is a local dir and gitSince a bounded flag value.
 	cmd := exec.Command("git", "-C", projectPath, "log", "-p", "--since="+idx.gitSince)
 	out, err := cmd.Output()
 	if err != nil {

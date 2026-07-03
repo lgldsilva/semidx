@@ -28,7 +28,7 @@ func Sync(ctx context.Context, dataDir, name, url, branch string) (string, error
 		return repoPath, nil
 	}
 
-	if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(repoPath), 0o750); err != nil {
 		return "", err
 	}
 	args := []string{"clone", "--depth", "50"}
@@ -51,9 +51,11 @@ func validURL(url string) bool {
 }
 
 func run(ctx context.Context, dir string, args ...string) error {
+	// #nosec G204 -- the executable is the fixed literal "git"; the URL is
+	// validated by validURL and the rest of the args are built by this package.
 	cmd := exec.CommandContext(ctx, "git", args...)
 	if dir != "" {
-		cmd = exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+		cmd = exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) // #nosec G204 -- see above
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))

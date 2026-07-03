@@ -150,6 +150,7 @@ func (a *Admin) protect(role string, fn authedHandler) http.HandlerFunc {
 // --- sessions & cookies ------------------------------------------------------
 
 func (a *Admin) setSession(w http.ResponseWriter, plaintext string) {
+	// #nosec G124 -- Secure is set from config (SEMIDX_COOKIE_SECURE, default true); it is false only when an operator deliberately serves the admin over plain HTTP.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    plaintext,
@@ -162,6 +163,7 @@ func (a *Admin) setSession(w http.ResponseWriter, plaintext string) {
 }
 
 func (a *Admin) clearSession(w http.ResponseWriter) {
+	// #nosec G124 -- see setSession; Secure follows SEMIDX_COOKIE_SECURE.
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: "", Path: "/admin",
 		HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteLaxMode, MaxAge: -1,

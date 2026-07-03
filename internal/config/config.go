@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	// #nosec G101 -- local development default DSN, not a real credential; overridden by SEMIDX_DB_DSN.
 	defaultDatabaseURL  = "postgres://semantic:semantic@localhost:55432/semantic_indexer"
 	defaultOllamaURL    = "http://localhost:11434"
 	defaultIndexWorkers = 4
@@ -153,6 +154,7 @@ type resolver struct {
 
 func newResolver(path string) *resolver {
 	vars := make(map[string]string)
+	// #nosec G304 -- reads the .env from the working directory by design (12-factor config).
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return &resolver{fileVars: vars}
