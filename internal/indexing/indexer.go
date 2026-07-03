@@ -1,7 +1,7 @@
 // Package indexing walks a project, chunks each file and stores embeddings,
 // routing sensitive files away from cloud providers. It depends only on the
-// store.Store and embed.Embedder interfaces, so the pipeline is unit-testable
-// with fakes.
+// store.IndexStore and embed.Embedder interfaces, so the pipeline is
+// unit-testable with fakes and can run against a standalone local store.
 package indexing
 
 import (
@@ -37,9 +37,9 @@ const (
 	defaultIndexWorkers = 4
 )
 
-// Indexer indexes a project into a Store using an Embedder.
+// Indexer indexes a project into an IndexStore using an Embedder.
 type Indexer struct {
-	db       store.Store
+	db       store.IndexStore
 	embedder embed.Embedder
 	dims     int
 	workers  int
@@ -68,7 +68,7 @@ const (
 
 // NewIndexer wires an Indexer. dims is the embedding dimension of model;
 // workers is the file concurrency (<1 falls back to defaultIndexWorkers).
-func NewIndexer(db store.Store, emb embed.Embedder, dims, workers int, verbose, gitMode bool, gitSince string) *Indexer {
+func NewIndexer(db store.IndexStore, emb embed.Embedder, dims, workers int, verbose, gitMode bool, gitSince string) *Indexer {
 	if workers < 1 {
 		workers = defaultIndexWorkers
 	}

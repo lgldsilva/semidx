@@ -13,14 +13,14 @@ import (
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
-// Service runs semantic searches against a Store using an Embedder.
+// Service runs semantic searches against an IndexStore using an Embedder.
 type Service struct {
-	store store.Store
+	store store.IndexStore
 	emb   embed.Embedder
 }
 
 // NewService wires a search Service.
-func NewService(s store.Store, e embed.Embedder) *Service {
+func NewService(s store.IndexStore, e embed.Embedder) *Service {
 	return &Service{store: s, emb: e}
 }
 
