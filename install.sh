@@ -16,7 +16,7 @@ DL_BASE="${SEMIDX_DOWNLOAD_BASE:-https://gitea.raspberrypi.lan/lgldsilva/semidx/
 BIN_DIR="${SEMIDX_BIN_DIR:-$HOME/.local/bin}"
 VERSION="" OS="" ARCH="" DEST="" ALL=0 INSTALL=1
 
-CURL="curl -fsSL"
+CURL="${CURL:-curl -fsSL}"
 [ "${SEMIDX_INSECURE:-}" = "1" ] && CURL="$CURL --insecure"
 
 die() { echo "install: $*" >&2; exit 1; }

@@ -82,6 +82,15 @@ Or build from source with Go:
 go install github.com/lgldsilva/semidx/cmd/semidx@latest
 ```
 
+### Private Repositories / Gitea Auth
+
+If your Gitea instance is private or requires authentication (where API requests return 404 without auth), you can pass credentials (using a Personal Access Token) to both the initial download and the installer script:
+
+```sh
+curl -k -fsSL -u "username:token" https://gitea.example.com/owner/repo/raw/branch/main/install.sh | \
+  CURL="curl -k -fsSL -u username:token" SEMIDX_INSECURE=1 sh
+```
+
 ## Quickstart (server)
 
 Bring up the server and its database (the database is **not** published to the
