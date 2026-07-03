@@ -29,6 +29,24 @@ type fakeStore struct {
 	nextUser   int
 	nextTok    int
 	projects   []store.Project
+
+	// search support
+	searchProject *store.Project // GetProject result (nil → ErrNotFound)
+	searchResults []store.SearchResult
+
+	// error-injection fields (all nil = success/normal path)
+	listProjectsErr error
+	listTokensErr   error
+	createTokErr    error
+	createJWTErr    error
+	revokeErr       error // generic RevokeUserToken error
+	listUsersErr    error
+	createUserErr   error // generic CreateUser error (distinct from ErrUserExists)
+	setPwErr        error
+	setDisabledErr  error // generic SetUserDisabled error
+	sessionErr      error // generic SessionUser error
+	createSessErr   error
+	getUserErr      error // generic GetUserByUsername error
 }
 
 func newFakeStore() *fakeStore {
@@ -48,6 +66,9 @@ func (f *fakeStore) addUser(username, password, role string) *store.User {
 }
 
 func (f *fakeStore) GetUserByUsername(_ context.Context, name string) (*store.User, error) {
+	if f.getUserErr != nil {
+		return nil, f.getUserErr
+	}
 	if u, ok := f.byName[name]; ok {
 		return u, nil
 	}
@@ -62,6 +83,9 @@ func (f *fakeStore) GetUserByID(_ context.Context, id int) (*store.User, error) 
 }
 
 func (f *fakeStore) CreateUser(_ context.Context, username, hash, role string) (*store.User, error) {
+	if f.createUserErr != nil {
+		return nil, f.createUserErr
+	}
 	if _, ok := f.byName[username]; ok {
 		return nil, store.ErrUserExists
 	}
@@ -73,6 +97,9 @@ func (f *fakeStore) CreateUser(_ context.Context, username, hash, role string) (
 }
 
 func (f *fakeStore) ListUsers(context.Context) ([]store.User, error) {
+	if f.listUsersErr != nil {
+		return nil, f.listUsersErr
+	}
 	var out []store.User
 	for _, u := range f.users {
 		out = append(out, *u)
@@ -81,6 +108,9 @@ func (f *fakeStore) ListUsers(context.Context) ([]store.User, error) {
 }
 
 func (f *fakeStore) SetUserPassword(_ context.Context, id int, hash string) error {
+	if f.setPwErr != nil {
+		return f.setPwErr
+	}
 	u, ok := f.users[id]
 	if !ok {
 		return store.ErrNotFound
@@ -90,6 +120,9 @@ func (f *fakeStore) SetUserPassword(_ context.Context, id int, hash string) erro
 }
 
 func (f *fakeStore) SetUserDisabled(_ context.Context, id int, disabled bool) error {
+	if f.setDisabledErr != nil {
+		return f.setDisabledErr
+	}
 	u, ok := f.users[id]
 	if !ok {
 		return store.ErrNotFound
@@ -106,11 +139,17 @@ func (f *fakeStore) SetUserDisabled(_ context.Context, id int, disabled bool) er
 }
 
 func (f *fakeStore) CreateSession(_ context.Context, hash string, userID int, _ time.Time) error {
+	if f.createSessErr != nil {
+		return f.createSessErr
+	}
 	f.sessions[hash] = userID
 	return nil
 }
 
 func (f *fakeStore) SessionUser(_ context.Context, hash string) (*store.User, error) {
+	if f.sessionErr != nil {
+		return nil, f.sessionErr
+	}
 	uid, ok := f.sessions[hash]
 	if !ok {
 		return nil, store.ErrNotFound
@@ -128,6 +167,9 @@ func (f *fakeStore) DeleteSession(_ context.Context, hash string) error {
 }
 
 func (f *fakeStore) CreateUserToken(_ context.Context, userID int, name, hash string, scopes []string) (int, error) {
+	if f.createTokErr != nil {
+		return 0, f.createTokErr
+	}
 	f.nextTok++
 	f.tokens[f.nextTok] = &store.Token{ID: f.nextTok, Name: name, Scopes: scopes, Kind: "opaque", CreatedAt: time.Unix(1, 0)}
 	f.tokenOwner[f.nextTok] = userID
@@ -135,6 +177,9 @@ func (f *fakeStore) CreateUserToken(_ context.Context, userID int, name, hash st
 }
 
 func (f *fakeStore) CreateJWTToken(_ context.Context, userID int, name, jti string, scopes []string, expiresAt *time.Time) (int, error) {
+	if f.createJWTErr != nil {
+		return 0, f.createJWTErr
+	}
 	f.nextTok++
 	f.tokens[f.nextTok] = &store.Token{ID: f.nextTok, Name: name, Scopes: scopes, Kind: "jwt", CreatedAt: time.Unix(1, 0), ExpiresAt: expiresAt}
 	f.tokenOwner[f.nextTok] = userID
@@ -142,6 +187,9 @@ func (f *fakeStore) CreateJWTToken(_ context.Context, userID int, name, jti stri
 }
 
 func (f *fakeStore) ListUserTokens(_ context.Context, userID int, kind string) ([]store.Token, error) {
+	if f.listTokensErr != nil {
+		return nil, f.listTokensErr
+	}
 	var out []store.Token
 	for id, owner := range f.tokenOwner {
 		if owner == userID && f.tokens[id].Kind == kind {
@@ -152,6 +200,9 @@ func (f *fakeStore) ListUserTokens(_ context.Context, userID int, kind string) (
 }
 
 func (f *fakeStore) RevokeUserToken(_ context.Context, userID, id int) error {
+	if f.revokeErr != nil {
+		return f.revokeErr
+	}
 	if f.tokenOwner[id] != userID {
 		return store.ErrNotFound
 	}
@@ -160,7 +211,24 @@ func (f *fakeStore) RevokeUserToken(_ context.Context, userID, id int) error {
 	return nil
 }
 
-func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) { return f.projects, nil }
+func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) {
+	return f.projects, f.listProjectsErr
+}
+
+func (f *fakeStore) GetProject(_ context.Context, _ string) (*store.Project, error) {
+	if f.searchProject == nil {
+		return nil, store.ErrNotFound
+	}
+	return f.searchProject, nil
+}
+
+func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]store.SearchResult, error) {
+	return f.searchResults, nil
+}
+
+func (f *fakeStore) SearchSimilarKeywords(context.Context, int, string, int, int) ([]store.SearchResult, error) {
+	return f.searchResults, nil
+}
 
 // --- helpers -----------------------------------------------------------------
 
