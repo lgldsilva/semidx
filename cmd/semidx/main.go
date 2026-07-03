@@ -152,6 +152,7 @@ func newRootCmd() *cobra.Command {
 		newDropCmd(d),
 		newServeCmd(d),
 		newMCPCmd(d),
+		newUpgradeCmd(d),
 	)
 	return root
 }
