@@ -76,7 +76,7 @@ When semidx is wired in as an MCP server, three tools are available:
 - `semantic_search` — args `project`, `query`, optional `model`, `top_k`.
   Returns ranked `file:line` matches with previews.
 - `semantic_projects` — lists registered projects and their indexing status.
-- `semantic_reindex` — args `project`, optional `type` (`full` | `incremental`).
+- `semantic_reindex` — args `project`, optional `type` (`full` | `git_history`).
   Queues a re-index of an already-registered project.
 
 Tools accept **project names only**, never filesystem paths — an agent cannot
