@@ -128,31 +128,42 @@ func extractHTML(data []byte) (string, error) {
 	}
 
 	var b strings.Builder
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if n.Type == html.ElementNode {
-			switch n.Data {
-			case "script", "style", "head", "noscript":
-				return // skip non-visible subtrees entirely
-			}
-		}
-		if n.Type == html.TextNode {
-			if text := strings.TrimSpace(n.Data); text != "" {
-				b.WriteString(text)
-				b.WriteByte(' ')
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-		// Break lines on block-level boundaries so paragraphs stay separated.
-		if n.Type == html.ElementNode && isBlockElement(n.Data) {
-			b.WriteByte('\n')
-		}
-	}
-	walk(doc)
+	walkHTMLText(doc, &b)
 
 	return normalizeText(b.String()), nil
+}
+
+// walkHTMLText recursively appends the visible text of an HTML node tree to b,
+// skipping non-visible subtrees and inserting a newline after block-level
+// elements so paragraphs stay separated.
+func walkHTMLText(n *html.Node, b *strings.Builder) {
+	if n.Type == html.ElementNode && isHiddenElement(n.Data) {
+		return // skip non-visible subtrees entirely
+	}
+	if n.Type == html.TextNode {
+		if text := strings.TrimSpace(n.Data); text != "" {
+			b.WriteString(text)
+			b.WriteByte(' ')
+		}
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		walkHTMLText(c, b)
+	}
+	// Break lines on block-level boundaries so paragraphs stay separated.
+	if n.Type == html.ElementNode && isBlockElement(n.Data) {
+		b.WriteByte('\n')
+	}
+}
+
+// isHiddenElement reports whether an element's subtree carries no visible text
+// and should be skipped entirely.
+func isHiddenElement(tag string) bool {
+	switch tag {
+	case "script", "style", "head", "noscript":
+		return true
+	default:
+		return false
+	}
 }
 
 // isBlockElement reports whether an HTML tag should introduce a line break in
@@ -225,13 +236,7 @@ func extractDOCX(data []byte) (string, error) {
 		return "", fmt.Errorf("extract: open docx: %w", err)
 	}
 
-	var docXML *zip.File
-	for _, f := range zr.File {
-		if f.Name == "word/document.xml" {
-			docXML = f
-			break
-		}
-	}
+	docXML := zipEntry(zr, "word/document.xml")
 	if docXML == nil {
 		return "", fmt.Errorf("extract: docx: missing word/document.xml")
 	}
@@ -264,26 +269,40 @@ func parseWordText(rc io.Reader) (string, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			switch t.Name.Local {
-			case "t":
-				var s string
-				if err := dec.DecodeElement(&s, &t); err != nil {
-					return "", fmt.Errorf("extract: docx: decode text run: %w", err)
-				}
-				b.WriteString(s)
-			case "tab":
-				b.WriteByte('\t')
-			case "br", "cr":
-				b.WriteByte('\n')
+			if err := writeWordStart(dec, t, &b); err != nil {
+				return "", err
 			}
 		case xml.EndElement:
-			switch t.Name.Local {
-			case "p", "tr":
+			if isWordLineBreak(t.Name.Local) {
 				b.WriteByte('\n')
 			}
 		}
 	}
 	return normalizeText(b.String()), nil
+}
+
+// writeWordStart handles a WordprocessingML start element: <w:t> text runs are
+// decoded and appended, <w:tab> and <w:br>/<w:cr> map to their whitespace.
+func writeWordStart(dec *xml.Decoder, t xml.StartElement, b *strings.Builder) error {
+	switch t.Name.Local {
+	case "t":
+		var s string
+		if err := dec.DecodeElement(&s, &t); err != nil {
+			return fmt.Errorf("extract: docx: decode text run: %w", err)
+		}
+		b.WriteString(s)
+	case "tab":
+		b.WriteByte('\t')
+	case "br", "cr":
+		b.WriteByte('\n')
+	}
+	return nil
+}
+
+// isWordLineBreak reports whether a WordprocessingML end element ends a line
+// (paragraphs and table rows).
+func isWordLineBreak(name string) bool {
+	return name == "p" || name == "tr"
 }
 
 // extractXLSX renders each worksheet as a markdown-ish heading followed by
@@ -316,6 +335,16 @@ func extractXLSX(data []byte) (string, error) {
 	}
 
 	return normalizeText(b.String()), nil
+}
+
+// zipEntry returns the archive entry with the exact name, or nil if absent.
+func zipEntry(zr *zip.Reader, name string) *zip.File {
+	for _, f := range zr.File {
+		if f.Name == name {
+			return f
+		}
+	}
+	return nil
 }
 
 // normalizeText trims trailing spaces from each line and collapses runs of blank

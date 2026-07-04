@@ -16,6 +16,9 @@ import (
 	"time"
 )
 
+// projectsPath is the base path for per-project API routes.
+const projectsPath = "/api/v1/projects/"
+
 // Client talks to a semidx server with a Bearer token.
 type Client struct {
 	baseURL string
@@ -119,7 +122,7 @@ func (c *Client) Healthz(ctx context.Context) error {
 func (c *Client) Search(ctx context.Context, project, query, model string, topK int) (*SearchResponse, error) {
 	body := map[string]any{"query": query, "top_k": topK, "model": model}
 	var out SearchResponse
-	if err := c.do(ctx, http.MethodPost, "/api/v1/projects/"+esc(project)+"/search", body, &out); err != nil {
+	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/search", body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -139,7 +142,7 @@ func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 // GetProject fetches one project.
 func (c *Client) GetProject(ctx context.Context, name string) (*Project, error) {
 	var out Project
-	if err := c.do(ctx, http.MethodGet, "/api/v1/projects/"+esc(name), nil, &out); err != nil {
+	if err := c.do(ctx, http.MethodGet, projectsPath+esc(name), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -163,7 +166,7 @@ func (c *Client) CreateProject(ctx context.Context, name, model, sourceType, git
 
 // DeleteProject removes a project.
 func (c *Client) DeleteProject(ctx context.Context, name string) error {
-	return c.do(ctx, http.MethodDelete, "/api/v1/projects/"+esc(name), nil, nil)
+	return c.do(ctx, http.MethodDelete, projectsPath+esc(name), nil, nil)
 }
 
 // EnqueueJob queues an index job and returns its id.
@@ -171,7 +174,7 @@ func (c *Client) EnqueueJob(ctx context.Context, project, jobType string) (int, 
 	var out struct {
 		JobID int `json:"job_id"`
 	}
-	if err := c.do(ctx, http.MethodPost, "/api/v1/projects/"+esc(project)+"/index-jobs",
+	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/index-jobs",
 		map[string]string{"type": jobType}, &out); err != nil {
 		return 0, err
 	}
@@ -190,7 +193,7 @@ func (c *Client) GetJob(ctx context.Context, id int) (*Job, error) {
 // FilesDiff reports which of the given path→hash files are stale or deleted.
 func (c *Client) FilesDiff(ctx context.Context, project string, hashes map[string]string) (*DiffResponse, error) {
 	var out DiffResponse
-	if err := c.do(ctx, http.MethodPost, "/api/v1/projects/"+esc(project)+"/files/diff",
+	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/files/diff",
 		map[string]any{"files": hashes}, &out); err != nil {
 		return nil, err
 	}
@@ -200,7 +203,7 @@ func (c *Client) FilesDiff(ctx context.Context, project string, hashes map[strin
 // FilesBatch uploads file contents to index and removes the delete list.
 func (c *Client) FilesBatch(ctx context.Context, project string, files []BatchFile, del []string) (*BatchResponse, error) {
 	var out BatchResponse
-	if err := c.do(ctx, http.MethodPost, "/api/v1/projects/"+esc(project)+"/files/batch",
+	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/files/batch",
 		map[string]any{"files": files, "delete": del}, &out); err != nil {
 		return nil, err
 	}
