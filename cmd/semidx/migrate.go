@@ -31,12 +31,7 @@ func newMigrateCmd(d *deps) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
-			if fromPath == "" {
-				fromPath = d.cfg.LocalIndexPath
-			}
-			if fromPath == "" {
-				fromPath = config.DefaultLocalIndexPath()
-			}
+			fromPath = d.resolveMigrateSource(fromPath)
 			src, err := localstore.New(fromPath)
 			if err != nil {
 				return fmt.Errorf("open source SQLite index %s: %w", fromPath, err)
@@ -64,21 +59,9 @@ func newMigrateCmd(d *deps) *cobra.Command {
 
 			var totalChunks, totalFiles int
 			for _, p := range projects {
-				identity := p.Identity
-				if identity == "" {
-					identity = "path:" + p.Path
-				}
-				pid, err := pg.EnsureProjectIdentity(ctx, identity, p.Name, p.Path, p.Model, p.SourceType)
+				files, chunks, err := migrateProject(ctx, src, pg, p)
 				if err != nil {
-					return fmt.Errorf("register project %q: %w", p.Name, err)
-				}
-				rows, err := src.ExportChunks(ctx, p.ID)
-				if err != nil {
-					return fmt.Errorf("export %q: %w", p.Name, err)
-				}
-				files, chunks, err := migrateRows(ctx, pg, pid, rows)
-				if err != nil {
-					return fmt.Errorf("migrate %q: %w", p.Name, err)
+					return err
 				}
 				totalFiles += files
 				totalChunks += chunks
@@ -93,49 +76,110 @@ func newMigrateCmd(d *deps) *cobra.Command {
 	return c
 }
 
+// resolveMigrateSource resolves the source SQLite path: an explicit --from, else
+// the configured local index, else the built-in default.
+func (d *deps) resolveMigrateSource(fromPath string) string {
+	if fromPath != "" {
+		return fromPath
+	}
+	if d.cfg.LocalIndexPath != "" {
+		return d.cfg.LocalIndexPath
+	}
+	return config.DefaultLocalIndexPath()
+}
+
+// migrateProject copies one project (identity, then all its chunks) into the
+// target store and returns the migrated file and chunk counts.
+func migrateProject(ctx context.Context, src *localstore.SQLiteStore, pg *store.PgStore, p store.Project) (files, chunks int, err error) {
+	identity := p.Identity
+	if identity == "" {
+		identity = "path:" + p.Path
+	}
+	pid, err := pg.EnsureProjectIdentity(ctx, identity, p.Name, p.Path, p.Model, p.SourceType)
+	if err != nil {
+		return 0, 0, fmt.Errorf("register project %q: %w", p.Name, err)
+	}
+	rows, err := src.ExportChunks(ctx, p.ID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("export %q: %w", p.Name, err)
+	}
+	files, chunks, err = migrateRows(ctx, pg, pid, rows)
+	if err != nil {
+		return 0, 0, fmt.Errorf("migrate %q: %w", p.Name, err)
+	}
+	return files, chunks, nil
+}
+
 // migrateRows inserts exported chunks into the target store, grouped by (file,
 // dims) — each group becomes one UpsertFile + InsertChunks (or, when the chunks
 // were stored text-only, InsertChunksTextOnly). Returns the file and chunk counts.
 func migrateRows(ctx context.Context, pg store.IndexStore, projectID int, rows []localstore.ExportedChunk) (files, chunks int, err error) {
 	ensured := map[int]bool{}
-	i := 0
-	for i < len(rows) {
-		path, dims := rows[i].FilePath, rows[i].Dims
+	for i := 0; i < len(rows); {
 		var group []localstore.ExportedChunk
-		for i < len(rows) && rows[i].FilePath == path && rows[i].Dims == dims {
-			group = append(group, rows[i])
-			i++
+		group, i = nextFileGroup(rows, i)
+		dims := group[0].Dims
+		if err := ensureChunksTableOnce(ctx, pg, ensured, dims); err != nil {
+			return files, chunks, err
 		}
-		if !ensured[dims] {
-			if err := pg.EnsureChunksTable(ctx, dims); err != nil {
-				return files, chunks, err
-			}
-			ensured[dims] = true
-		}
-		fileID, err := pg.UpsertFile(ctx, projectID, path, group[0].FileHash, group[0].FileSize)
+		fileID, err := pg.UpsertFile(ctx, projectID, group[0].FilePath, group[0].FileHash, group[0].FileSize)
 		if err != nil {
 			return files, chunks, err
 		}
-		cks := make([]chunker.Chunk, len(group))
-		embs := make([][]float32, len(group))
-		textOnly := false
-		for j, g := range group {
-			cks[j] = chunker.Chunk{Content: g.Content, StartLine: g.StartLine, EndLine: g.EndLine}
-			embs[j] = g.Embedding
-			if g.Embedding == nil {
-				textOnly = true
-			}
-		}
-		if textOnly {
-			err = pg.InsertChunksTextOnly(ctx, projectID, fileID, cks, dims)
-		} else {
-			err = pg.InsertChunks(ctx, projectID, fileID, cks, embs, dims)
-		}
-		if err != nil {
+		if err := insertMigratedGroup(ctx, pg, projectID, fileID, group, dims); err != nil {
 			return files, chunks, err
 		}
 		files++
 		chunks += len(group)
 	}
 	return files, chunks, nil
+}
+
+// nextFileGroup returns the run of rows starting at i that share the same file
+// path and dims, plus the index just past that run.
+func nextFileGroup(rows []localstore.ExportedChunk, i int) ([]localstore.ExportedChunk, int) {
+	path, dims := rows[i].FilePath, rows[i].Dims
+	j := i
+	for j < len(rows) && rows[j].FilePath == path && rows[j].Dims == dims {
+		j++
+	}
+	return rows[i:j], j
+}
+
+// ensureChunksTableOnce creates the chunks_<dims> table the first time a given
+// dims is seen, tracking which have been ensured in the shared map.
+func ensureChunksTableOnce(ctx context.Context, pg store.IndexStore, ensured map[int]bool, dims int) error {
+	if ensured[dims] {
+		return nil
+	}
+	if err := pg.EnsureChunksTable(ctx, dims); err != nil {
+		return err
+	}
+	ensured[dims] = true
+	return nil
+}
+
+// insertMigratedGroup inserts one file's chunks: text-only when any chunk has a
+// NULL embedding (a sensitive file), otherwise with its copied embeddings.
+func insertMigratedGroup(ctx context.Context, pg store.IndexStore, projectID, fileID int, group []localstore.ExportedChunk, dims int) error {
+	cks, embs, textOnly := chunksFromGroup(group)
+	if textOnly {
+		return pg.InsertChunksTextOnly(ctx, projectID, fileID, cks, dims)
+	}
+	return pg.InsertChunks(ctx, projectID, fileID, cks, embs, dims)
+}
+
+// chunksFromGroup splits an exported group into chunks and embeddings, flagging
+// the group text-only if any chunk was stored without an embedding.
+func chunksFromGroup(group []localstore.ExportedChunk) (cks []chunker.Chunk, embs [][]float32, textOnly bool) {
+	cks = make([]chunker.Chunk, len(group))
+	embs = make([][]float32, len(group))
+	for j, g := range group {
+		cks[j] = chunker.Chunk{Content: g.Content, StartLine: g.StartLine, EndLine: g.EndLine}
+		embs[j] = g.Embedding
+		if g.Embedding == nil {
+			textOnly = true
+		}
+	}
+	return cks, embs, textOnly
 }

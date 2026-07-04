@@ -39,41 +39,69 @@ func extractArchive(name string, data []byte) (docs []Doc, err error) {
 
 	dec := newDecompiler() // nil unless SEMIDX_JAVA_DECOMPILER is configured
 	for _, f := range zr.File {
-		if f.FileInfo().IsDir() {
-			continue
-		}
-		entry := f.Name
-		lower := strings.ToLower(entry)
-		ext := strings.ToLower(path.Ext(entry))
-
-		switch {
-		case ext == ".class":
-			raw, rerr := readZipEntry(f)
-			if rerr != nil {
-				continue
-			}
-			text, cerr := classAPI(raw)
-			if cerr != nil {
-				continue // unparseable class — skip, don't fail the whole jar
-			}
-			if dec != nil {
-				if src, ok := dec.decompile(raw); ok {
-					text += "\n" + src
-				}
-			}
-			docs = append(docs, Doc{Path: name + "!" + entry, Text: text})
-
-		case textEntryExts[ext] || strings.HasSuffix(lower, "/manifest.mf") || lower == "manifest.mf":
-			raw, rerr := readZipEntry(f)
-			if rerr != nil || !utf8.Valid(raw) {
-				continue
-			}
-			if s := strings.TrimSpace(string(raw)); s != "" {
-				docs = append(docs, Doc{Path: name + "!" + entry, Text: string(raw)})
-			}
+		if doc, ok := archiveEntryDoc(name, f, dec); ok {
+			docs = append(docs, doc)
 		}
 	}
 	return docs, nil
+}
+
+// archiveEntryDoc turns one archive entry into a Doc: a .class becomes its API
+// surface (optionally with decompiled source), a source/text resource is indexed
+// as-is. Directories and unrecognised entries return ok=false.
+func archiveEntryDoc(name string, f *zip.File, dec *decompiler) (Doc, bool) {
+	if f.FileInfo().IsDir() {
+		return Doc{}, false
+	}
+	switch {
+	case strings.ToLower(path.Ext(f.Name)) == ".class":
+		return classEntryDoc(name, f, dec)
+	case isTextArchiveEntry(f.Name):
+		return textEntryDoc(name, f)
+	default:
+		return Doc{}, false
+	}
+}
+
+// isTextArchiveEntry reports whether an entry is a source/text resource indexed
+// as-is (a known text extension or a JAR manifest).
+func isTextArchiveEntry(entry string) bool {
+	lower := strings.ToLower(entry)
+	ext := strings.ToLower(path.Ext(entry))
+	return textEntryExts[ext] || strings.HasSuffix(lower, "/manifest.mf") || lower == "manifest.mf"
+}
+
+// classEntryDoc builds the Doc for a .class entry from its constant-pool API
+// surface, appending decompiled pseudo-Java when a decompiler is configured. An
+// unreadable or unparseable class returns ok=false (skip, don't fail the jar).
+func classEntryDoc(name string, f *zip.File, dec *decompiler) (Doc, bool) {
+	raw, err := readZipEntry(f)
+	if err != nil {
+		return Doc{}, false
+	}
+	text, err := classAPI(raw)
+	if err != nil {
+		return Doc{}, false // unparseable class — skip, don't fail the whole jar
+	}
+	if dec != nil {
+		if src, ok := dec.decompile(raw); ok {
+			text += "\n" + src
+		}
+	}
+	return Doc{Path: name + "!" + f.Name, Text: text}, true
+}
+
+// textEntryDoc builds the Doc for a source/text entry, skipping non-UTF-8 or
+// blank content.
+func textEntryDoc(name string, f *zip.File) (Doc, bool) {
+	raw, err := readZipEntry(f)
+	if err != nil || !utf8.Valid(raw) {
+		return Doc{}, false
+	}
+	if strings.TrimSpace(string(raw)) == "" {
+		return Doc{}, false
+	}
+	return Doc{Path: name + "!" + f.Name, Text: string(raw)}, true
 }
 
 func readZipEntry(f *zip.File) ([]byte, error) {
