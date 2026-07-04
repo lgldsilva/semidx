@@ -5,7 +5,7 @@ self-hosted `act_runner`s. There are **two workflows** with different jobs:
 
 | Workflow | File | Triggers | Purpose |
 |---|---|---|---|
-| **CI (gates)** | `.github/workflows/ci.yml` | every push to `main`, every pull request | **quality/security gates** — build, test, lint, gitleaks, govulncheck, gosec, Trivy image scan (all on PR + main); SonarQube **on main only** |
+| **CI (gates)** | `.gitea/workflows/ci.yml` | every push to `main`, every pull request | **quality/security gates** — build, test, lint, gitleaks, govulncheck, gosec, Trivy image scan (all on PR + main); SonarQube **on main only** |
 | **Release (deploy)** | `.gitea/workflows/release.yml` | version tags (`v*`) and manual dispatch | **publishes** the release — pushes the image and uploads the SBOM to Dependency-Track |
 
 The split is deliberate: **a PR runs every gate that predicts what may enter
@@ -19,13 +19,16 @@ gates are not re-run at release time.
 > gate. PR-time prediction comes from the other gates (a red gate there blocks
 > the merge before it ever reaches main).
 
-The CI workflow is intentionally left in `.github/workflows/` so the same YAML
-also runs unchanged on GitHub Actions after the public migration (roadmap F7).
-The release workflow lives in `.gitea/workflows/` because it targets homelab
-infrastructure (SonarQube, Dependency-Track, the Gitea registry) that only
-exists behind the WireGuard network.
+All workflows live in **`.gitea/workflows/`**. Gitea scans only that directory
+when it exists and ignores `.github/workflows/`, so keeping the gates under
+`.github/` silently stopped them from running on PRs once the release workflow
+was added under `.gitea/`. The gate YAML stays GitHub-Actions compatible (only
+`actions/checkout` + `actions/setup-go`), so it can move to `.github/workflows/`
+unchanged for the public migration (roadmap F7). The release workflow targets
+homelab infrastructure (SonarQube, Dependency-Track, the Gitea registry) reachable
+only behind the WireGuard network.
 
-## CI gates (`.github/workflows/ci.yml`)
+## CI gates (`.gitea/workflows/ci.yml`)
 
 The gate pipeline. Runs on every PR and every push to `main`.
 
