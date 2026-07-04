@@ -539,7 +539,7 @@ func (idx *Indexer) progress(done, total int, rel string, chunks int) {
 		fmt.Printf("  [%d/%d] %s (%d chunks) | HeapAlloc: %d MB, Sys: %d MB\n",
 			done, total, rel, chunks, m.Alloc/1024/1024, m.Sys/1024/1024)
 	} else if done%logEvery == 0 || done == total {
-		fmt.Printf("  ...%d/%d arquivos (%d chunks)\n", done, total, chunks)
+		fmt.Printf("  ...%d/%d files (%d chunks)\n", done, total, chunks)
 	}
 }
 
