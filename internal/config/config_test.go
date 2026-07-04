@@ -15,6 +15,7 @@ func clearEnv(t *testing.T) {
 		"EMBED_PROVIDER", "EMBED_ENDPOINT", "EMBED_API_KEY",
 		"GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
 		"OLLAMA_CLOUD_API_KEY", "EMBED_PRIVACY", "SEMIDX_INDEX_WORKERS",
+		"SEMIDX_LOCAL_INDEX",
 	} {
 		t.Setenv(key, "")
 	}
@@ -188,6 +189,7 @@ func TestResolveLocalIndex(t *testing.T) {
 }
 
 func TestLoadLocalIndexFromEnv(t *testing.T) {
+	clearEnv(t)
 	t.Setenv("SEMIDX_LOCAL_INDEX", "/tmp/x.db")
 	if got := Load().LocalIndexPath; got != "/tmp/x.db" {
 		t.Errorf("LocalIndexPath = %q, want /tmp/x.db", got)
