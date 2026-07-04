@@ -56,43 +56,63 @@ func newUpgradeCmd(_ *deps) *cobra.Command {
 			token := config.EffectiveValue("SEMIDX_UPDATE_TOKEN")
 			hc := updateHTTPClient(apiURL)
 
-			tag := wantVersion
-			if tag == "" {
-				latest, err := fetchLatestTag(ctx, hc, apiURL, token)
-				if err != nil {
-					return fmt.Errorf("resolve latest release: %w", err)
-				}
-				tag = latest
+			tag, err := resolveUpgradeTag(ctx, hc, apiURL, token, wantVersion)
+			if err != nil {
+				return err
 			}
 			fmt.Printf("current: %s\nlatest:  %s\n", version, tag)
 
 			if checkOnly {
-				if sameVersion(version, tag) {
-					fmt.Println("up to date.")
-				} else {
-					fmt.Println("an update is available — run `semidx upgrade`.")
-				}
+				printUpgradeCheck(version, tag)
 				return nil
 			}
 			if wantVersion == "" && sameVersion(version, tag) {
 				fmt.Println("already up to date.")
 				return nil
 			}
-
-			bin, err := downloadReleaseBinary(ctx, hc, dlURL, tag, runtime.GOOS, runtime.GOARCH, token)
-			if err != nil {
-				return err
-			}
-			if err := replaceRunningBinary(bin); err != nil {
-				return fmt.Errorf("install update: %w", err)
-			}
-			fmt.Printf("upgraded to %s\n", tag)
-			return nil
+			return installUpgrade(ctx, hc, dlURL, tag, token)
 		},
 	}
 	c.Flags().StringVar(&wantVersion, "version", "", "install a specific release tag (default: latest)")
 	c.Flags().BoolVar(&checkOnly, "check", false, "only report whether an update is available")
 	return c
+}
+
+// resolveUpgradeTag returns the requested tag, or resolves the latest release
+// tag when none was requested.
+func resolveUpgradeTag(ctx context.Context, hc *http.Client, apiURL, token, wantVersion string) (string, error) {
+	if wantVersion != "" {
+		return wantVersion, nil
+	}
+	latest, err := fetchLatestTag(ctx, hc, apiURL, token)
+	if err != nil {
+		return "", fmt.Errorf("resolve latest release: %w", err)
+	}
+	return latest, nil
+}
+
+// printUpgradeCheck reports whether the current binary is already at tag (used
+// by `upgrade --check`).
+func printUpgradeCheck(current, tag string) {
+	if sameVersion(current, tag) {
+		fmt.Println("up to date.")
+		return
+	}
+	fmt.Println("an update is available — run `semidx upgrade`.")
+}
+
+// installUpgrade downloads the release binary for this OS/arch and atomically
+// replaces the running executable with it.
+func installUpgrade(ctx context.Context, hc *http.Client, dlURL, tag, token string) error {
+	bin, err := downloadReleaseBinary(ctx, hc, dlURL, tag, runtime.GOOS, runtime.GOARCH, token)
+	if err != nil {
+		return err
+	}
+	if err := replaceRunningBinary(bin); err != nil {
+		return fmt.Errorf("install update: %w", err)
+	}
+	fmt.Printf("upgraded to %s\n", tag)
+	return nil
 }
 
 // valueOr resolves a config key (env > .env > user config), falling back to def.
@@ -176,22 +196,32 @@ func extractSemidxBinary(data []byte, ext, goos string) ([]byte, error) {
 		want = "semidx.exe"
 	}
 	if ext == "zip" {
-		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-		if err != nil {
-			return nil, fmt.Errorf("open zip: %w", err)
-		}
-		for _, f := range zr.File {
-			if filepath.Base(f.Name) == want {
-				rc, err := f.Open()
-				if err != nil {
-					return nil, err
-				}
-				defer func() { _ = rc.Close() }()
-				return io.ReadAll(rc)
-			}
-		}
-		return nil, fmt.Errorf("%s not found in archive", want)
+		return extractFromZip(data, want)
 	}
+	return extractFromTarGz(data, want)
+}
+
+// extractFromZip returns the named entry from a zip release archive.
+func extractFromZip(data []byte, want string) ([]byte, error) {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, fmt.Errorf("open zip: %w", err)
+	}
+	for _, f := range zr.File {
+		if filepath.Base(f.Name) == want {
+			rc, err := f.Open()
+			if err != nil {
+				return nil, err
+			}
+			defer func() { _ = rc.Close() }()
+			return io.ReadAll(rc)
+		}
+	}
+	return nil, fmt.Errorf("%s not found in archive", want)
+}
+
+// extractFromTarGz returns the named entry from a gzip'd tar release archive.
+func extractFromTarGz(data []byte, want string) ([]byte, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("open gzip: %w", err)

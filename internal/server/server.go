@@ -22,6 +22,9 @@ import (
 	"github.com/lgldsilva/semidx/internal/webadmin"
 )
 
+// headerContentType is the HTTP Content-Type header name.
+const headerContentType = "Content-Type"
+
 // Server is the HTTP API. It owns the store, embedder and search service; token
 // auth is enforced per route.
 type Server struct {
@@ -112,7 +115,7 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set(headerContentType, "text/plain")
 	_, _ = w.Write([]byte("ok"))
 }
 
@@ -121,7 +124,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusServiceUnavailable, "database not ready")
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set(headerContentType, "text/plain")
 	_, _ = w.Write([]byte("ready"))
 }
 
@@ -203,7 +206,7 @@ func (r *statusRecorder) WriteHeader(code int) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }

@@ -139,25 +139,7 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 			created, softErrs, outcome, units, ferr := idx.indexFile(ctx, projectID, path, rel, model)
 
 			mu.Lock()
-			stats.Errors += softErrs
-			switch {
-			case ferr != nil:
-				stats.Errors++
-				idx.logf("[err] %s: %s", rel, truncateErr(ferr, 200))
-			case outcome == outcomeIndexed:
-				stats.ChunksCreated += created
-				stats.FilesIndexed++
-			case outcome == outcomeSkippedUnchanged:
-				stats.FilesSkipped++
-			case outcome == outcomeEncrypted:
-				stats.FilesEncrypted++
-				stats.EncryptedPaths = append(stats.EncryptedPaths, rel)
-			}
-			// Record every searchable unit (a file, or an archive's entries) in the
-			// worktree manifest so pruning matches the actual stored paths.
-			for _, u := range units {
-				manifest[u.path] = u.hash
-			}
+			idx.accumulate(stats, manifest, rel, created, softErrs, outcome, units, ferr)
 			processed++
 			done, chunks := processed, stats.ChunksCreated
 			mu.Unlock()
@@ -176,11 +158,7 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 	// no worktree still references (bounding growth). Best-effort — a manifest
 	// failure shouldn't fail an otherwise-successful index.
 	if idx.worktree != "" {
-		if err := idx.db.SetWorktreeFiles(ctx, projectID, idx.worktree, manifest); err != nil {
-			idx.logf("[warn] worktree manifest: %s", truncateErr(err, 200))
-		} else if _, err := idx.db.PruneUnreferencedFiles(ctx, projectID); err != nil {
-			idx.logf("[warn] prune: %s", truncateErr(err, 200))
-		}
+		idx.recordWorktree(ctx, projectID, manifest)
 	}
 
 	if idx.gitMode {
@@ -192,6 +170,43 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 
 	_ = idx.db.UpdateProjectStatus(ctx, projectID, "ready")
 	return stats, nil
+}
+
+// accumulate folds one file's indexing result into the run stats and the
+// worktree manifest. Callers must hold the stats mutex.
+func (idx *Indexer) accumulate(stats *IndexStats, manifest map[string]string, rel string, created, softErrs int, outcome fileOutcome, units []indexedUnit, ferr error) {
+	stats.Errors += softErrs
+	switch {
+	case ferr != nil:
+		stats.Errors++
+		idx.logf("[err] %s: %s", rel, truncateErr(ferr, 200))
+	case outcome == outcomeIndexed:
+		stats.ChunksCreated += created
+		stats.FilesIndexed++
+	case outcome == outcomeSkippedUnchanged:
+		stats.FilesSkipped++
+	case outcome == outcomeEncrypted:
+		stats.FilesEncrypted++
+		stats.EncryptedPaths = append(stats.EncryptedPaths, rel)
+	}
+	// Record every searchable unit (a file, or an archive's entries) in the
+	// worktree manifest so pruning matches the actual stored paths.
+	for _, u := range units {
+		manifest[u.path] = u.hash
+	}
+}
+
+// recordWorktree stores this worktree's manifest and then prunes file versions
+// no worktree still references. Best-effort: a manifest failure is logged and
+// skips the prune, but never fails an otherwise-successful index.
+func (idx *Indexer) recordWorktree(ctx context.Context, projectID int, manifest map[string]string) {
+	if err := idx.db.SetWorktreeFiles(ctx, projectID, idx.worktree, manifest); err != nil {
+		idx.logf("[warn] worktree manifest: %s", truncateErr(err, 200))
+		return
+	}
+	if _, err := idx.db.PruneUnreferencedFiles(ctx, projectID); err != nil {
+		idx.logf("[warn] prune: %s", truncateErr(err, 200))
+	}
 }
 
 // scanFiles walks projectPath, skipping ignored dirs and non-indexable files,
@@ -304,39 +319,7 @@ func (idx *Indexer) indexContent(ctx context.Context, projectID int, rel, model 
 	}
 
 	if extract.Supported(rel) {
-		docs, err := extract.ExtractAll(rel, content)
-		switch {
-		case errors.Is(err, extract.ErrEncrypted):
-			// Password-protected: skip now, but if the type is one we can decrypt,
-			// flag it so the caller can prompt for a password (`semidx unlock`).
-			if extract.CanBeEncrypted(rel) {
-				return 0, 0, outcomeEncrypted, nil, nil
-			}
-			return 0, 0, outcomeSkippedEmpty, nil, nil
-		case err != nil:
-			return 0, 1, outcomeSkippedEmpty, nil, nil // malformed: soft error, never fatal
-		}
-		outcome = outcomeSkippedEmpty
-		for _, d := range docs {
-			c, s, o, h, e := idx.indexUnit(ctx, projectID, d.Path, model, []byte(d.Text))
-			if e != nil {
-				return created, softErrs, outcomeSkippedEmpty, units, e
-			}
-			created += c
-			softErrs += s
-			if h != "" {
-				units = append(units, indexedUnit{d.Path, h})
-			}
-			switch o {
-			case outcomeIndexed:
-				outcome = outcomeIndexed
-			case outcomeSkippedUnchanged:
-				if outcome != outcomeIndexed {
-					outcome = outcomeSkippedUnchanged
-				}
-			}
-		}
-		return created, softErrs, outcome, units, nil
+		return idx.indexExtracted(ctx, projectID, rel, model, content)
 	}
 
 	c, s, o, h, e := idx.indexUnit(ctx, projectID, rel, model, content)
@@ -344,6 +327,54 @@ func (idx *Indexer) indexContent(ctx context.Context, projectID int, rel, model 
 		units = []indexedUnit{{rel, h}}
 	}
 	return c, s, o, units, e
+}
+
+// indexExtracted extracts a document/archive into its searchable units and
+// indexes each, aggregating their outcomes. A password-protected input is
+// flagged (or silently skipped when we can't decrypt its type); a malformed one
+// is a soft error, never fatal.
+func (idx *Indexer) indexExtracted(ctx context.Context, projectID int, rel, model string, content []byte) (created, softErrs int, outcome fileOutcome, units []indexedUnit, hardErr error) {
+	docs, err := extract.ExtractAll(rel, content)
+	switch {
+	case errors.Is(err, extract.ErrEncrypted):
+		// Password-protected: skip now, but if the type is one we can decrypt,
+		// flag it so the caller can prompt for a password (`semidx unlock`).
+		if extract.CanBeEncrypted(rel) {
+			return 0, 0, outcomeEncrypted, nil, nil
+		}
+		return 0, 0, outcomeSkippedEmpty, nil, nil
+	case err != nil:
+		return 0, 1, outcomeSkippedEmpty, nil, nil // malformed: soft error, never fatal
+	}
+	outcome = outcomeSkippedEmpty
+	for _, d := range docs {
+		c, s, o, h, e := idx.indexUnit(ctx, projectID, d.Path, model, []byte(d.Text))
+		if e != nil {
+			return created, softErrs, outcomeSkippedEmpty, units, e
+		}
+		created += c
+		softErrs += s
+		if h != "" {
+			units = append(units, indexedUnit{d.Path, h})
+		}
+		outcome = mergeOutcome(outcome, o)
+	}
+	return created, softErrs, outcome, units, nil
+}
+
+// mergeOutcome folds one unit's outcome into the aggregate for a multi-unit
+// input: any indexed unit makes the whole input indexed; otherwise an unchanged
+// unit upgrades an empty aggregate to unchanged.
+func mergeOutcome(current, o fileOutcome) fileOutcome {
+	switch o {
+	case outcomeIndexed:
+		return outcomeIndexed
+	case outcomeSkippedUnchanged:
+		if current != outcomeIndexed {
+			return outcomeSkippedUnchanged
+		}
+	}
+	return current
 }
 
 // indexUnit chunks, embeds and stores one already-textual unit (a file's content
@@ -376,13 +407,25 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		return 0, 0, outcomeSkippedEmpty, "", err
 	}
 
+	created, softErrs, err = idx.storeChunks(ctx, projectID, fileID, rel, model, chunks)
+	if err != nil {
+		return 0, 0, outcomeSkippedEmpty, "", err
+	}
+	return created, softErrs, outcomeIndexed, hash, nil
+}
+
+// storeChunks turns a unit's chunks into stored rows, honoring keyword-only mode
+// and privacy routing. It stores the chunks text-only in keyword-only mode, or
+// when a sensitive file cannot be embedded by a local provider; otherwise it
+// embeds them (forcing a local provider for sensitive files).
+func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel, model string, chunks []chunker.Chunk) (created, softErrs int, hardErr error) {
 	// Keyword-only mode: no embedding provider at all — store the chunks as text
 	// so they stay searchable by keyword (FTS/ILIKE) without any model.
 	if idx.keywordOnly {
 		if err := idx.db.InsertChunksTextOnly(ctx, projectID, fileID, chunks, idx.dims); err != nil {
-			return 0, 0, outcomeSkippedEmpty, "", err
+			return 0, 0, err
 		}
-		return len(chunks), 0, outcomeIndexed, hash, nil
+		return len(chunks), 0, nil
 	}
 
 	// Privacy routing: a sensitive file must never be embedded by a cloud
@@ -394,16 +437,16 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		localCtx := embed.WithForceLocal(ctx, true)
 		if _, err := idx.embedder.ModelInfo(localCtx, model); err != nil {
 			if err := idx.db.InsertChunksTextOnly(ctx, projectID, fileID, chunks, idx.dims); err != nil {
-				return 0, 0, outcomeSkippedEmpty, "", err
+				return 0, 0, err
 			}
 			idx.logf("  [local-text] %s (sensitive; stored text-only, no cloud embedding)", rel)
-			return len(chunks), 0, outcomeIndexed, hash, nil
+			return len(chunks), 0, nil
 		}
 		embedCtx = localCtx
 	}
 
 	created, softErrs = idx.embedAndInsert(embedCtx, projectID, fileID, chunks, model, rel)
-	return created, softErrs, outcomeIndexed, hash, nil
+	return created, softErrs, nil
 }
 
 // embedAndInsert embeds chunks in sub-batches and inserts each successful batch.
@@ -495,35 +538,38 @@ func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectP
 		if i > 0 {
 			commit = append([]byte("commit "), commit...)
 		}
-		if len(commit) > maxChunkChars {
-			commit = commit[:maxChunkChars]
-		}
-
-		firstLine := bytes.SplitN(commit, []byte("\n"), 2)
-		filePath := "git:" + string(bytes.TrimSpace(firstLine[0]))
-
-		fileID, err := idx.db.UpsertFile(ctx, projectID, filePath, fmt.Sprintf("%x", sha256.Sum256(commit)), len(commit))
-		if err != nil {
-			continue
-		}
-		if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
-			continue
-		}
-
-		embedding, err := idx.embedder.EmbedSingle(ctx, model, string(commit))
-		if err != nil {
-			continue
-		}
-		chunk := chunker.Chunk{Content: string(commit), StartLine: 1, EndLine: 1}
-		if err := idx.db.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{chunk}, [][]float32{embedding}, idx.dims); err != nil {
-			continue
-		}
-
-		if idx.verbose && i%10 == 0 {
+		if idx.indexCommit(ctx, projectID, model, commit) && idx.verbose && i%10 == 0 {
 			fmt.Printf("  [git] processed %d commits\n", i+1)
 		}
 	}
 	return nil
+}
+
+// indexCommit embeds and stores a single `git log -p` commit block as one chunk,
+// returning true only when the chunk was stored. Every step is best-effort: any
+// error skips this commit without failing the history pass.
+func (idx *Indexer) indexCommit(ctx context.Context, projectID int, model string, commit []byte) bool {
+	if len(commit) > maxChunkChars {
+		commit = commit[:maxChunkChars]
+	}
+
+	firstLine := bytes.SplitN(commit, []byte("\n"), 2)
+	filePath := "git:" + string(bytes.TrimSpace(firstLine[0]))
+
+	fileID, err := idx.db.UpsertFile(ctx, projectID, filePath, fmt.Sprintf("%x", sha256.Sum256(commit)), len(commit))
+	if err != nil {
+		return false
+	}
+	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
+		return false
+	}
+
+	embedding, err := idx.embedder.EmbedSingle(ctx, model, string(commit))
+	if err != nil {
+		return false
+	}
+	chunk := chunker.Chunk{Content: string(commit), StartLine: 1, EndLine: 1}
+	return idx.db.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{chunk}, [][]float32{embedding}, idx.dims) == nil
 }
 
 func (idx *Indexer) logf(format string, args ...any) {

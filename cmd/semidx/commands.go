@@ -34,6 +34,20 @@ func (d *deps) applyPrivacy(force bool) {
 	}
 }
 
+// modelDims resolves the embedding dimensions for a model: the fixed keyword
+// bucket in keyword-only mode, otherwise the provider's reported dims. Callers
+// wrap the error with their own context.
+func (d *deps) modelDims(ctx context.Context, model string) (int, error) {
+	if d.cfg.KeywordOnly {
+		return store.KeywordDims, nil
+	}
+	info, err := d.emb.ModelInfo(ctx, model)
+	if err != nil {
+		return 0, err
+	}
+	return info.Dims, nil
+}
+
 // indexTarget is how a --project path resolves into the store's identity model:
 // a git project (keyed by repo identity, rooted at the worktree toplevel) or a
 // document folder (keyed by its absolute path). Shared by index and unlock so
@@ -65,6 +79,34 @@ func docsFlagHint(docs bool) string {
 		return " --docs"
 	}
 	return ""
+}
+
+// printIndexHeader prints the pre-index banner: the model and its dims, or the
+// keyword-only notice when no embeddings are used.
+func printIndexHeader(tgt indexTarget, model string, dims int, keywordOnly bool) {
+	if keywordOnly {
+		fmt.Printf("Indexing project: %s\nPath: %s (%s)\nMode: keyword-only (no embeddings)\n", tgt.name, tgt.indexPath, tgt.sourceType)
+		return
+	}
+	fmt.Printf("Indexing project: %s\nPath: %s (%s)\nModel: %s (dims=%d)\n", tgt.name, tgt.indexPath, tgt.sourceType, model, dims)
+}
+
+// recordEncryptedPending saves the password-protected files that `index`
+// skipped so `semidx unlock` can find them later, and points the user at it. A
+// no-op when nothing was encrypted.
+func recordEncryptedPending(tgt indexTarget, model, projectPath string, docs bool, stats *indexing.IndexStats) {
+	if stats.FilesEncrypted == 0 {
+		return
+	}
+	abs := make([]string, 0, len(stats.EncryptedPaths))
+	for _, rel := range stats.EncryptedPaths {
+		abs = append(abs, filepath.Join(tgt.indexPath, rel))
+	}
+	if err := pending.Save(tgt.identity, &pending.Registry{Project: tgt.name, Model: model, Files: abs}); err != nil {
+		fmt.Fprintf(os.Stderr, "[warn] could not record encrypted files: %v\n", err)
+	}
+	fmt.Printf("Files needing a password: %d\n  → run: semidx unlock --project %s%s\n",
+		stats.FilesEncrypted, projectPath, docsFlagHint(docs))
 }
 
 func newIndexCmd(d *deps) *cobra.Command {
@@ -104,17 +146,11 @@ With no embedding provider configured, add --keyword to index text-only.`,
 			tgt := resolveTarget(ctx, projectPath, docs)
 
 			// Keyword-only mode needs no model: dims come from the fixed text bucket.
-			dims := store.KeywordDims
-			if !d.cfg.KeywordOnly {
-				info, err := d.emb.ModelInfo(ctx, model)
-				if err != nil {
-					return fmt.Errorf("model info for %s: %w (no embedding provider reachable? re-run with --keyword to index text-only)", model, err)
-				}
-				dims = info.Dims
-				fmt.Printf("Indexing project: %s\nPath: %s (%s)\nModel: %s (dims=%d)\n", tgt.name, tgt.indexPath, tgt.sourceType, model, dims)
-			} else {
-				fmt.Printf("Indexing project: %s\nPath: %s (%s)\nMode: keyword-only (no embeddings)\n", tgt.name, tgt.indexPath, tgt.sourceType)
+			dims, err := d.modelDims(ctx, model)
+			if err != nil {
+				return fmt.Errorf("model info for %s: %w (no embedding provider reachable? re-run with --keyword to index text-only)", model, err)
 			}
+			printIndexHeader(tgt, model, dims, d.cfg.KeywordOnly)
 
 			if err := db.EnsureChunksTable(ctx, dims); err != nil {
 				return fmt.Errorf("ensure chunks table: %w", err)
@@ -137,17 +173,7 @@ With no embedding provider configured, add --keyword to index text-only.`,
 
 			// Record password-protected files so `semidx unlock` can find them, and
 			// point the user at it.
-			if stats.FilesEncrypted > 0 {
-				abs := make([]string, 0, len(stats.EncryptedPaths))
-				for _, rel := range stats.EncryptedPaths {
-					abs = append(abs, filepath.Join(tgt.indexPath, rel))
-				}
-				if err := pending.Save(tgt.identity, &pending.Registry{Project: tgt.name, Model: model, Files: abs}); err != nil {
-					fmt.Fprintf(os.Stderr, "[warn] could not record encrypted files: %v\n", err)
-				}
-				fmt.Printf("Files needing a password: %d\n  → run: semidx unlock --project %s%s\n",
-					stats.FilesEncrypted, projectPath, docsFlagHint(docs))
-			}
+			recordEncryptedPending(tgt, model, projectPath, docs, stats)
 			return nil
 		},
 	}
@@ -187,28 +213,40 @@ When embeddings are unavailable it transparently falls back to keyword search.`,
 			if asJSON {
 				return renderSearchJSON(os.Stdout, results)
 			}
-			if len(results) > 1 {
-				fmt.Printf("Query: %s (searching %d projects)\n\n", query, len(results))
-			}
-			for _, ps := range results {
-				if len(results) > 1 {
-					fmt.Printf("=== project: %s ===\n", ps.name)
-				} else {
-					fmt.Printf("Searching project: %s (model: %s)\nQuery: %s\n\n", ps.resp.Project.Name, ps.resp.Model, query)
-				}
-				if ps.resp.Fallback {
-					fmt.Fprint(os.Stderr, "[warn] embedding unavailable — used keyword search\n\n")
-				}
-				fmt.Printf("Found %d results in %v\n\n", len(ps.resp.Results), ps.took)
-				if err := (search.HumanFormatter{}).Format(os.Stdout, ps.resp); err != nil {
-					return err
-				}
-			}
-			return nil
+			return renderSearchResults(query, results)
 		},
 	}
 	addSearchFlags(c, &project, &query, &model, &topK, &privacy, &asJSON)
 	return c
+}
+
+// renderSearchResults prints human-readable search results, tagging each block
+// with its project name when more than one project was searched.
+func renderSearchResults(query string, results []projSearch) error {
+	multi := len(results) > 1
+	if multi {
+		fmt.Printf("Query: %s (searching %d projects)\n\n", query, len(results))
+	}
+	for _, ps := range results {
+		if err := renderProjectSearch(query, ps, multi); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// renderProjectSearch prints one project's header and its formatted matches.
+func renderProjectSearch(query string, ps projSearch, multi bool) error {
+	if multi {
+		fmt.Printf("=== project: %s ===\n", ps.name)
+	} else {
+		fmt.Printf("Searching project: %s (model: %s)\nQuery: %s\n\n", ps.resp.Project.Name, ps.resp.Model, query)
+	}
+	if ps.resp.Fallback {
+		fmt.Fprint(os.Stderr, "[warn] embedding unavailable — used keyword search\n\n")
+	}
+	fmt.Printf("Found %d results in %v\n\n", len(ps.resp.Results), ps.took)
+	return (search.HumanFormatter{}).Format(os.Stdout, ps.resp)
 }
 
 func newSgrepCmd(d *deps) *cobra.Command {
@@ -235,32 +273,45 @@ they stay correct even when searching across multiple projects.`,
 				return renderSearchJSON(os.Stdout, results)
 			}
 			// Single project: keep the exact classic anchoring (protects the sgrep
-			// golden). Remote → cwd; local git → the current worktree root; else the
-			// stored project path.
+			// golden).
 			if len(results) == 1 {
 				resp := results[0].resp
-				projectPath := resp.Project.Path
-				if d.remote() {
-					if wd, e := os.Getwd(); e == nil {
-						projectPath = wd
-					}
-				} else if wt := currentWorktreeRoot(cmd.Context()); wt != "" {
-					projectPath = wt
-				}
-				return search.GrepFormatter{ProjectPath: projectPath}.Format(os.Stdout, resp)
+				path := d.sgrepProjectPath(cmd.Context(), resp.Project.Path)
+				return search.GrepFormatter{ProjectPath: path}.Format(os.Stdout, resp)
 			}
-			// Multiple projects: anchor each result at its own project's path so the
-			// absolute file:line stays correct and shows which project it came from.
-			for _, ps := range results {
-				if err := (search.GrepFormatter{ProjectPath: ps.resp.Project.Path}).Format(os.Stdout, ps.resp); err != nil {
-					return err
-				}
-			}
-			return nil
+			return renderSgrepMulti(results)
 		},
 	}
 	addSearchFlags(c, &project, &query, &model, &topK, &privacy, &asJSON)
 	return c
+}
+
+// sgrepProjectPath picks the path grep output is anchored at for a single
+// project: remote → the current working directory; a local git project → the
+// current worktree root; otherwise the stored project path.
+func (d *deps) sgrepProjectPath(ctx context.Context, stored string) string {
+	if d.remote() {
+		if wd, e := os.Getwd(); e == nil {
+			return wd
+		}
+		return stored
+	}
+	if wt := currentWorktreeRoot(ctx); wt != "" {
+		return wt
+	}
+	return stored
+}
+
+// renderSgrepMulti prints grep-style output across projects, anchoring each
+// result at its own project's path so the absolute file:line stays correct and
+// shows which project it came from.
+func renderSgrepMulti(results []projSearch) error {
+	for _, ps := range results {
+		if err := (search.GrepFormatter{ProjectPath: ps.resp.Project.Path}).Format(os.Stdout, ps.resp); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func addSearchFlags(c *cobra.Command, project, query, model *string, topK *int, privacy, asJSON *bool) {
@@ -347,32 +398,41 @@ first run it prints a one-time bootstrap admin token. Requires Postgres
 			log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 			srv := server.New(db, d.emb, log)
 
-			token, err := srv.EnsureBootstrapToken(cmd.Context(), d.cfg.BootstrapToken)
-			if err != nil {
-				return fmt.Errorf("bootstrap token: %w", err)
-			}
-			if token != "" {
-				fmt.Fprintf(os.Stderr, "bootstrap admin token (shown once — save it): %s\n", token)
-			}
-			admin, err := srv.EnsureBootstrapAdmin(cmd.Context(), d.cfg.BootstrapAdminUser, d.cfg.BootstrapAdminPassword)
-			if err != nil {
-				return fmt.Errorf("bootstrap admin: %w", err)
-			}
-			if admin != "" {
-				fmt.Fprintf(os.Stderr, "bootstrap web admin user created: %s\n", admin)
-			}
-			if d.cfg.JWTSecret != "" {
-				if err := srv.EnableJWT(d.cfg.JWTSecret); err != nil {
-					return fmt.Errorf("enable JWT control tokens: %w", err)
-				}
-			}
-			if err := srv.MountAdmin(d.cfg.CookieSecure); err != nil {
-				return fmt.Errorf("mount admin UI: %w", err)
+			if err := d.bootstrapServer(cmd.Context(), srv); err != nil {
+				return err
 			}
 			srv.StartWorkers(cmd.Context(), d.cfg.IndexWorkers, d.cfg.DataDir)
 			return srv.Run(cmd.Context(), d.cfg.ListenAddr)
 		},
 	}
+}
+
+// bootstrapServer runs the one-time server setup: bootstrap admin token + user,
+// optional JWT control tokens, and mounting the web admin UI.
+func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server) error {
+	token, err := srv.EnsureBootstrapToken(ctx, d.cfg.BootstrapToken)
+	if err != nil {
+		return fmt.Errorf("bootstrap token: %w", err)
+	}
+	if token != "" {
+		fmt.Fprintf(os.Stderr, "bootstrap admin token (shown once — save it): %s\n", token)
+	}
+	admin, err := srv.EnsureBootstrapAdmin(ctx, d.cfg.BootstrapAdminUser, d.cfg.BootstrapAdminPassword)
+	if err != nil {
+		return fmt.Errorf("bootstrap admin: %w", err)
+	}
+	if admin != "" {
+		fmt.Fprintf(os.Stderr, "bootstrap web admin user created: %s\n", admin)
+	}
+	if d.cfg.JWTSecret != "" {
+		if err := srv.EnableJWT(d.cfg.JWTSecret); err != nil {
+			return fmt.Errorf("enable JWT control tokens: %w", err)
+		}
+	}
+	if err := srv.MountAdmin(d.cfg.CookieSecure); err != nil {
+		return fmt.Errorf("mount admin UI: %w", err)
+	}
+	return nil
 }
 
 func newMCPCmd(d *deps) *cobra.Command {

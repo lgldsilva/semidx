@@ -79,13 +79,7 @@ func extractOpenDocument(data []byte) (string, error) {
 	}
 	// An encrypted ODF marks entries in META-INF/manifest.xml with a
 	// manifest:encryption-data element; content.xml is then ciphertext.
-	var content *zip.File
-	for _, f := range zr.File {
-		if f.Name == "content.xml" {
-			content = f
-			break
-		}
-	}
+	content := zipEntry(zr, "content.xml")
 	if content == nil {
 		return "", fmt.Errorf("extract: opendocument: missing content.xml")
 	}
@@ -95,6 +89,13 @@ func extractOpenDocument(data []byte) (string, error) {
 	}
 	defer func() { _ = rc.Close() }()
 
+	return parseODFText(rc)
+}
+
+// parseODFText streams an ODF content.xml and collects its visible text,
+// breaking a line at paragraph/heading/table-row/list-item boundaries and
+// emitting a tab for <text:tab>.
+func parseODFText(rc io.Reader) (string, error) {
 	dec := xml.NewDecoder(rc)
 	var b strings.Builder
 	for {
@@ -113,13 +114,22 @@ func extractOpenDocument(data []byte) (string, error) {
 				b.WriteByte('\t')
 			}
 		case xml.EndElement:
-			switch t.Name.Local {
-			case "p", "h", "table-row", "list-item":
+			if isODFLineBreak(t.Name.Local) {
 				b.WriteByte('\n')
 			}
 		}
 	}
 	return normalizeText(b.String()), nil
+}
+
+// isODFLineBreak reports whether an ODF end element ends a line.
+func isODFLineBreak(name string) bool {
+	switch name {
+	case "p", "h", "table-row", "list-item":
+		return true
+	default:
+		return false
+	}
 }
 
 // extractEPUB flattens an .epub (a zip of XHTML documents) to text by stripping
@@ -216,74 +226,124 @@ func decodeNotebookSource(raw json.RawMessage) (string, error) {
 // It is a pragmatic reader for common editor output (Word/WordPad), not a full
 // RTF parser.
 func extractRTF(data []byte) (string, error) {
-	s := data
-	if !bytes.HasPrefix(bytes.TrimSpace(s), []byte(`{\rtf`)) {
+	if !bytes.HasPrefix(bytes.TrimSpace(data), []byte(`{\rtf`)) {
 		return "", fmt.Errorf("extract: not an rtf document")
 	}
-	// skipDepth > 0 means we are inside a destination whose text is not content.
-	var b strings.Builder
-	skipTo := -1 // group depth to stop skipping at; -1 = not skipping
-	depth := 0
-	i := 0
-	for i < len(s) {
-		switch c := s[i]; c {
+	p := &rtfParser{s: data, skipTo: -1}
+	return p.parse(), nil
+}
+
+// rtfParser holds the state of the RTF scan: the current byte cursor (i), the
+// brace-group depth, and skipTo — the group depth to stop skipping at, or -1
+// when not inside a non-content destination.
+type rtfParser struct {
+	s      []byte
+	b      strings.Builder
+	skipTo int
+	depth  int
+	i      int
+}
+
+// parse scans the whole document and returns the normalized plain text.
+func (p *rtfParser) parse() string {
+	for p.i < len(p.s) {
+		switch c := p.s[p.i]; c {
 		case '{':
-			depth++
-			i++
+			p.depth++
+			p.i++
 		case '}':
-			if skipTo >= 0 && depth == skipTo {
-				skipTo = -1
-			}
-			depth--
-			i++
+			p.closeGroup()
 		case '\\':
-			if i+1 < len(s) && (s[i+1] == '\\' || s[i+1] == '{' || s[i+1] == '}') {
-				if skipTo < 0 {
-					b.WriteByte(s[i+1])
-				}
-				i += 2
-				continue
-			}
-			if i+1 < len(s) && s[i+1] == '*' {
-				// ignorable destination: skip the whole enclosing group
-				if skipTo < 0 {
-					skipTo = depth
-				}
-				i += 2
-				continue
-			}
-			if i+3 < len(s) && s[i+1] == '\'' {
-				if v, err := strconv.ParseInt(string(s[i+2:i+4]), 16, 32); err == nil && skipTo < 0 {
-					// \'hh is a byte in the document codepage; decode as Latin-1
-					// (rune == byte) into UTF-8, which covers the common range.
-					b.WriteRune(rune(v))
-				}
-				i += 4
-				continue
-			}
-			word, next := rtfControlWord(s, i+1)
-			i = next
-			if skipTo >= 0 {
-				continue
-			}
-			switch word {
-			case "par", "line", "sect", "page", "row":
-				b.WriteByte('\n')
-			case "tab", "cell":
-				b.WriteByte('\t')
-			case "fonttbl", "colortbl", "stylesheet", "info", "pict", "header", "footer":
-				skipTo = depth // these destinations hold no body text
-			}
+			p.handleEscape()
 		case '\r', '\n':
-			i++
+			p.i++
 		default:
-			if skipTo < 0 {
-				b.WriteByte(c)
+			if p.skipTo < 0 {
+				p.b.WriteByte(c)
 			}
-			i++
+			p.i++
 		}
 	}
-	return normalizeText(b.String()), nil
+	return normalizeText(p.b.String())
+}
+
+// closeGroup ends a brace group, leaving skip mode if this is the group we were
+// skipping to.
+func (p *rtfParser) closeGroup() {
+	if p.skipTo >= 0 && p.depth == p.skipTo {
+		p.skipTo = -1
+	}
+	p.depth--
+	p.i++
+}
+
+// handleEscape dispatches a backslash escape: a literal brace/backslash, an
+// ignorable destination, a \'hh hex byte, or a control word.
+func (p *rtfParser) handleEscape() {
+	if p.tryLiteralEscape() || p.tryIgnorableDest() || p.tryHexEscape() {
+		return
+	}
+	word, next := rtfControlWord(p.s, p.i+1)
+	p.i = next
+	if p.skipTo < 0 {
+		p.applyControlWord(word)
+	}
+}
+
+// tryLiteralEscape handles \\, \{ and \} (an escaped backslash or brace).
+func (p *rtfParser) tryLiteralEscape() bool {
+	if p.i+1 >= len(p.s) {
+		return false
+	}
+	switch p.s[p.i+1] {
+	case '\\', '{', '}':
+		if p.skipTo < 0 {
+			p.b.WriteByte(p.s[p.i+1])
+		}
+		p.i += 2
+		return true
+	default:
+		return false
+	}
+}
+
+// tryIgnorableDest handles \* — an ignorable destination whose whole enclosing
+// group is skipped.
+func (p *rtfParser) tryIgnorableDest() bool {
+	if p.i+1 < len(p.s) && p.s[p.i+1] == '*' {
+		if p.skipTo < 0 {
+			p.skipTo = p.depth
+		}
+		p.i += 2
+		return true
+	}
+	return false
+}
+
+// tryHexEscape handles \'hh, a byte in the document codepage; it is decoded as
+// Latin-1 (rune == byte) into UTF-8, which covers the common range.
+func (p *rtfParser) tryHexEscape() bool {
+	if p.i+3 < len(p.s) && p.s[p.i+1] == '\'' {
+		if v, err := strconv.ParseInt(string(p.s[p.i+2:p.i+4]), 16, 32); err == nil && p.skipTo < 0 {
+			p.b.WriteRune(rune(v))
+		}
+		p.i += 4
+		return true
+	}
+	return false
+}
+
+// applyControlWord maps a control word to whitespace, or enters skip mode for a
+// destination that holds no body text.
+func (p *rtfParser) applyControlWord(word string) {
+	switch word {
+	case "par", "line", "sect", "page", "row":
+		p.b.WriteByte('\n')
+	case "tab", "cell":
+		p.b.WriteByte('\t')
+	case "fonttbl", "colortbl", "stylesheet", "info", "pict", "header", "footer":
+		p.skipTo = p.depth // these destinations hold no body text
+	}
 }
 
 // rtfControlWord reads a control word starting at i (just past the backslash):

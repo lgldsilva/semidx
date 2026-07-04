@@ -35,41 +35,73 @@ func classAPI(data []byte) (out string, err error) {
 		return "", errNotClass
 	}
 
-	// Constant pool is 1-indexed with count-1 entries; Long/Double take two slots.
-	utf8s := make(map[int]string, count)
-	classNameIdx := make(map[int]int, count) // Class entry index -> name Utf8 index
-	for i := 1; i < count; i++ {
-		if r.err != nil {
-			return "", errNotClass
-		}
-		tag := r.u1()
-		switch tag {
-		case 1: // Utf8
-			n := int(r.u2())
-			utf8s[i] = r.str(n)
-		case 7: // Class -> name_index
-			classNameIdx[i] = int(r.u2())
-		case 8, 16, 19, 20: // String / MethodType / Module / Package: one u2 index
-			r.u2()
-		case 3, 4, 9, 10, 11, 12, 17, 18: // Integer/Float/*ref/NameAndType/Dynamic: 4 bytes
-			r.u4()
-		case 5, 6: // Long / Double: 8 bytes, and occupy two pool slots
-			r.u4()
-			r.u4()
-			i++
-		case 15: // MethodHandle: u1 + u2
-			r.u1()
-			r.u2()
-		default:
-			return "", errNotClass // unknown tag → not a class we understand
-		}
+	utf8s, classNameIdx, ok := parseConstantPool(r, count)
+	if !ok {
+		return "", errNotClass
 	}
+
 	r.u2() // access_flags
 	thisClass := int(r.u2())
 	if r.err != nil {
 		return "", errNotClass
 	}
 
+	return renderClassSymbols(count, thisClass, utf8s, classNameIdx), nil
+}
+
+// parseConstantPool reads the constant-pool entries into the two lookup maps the
+// caller needs: Utf8 index -> string, and Class index -> name Utf8 index. It
+// returns ok=false on any malformed/short input or an unknown tag.
+func parseConstantPool(r *reader, count int) (utf8s map[int]string, classNameIdx map[int]int, ok bool) {
+	// Constant pool is 1-indexed with count-1 entries; Long/Double take two slots.
+	utf8s = make(map[int]string, count)
+	classNameIdx = make(map[int]int, count) // Class entry index -> name Utf8 index
+	for i := 1; i < count; i++ {
+		if r.err != nil {
+			return nil, nil, false
+		}
+		twoSlot, known := readConstEntry(r, i, utf8s, classNameIdx)
+		if !known {
+			return nil, nil, false
+		}
+		if twoSlot {
+			i++ // Long/Double occupy two pool slots
+		}
+	}
+	return utf8s, classNameIdx, true
+}
+
+// readConstEntry consumes one constant-pool entry at index i, recording Utf8 and
+// Class entries. It returns twoSlot=true for Long/Double (which take two slots)
+// and known=false for an unrecognised tag.
+func readConstEntry(r *reader, i int, utf8s map[int]string, classNameIdx map[int]int) (twoSlot, known bool) {
+	switch r.u1() {
+	case 1: // Utf8
+		n := int(r.u2())
+		utf8s[i] = r.str(n)
+	case 7: // Class -> name_index
+		classNameIdx[i] = int(r.u2())
+	case 8, 16, 19, 20: // String / MethodType / Module / Package: one u2 index
+		r.u2()
+	case 3, 4, 9, 10, 11, 12, 17, 18: // Integer/Float/*ref/NameAndType/Dynamic: 4 bytes
+		r.u4()
+	case 5, 6: // Long / Double: 8 bytes, and occupy two pool slots
+		r.u4()
+		r.u4()
+		return true, true
+	case 15: // MethodHandle: u1 + u2
+		r.u1()
+		r.u2()
+	default:
+		return false, false // unknown tag → not a class we understand
+	}
+	return false, true
+}
+
+// renderClassSymbols builds the API-surface text: the fully-qualified class name
+// (from thisClass) followed by the distinct, human-meaningful UTF-8 constants,
+// skipping type descriptors like "()V" and "[Ljava/lang/Object;".
+func renderClassSymbols(count, thisClass int, utf8s map[int]string, classNameIdx map[int]int) string {
 	var b strings.Builder
 	if ni, ok := classNameIdx[thisClass]; ok {
 		if name := utf8s[ni]; name != "" {
@@ -77,8 +109,6 @@ func classAPI(data []byte) (out string, err error) {
 			b.WriteByte('\n')
 		}
 	}
-	// Emit the distinct, human-meaningful UTF-8 constants (names + literals),
-	// skipping type descriptors like "()V" and "[Ljava/lang/Object;".
 	seen := make(map[string]bool)
 	for i := 1; i < count; i++ {
 		s := utf8s[i]
@@ -89,7 +119,7 @@ func classAPI(data []byte) (out string, err error) {
 		b.WriteString(s)
 		b.WriteByte('\n')
 	}
-	return b.String(), nil
+	return b.String()
 }
 
 // isReadableSymbol keeps identifiers, dotted/slashed names and string literals,

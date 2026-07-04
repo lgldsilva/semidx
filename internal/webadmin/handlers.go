@@ -12,6 +12,11 @@ import (
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
+const (
+	tmplLogin        = "login.html"
+	msgInternalError = "internal error"
+)
+
 // page is the data every rendered template receives.
 type page struct {
 	User   *store.User
@@ -39,7 +44,7 @@ func (a *Admin) loginForm(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	a.render(w, "login.html", page{Err: r.URL.Query().Get("err")})
+	a.render(w, tmplLogin, page{Err: r.URL.Query().Get("err")})
 }
 
 func (a *Admin) loginSubmit(w http.ResponseWriter, r *http.Request) {
@@ -48,13 +53,13 @@ func (a *Admin) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 
 	if !a.limiter.allowed(username, now) {
-		a.render(w, "login.html", page{Err: "too many attempts — wait a few minutes and try again"})
+		a.render(w, tmplLogin, page{Err: "too many attempts — wait a few minutes and try again"})
 		return
 	}
 
 	fail := func() {
 		a.limiter.record(username, now)
-		a.render(w, "login.html", page{Err: "invalid username or password"})
+		a.render(w, tmplLogin, page{Err: "invalid username or password"})
 	}
 
 	user, err := a.store.GetUserByUsername(r.Context(), username)
@@ -64,7 +69,7 @@ func (a *Admin) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		a.log.Error("login lookup failed", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	ok, err := passwd.Verify(password, user.PasswordHash)
@@ -75,12 +80,12 @@ func (a *Admin) loginSubmit(w http.ResponseWriter, r *http.Request) {
 
 	plaintext, hash, err := newSessionToken()
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if err := a.store.CreateSession(r.Context(), hash, user.ID, now.Add(sessionTTL)); err != nil {
 		a.log.Error("create session failed", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	a.limiter.reset(username)
@@ -168,7 +173,7 @@ func (a *Admin) keysCreate(w http.ResponseWriter, r *http.Request, ac *authCtx) 
 	}
 	plaintext, hash, err := generateAPIToken()
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if _, err := a.store.CreateUserToken(r.Context(), ac.user.ID, name, hash, scopes); err != nil {
@@ -218,7 +223,7 @@ func (a *Admin) accountChangePassword(w http.ResponseWriter, r *http.Request, ac
 	}
 	hash, err := passwd.Hash(next)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	if err := a.store.SetUserPassword(r.Context(), ac.user.ID, hash); err != nil {
@@ -257,7 +262,7 @@ func (a *Admin) usersCreate(w http.ResponseWriter, r *http.Request, ac *authCtx)
 	}
 	hash, err := passwd.Hash(password)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	switch _, err := a.store.CreateUser(r.Context(), username, hash, role); {

@@ -92,61 +92,77 @@ func chunkCode(content []byte, maxChars int) []Chunk {
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 	scanner.Split(scanLines)
 
-	var chunks []Chunk
-	var current strings.Builder
-	curStart, curEnd := 0, 0
+	acc := codeAccumulator{maxChars: maxChars}
 	lineNum := 0
-
-	flush := func() {
-		if current.Len() == 0 {
-			return
-		}
-		chunks = append(chunks, Chunk{Content: strings.TrimSpace(current.String()), StartLine: curStart, EndLine: curEnd})
-		current.Reset()
-	}
 
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
 
-		if trimmed == "" && current.Len() > 0 {
-			flush()
-			continue
+		switch {
+		case strings.TrimSpace(line) == "" && acc.current.Len() > 0:
+			// Blank line ends the current run.
+			acc.flush()
+		case len(line) > maxChars:
+			acc.appendOversizedLine(line, lineNum)
+		default:
+			acc.appendLine(line, lineNum)
 		}
-
-		// A single line longer than the budget can't fit any chunk: flush what
-		// we have, then hard-split the line on rune boundaries (all pieces map
-		// to that one source line).
-		if len(line) > maxChars {
-			flush()
-			for _, piece := range splitRunes(line, maxChars) {
-				if p := strings.TrimSpace(piece); p != "" {
-					chunks = append(chunks, Chunk{Content: p, StartLine: lineNum, EndLine: lineNum})
-				}
-			}
-			continue
-		}
-
-		if current.Len()+len(line)+1 > maxChars && current.Len() > 0 {
-			flush()
-		}
-		if current.Len() == 0 {
-			curStart = lineNum
-		}
-		curEnd = lineNum
-		current.WriteString(line)
-		current.WriteString("\n")
 	}
 
-	flush()
+	acc.flush()
 
 	// Files without blank lines produce no chunks above; fall back to prose split.
-	if len(chunks) == 0 && len(content) > 0 {
+	if len(acc.chunks) == 0 && len(content) > 0 {
 		return chunkText(content, maxChars)
 	}
 
-	return chunks
+	return acc.chunks
+}
+
+// codeAccumulator merges code lines into bounded chunks while tracking the
+// 1-based source line range of the chunk currently being built.
+type codeAccumulator struct {
+	chunks   []Chunk
+	current  strings.Builder
+	curStart int
+	curEnd   int
+	maxChars int
+}
+
+// flush emits the pending chunk (if any) and resets the builder.
+func (a *codeAccumulator) flush() {
+	if a.current.Len() == 0 {
+		return
+	}
+	a.chunks = append(a.chunks, Chunk{Content: strings.TrimSpace(a.current.String()), StartLine: a.curStart, EndLine: a.curEnd})
+	a.current.Reset()
+}
+
+// appendLine adds a within-budget line, flushing first if it would overflow the
+// current chunk.
+func (a *codeAccumulator) appendLine(line string, lineNum int) {
+	if a.current.Len()+len(line)+1 > a.maxChars && a.current.Len() > 0 {
+		a.flush()
+	}
+	if a.current.Len() == 0 {
+		a.curStart = lineNum
+	}
+	a.curEnd = lineNum
+	a.current.WriteString(line)
+	a.current.WriteString("\n")
+}
+
+// appendOversizedLine handles a single line longer than the budget: it flushes
+// what we have, then hard-splits the line on rune boundaries (all pieces map to
+// that one source line).
+func (a *codeAccumulator) appendOversizedLine(line string, lineNum int) {
+	a.flush()
+	for _, piece := range splitRunes(line, a.maxChars) {
+		if p := strings.TrimSpace(piece); p != "" {
+			a.chunks = append(a.chunks, Chunk{Content: p, StartLine: lineNum, EndLine: lineNum})
+		}
+	}
 }
 
 func chunkText(content []byte, maxChars int) []Chunk {
@@ -160,23 +176,7 @@ func chunkText(content []byte, maxChars int) []Chunk {
 	start := 0
 
 	for start < len(text) {
-		end := start + maxChars
-		if end > len(text) {
-			end = len(text)
-		}
-
-		// Prefer breaking at a newline past the halfway point; otherwise snap the
-		// cut back to a rune boundary so a multi-byte character is never split.
-		if end < len(text) {
-			if nl := strings.LastIndex(text[start:end], "\n"); nl > maxChars/2 {
-				end = start + nl + 1
-			} else {
-				for end > start && !utf8.RuneStart(text[end]) {
-					end--
-				}
-			}
-		}
-
+		end := proseCutEnd(text, start, maxChars)
 		chunks = append(chunks, Chunk{
 			Content:   strings.TrimSpace(text[start:end]),
 			StartLine: lineOf(text, start),
@@ -185,18 +185,41 @@ func chunkText(content []byte, maxChars int) []Chunk {
 		if end >= len(text) {
 			break
 		}
-
-		next := end - overlap
-		for next > start && next < len(text) && !utf8.RuneStart(text[next]) {
-			next-- // keep the overlap window on a rune boundary too
-		}
-		if next <= start {
-			next = end // guarantee forward progress even when overlap can't apply
-		}
-		start = next
+		start = proseNextStart(text, start, end, overlap)
 	}
 
 	return chunks
+}
+
+// proseCutEnd picks the end offset of a prose chunk beginning at start. It aims
+// for start+maxChars but prefers breaking at a newline past the halfway point,
+// and otherwise snaps back to a rune boundary so a multi-byte character is never
+// split.
+func proseCutEnd(text string, start, maxChars int) int {
+	end := start + maxChars
+	if end >= len(text) {
+		return len(text)
+	}
+	if nl := strings.LastIndex(text[start:end], "\n"); nl > maxChars/2 {
+		return start + nl + 1
+	}
+	for end > start && !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return end
+}
+
+// proseNextStart computes the start offset of the next prose chunk, applying the
+// overlap window on a rune boundary while guaranteeing forward progress.
+func proseNextStart(text string, start, end, overlap int) int {
+	next := end - overlap
+	for next > start && next < len(text) && !utf8.RuneStart(text[next]) {
+		next-- // keep the overlap window on a rune boundary too
+	}
+	if next <= start {
+		next = end // guarantee forward progress even when overlap can't apply
+	}
+	return next
 }
 
 // lineOf returns the 1-based line number of the byte offset in text.
