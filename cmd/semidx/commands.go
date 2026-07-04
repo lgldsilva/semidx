@@ -107,7 +107,7 @@ With no embedding provider configured, add --keyword to index text-only.`,
 			if !d.cfg.KeywordOnly {
 				info, err := d.emb.ModelInfo(ctx, model)
 				if err != nil {
-					return fmt.Errorf("model info for %s: %w", model, err)
+					return fmt.Errorf("model info for %s: %w (no embedding provider reachable? re-run with --keyword to index text-only)", model, err)
 				}
 				dims = info.Dims
 				fmt.Printf("Indexing project: %s\nPath: %s (%s)\nModel: %s (dims=%d)\n", tgt.name, tgt.indexPath, tgt.sourceType, model, dims)
@@ -150,7 +150,7 @@ With no embedding provider configured, add --keyword to index text-only.`,
 			return nil
 		},
 	}
-	c.Flags().StringVar(&projectPath, "project", "", "Path to project directory")
+	c.Flags().StringVar(&projectPath, "project", ".", "Path to the project directory (default: current directory)")
 	c.Flags().StringVar(&model, "model", "bge-m3", "Embedding model name")
 	c.Flags().IntVar(&maxFiles, "max-files", 0, "Limit number of files to index (0 = all)")
 	c.Flags().BoolVar(&docs, "docs", false, "Treat the path as a document folder (absolute-path identity), even inside a git repo")
@@ -158,7 +158,6 @@ With no embedding provider configured, add --keyword to index text-only.`,
 	c.Flags().StringVar(&gitSince, "git-since", "30.days", "git log --since duration (e.g. 7.days)")
 	c.Flags().BoolVar(&verbose, "verbose", false, "Show detailed progress and errors")
 	c.Flags().BoolVar(&privacy, "privacy", false, "Force local-only providers (Ollama)")
-	_ = c.MarkFlagRequired("project")
 	return c
 }
 
