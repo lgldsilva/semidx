@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -196,7 +197,7 @@ When embeddings are unavailable it transparently falls back to keyword search.`,
 					fmt.Printf("Searching project: %s (model: %s)\nQuery: %s\n\n", ps.resp.Project.Name, ps.resp.Model, query)
 				}
 				if ps.resp.Fallback {
-					fmt.Print("[warn] embedding unavailable — used keyword search\n\n")
+					fmt.Fprint(os.Stderr, "[warn] embedding unavailable — used keyword search\n\n")
 				}
 				fmt.Printf("Found %d results in %v\n\n", len(ps.resp.Results), ps.took)
 				if err := (search.HumanFormatter{}).Format(os.Stdout, ps.resp); err != nil {
@@ -294,13 +295,26 @@ Gemini → Groq → OpenRouter → Ollama Cloud → local Ollama).`,
 }
 
 func newDropCmd(d *deps) *cobra.Command {
-	return &cobra.Command{
+	var confirm bool
+	c := &cobra.Command{
 		Use:   "drop",
 		Short: "Drop all indexed data",
 		Long: `Delete ALL indexed data — every project, file and chunk — from the active
-store. This is destructive and cannot be undone.`,
-		Example: "  semidx drop",
+store. This is destructive and cannot be undone. You must confirm: either type
+"yes" at the interactive prompt, or pass --confirm (e.g. in scripts).`,
+		Example: "  semidx drop --confirm",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !confirm {
+				fmt.Fprint(os.Stderr, "This permanently deletes ALL indexed data. Type 'yes' to continue (or pass --confirm): ")
+				var answer string
+				// A non-interactive stdin (pipe/CI with no input) yields EOF here, so
+				// answer stays empty and the drop is safely aborted.
+				_, _ = fmt.Scanln(&answer)
+				if strings.ToLower(strings.TrimSpace(answer)) != "yes" {
+					fmt.Fprintln(os.Stderr, "Aborted.")
+					return nil
+				}
+			}
 			db, err := d.indexStore(cmd.Context())
 			if err != nil {
 				return err
@@ -312,6 +326,8 @@ store. This is destructive and cannot be undone.`,
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&confirm, "confirm", false, "Skip the interactive prompt and drop immediately (for scripts)")
+	return c
 }
 
 func newServeCmd(d *deps) *cobra.Command {
