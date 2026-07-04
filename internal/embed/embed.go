@@ -82,7 +82,7 @@ func (ce *ChainEmbedder) Embed(ctx context.Context, model string, inputs ...stri
 			return nil, ctx.Err()
 		}
 	}
-	return nil, fmt.Errorf("chain: falha ao gerar embeddings: %w", lastErr)
+	return nil, fmt.Errorf("chain: failed to generate embeddings: %w", lastErr)
 }
 
 func (ce *ChainEmbedder) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
@@ -101,7 +101,7 @@ func (ce *ChainEmbedder) EmbedSingle(ctx context.Context, model, text string) ([
 			return nil, ctx.Err()
 		}
 	}
-	return nil, fmt.Errorf("chain: falha ao gerar embedding single: %w", lastErr)
+	return nil, fmt.Errorf("chain: failed to generate embedding: %w", lastErr)
 }
 
 func (ce *ChainEmbedder) ModelInfo(ctx context.Context, model string) (*ModelInfo, error) {
@@ -120,7 +120,7 @@ func (ce *ChainEmbedder) ModelInfo(ctx context.Context, model string) (*ModelInf
 			return nil, ctx.Err()
 		}
 	}
-	return nil, fmt.Errorf("chain: falha ao obter model info: %w", lastErr)
+	return nil, fmt.Errorf("chain: failed to get model info: %w", lastErr)
 }
 
 func (ce *ChainEmbedder) ListModels(ctx context.Context) ([]string, error) {
@@ -143,7 +143,7 @@ func (ce *ChainEmbedder) ListModels(ctx context.Context) ([]string, error) {
 		}
 	}
 	if len(models) == 0 {
-		return nil, fmt.Errorf("chain: nenhum modelo de embedding disponível")
+		return nil, fmt.Errorf("chain: no embedding model available")
 	}
 	return models, nil
 }
