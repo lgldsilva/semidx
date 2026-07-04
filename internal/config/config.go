@@ -23,8 +23,10 @@ import (
 )
 
 const (
-	// #nosec G101 -- local development default DSN, not a real credential; overridden by SEMIDX_DB_DSN.
-	defaultDatabaseURL  = "postgres://semantic:semantic@localhost:55432/semantic_indexer"
+	// Credential-free local-dev default: points at the dev Postgres but carries no
+	// password in source. Real deployments set SEMIDX_DB_DSN (the compose does);
+	// a local dev supplies credentials via SEMIDX_DB_DSN or the standard PG* env.
+	defaultDatabaseURL  = "postgres://localhost:55432/semantic_indexer"
 	defaultOllamaURL    = "http://localhost:11434"
 	defaultIndexWorkers = 4
 	defaultListenAddr   = ":8080"
