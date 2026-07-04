@@ -139,8 +139,15 @@ func Load() *Config {
 		BootstrapAdminPassword: env.get("SEMIDX_BOOTSTRAP_ADMIN_PASSWORD", ""),
 		CookieSecure:           env.get("SEMIDX_COOKIE_SECURE", "true") != "false",
 		JWTSecret:              env.get("SEMIDX_JWT_SECRET", ""),
-		LocalIndexPath:         resolveLocalIndex(env.get("SEMIDX_LOCAL_INDEX", "")),
-		KeywordOnly:            env.get("SEMIDX_EMBED_MODE", "") == "none",
+		// If a Postgres DSN is explicitly configured, it takes precedence over
+		// SEMIDX_LOCAL_INDEX (Postgres (configured) > SQLite > Postgres (default)).
+		LocalIndexPath: func() string {
+			if env.get("SEMIDX_DB_DSN", "") != "" {
+				return ""
+			}
+			return resolveLocalIndex(env.get("SEMIDX_LOCAL_INDEX", ""))
+		}(),
+		KeywordOnly: env.get("SEMIDX_EMBED_MODE", "") == "none",
 	}
 }
 
@@ -157,7 +164,7 @@ type KeySpec struct {
 // (Postgres DSN, local SQLite, remote server), the embedding providers, and the
 // server-only (serve) settings.
 var KnownKeys = []KeySpec{
-	// Storage backend — pick ONE; precedence at run time is remote > SQLite > Postgres.
+	// Storage backend — pick ONE; precedence at run time is remote > Postgres (configured) > SQLite > Postgres (default).
 	{"SEMIDX_DB_DSN", "PostgreSQL/pgvector DSN — connect the CLI straight to Postgres", true},
 	{"SEMIDX_LOCAL_INDEX", "Standalone SQLite index (a path, or 1/true for the default location)", false},
 	{"SEMIDX_EMBED_MODE", "Set to \"none\" for keyword-only indexing (no embedding model)", false},

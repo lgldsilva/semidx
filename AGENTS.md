@@ -104,7 +104,7 @@ deploy/            docker-compose (self-host), homelab/ (Watchtower deploy),
 docs/              architecture.md, api.md, self-hosting.md, CICD.md, ADRs
 ```
 
-## Storage backends (pick one; runtime precedence: remote > SQLite > Postgres)
+## Storage backends (pick one; runtime precedence: remote > Postgres (configured) > SQLite > Postgres (default))
 
 | Backend | Select with | Notes |
 |---|---|---|

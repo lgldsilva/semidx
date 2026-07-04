@@ -150,10 +150,23 @@ func TestActiveBackendPrecedence(t *testing.T) {
 		t.Errorf("backend = %q; must be Postgres and must not leak the password", got)
 	}
 
-	// SQLite wins over Postgres.
+	// With Postgres configured, SEMIDX_LOCAL_INDEX is ignored by default (Postgres wins over SQLite).
 	t.Setenv("SEMIDX_LOCAL_INDEX", "/tmp/idx.db")
+	if got := activeBackend(&deps{}); !strings.Contains(got, "Postgres") {
+		t.Errorf("with DSN set, Postgres should win over SQLite env var, got %q", got)
+	}
+
+	// SQLite wins only if DSN is not set (cleared/empty).
+	t.Setenv("SEMIDX_DB_DSN", "")
 	if got := activeBackend(&deps{}); !strings.Contains(got, "SQLite") {
-		t.Errorf("SQLite should win over Postgres, got %q", got)
+		t.Errorf("SQLite should win over Postgres default, got %q", got)
+	}
+
+	// If LocalIndexPath is explicitly forced via config/flag, SQLite wins even if DSN is set.
+	t.Setenv("SEMIDX_DB_DSN", "postgres://u:supersecret@h:5432/db")
+	dLocal := &deps{cfg: &config.Config{LocalIndexPath: "/tmp/idx.db"}}
+	if got := activeBackend(dLocal); !strings.Contains(got, "SQLite") {
+		t.Errorf("explicitly forced LocalIndexPath should win over Postgres DSN, got %q", got)
 	}
 
 	// Remote server wins over everything.

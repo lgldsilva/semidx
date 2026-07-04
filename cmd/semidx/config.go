@@ -18,7 +18,7 @@ func newConfigCmd(d *deps) *cobra.Command {
 		Use:   "config",
 		Short: "Configure providers and the storage backend (SQLite, Postgres, or a remote server)",
 		Long: "Manage semidx's persistent settings without hand-editing a .env.\n\n" +
-			"Storage backends (choose one; run-time precedence is remote > SQLite > Postgres):\n" +
+			"Storage backends (choose one; run-time precedence is remote > Postgres (configured) > SQLite > Postgres (default)):\n" +
 			"  • Remote server  — `semidx login <url> --token ...`\n" +
 			"  • Local SQLite   — `semidx config set SEMIDX_LOCAL_INDEX 1` (or a path)\n" +
 			"  • Postgres       — `semidx config set SEMIDX_DB_DSN postgres://...`\n\n" +
@@ -154,19 +154,31 @@ func newConfigPathCmd() *cobra.Command {
 }
 
 // activeBackend reports which storage backend the CLI will use, honoring the
-// remote > SQLite > Postgres precedence that indexStore/remote() implement.
+// remote > Postgres (configured) > SQLite > Postgres (default) precedence.
 func activeBackend(d *deps) string {
 	if d != nil && d.remote() {
 		return "remote server (" + d.client.ServerURL + ")"
 	}
+
+	// Resolve the active local index path, taking precedence into account.
+	var localPath string
+	if d != nil && d.cfg != nil {
+		localPath = d.cfg.LocalIndexPath
+	} else {
+		// Fallback for when configuration is evaluated statically (e.g. in config commands or tests).
+		if config.EffectiveValue("SEMIDX_DB_DSN") == "" {
+			localPath = config.EffectiveValue("SEMIDX_LOCAL_INDEX")
+		}
+	}
+
 	if config.EffectiveValue("SEMIDX_EMBED_MODE") == "none" {
-		if p := config.EffectiveValue("SEMIDX_LOCAL_INDEX"); p != "" {
+		if localPath != "" {
 			return "local SQLite, keyword-only"
 		}
 		return "keyword-only"
 	}
-	if p := config.EffectiveValue("SEMIDX_LOCAL_INDEX"); p != "" {
-		return "local SQLite (" + p + ")"
+	if localPath != "" {
+		return "local SQLite (" + localPath + ")"
 	}
 	if dsn := config.EffectiveValue("SEMIDX_DB_DSN"); dsn != "" {
 		return "Postgres (" + mask(dsn) + ")"
