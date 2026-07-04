@@ -1,17 +1,22 @@
 # CI/CD
 
 semidx lives in the homelab Gitea and is built by **Gitea Actions** on
-self-hosted `act_runner`s. There are **two workflows** with different jobs:
+self-hosted `act_runner`s. The workflows, each with different jobs:
 
 | Workflow | File | Triggers | Purpose |
 |---|---|---|---|
 | **CI (gates)** | `.gitea/workflows/ci.yml` | every push to `main`, every pull request | **quality/security gates** — build, test, lint, gitleaks, govulncheck, gosec, Trivy image scan (all on PR + main); SonarQube **on main only** |
-| **Release (deploy)** | `.gitea/workflows/release.yml` | version tags (`v*`) and manual dispatch | **publishes** the release — pushes the image and uploads the SBOM to Dependency-Track |
+| **Auto-tag (semver)** | `.gitea/workflows/autotag.yml` | every push to `main` | **cuts the version** — computes the next semver from Conventional Commits and pushes a `v*` tag, which triggers the release |
+| **Release (deploy)** | `.gitea/workflows/release.yml` | version tags (`v*`) and manual dispatch | **publishes + deploys** the release — pushes the image, uploads the SBOM to Dependency-Track, builds GoReleaser artifacts, and redeploys via Watchtower |
 
 The split is deliberate: **a PR runs every gate that predicts what may enter
-`main`; the only thing the release adds is the deploy** (image push + SBOM
-publish). The release commit is already gated by the PR it came from, so the
-gates are not re-run at release time.
+`main`; auto-tag turns a merge into a version; the release does the deploy**
+(image push + SBOM publish + artifacts). The release commit is already gated by
+the PR it came from, so the gates are not re-run at release time.
+
+> **Continuous delivery.** A merge to `main` with a `feat`/`fix` (etc.) commit
+> auto-tags a new version and ships it end-to-end — no manual `git tag`. Merges
+> with only `docs`/`chore`/`ci`/`test` commits bump nothing and cut no release.
 
 > **SonarQube is main-only.** The homelab SonarQube is **Community edition**,
 > which analyses a single branch and has no PR/branch analysis. So the `sonar`
@@ -51,6 +56,25 @@ each tool as a plain `go run <tool>@<version>` step, so they stay portable to
 GitHub Actions. The `sonar` gate needs the homelab `SONAR_TOKEN` and pins the
 Sonar host IP into `/etc/hosts` (act_runner has no LAN DNS); it degrades to a
 skip when the secret is absent, so forked/secret-less runs stay green.
+
+## Auto-tag / versioning (`.gitea/workflows/autotag.yml`)
+
+On every push to `main`, one job computes the next version with **svu**
+(`go run github.com/caarlos0/svu/v3@v3.2.1`, pinned like the other tools) from the
+Conventional Commits since the last tag — `feat` → minor, `fix`/others → patch,
+`!`/`BREAKING CHANGE` → major. If it bumps, it pushes an annotated `v*` tag; that
+tag is what triggers the release pipeline below. A merge whose commits warrant no
+bump (only `docs`/`chore`/`ci`/`test`) tags nothing, and the job is idempotent
+(it skips a tag that already exists).
+
+> **Requires a PAT — `RELEASE_TAG_TOKEN`.** A tag pushed by the auto-provided
+> Actions token (`secrets.GITEA_TOKEN`) does **not** re-trigger another workflow
+> (loop guard, same as GitHub), so `release.yml` would never fire. The push
+> therefore uses a real Personal Access Token (repo **write** scope) stored in the
+> repo secret `RELEASE_TAG_TOKEN`. It cannot be named `GITEA_TOKEN` — Gitea
+> reserves the `GITEA_`/`GITHUB_` secret prefixes. **Without the secret the job
+> skips cleanly** (so forks and a not-yet-provisioned repo stay green, but no
+> release is cut until the PAT is set).
 
 ## Release / deploy pipeline (`.gitea/workflows/release.yml`)
 
@@ -118,6 +142,7 @@ them unset and that stage is skipped cleanly.
 | `REGISTRY_TOKEN` | push step of `image` | Token/password for the Gitea container registry (`gitea.raspberrypi.lan`), scope `write:package`. Without it the image is built + scanned but not pushed (and nothing to deploy). |
 | `WATCHTOWER_TOKEN` | `deploy` job | Bearer token for Watchtower's HTTP API (`WATCHTOWER_HTTP_API_TOKEN` on the host). Triggers an immediate redeploy. |
 | `GITEA_TOKEN` | `release-artifacts` job | Gitea token with repo write scope, used by GoReleaser to publish the release + upload the artifacts. Without it, artifacts are built as a snapshot but not published. |
+| `RELEASE_TAG_TOKEN` | `autotag` job in `autotag.yml` | **PAT** (repo **write** scope) used to push the computed `v*` tag so the tag event re-triggers `release.yml` (the auto-provided `GITEA_TOKEN` cannot re-trigger a workflow, and cannot be renamed — Gitea reserves the `GITEA_`/`GITHUB_` prefixes). Without it, auto-tag skips and no release is cut. |
 | `TELEGRAM_BOT_TOKEN` | `notify-failure` | Telegram bot token. |
 | `TELEGRAM_CHAT_ID` | `notify-failure` | Telegram chat id. Both Telegram secrets must be set for a notification. |
 
