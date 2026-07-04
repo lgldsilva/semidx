@@ -27,6 +27,7 @@ func newMigrateCmd(d *deps) *cobra.Command {
 			"Projects are matched by identity, so re-running is idempotent per (project,\n" +
 			"file, dims). Worktree manifests are not copied — re-run `semidx index` in a\n" +
 			"git worktree if you need worktree-scoped search there.",
+		Example: "  semidx migrate\n  semidx migrate --from ./local.db --to postgres://user:pass@host:5432/db",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 

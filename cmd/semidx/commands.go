@@ -76,6 +76,16 @@ func newIndexCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "index",
 		Short: "Index a project directory",
+		Long: `Index a project so it can be searched. A git repo becomes one logical index
+keyed by its identity (shared across worktrees/clones); any other folder — or
+one passed with --docs — is keyed by its absolute path. Oversized and
+password-protected files are skipped; run "semidx unlock" for the latter.
+
+With no embedding provider configured, add --keyword to index text-only.`,
+		Example: `  semidx index --project .                 # index the current repo
+  semidx index --project ./docs --docs     # a plain document folder
+  semidx index --project . --git           # also index recent git history
+  semidx index --project . --keyword       # no embeddings, keyword-only`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			d.applyPrivacy(privacy)
 			if systemDirs[filepath.Clean(projectPath)] {
@@ -161,6 +171,14 @@ func newSearchCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "search",
 		Short: "Semantic search over an indexed project",
+		Long: `Search an indexed project with a natural-language query and get ranked
+file:line matches. With no --project, semidx searches the project enclosing the
+current directory, falling back to every indexed project (labeled per project).
+When embeddings are unavailable it transparently falls back to keyword search.`,
+		Example: `  semidx search --query "where is auth handled"
+  semidx search --query "retry with backoff" --top-k 10
+  semidx search --project ./my-repo --query "http timeout"
+  semidx search --query "auth" --json        # machine-readable output`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			results, err := d.runSearchTargets(cmd, project, query, model, topK, privacy)
 			if err != nil {
@@ -202,6 +220,12 @@ func newSgrepCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "sgrep",
 		Short: "Semantic search with classic grep output (file:line:content)",
+		Long: `Like "search", but prints classic grep-style file:line:content (one line per
+match) so results pipe cleanly into editors and scripts. Paths are absolute so
+they stay correct even when searching across multiple projects.`,
+		Example: `  semidx sgrep --query "database connection pool"
+  semidx sgrep --query "TODO" --project ./my-repo
+  semidx sgrep --query "auth middleware" | fzf`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			results, err := d.runSearchTargets(cmd, project, query, model, topK, privacy)
 			if err != nil {
@@ -253,6 +277,9 @@ func newModelsCmd(d *deps) *cobra.Command {
 	return &cobra.Command{
 		Use:   "models",
 		Short: "List available embedding models",
+		Long: `List the embedding models advertised by the configured providers (the chain
+Gemini → Groq → OpenRouter → Ollama Cloud → local Ollama).`,
+		Example: "  semidx models",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			models, err := d.emb.ListModels(cmd.Context())
 			if err != nil {
@@ -271,6 +298,9 @@ func newDropCmd(d *deps) *cobra.Command {
 	return &cobra.Command{
 		Use:   "drop",
 		Short: "Drop all indexed data",
+		Long: `Delete ALL indexed data — every project, file and chunk — from the active
+store. This is destructive and cannot be undone.`,
+		Example: "  semidx drop",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			db, err := d.indexStore(cmd.Context())
 			if err != nil {
@@ -289,6 +319,11 @@ func newServeCmd(d *deps) *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",
 		Short: "Run the HTTP API server",
+		Long: `Run the semidx HTTP API server (and the embedded web admin at /admin). On
+first run it prints a one-time bootstrap admin token. Requires Postgres
+(SEMIDX_DB_DSN); listens on SEMIDX_LISTEN_ADDR.`,
+		Example: `  semidx serve
+  SEMIDX_LISTEN_ADDR=:8080 semidx serve`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			db, err := d.database(cmd.Context())
 			if err != nil {
@@ -329,6 +364,12 @@ func newMCPCmd(d *deps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run the MCP server over stdio (proxying to a server, or over the local index)",
+		Long: `Run the Model Context Protocol server over stdio so AI agents can call
+semantic_search / semantic_projects / semantic_reindex. Proxies a configured
+server, or serves the local index directly. Use "semidx mcp install" to wire it
+into an agent client. (stdout carries the protocol — logs go to stderr.)`,
+		Example: `  semidx mcp                                  # run the stdio server
+  semidx mcp install --client claude-code --apply`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			// Remote mode when a server is configured; otherwise serve the standalone
@@ -366,6 +407,7 @@ func newMCPInstallCmd() *cobra.Command {
 			"By default it PRINTS the config snippet and its target path; pass --apply to\n" +
 			"merge it in place (a timestamped .bak is written first and other servers are\n" +
 			"preserved). Supported clients:\n\n" + mcpinstall.ClientList(),
+		Example: "  semidx mcp install --list\n  semidx mcp install --client claude-code --apply",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if list {
 				fmt.Print(mcpinstall.ClientList())
