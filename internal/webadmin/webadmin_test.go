@@ -21,14 +21,15 @@ import (
 // fakeStore is an in-memory Store covering only what the web admin touches.
 type fakeStore struct {
 	store.Store
-	users      map[int]*store.User
-	byName     map[string]*store.User
-	sessions   map[string]int // session hash -> user id
-	tokens     map[int]*store.Token
-	tokenOwner map[int]int
-	nextUser   int
-	nextTok    int
-	projects   []store.Project
+	users             map[int]*store.User
+	byName            map[string]*store.User
+	sessions          map[string]int // session hash -> user id
+	lastSessionExpiry time.Time      // expiry passed to the most recent CreateSession
+	tokens            map[int]*store.Token
+	tokenOwner        map[int]int
+	nextUser          int
+	nextTok           int
+	projects          []store.Project
 
 	// search support
 	searchProject *store.Project // GetProject result (nil → ErrNotFound)
@@ -138,11 +139,12 @@ func (f *fakeStore) SetUserDisabled(_ context.Context, id int, disabled bool) er
 	return nil
 }
 
-func (f *fakeStore) CreateSession(_ context.Context, hash string, userID int, _ time.Time) error {
+func (f *fakeStore) CreateSession(_ context.Context, hash string, userID int, expiresAt time.Time) error {
 	if f.createSessErr != nil {
 		return f.createSessErr
 	}
 	f.sessions[hash] = userID
+	f.lastSessionExpiry = expiresAt
 	return nil
 }
 

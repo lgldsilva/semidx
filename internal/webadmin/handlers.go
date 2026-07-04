@@ -78,18 +78,23 @@ func (a *Admin) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ttl := sessionTTL
+	if r.FormValue("remember_me") == "1" {
+		ttl = rememberMeTTL
+	}
+
 	plaintext, hash, err := newSessionToken()
 	if err != nil {
 		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
-	if err := a.store.CreateSession(r.Context(), hash, user.ID, now.Add(sessionTTL)); err != nil {
+	if err := a.store.CreateSession(r.Context(), hash, user.ID, now.Add(ttl)); err != nil {
 		a.log.Error("create session failed", "err", err)
 		http.Error(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	a.limiter.reset(username)
-	a.setSession(w, plaintext)
+	a.setSession(w, plaintext, ttl)
 	http.Redirect(w, r, "/admin/", http.StatusSeeOther)
 }
 

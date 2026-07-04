@@ -1,21 +1,20 @@
 name: semidx
 
-# Reference deployment: the semidx server + its PostgreSQL/pgvector database.
+# semidx — pull-based deploy. Pulls the pre-built image from the Gitea container
+# registry instead of building locally. Use this when you don't want to compile
+# the Go binary yourself, or when deploying on a machine without the Go toolchain.
 #
-# TWO MODES (pick one):
-#   Build from source:           docker compose up -d --build
-#   Pull pre-built image:        SEMIDX_IMAGE=gitea.raspberrypi.lan/lgldsilva/semidx:main SEMIDX_PULL_POLICY=always docker compose up -d
+# The :main tag is pushed automatically on every merge to main (CI pipeline), so
+# you get the latest without waiting for a version tag. Set SEMIDX_IMAGE to pin a
+# specific version (e.g. gitea.raspberrypi.lan/lgldsilva/semidx:v0.3.0).
 #
-# When SEMIDX_IMAGE is set to a registry image, set SEMIDX_PULL_POLICY=always
-# to pull instead of building. The :main tag is pushed automatically on every
-# merge to main (CI pipeline), so you get the latest without waiting for a tag.
-# Pin a version with e.g. SEMIDX_IMAGE=.../semidx:v0.3.0.
+# If you do NOT have access to the Gitea registry, use docker-compose.yml which
+# builds from source.
 #
-# For a dedicated pull-only compose without the build section, see
-# docker-compose.pull.yml.
+# Bring it up:
+#   docker compose -f deploy/docker-compose.pull.yml up -d
 #
-# The database has NO published ports — it is reachable only on the internal
-# compose network, so the only way in is the authenticated HTTP API.
+# See deploy/docker-compose.yml for the build-from-source equivalent.
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -34,11 +33,7 @@ services:
     restart: unless-stopped
 
   semidx:
-    image: ${SEMIDX_IMAGE:-semidx:local}
-    pull_policy: ${SEMIDX_PULL_POLICY:-build}
-    build:
-      context: ..
-      dockerfile: Dockerfile
+    image: ${SEMIDX_IMAGE:-gitea.raspberrypi.lan/lgldsilva/semidx:main}
     depends_on:
       db:
         condition: service_healthy
@@ -46,11 +41,10 @@ services:
       SEMIDX_DB_DSN: postgres://semidx:${SEMIDX_DB_PASSWORD:-changeme}@db:5432/semidx?sslmode=disable
       SEMIDX_LISTEN_ADDR: ":8080"
       SEMIDX_DATA_DIR: /data
-      # Bootstrap credentials — used only while the DB is empty.
+      # Optional: fix the first admin token instead of a generated one.
       SEMIDX_BOOTSTRAP_TOKEN: ${SEMIDX_BOOTSTRAP_TOKEN:-}
       SEMIDX_BOOTSTRAP_ADMIN_USER: ${SEMIDX_BOOTSTRAP_ADMIN_USER:-admin}
       SEMIDX_BOOTSTRAP_ADMIN_PASSWORD: ${SEMIDX_BOOTSTRAP_ADMIN_PASSWORD:-}
-      # JWT secret for revocable control tokens (optional; disabled when empty).
       SEMIDX_JWT_SECRET: ${SEMIDX_JWT_SECRET:-}
       # Embedding providers (set what you use). Ollama example:
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}

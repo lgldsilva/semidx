@@ -2,3 +2,16 @@
 # Run manually with: gitleaks detect --source . -v
 [extend]
 useDefault = true
+
+# docs/homelab-setup.md ships an example `semidx login --token …` / `curl -H
+# "Authorization: Bearer …"`. The current file uses the obvious placeholder
+# `<your-token>`, but an earlier commit on this branch still carries the example
+# value `semidx_homelab_2026`, which the full-history scan flags as a
+# curl-auth-header. It is NOT a live credential (not present in the homelab
+# credentials store) — allowlist the exact example value by regex. Any other
+# secret keeps failing the gate.
+[allowlist]
+description = "Placeholder token in the homelab-setup docs example (not a live credential)"
+regexes = [
+  '''semidx_homelab_2026''',
+]

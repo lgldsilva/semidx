@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -163,6 +164,50 @@ type PgStore struct {
 // compile-time assertion that PgStore satisfies Store.
 var _ Store = (*PgStore)(nil)
 
+// defaultPingDelays are the backoff intervals between initial-connection ping
+// attempts (len+1 attempts total: 6 pings with 5 waits, 1s→16s).
+var defaultPingDelays = []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second}
+
+// pingWithBackoff pings the pool with exponential backoff so a slow-to-start
+// Postgres does not turn into a restart loop.
+func pingWithBackoff(ctx context.Context, pool *pgxpool.Pool) error {
+	return retryPing(ctx, pool.Ping, defaultPingDelays)
+}
+
+// retryPing calls ping up to len(delays)+1 times, waiting delays[i] before the
+// (i+1)-th retry. It returns the last error if every attempt fails, and honours
+// context cancellation before and during each wait. It is split out from
+// pingWithBackoff so the retry logic can be unit-tested without a live pool.
+func retryPing(ctx context.Context, ping func(context.Context) error, delays []time.Duration) error {
+	maxAttempts := len(delays) + 1
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		err := ping(ctx)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt == maxAttempts-1 {
+			break
+		}
+		slog.Warn("db ping failed; retrying",
+			"attempt", attempt+1, "max", maxAttempts, "err", lastErr, "retry_in", delays[attempt])
+
+		// Respect context cancellation before and during the wait.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		timer := time.NewTimer(delays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
+}
+
 // NewPgStore connects (and pings) a pgxpool at connString and applies any
 // pending schema migrations.
 func NewPgStore(ctx context.Context, connString string) (*PgStore, error) {
@@ -170,7 +215,7 @@ func NewPgStore(ctx context.Context, connString string) (*PgStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := pool.Ping(ctx); err != nil {
+	if err := pingWithBackoff(ctx, pool); err != nil {
 		pool.Close()
 		return nil, err
 	}
