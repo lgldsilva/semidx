@@ -77,6 +77,16 @@ const (
 	outcomeEncrypted                           // password-protected; skipped, unlockable
 )
 
+// fileResult is what indexFile produced for one file: chunk/error counts, how it
+// was handled, and the searchable units to record in the worktree manifest.
+type fileResult struct {
+	created  int
+	softErrs int
+	outcome  fileOutcome
+	units    []indexedUnit
+	err      error
+}
+
 // NewIndexer wires an Indexer. dims is the embedding dimension of model;
 // workers is the file concurrency (<1 falls back to defaultIndexWorkers).
 func NewIndexer(db store.IndexStore, emb embed.Embedder, dims, workers int, verbose, gitMode bool, gitSince string) *Indexer {
@@ -139,7 +149,13 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 			created, softErrs, outcome, units, ferr := idx.indexFile(ctx, projectID, path, rel, model)
 
 			mu.Lock()
-			idx.accumulate(stats, manifest, rel, created, softErrs, outcome, units, ferr)
+			idx.accumulate(stats, manifest, rel, fileResult{
+				created:  created,
+				softErrs: softErrs,
+				outcome:  outcome,
+				units:    units,
+				err:      ferr,
+			})
 			processed++
 			done, chunks := processed, stats.ChunksCreated
 			mu.Unlock()
@@ -174,24 +190,24 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 
 // accumulate folds one file's indexing result into the run stats and the
 // worktree manifest. Callers must hold the stats mutex.
-func (idx *Indexer) accumulate(stats *IndexStats, manifest map[string]string, rel string, created, softErrs int, outcome fileOutcome, units []indexedUnit, ferr error) {
-	stats.Errors += softErrs
+func (idx *Indexer) accumulate(stats *IndexStats, manifest map[string]string, rel string, r fileResult) {
+	stats.Errors += r.softErrs
 	switch {
-	case ferr != nil:
+	case r.err != nil:
 		stats.Errors++
-		idx.logf("[err] %s: %s", rel, truncateErr(ferr, 200))
-	case outcome == outcomeIndexed:
-		stats.ChunksCreated += created
+		idx.logf("[err] %s: %s", rel, truncateErr(r.err, 200))
+	case r.outcome == outcomeIndexed:
+		stats.ChunksCreated += r.created
 		stats.FilesIndexed++
-	case outcome == outcomeSkippedUnchanged:
+	case r.outcome == outcomeSkippedUnchanged:
 		stats.FilesSkipped++
-	case outcome == outcomeEncrypted:
+	case r.outcome == outcomeEncrypted:
 		stats.FilesEncrypted++
 		stats.EncryptedPaths = append(stats.EncryptedPaths, rel)
 	}
 	// Record every searchable unit (a file, or an archive's entries) in the
 	// worktree manifest so pruning matches the actual stored paths.
-	for _, u := range units {
+	for _, u := range r.units {
 		manifest[u.path] = u.hash
 	}
 }
