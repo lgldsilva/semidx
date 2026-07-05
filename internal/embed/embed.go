@@ -163,6 +163,8 @@ func InferDims(model string) int {
 		return 1024
 	case strings.Contains(model, "gemini-embedding-2"), strings.Contains(model, "text-embedding-3-large"):
 		return 3072
+	case strings.Contains(model, "text-embedding-3-small"), strings.Contains(model, "text-embedding-ada-002"), strings.Contains(model, "gemini-embedding-001"):
+		return 1536
 	default:
 		return 0
 	}

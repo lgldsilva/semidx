@@ -221,7 +221,10 @@ func (c *Client) FilesBatch(ctx context.Context, project string, files []BatchFi
 	return &out, nil
 }
 
-func esc(s string) string { return url.PathEscape(s) }
+// esc escapes a path segment for use in REST URLs. url.PathEscape does not
+// encode '/', so names containing a slash would be interpreted as multiple
+// path segments; we replace any remaining slash with %2F.
+func esc(s string) string { return strings.ReplaceAll(url.PathEscape(s), "/", "%2F") }
 
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var rdr io.Reader
