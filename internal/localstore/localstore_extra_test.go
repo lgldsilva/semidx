@@ -127,7 +127,7 @@ func TestClosedDBErrorPaths(t *testing.T) {
 	assertErr("UpsertProject", err)
 	_, err = s.CreateProject(ctx, "p", "m", "path", "", "")
 	assertErr("CreateProject", err)
-	_, err = s.ListProjects(ctx)
+	_, err = s.ListProjects(ctx, 0, 0)
 	assertErr("ListProjects", err)
 	assertErr("DeleteProject", s.DeleteProject(ctx, "p"))
 	assertErr("UpdateProjectStatus", s.UpdateProjectStatus(ctx, 1, "ready"))

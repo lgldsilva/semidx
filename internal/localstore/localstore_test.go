@@ -220,7 +220,7 @@ func TestCreateProjectAndDuplicate(t *testing.T) {
 		t.Fatalf("duplicate CreateProject err = %v, want ErrProjectExists", err)
 	}
 
-	list, err := s.ListProjects(ctx)
+	list, err := s.ListProjects(ctx, 0, 0)
 	if err != nil || len(list) != 1 || list[0].Name != "git-proj" {
 		t.Fatalf("ListProjects = %+v err=%v", list, err)
 	}
@@ -297,7 +297,7 @@ func TestDropAll(t *testing.T) {
 	if err := s.DropAll(ctx); err != nil {
 		t.Fatalf("DropAll: %v", err)
 	}
-	if list, err := s.ListProjects(ctx); err != nil || len(list) != 0 {
+	if list, err := s.ListProjects(ctx, 0, 0); err != nil || len(list) != 0 {
 		t.Fatalf("after DropAll: %d projects err=%v, want 0", len(list), err)
 	}
 
