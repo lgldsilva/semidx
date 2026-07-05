@@ -34,9 +34,12 @@ type Server struct {
 	emb    embed.Embedder
 	search *search.Service
 	log    *slog.Logger
-	reg    *prometheus.Registry
-	reqs   *prometheus.CounterVec
-	admin  http.Handler    // the /admin management UI, nil unless MountAdmin was called
+	reg              *prometheus.Registry
+	reqs             *prometheus.CounterVec
+	searchDuration   *prometheus.HistogramVec
+	requestDuration  *prometheus.HistogramVec
+	activeRequests   *prometheus.GaugeVec
+	admin            http.Handler    // the /admin management UI, nil unless MountAdmin was called
 	jwt    *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
 
 	apiLimiter *apiRateLimiter // per-key API rate limiter
@@ -76,7 +79,28 @@ func New(st store.Store, emb embed.Embedder, log *slog.Logger) *Server {
 		Help: "Total HTTP requests by method and status.",
 	}, []string{"method", "status"})
 	reg.MustRegister(reqs)
-	return &Server{store: st, emb: emb, search: search.NewService(st, emb), log: log, reg: reg, reqs: reqs, apiLimiter: newAPIRateLimiter()}
+
+	searchDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "semidx_search_duration_seconds",
+		Help:    "Search request duration in seconds.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"project"})
+	reg.MustRegister(searchDuration)
+
+	requestDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "semidx_http_request_duration_seconds",
+		Help:    "HTTP request duration in seconds.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"method", "path"})
+	reg.MustRegister(requestDuration)
+
+	activeRequests := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "semidx_http_requests_in_flight",
+		Help: "Number of HTTP requests currently being processed.",
+	}, []string{"method"})
+	reg.MustRegister(activeRequests)
+
+	return &Server{store: st, emb: emb, search: search.NewService(st, emb), log: log, reg: reg, reqs: reqs, searchDuration: searchDuration, requestDuration: requestDuration, activeRequests: activeRequests, apiLimiter: newAPIRateLimiter()}
 }
 
 // Handler returns the fully-wired HTTP handler (routing + metrics instrumentation).
@@ -187,15 +211,22 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			Score: hit.Score, Content: hit.Content,
 		})
 	}
+	s.searchDuration.WithLabelValues(project).Observe(time.Since(start).Seconds())
 	writeJSON(w, http.StatusOK, out)
 }
 
-// instrument wraps the mux to count requests by method and status.
+// instrument wraps the mux to count requests by method and status, track
+// in-flight count, and record request duration.
 func (s *Server) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.activeRequests.WithLabelValues(r.Method).Inc()
+		defer s.activeRequests.WithLabelValues(r.Method).Dec()
+
+		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 		s.reqs.WithLabelValues(r.Method, http.StatusText(rec.status)).Inc()
+		s.requestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(time.Since(start).Seconds())
 	})
 }
 
