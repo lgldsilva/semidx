@@ -92,6 +92,9 @@ type Config struct {
 	// JWTSecret is the HS256 signing key for control tokens
 	// (SEMIDX_JWT_SECRET). When empty, JWT control tokens are disabled.
 	JWTSecret string
+	// CSRFKey is the secret used to derive CSRF tokens for the web admin
+	// (SEMIDX_CSRF_KEY). When empty, a random key is generated on each restart.
+	CSRFKey string
 	// LocalIndexPath, when non-empty, makes the CLI index and search a local
 	// SQLite file instead of PostgreSQL (SEMIDX_LOCAL_INDEX: a path, or a truthy
 	// value to use the default location). Empty means server/Postgres mode.
@@ -160,6 +163,7 @@ func Load() *Config {
 		BootstrapAdminPassword: env.get("SEMIDX_BOOTSTRAP_ADMIN_PASSWORD", ""),
 		CookieSecure:           env.get("SEMIDX_COOKIE_SECURE", "true") != "false",
 		JWTSecret:              env.get("SEMIDX_JWT_SECRET", ""),
+		CSRFKey:                env.get("SEMIDX_CSRF_KEY", ""),
 		// If a Postgres DSN is explicitly configured, it takes precedence over
 		// SEMIDX_LOCAL_INDEX (Postgres (configured) > SQLite > Postgres (default)).
 		LocalIndexPath: func() string {
@@ -215,6 +219,7 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_LISTEN_ADDR", "Server bind address, e.g. :8080 (serve)", false},
 	{"SEMIDX_DATA_DIR", "Where the server clones git projects (serve)", false},
 	{"SEMIDX_JWT_SECRET", "HS256 secret enabling JWT control tokens (serve)", true},
+	{"SEMIDX_CSRF_KEY", "HMAC key for web-admin CSRF tokens; persistent across restarts (serve)", true},
 	{"SEMIDX_COOKIE_SECURE", "Secure flag on web-admin cookies; false only over HTTP (serve)", false},
 }
 
