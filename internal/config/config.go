@@ -26,18 +26,19 @@ const (
 	// Credential-free local-dev default: points at the dev Postgres but carries no
 	// password in source. Real deployments set SEMIDX_DB_DSN (the compose does);
 	// a local dev supplies credentials via SEMIDX_DB_DSN or the standard PG* env.
-	defaultDatabaseURL      = "postgres://localhost:55432/semantic_indexer"
-	defaultOllamaURL        = "http://localhost:11434"
-	defaultGeminiBaseURL    = "https://generativelanguage.googleapis.com/v1beta/openai"
-	defaultGroqBaseURL      = "https://api.groq.com/openai/v1"
-	defaultOpenRouterURL    = "https://openrouter.ai/api/v1"
-	defaultOllamaCloudURL   = "https://ollama.com/v1"
-	defaultIndexWorkers     = 4
-	defaultEmbedBatchSize   = 8
-	defaultMaxFileSize      = 1024 * 1024 // 1MB
-	defaultMaxChunksPerFile = 32
-	defaultListenAddr       = ":8080"
-	defaultDataDir          = "/var/lib/semidx"
+	defaultDatabaseURL         = "postgres://localhost:55432/semantic_indexer"
+	defaultOllamaURL           = "http://localhost:11434"
+	defaultGeminiBaseURL       = "https://generativelanguage.googleapis.com/v1beta/openai"
+	defaultGroqBaseURL         = "https://api.groq.com/openai/v1"
+	defaultOpenRouterURL       = "https://openrouter.ai/api/v1"
+	defaultOllamaCloudURL      = "https://ollama.com/v1"
+	defaultIndexWorkers        = 4
+	defaultEmbedBatchSize      = 8
+	defaultMaxFileSize         = 1024 * 1024 // 1MB
+	defaultMaxChunksPerFile    = 32
+	defaultMaxChunksPerProject = 0 // 0 = unlimited
+	defaultListenAddr          = ":8080"
+	defaultDataDir             = "/var/lib/semidx"
 )
 
 // Config holds every runtime setting the CLI and MCP server need.
@@ -84,6 +85,9 @@ type Config struct {
 	// MaxChunksPerFile caps how many chunks a single file can produce
 	// (SEMIDX_MAX_CHUNKS_PER_FILE). Defaults to 32.
 	MaxChunksPerFile int
+	// MaxChunksPerProject caps the total number of chunks a project may have
+	// (SEMIDX_MAX_CHUNKS_PER_PROJECT). 0 = unlimited. Default is unlimited.
+	MaxChunksPerProject int
 
 	// ListenAddr is the server bind address (SEMIDX_LISTEN_ADDR, e.g. ":8080").
 	ListenAddr string
@@ -152,28 +156,29 @@ func Load() *Config {
 	}
 	env := newResolver(paths...)
 	return &Config{
-		DatabaseURL:        env.get("SEMIDX_DB_DSN", defaultDatabaseURL),
-		OllamaURL:          env.first("SEMIDX_OLLAMA_URL", "OLLAMA_URL", defaultOllamaURL),
-		OllamaURLs:         parseCommaSep(env.get("SEMIDX_OLLAMA_URLS", "")),
-		Provider:           env.get("EMBED_PROVIDER", ""),
-		Endpoint:           env.get("EMBED_ENDPOINT", ""),
-		APIKey:             env.get("EMBED_API_KEY", ""),
-		GeminiAPIKey:       env.get("GEMINI_API_KEY", ""),
-		GeminiBaseURL:      env.get("SEMIDX_GEMINI_BASE_URL", defaultGeminiBaseURL),
-		GroqAPIKey:         env.get("GROQ_API_KEY", ""),
-		GroqBaseURL:        env.get("SEMIDX_GROQ_BASE_URL", defaultGroqBaseURL),
-		OpenRouterAPIKey:   env.get("OPENROUTER_API_KEY", ""),
-		OpenRouterBaseURL:  env.get("SEMIDX_OPENROUTER_BASE_URL", defaultOpenRouterURL),
-		OllamaCloudAPIKey:  env.get("OLLAMA_CLOUD_API_KEY", ""),
-		OllamaCloudBaseURL: env.get("SEMIDX_OLLAMA_CLOUD_BASE_URL", defaultOllamaCloudURL),
-		Privacy:            env.get("EMBED_PRIVACY", "") == "true",
-		IndexWorkers:       atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
-		EmbedBatchSize:     atoiDefault(env.get("SEMIDX_EMBED_BATCH_SIZE", ""), defaultEmbedBatchSize),
-		MaxFileSize:        atoiDefault(env.get("SEMIDX_MAX_FILE_SIZE", ""), defaultMaxFileSize),
-		MaxChunksPerFile:   atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_FILE", ""), defaultMaxChunksPerFile),
-		ListenAddr:         env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
-		BootstrapToken:     env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
-		DataDir:            env.get("SEMIDX_DATA_DIR", defaultDataDir),
+		DatabaseURL:         env.get("SEMIDX_DB_DSN", defaultDatabaseURL),
+		OllamaURL:           env.first("SEMIDX_OLLAMA_URL", "OLLAMA_URL", defaultOllamaURL),
+		OllamaURLs:          parseCommaSep(env.get("SEMIDX_OLLAMA_URLS", "")),
+		Provider:            env.get("EMBED_PROVIDER", ""),
+		Endpoint:            env.get("EMBED_ENDPOINT", ""),
+		APIKey:              env.get("EMBED_API_KEY", ""),
+		GeminiAPIKey:        env.get("GEMINI_API_KEY", ""),
+		GeminiBaseURL:       env.get("SEMIDX_GEMINI_BASE_URL", defaultGeminiBaseURL),
+		GroqAPIKey:          env.get("GROQ_API_KEY", ""),
+		GroqBaseURL:         env.get("SEMIDX_GROQ_BASE_URL", defaultGroqBaseURL),
+		OpenRouterAPIKey:    env.get("OPENROUTER_API_KEY", ""),
+		OpenRouterBaseURL:   env.get("SEMIDX_OPENROUTER_BASE_URL", defaultOpenRouterURL),
+		OllamaCloudAPIKey:   env.get("OLLAMA_CLOUD_API_KEY", ""),
+		OllamaCloudBaseURL:  env.get("SEMIDX_OLLAMA_CLOUD_BASE_URL", defaultOllamaCloudURL),
+		Privacy:             env.get("EMBED_PRIVACY", "") == "true",
+		IndexWorkers:        atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
+		EmbedBatchSize:      atoiDefault(env.get("SEMIDX_EMBED_BATCH_SIZE", ""), defaultEmbedBatchSize),
+		MaxFileSize:         atoiDefault(env.get("SEMIDX_MAX_FILE_SIZE", ""), defaultMaxFileSize),
+		MaxChunksPerFile:    atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_FILE", ""), defaultMaxChunksPerFile),
+		MaxChunksPerProject: atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_PROJECT", ""), defaultMaxChunksPerProject),
+		ListenAddr:          env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
+		BootstrapToken:      env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
+		DataDir:             env.get("SEMIDX_DATA_DIR", defaultDataDir),
 
 		BootstrapAdminUser:     env.get("SEMIDX_BOOTSTRAP_ADMIN_USER", "admin"),
 		BootstrapAdminPassword: env.get("SEMIDX_BOOTSTRAP_ADMIN_PASSWORD", ""),
@@ -228,6 +233,7 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_EMBED_BATCH_SIZE", "Texts per embedding API call (positive int)", false},
 	{"SEMIDX_MAX_FILE_SIZE", "Largest file the indexer processes (bytes, positive int)", false},
 	{"SEMIDX_MAX_CHUNKS_PER_FILE", "Maximum chunks a single file can produce (positive int)", false},
+	{"SEMIDX_MAX_CHUNKS_PER_PROJECT", "Maximum chunks per project (0=unlimited)", false},
 	{"SEMIDX_JAVA_DECOMPILER", "External Java decompiler command for .class in JARs", false},
 	// Self-update (semidx upgrade) — override to point at a different release host.
 	{"SEMIDX_UPDATE_API", "Releases API base for `semidx upgrade` (default: homelab Gitea)", false},
