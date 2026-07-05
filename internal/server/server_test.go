@@ -244,6 +244,13 @@ func TestCreateProject(t *testing.T) {
 	if rec := do(t, srv, "POST", "/api/v1/projects", "tok", `{"model":"m"}`); rec.Code != 400 {
 		t.Errorf("no name = %d, want 400", rec.Code)
 	}
+	// invalid project names → 400.
+	for _, name := range []string{"-bad", "space name", "a/b", "", strings.Repeat("x", 256)} {
+		body := `{"name":"` + name + `","model":"m"}`
+		if rec := do(t, srv, "POST", "/api/v1/projects", "tok", body); rec.Code != 400 {
+			t.Errorf("name %q = %d, want 400", name, rec.Code)
+		}
+	}
 	// git without url → 400.
 	if rec := do(t, srv, "POST", "/api/v1/projects", "tok", `{"name":"g","source":{"type":"git"}}`); rec.Code != 400 {
 		t.Errorf("git no url = %d, want 400", rec.Code)

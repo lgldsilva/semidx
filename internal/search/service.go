@@ -9,7 +9,10 @@ import (
 	"context"
 	"fmt"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/observ"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -57,6 +60,9 @@ type Response struct {
 // Search resolves the model, embeds the query and runs a vector search,
 // transparently falling back to keyword search if the embedding fails.
 func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
+	ctx, span := observ.StartSpan(ctx, "search.Service.Search")
+	defer span.End()
+
 	if req.TopK <= 0 {
 		req.TopK = 5
 	}
@@ -74,6 +80,12 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	if req.Model != "" {
 		model = req.Model
 	}
+	span.SetAttributes(
+		attribute.String("project", project.Name),
+		attribute.String("model", model),
+		attribute.String("query", req.Query),
+		attribute.Int("topk", req.TopK),
+	)
 
 	// A provider that knows the model wins; otherwise infer from the name.
 	dims := embed.InferDims(model)

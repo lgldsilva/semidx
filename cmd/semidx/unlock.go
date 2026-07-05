@@ -120,7 +120,7 @@ func (d *deps) prepareUnlockIndexer(ctx context.Context, db store.IndexStore, tg
 		MaxChunksPerProject: d.cfg.MaxChunksPerProject,
 		Verbose:             verbose,
 	}).
-		SetKeywordOnly(d.cfg.KeywordOnly).
+		SetKeywordOnly(d.keywordOnly).
 		SetWorktree(tgt.worktree)
 	return idx, projectID, nil
 }

@@ -160,18 +160,33 @@ func activeBackend(d *deps) string {
 		return "remote server (" + d.client.ServerURL + ")"
 	}
 
-	// Resolve the active local index path, taking precedence into account.
+	// Resolve the active local index path. When deps is fully initialized,
+	// PersistentPreRunE populates d.localIndexPath; otherwise fall back to the
+	// loaded config or environment.
 	var localPath string
-	if d != nil && d.cfg != nil {
+	switch {
+	case d != nil && d.localIndexPath != "":
+		localPath = d.localIndexPath
+	case d != nil && d.cfg != nil && d.cfg.LocalIndexPath != "":
 		localPath = d.cfg.LocalIndexPath
-	} else {
+	default:
 		// Fallback for when configuration is evaluated statically (e.g. in config commands or tests).
 		if config.EffectiveValue("SEMIDX_DB_DSN") == "" {
 			localPath = config.EffectiveValue("SEMIDX_LOCAL_INDEX")
 		}
 	}
 
-	if config.EffectiveValue("SEMIDX_EMBED_MODE") == "none" {
+	// Resolve keyword-only mode. When deps is fully initialized, PersistentPreRunE
+	// populates d.keywordOnly; otherwise fall back to the environment.
+	keywordOnly := false
+	switch {
+	case d != nil && d.keywordOnly:
+		keywordOnly = true
+	case config.EffectiveValue("SEMIDX_EMBED_MODE") == "none":
+		keywordOnly = true
+	}
+
+	if keywordOnly {
 		if localPath != "" {
 			return "local SQLite, keyword-only"
 		}
