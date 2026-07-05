@@ -37,6 +37,15 @@ type deps struct {
 	dbOpened bool
 	local    *localstore.SQLiteStore
 	localErr error
+
+	// localIndexPath is the resolved local SQLite path: SEMIDX_LOCAL_INDEX, or
+	// the default data dir when --local is used. It is computed in
+	// PersistentPreRunE so the loaded config is never mutated.
+	localIndexPath string
+	// keywordOnly is the resolved keyword-only flag: SEMIDX_EMBED_MODE=none or
+	// --keyword. It is computed in PersistentPreRunE so the loaded config is
+	// never mutated.
+	keywordOnly bool
 }
 
 // database opens (once) and returns the full PostgreSQL store, or the connection
@@ -57,11 +66,11 @@ func (d *deps) database(ctx context.Context) (store.Store, error) {
 // SQLite file when local mode is on (SEMIDX_LOCAL_INDEX / --local), otherwise the
 // PostgreSQL store. Both satisfy store.IndexStore, so callers stay agnostic.
 func (d *deps) indexStore(ctx context.Context) (store.IndexStore, error) {
-	if d.cfg.LocalIndexPath != "" {
+	if d.localIndexPath != "" {
 		if d.local == nil && d.localErr == nil {
-			s, err := localstore.New(d.cfg.LocalIndexPath)
+			s, err := localstore.New(d.localIndexPath)
 			if err != nil {
-				d.localErr = fmt.Errorf("open local index %s: %w", d.cfg.LocalIndexPath, err)
+				d.localErr = fmt.Errorf("open local index %s: %w", d.localIndexPath, err)
 			}
 			d.local = s
 		}
@@ -140,14 +149,15 @@ Run "semidx <command> --help" for details on any command.`,
 		SilenceErrors: true,
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
 			d.cfg = config.Load()
+			// Resolve the local index path without mutating the loaded config.
 			// --local forces standalone mode at the default path unless a path was
 			// already given via SEMIDX_LOCAL_INDEX.
-			if forceLocal && d.cfg.LocalIndexPath == "" {
-				d.cfg.LocalIndexPath = config.DefaultLocalIndexPath()
+			d.localIndexPath = d.cfg.LocalIndexPath
+			if forceLocal && d.localIndexPath == "" {
+				d.localIndexPath = config.DefaultLocalIndexPath()
 			}
-			if keywordOnly {
-				d.cfg.KeywordOnly = true
-			}
+			// Resolve keyword-only mode without mutating the loaded config.
+			d.keywordOnly = d.cfg.KeywordOnly || keywordOnly
 			d.emb = embed.NewChainFromConfig(embed.ChainConfig{
 				OllamaURL:          d.cfg.OllamaURL,
 				OllamaURLs:         d.cfg.OllamaURLs,

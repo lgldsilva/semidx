@@ -28,6 +28,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/extract"
 	"github.com/lgldsilva/semidx/internal/gitenv"
+	"github.com/lgldsilva/semidx/internal/observ"
 	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -144,6 +145,9 @@ func (idx *Indexer) SetWorktree(worktree string) *Indexer {
 // IndexProject scans projectPath, indexes each eligible file, optionally indexes
 // git history, and marks the project ready.
 func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath, model string, maxFiles int) (*IndexStats, error) {
+	ctx, span := observ.StartSpan(ctx, "indexing.Indexer.IndexProject")
+	defer span.End()
+
 	stats := &IndexStats{}
 
 	files, err := ScanFiles(projectPath, maxFiles)

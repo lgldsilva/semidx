@@ -16,6 +16,9 @@ func TestIsSensitive(t *testing.T) {
 		"src/main.go":            false,
 		"docs/readme.md":         false,
 		"pkg/handler.go":         false,
+		"src/donkey.go":          false,
+		"pkg/hotkey.py":          false,
+		"internal/keyboard.go":   false,
 	}
 	for path, want := range cases {
 		if got := IsSensitive(path); got != want {

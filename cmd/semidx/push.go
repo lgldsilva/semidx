@@ -126,9 +126,9 @@ func validatePushPreconditions(d *deps, o *pushOptions) error {
 	switch {
 	case !d.remote():
 		return fmt.Errorf("no server configured — run \"semidx login <url> --token ...\" first")
-	case d.cfg.LocalIndexPath != "":
+	case d.localIndexPath != "":
 		return fmt.Errorf("--local is not compatible with push (push requires a server)")
-	case d.cfg.KeywordOnly:
+	case d.keywordOnly:
 		return fmt.Errorf("--keyword is not compatible with push (use \"semidx index --keyword\" for keyword-only indexing)")
 	case o.priv && !o.embedLocally:
 		return fmt.Errorf("--privacy requires --embed-locally")
