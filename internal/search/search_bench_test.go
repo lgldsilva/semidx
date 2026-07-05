@@ -25,6 +25,6 @@ func BenchmarkHumanFormat(b *testing.B) {
 	f := HumanFormatter{Preview: 200}
 	b.ResetTimer()
 	for b.Loop() {
-		f.Format(io.Discard, resp)
+		_ = f.Format(io.Discard, resp)
 	}
 }
