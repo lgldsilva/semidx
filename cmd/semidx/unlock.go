@@ -108,11 +108,11 @@ func (d *deps) prepareUnlockIndexer(ctx context.Context, db store.IndexStore, tg
 	if err := db.EnsureChunksTable(ctx, dims); err != nil {
 		return nil, 0, fmt.Errorf("ensure chunks table: %w", err)
 	}
-	projectID, err := db.EnsureProjectIdentity(ctx, tgt.identity, tgt.name, tgt.indexPath, model, tgt.sourceType)
+	projectID, err := db.EnsureProjectIdentity(ctx, tgt.identity, tgt.name, tgt.indexPath, model, tgt.sourceType, dims)
 	if err != nil {
 		return nil, 0, fmt.Errorf("register project: %w", err)
 	}
-	idx := indexing.NewIndexer(db, d.emb, dims, d.cfg.IndexWorkers, verbose, false, "").
+	idx := indexing.NewIndexer(db, d.emb, dims, d.cfg.IndexWorkers, d.cfg.EmbedBatchSize, d.cfg.MaxFileSize, d.cfg.MaxChunksPerFile, verbose, false, "", nil).
 		SetKeywordOnly(d.cfg.KeywordOnly).
 		SetWorktree(tgt.worktree)
 	return idx, projectID, nil

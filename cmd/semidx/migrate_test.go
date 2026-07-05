@@ -24,7 +24,7 @@ func TestMigrateRows(t *testing.T) {
 	if err := src.EnsureChunksTable(ctx, 3); err != nil {
 		t.Fatal(err)
 	}
-	pid, _ := src.UpsertProject(ctx, "proj", "/proj", "m")
+	pid, _ := src.UpsertProject(ctx, "proj", "/proj", "m", 0)
 	fid, _ := src.UpsertFile(ctx, pid, "alpha.go", "h1", 10)
 	if err := src.InsertChunks(ctx, pid, fid,
 		[]chunker.Chunk{{Content: "alpha token", StartLine: 1, EndLine: 1}},
@@ -51,7 +51,7 @@ func TestMigrateRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(tgt.Close)
-	tpid, _ := tgt.UpsertProject(ctx, "proj", "/proj", "m")
+	tpid, _ := tgt.UpsertProject(ctx, "proj", "/proj", "m", 0)
 
 	files, chunks, err := migrateRows(ctx, tgt, tpid, rows)
 	if err != nil {

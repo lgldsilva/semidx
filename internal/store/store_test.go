@@ -70,7 +70,7 @@ func TestProjectLifecycle(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	id, err := s.UpsertProject(ctx, "demo", "/tmp/demo", "bge-m3")
+	id, err := s.UpsertProject(ctx, "demo", "/tmp/demo", "bge-m3", 0)
 	if err != nil {
 		t.Fatalf("UpsertProject: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestProjectLifecycle(t *testing.T) {
 	}
 
 	// Upsert is idempotent on name and resets status to indexing.
-	id2, _ := s.UpsertProject(ctx, "demo", "/tmp/demo2", "bge-m3")
+	id2, _ := s.UpsertProject(ctx, "demo", "/tmp/demo2", "bge-m3", 0)
 	if id2 != id {
 		t.Errorf("re-upsert changed id: %d != %d", id2, id)
 	}
@@ -105,7 +105,7 @@ func TestChunkRoundTripAndSearch(t *testing.T) {
 	if err := s.EnsureChunksTable(ctx, 3); err != nil {
 		t.Fatalf("EnsureChunksTable: %v", err)
 	}
-	pid, err := s.UpsertProject(ctx, "proj", "/tmp/proj", "test-3d")
+	pid, err := s.UpsertProject(ctx, "proj", "/tmp/proj", "test-3d", 0)
 	if err != nil {
 		t.Fatalf("UpsertProject: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestTextOnlyChunksKeywordOnly(t *testing.T) {
 	if err := s.EnsureChunksTable(ctx, 3); err != nil {
 		t.Fatalf("EnsureChunksTable: %v", err)
 	}
-	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d")
+	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d", 0)
 
 	// One embedded chunk and one text-only (embedding NULL) chunk.
 	efid, _ := s.UpsertFile(ctx, pid, "code.go", "h1", 1)
@@ -226,7 +226,7 @@ func TestFileUpToDate(t *testing.T) {
 	if err := s.EnsureChunksTable(ctx, 3); err != nil {
 		t.Fatalf("EnsureChunksTable: %v", err)
 	}
-	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d")
+	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d", 0)
 	fid, _ := s.UpsertFile(ctx, pid, "x.go", "hash-v1", 10)
 
 	// No chunks yet → not up to date even though the hash matches.
@@ -254,7 +254,7 @@ func TestProjectCRUD(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	p, err := s.CreateProject(ctx, "repo", "bge-m3", "git", "https://x/y.git", "main")
+	p, err := s.CreateProject(ctx, "repo", "bge-m3", "git", "https://x/y.git", "main", 0)
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestProjectCRUD(t *testing.T) {
 	}
 
 	// Duplicate name → ErrProjectExists.
-	if _, err := s.CreateProject(ctx, "repo", "m", "push", "", ""); !errors.Is(err, ErrProjectExists) {
+	if _, err := s.CreateProject(ctx, "repo", "m", "push", "", "", 0); !errors.Is(err, ErrProjectExists) {
 		t.Errorf("duplicate CreateProject err = %v, want ErrProjectExists", err)
 	}
 
@@ -278,7 +278,7 @@ func TestProjectCRUD(t *testing.T) {
 	}
 
 	// List includes it.
-	list, err := s.ListProjects(ctx)
+	list, err := s.ListProjects(ctx, 0, 0)
 	if err != nil || len(list) != 1 || list[0].Name != "repo" {
 		t.Errorf("ListProjects = %+v, err %v", list, err)
 	}
@@ -295,7 +295,7 @@ func TestProjectCRUD(t *testing.T) {
 func TestIndexJobs(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	p, _ := s.CreateProject(ctx, "proj", "bge-m3", "git", "https://x/y.git", "")
+	p, _ := s.CreateProject(ctx, "proj", "bge-m3", "git", "https://x/y.git", "", 0)
 
 	// GetProjectByID round-trips.
 	if got, err := s.GetProjectByID(ctx, p.ID); err != nil || got.Name != "proj" {
@@ -332,7 +332,7 @@ func TestIndexJobs(t *testing.T) {
 func TestClaimJobConcurrentNoDoubleClaim(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	p, _ := s.CreateProject(ctx, "proj", "bge-m3", "push", "", "")
+	p, _ := s.CreateProject(ctx, "proj", "bge-m3", "push", "", "", 0)
 
 	const n = 20
 	for i := 0; i < n; i++ {
@@ -452,7 +452,7 @@ func TestUsers(t *testing.T) {
 	if _, err := s.CreateUser(ctx, "bob", "h", "member"); err != nil {
 		t.Fatalf("CreateUser bob: %v", err)
 	}
-	users, err := s.ListUsers(ctx)
+	users, err := s.ListUsers(ctx, 0, 0)
 	if err != nil || len(users) != 2 {
 		t.Fatalf("ListUsers = %d users, err %v; want 2", len(users), err)
 	}
@@ -574,7 +574,7 @@ func TestListFileHashesAndDeleteByPath(t *testing.T) {
 	if err := s.EnsureChunksTable(ctx, 3); err != nil {
 		t.Fatalf("EnsureChunksTable: %v", err)
 	}
-	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d")
+	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d", 0)
 	fidA, _ := s.UpsertFile(ctx, pid, "a.go", "h1", 10)
 	_, _ = s.UpsertFile(ctx, pid, "b.go", "h2", 20)
 	_ = s.InsertChunks(ctx, pid, fidA, []chunker.Chunk{{Content: "alpha"}}, [][]float32{{1, 0, 0}}, 3)
@@ -604,7 +604,7 @@ func TestDeleteChunksForFile(t *testing.T) {
 	if err := s.EnsureChunksTable(ctx, 3); err != nil {
 		t.Fatalf("EnsureChunksTable: %v", err)
 	}
-	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d")
+	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d", 0)
 	fid, _ := s.UpsertFile(ctx, pid, "f.go", "h", 1)
 	_ = s.InsertChunks(ctx, pid, fid, []chunker.Chunk{{Content: "keepme"}}, [][]float32{{1, 0, 0}}, 3)
 

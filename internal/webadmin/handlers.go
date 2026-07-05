@@ -111,7 +111,7 @@ func (a *Admin) logout(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 // --- dashboard & search ------------------------------------------------------
 
 func (a *Admin) dashboard(w http.ResponseWriter, r *http.Request, ac *authCtx) {
-	projects, err := a.store.ListProjects(r.Context())
+	projects, err := a.store.ListProjects(r.Context(), 0, 0)
 	if err != nil {
 		a.log.Error("list projects failed", "err", err)
 	}
@@ -160,7 +160,7 @@ type projectItem struct {
 }
 
 func (a *Admin) projectsAPI(w http.ResponseWriter, r *http.Request, ac *authCtx) {
-	projects, err := a.store.ListProjects(r.Context())
+	projects, err := a.store.ListProjects(r.Context(), 0, 0)
 	if err != nil {
 		a.log.Error("list projects (api) failed", "err", err)
 		w.Header().Set(headerContentType, "application/json")
@@ -282,7 +282,7 @@ func (a *Admin) usersList(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 }
 
 func (a *Admin) renderUsers(w http.ResponseWriter, r *http.Request, ac *authCtx, flash, errMsg string) {
-	users, err := a.store.ListUsers(r.Context())
+	users, err := a.store.ListUsers(r.Context(), 0, 0)
 	if err != nil {
 		a.log.Error("list users failed", "err", err)
 		errMsg = "could not load users"

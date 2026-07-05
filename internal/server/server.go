@@ -10,6 +10,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -28,14 +30,19 @@ const headerContentType = "Content-Type"
 // Server is the HTTP API. It owns the store, embedder and search service; token
 // auth is enforced per route.
 type Server struct {
-	store  store.Store
-	emb    embed.Embedder
-	search *search.Service
-	log    *slog.Logger
-	reg    *prometheus.Registry
-	reqs   *prometheus.CounterVec
-	admin  http.Handler    // the /admin management UI, nil unless MountAdmin was called
-	jwt    *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
+	store           store.Store
+	emb             embed.Embedder
+	search          *search.Service
+	log             *slog.Logger
+	reg             *prometheus.Registry
+	reqs            *prometheus.CounterVec
+	searchDuration  *prometheus.HistogramVec
+	requestDuration *prometheus.HistogramVec
+	activeRequests  *prometheus.GaugeVec
+	admin           http.Handler    // the /admin management UI, nil unless MountAdmin was called
+	jwt             *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
+
+	apiLimiter *apiRateLimiter // per-key API rate limiter
 }
 
 // EnableJWT turns on JWT control tokens using secret as the HS256 signing key.
@@ -52,8 +59,8 @@ func (s *Server) EnableJWT(secret string) error {
 // MountAdmin enables the web management UI at /admin. secureCookies must be true
 // when the server is reached over HTTPS (directly or via a TLS proxy). If JWT is
 // enabled (EnableJWT), the UI can also mint control tokens.
-func (s *Server) MountAdmin(secureCookies bool) error {
-	a, err := webadmin.New(s.store, s.emb, s.log, secureCookies, s.jwt)
+func (s *Server) MountAdmin(secureCookies bool, csrfKey string) error {
+	a, err := webadmin.New(s.store, s.emb, s.log, secureCookies, s.jwt, csrfKey)
 	if err != nil {
 		return err
 	}
@@ -72,7 +79,28 @@ func New(st store.Store, emb embed.Embedder, log *slog.Logger) *Server {
 		Help: "Total HTTP requests by method and status.",
 	}, []string{"method", "status"})
 	reg.MustRegister(reqs)
-	return &Server{store: st, emb: emb, search: search.NewService(st, emb), log: log, reg: reg, reqs: reqs}
+
+	searchDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "semidx_search_duration_seconds",
+		Help:    "Search request duration in seconds.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"project"})
+	reg.MustRegister(searchDuration)
+
+	requestDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "semidx_http_request_duration_seconds",
+		Help:    "HTTP request duration in seconds.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"method", "path"})
+	reg.MustRegister(requestDuration)
+
+	activeRequests := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "semidx_http_requests_in_flight",
+		Help: "Number of HTTP requests currently being processed.",
+	}, []string{"method"})
+	reg.MustRegister(activeRequests)
+
+	return &Server{store: st, emb: emb, search: search.NewService(st, emb), log: log, reg: reg, reqs: reqs, searchDuration: searchDuration, requestDuration: requestDuration, activeRequests: activeRequests, apiLimiter: newAPIRateLimiter()}
 }
 
 // Handler returns the fully-wired HTTP handler (routing + metrics instrumentation).
@@ -82,24 +110,24 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.Handle("GET /metrics", promhttp.HandlerFor(s.reg, promhttp.HandlerOpts{}))
 
-	mux.Handle("POST /api/v1/projects", s.authed("write", s.handleCreateProject))
+	mux.Handle("POST /api/v1/projects", s.limited(1<<20, s.authed("write", s.handleCreateProject)))
 	mux.Handle("GET /api/v1/projects", s.authed("read", s.handleListProjects))
 	mux.Handle("GET /api/v1/projects/{project}", s.authed("read", s.handleGetProject))
 	mux.Handle("DELETE /api/v1/projects/{project}", s.authed("write", s.handleDeleteProject))
-	mux.Handle("POST /api/v1/projects/{project}/search", s.authed("read", s.handleSearch))
-	mux.Handle("POST /api/v1/projects/{project}/index-jobs", s.authed("write", s.handleEnqueueJob))
-	mux.Handle("POST /api/v1/projects/{project}/files/diff", s.authed("write", s.handleFilesDiff))
-	mux.Handle("POST /api/v1/projects/{project}/files/batch", s.authed("write", s.handleFilesBatch))
+	mux.Handle("POST /api/v1/projects/{project}/search", s.limited(1<<20, s.authed("read", s.handleSearch)))
+	mux.Handle("POST /api/v1/projects/{project}/index-jobs", s.limited(100<<10, s.authed("write", s.handleEnqueueJob)))
+	mux.Handle("POST /api/v1/projects/{project}/files/diff", s.limited(10<<20, s.authed("write", s.handleFilesDiff)))
+	mux.Handle("POST /api/v1/projects/{project}/files/batch", s.limited(100<<20, s.authed("write", s.handleFilesBatch)))
 	mux.Handle("GET /api/v1/jobs/{id}", s.authed("read", s.handleGetJob))
 	if s.admin != nil {
 		mux.Handle("/admin/", s.admin)
 	}
-	return s.instrument(mux)
+	return s.rateLimit(s.instrument(mux))
 }
 
 // Run serves until ctx is cancelled, then shuts down gracefully.
 func (s *Server) Run(ctx context.Context, addr string) error {
-	srv := &http.Server{Addr: addr, Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
 	// #nosec G118 -- shutdown must use a fresh context; the request/serve context is already cancelled here.
 	go func() {
 		<-ctx.Done()
@@ -165,8 +193,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Project: project, Query: body.Query, Model: body.Model, TopK: body.TopK,
 	})
 	if err != nil {
-		// The only user-facing error today is a missing project.
-		writeJSONError(w, http.StatusNotFound, err.Error())
+		s.log.Warn("search failed", "project", project, "err", err)
+		writeJSONError(w, http.StatusNotFound, "project not found")
 		return
 	}
 
@@ -183,15 +211,52 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			Score: hit.Score, Content: hit.Content,
 		})
 	}
+	s.searchDuration.WithLabelValues(project).Observe(time.Since(start).Seconds())
 	writeJSON(w, http.StatusOK, out)
 }
 
-// instrument wraps the mux to count requests by method and status.
+// instrument wraps the mux to count requests by method and status, track
+// in-flight count, and record request duration.
 func (s *Server) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.activeRequests.WithLabelValues(r.Method).Inc()
+		defer s.activeRequests.WithLabelValues(r.Method).Dec()
+
+		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 		s.reqs.WithLabelValues(r.Method, http.StatusText(rec.status)).Inc()
+		s.requestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(time.Since(start).Seconds())
+	})
+}
+
+// limited wraps a handler so that the request body is capped at maxBytes.
+// Excess bytes trigger an early 413 without reading further.
+func (s *Server) limited(maxBytes int64, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// rateLimit rejects requests that exceed 200 req/s per key (bearer token or IP).
+// Health/ready/metrics/admin paths are excluded.
+func (s *Server) rateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "/healthz" || path == "/readyz" || path == "/metrics" || strings.HasPrefix(path, "/admin") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		key := r.RemoteAddr
+		if tok := r.Header.Get("Authorization"); tok != "" {
+			key = tok
+		}
+		if !s.apiLimiter.allow(key) {
+			writeJSONError(w, http.StatusTooManyRequests, "rate limit exceeded")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -213,4 +278,51 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// apiRateLimiter is a per-key token-bucket rate limiter (200 req/s per key).
+type apiRateLimiter struct {
+	mu     sync.Mutex
+	counts map[string]*rateBucket
+}
+
+type rateBucket struct {
+	count  int
+	window time.Time
+}
+
+func newAPIRateLimiter() *apiRateLimiter {
+	l := &apiRateLimiter{counts: map[string]*rateBucket{}}
+	go l.reap()
+	return l
+}
+
+func (l *apiRateLimiter) allow(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	b, ok := l.counts[key]
+	if !ok || now.After(b.window) {
+		l.counts[key] = &rateBucket{count: 1, window: now.Add(time.Second)}
+		return true
+	}
+	if b.count >= 200 {
+		return false
+	}
+	b.count++
+	return true
+}
+
+func (l *apiRateLimiter) reap() {
+	for {
+		time.Sleep(5 * time.Minute)
+		l.mu.Lock()
+		now := time.Now()
+		for k, b := range l.counts {
+			if now.After(b.window) {
+				delete(l.counts, k)
+			}
+		}
+		l.mu.Unlock()
+	}
 }

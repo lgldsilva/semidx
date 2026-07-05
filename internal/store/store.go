@@ -41,6 +41,7 @@ type Project struct {
 	GitURL     string // set when SourceType == "git"
 	Branch     string // optional git branch
 	Identity   string // stable dedup key (git remote/common-dir, or absolute path)
+	Dims       int    // embedding dimension used for this project (0 = unknown/probe)
 }
 
 // Sentinel errors so callers (e.g. the HTTP layer) can map to status codes
@@ -96,15 +97,15 @@ type IndexStore interface {
 	Close()
 	Ping(ctx context.Context) error
 	EnsureChunksTable(ctx context.Context, dims int) error
-	UpsertProject(ctx context.Context, name, path, model string) (int, error)
-	EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string) (int, error)
+	UpsertProject(ctx context.Context, name, path, model string, dims int) (int, error)
+	EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string, dims int) (int, error)
 	SetWorktreeFiles(ctx context.Context, projectID int, worktree string, files map[string]string) error
 	PruneUnreferencedFiles(ctx context.Context, projectID int) (int64, error)
-	CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*Project, error)
+	CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string, dims int) (*Project, error)
 	GetProject(ctx context.Context, name string) (*Project, error)
 	GetProjectByID(ctx context.Context, id int) (*Project, error)
 	GetProjectByIdentity(ctx context.Context, identity string) (*Project, error)
-	ListProjects(ctx context.Context) ([]Project, error)
+	ListProjects(ctx context.Context, limit, offset int) ([]Project, error)
 	DeleteProject(ctx context.Context, name string) error
 	UpdateProjectStatus(ctx context.Context, id int, status string) error
 	UpsertFile(ctx context.Context, projectID int, path, hash string, size int) (int, error)
@@ -139,7 +140,7 @@ type Store interface {
 	CreateUser(ctx context.Context, username, passwordHash, role string) (*User, error)
 	GetUserByUsername(ctx context.Context, username string) (*User, error)
 	GetUserByID(ctx context.Context, id int) (*User, error)
-	ListUsers(ctx context.Context) ([]User, error)
+	ListUsers(ctx context.Context, limit, offset int) ([]User, error)
 	SetUserPassword(ctx context.Context, id int, passwordHash string) error
 	SetUserDisabled(ctx context.Context, id int, disabled bool) error
 	CountUsers(ctx context.Context) (int, error)
@@ -223,7 +224,11 @@ func NewPgStore(ctx context.Context, connString string) (*PgStore, error) {
 		pool.Close()
 		return nil, fmt.Errorf("apply migrations: %w", err)
 	}
-	return &PgStore{pool: pool}, nil
+	s := &PgStore{pool: pool}
+	if err := s.applyTrigramIndexes(ctx); err != nil {
+		slog.Warn("trigram indexes (non-fatal)", "err", err)
+	}
+	return s, nil
 }
 
 func (s *PgStore) Close() {
@@ -292,8 +297,36 @@ func (s *PgStore) EnsureChunksTable(ctx context.Context, dims int) error {
 	if dims > hnswVectorLimit {
 		opclass = fmt.Sprintf("((embedding::halfvec(%d)) halfvec_cosine_ops)", dims)
 	}
-	_, err = s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING hnsw %s", idxHNSW, table, opclass))
+	if _, err := s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING hnsw %s", idxHNSW, table, opclass)); err != nil {
+		return err
+	}
+
+	// GIN trigram index for ILIKE keyword search (see searchKeywords).
+	trgmIdx := pgx.Identifier{fmt.Sprintf("chunks_%d_content_trgm", dims)}.Sanitize()
+	_, err = s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING gin (content gin_trgm_ops)", trgmIdx, table))
 	return err
+}
+
+// applyTrigramIndexes scans for existing chunks_* tables (from prior runs) and
+// adds GIN trigram indexes to each. Tables created after the migration runs
+// via EnsureChunksTable already get the index; this catches tables that existed
+// before the migration was applied.
+func (s *PgStore) applyTrigramIndexes(ctx context.Context) error {
+	rows, err := s.pool.Query(ctx, `SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'chunks_%'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tbl string
+		if err := rows.Scan(&tbl); err != nil {
+			continue
+		}
+		idx := pgx.Identifier{tbl + "_content_trgm"}.Sanitize()
+		tblSafe := pgx.Identifier{tbl}.Sanitize()
+		_, _ = s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING gin (content gin_trgm_ops)", idx, tblSafe))
+	}
+	return rows.Err()
 }
 
 // distanceExpr is the cosine-distance SQL expression against query param $1,
@@ -305,24 +338,24 @@ func distanceExpr(dims int) string {
 	return "c.embedding <=> $1"
 }
 
-func (s *PgStore) UpsertProject(ctx context.Context, name, path, model string) (int, error) {
+func (s *PgStore) UpsertProject(ctx context.Context, name, path, model string, dims int) (int, error) {
 	var id int
 	// name is no longer UNIQUE (F14), so upsert on identity instead — for this
 	// legacy by-name API the identity is the name, keeping it idempotent per name.
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO projects (name, path, model, status, identity)
-		VALUES ($1, $2, $3, 'indexing', $1)
-		ON CONFLICT (identity) DO UPDATE SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing'
+		INSERT INTO projects (name, path, model, status, identity, dims)
+		VALUES ($1, $2, $3, 'indexing', $1, $4)
+		ON CONFLICT (identity) DO UPDATE SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing', dims = EXCLUDED.dims
 		RETURNING id
-	`, name, path, model).Scan(&id)
+	`, name, path, model, dims).Scan(&id)
 	return id, err
 }
 
-const projectColumns = `id, name, path, model, status, source_type, COALESCE(git_url, ''), COALESCE(branch, ''), COALESCE(identity, '')`
+const projectColumns = `id, name, path, model, status, source_type, COALESCE(git_url, ''), COALESCE(branch, ''), COALESCE(identity, ''), COALESCE(dims, 0)`
 
 func scanProject(row pgx.Row) (*Project, error) {
 	var p Project
-	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity, &p.Dims); err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -331,15 +364,15 @@ func scanProject(row pgx.Row) (*Project, error) {
 // EnsureProjectIdentity upserts a project keyed by its stable identity, so any
 // worktree or clone of the same repo maps to one project row. It returns the
 // project id and sets status to "indexing".
-func (s *PgStore) EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string) (int, error) {
+func (s *PgStore) EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string, dims int) (int, error) {
 	var id int
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, identity)
-		VALUES ($1, $2, $3, 'indexing', $4, $5)
+		INSERT INTO projects (name, path, model, status, source_type, identity, dims)
+		VALUES ($1, $2, $3, 'indexing', $4, $5, $6)
 		ON CONFLICT (identity) DO UPDATE
-		  SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing'
+		  SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing', dims = EXCLUDED.dims
 		RETURNING id
-	`, name, path, model, sourceType, identity).Scan(&id)
+	`, name, path, model, sourceType, identity, dims).Scan(&id)
 	return id, err
 }
 
@@ -355,12 +388,25 @@ func (s *PgStore) SetWorktreeFiles(ctx context.Context, projectID int, worktree 
 	if _, err := tx.Exec(ctx, `DELETE FROM worktree_files WHERE project_id = $1 AND worktree = $2`, projectID, worktree); err != nil {
 		return err
 	}
+	if len(files) == 0 {
+		return tx.Commit(ctx)
+	}
+
+	batch := &pgx.Batch{}
 	for path, hash := range files {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO worktree_files (project_id, worktree, path, hash) VALUES ($1, $2, $3, $4)`,
-			projectID, worktree, path, hash); err != nil {
+		batch.Queue(`INSERT INTO worktree_files (project_id, worktree, path, hash) VALUES ($1, $2, $3, $4)`,
+			projectID, worktree, path, hash)
+	}
+	br := tx.SendBatch(ctx, batch)
+	defer func() { _ = br.Close() }()
+
+	for range files {
+		if _, err := br.Exec(); err != nil {
 			return err
 		}
+	}
+	if err := br.Close(); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }
@@ -404,17 +450,17 @@ func (s *PgStore) GetProjectByIdentity(ctx context.Context, identity string) (*P
 
 // CreateProject registers a project with its content source. Returns
 // ErrProjectExists if the name is taken.
-func (s *PgStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*Project, error) {
+func (s *PgStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string, dims int) (*Project, error) {
 	var id int
 	// identity = name: server-registered projects are keyed by their (user-chosen,
 	// unique) name via the identity unique index — the UNIQUE(name) constraint is
 	// gone (F14, so index-path projects can share a basename), so name uniqueness
 	// for API projects is preserved through identity instead.
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, git_url, branch, identity)
-		VALUES ($1, '', $2, 'registered', $3, NULLIF($4, ''), NULLIF($5, ''), $1)
+		INSERT INTO projects (name, path, model, status, source_type, git_url, branch, identity, dims)
+		VALUES ($1, '', $2, 'registered', $3, NULLIF($4, ''), NULLIF($5, ''), $1, $6)
 		RETURNING id
-	`, name, model, sourceType, gitURL, branch).Scan(&id)
+	`, name, model, sourceType, gitURL, branch, dims).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation (identity)
@@ -422,11 +468,15 @@ func (s *PgStore) CreateProject(ctx context.Context, name, model, sourceType, gi
 		}
 		return nil, err
 	}
-	return &Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name}, nil
+	return &Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name, Dims: dims}, nil
 }
 
-func (s *PgStore) ListProjects(ctx context.Context) ([]Project, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY name`)
+func (s *PgStore) ListProjects(ctx context.Context, limit, offset int) ([]Project, error) {
+	var limitArg any
+	if limit > 0 {
+		limitArg = limit
+	} // nil → LIMIT NULL (no limit)
+	rows, err := s.pool.Query(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY name LIMIT $1 OFFSET $2`, limitArg, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -817,10 +867,14 @@ func (s *PgStore) GetUserByID(ctx context.Context, id int) (*User, error) {
 }
 
 // ListUsers returns all users ordered by username.
-func (s *PgStore) ListUsers(ctx context.Context) ([]User, error) {
+func (s *PgStore) ListUsers(ctx context.Context, limit, offset int) ([]User, error) {
+	var limitArg any
+	if limit > 0 {
+		limitArg = limit
+	} // nil → LIMIT NULL (no limit)
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, username, password_hash, role, (disabled_at IS NOT NULL) FROM users ORDER BY username
-	`)
+		SELECT id, username, password_hash, role, (disabled_at IS NOT NULL) FROM users ORDER BY username LIMIT $1 OFFSET $2
+	`, limitArg, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -936,6 +990,11 @@ func (s *PgStore) SearchSimilarKeywordsWorktree(ctx context.Context, projectID i
 
 func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]SearchResult, error) {
 	if dims <= 0 {
+		if p, err := s.GetProjectByID(ctx, projectID); err == nil && p.Dims > 0 {
+			dims = p.Dims
+		}
+	}
+	if dims <= 0 {
 		dims = s.probeDimsForProject(ctx, projectID)
 	}
 	if dims <= 0 {
@@ -950,6 +1009,22 @@ func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText s
 	words := strings.Fields(queryText)
 	if len(words) == 0 {
 		return nil, nil
+	}
+
+	// Filter: skip words shorter than 3 characters and cap at 20 terms
+	// to prevent wasteful scans and DoS via query explosion.
+	filtered := words[:0]
+	for _, w := range words {
+		if len(w) >= 3 {
+			filtered = append(filtered, w)
+		}
+	}
+	words = filtered
+	if len(words) == 0 {
+		return nil, nil
+	}
+	if len(words) > 20 {
+		words = words[:20]
 	}
 
 	clauses := make([]string, 0, len(words))
@@ -1001,15 +1076,24 @@ func (s *PgStore) probeDimsForProject(ctx context.Context, projectID int) int {
 		}
 	}
 
+	if len(tables) == 0 {
+		return 0
+	}
+
+	var parts []string
 	for _, tbl := range tables {
-		var exists int
-		q := fmt.Sprintf("SELECT 1 FROM %s WHERE project_id = $1 LIMIT 1", pgx.Identifier{tbl}.Sanitize())
-		if err := s.pool.QueryRow(ctx, q, projectID).Scan(&exists); err == nil && exists == 1 {
-			var d int
-			if _, err := fmt.Sscanf(tbl, "chunks_%d", &d); err == nil && d > 0 {
-				return d
-			}
-		}
+		sanitized := pgx.Identifier{tbl}.Sanitize()
+		parts = append(parts, fmt.Sprintf("SELECT '%s'::text AS tbl FROM %s WHERE project_id = $1", tbl, sanitized))
+	}
+	q := strings.Join(parts, " UNION ALL ") + " LIMIT 1"
+
+	var found string
+	if err := s.pool.QueryRow(ctx, q, projectID).Scan(&found); err != nil {
+		return 0
+	}
+	var d int
+	if _, err := fmt.Sscanf(found, "chunks_%d", &d); err == nil && d > 0 {
+		return d
 	}
 	return 0
 }

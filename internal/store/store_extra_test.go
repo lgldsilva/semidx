@@ -40,7 +40,7 @@ func TestPingAndFailJob(t *testing.T) {
 	}
 
 	// FailJob path: enqueue → claim → fail → observe failed status + error text.
-	p, _ := s.CreateProject(ctx, "proj", "bge-m3", "push", "", "")
+	p, _ := s.CreateProject(ctx, "proj", "bge-m3", "push", "", "", 0)
 	id, err := s.EnqueueJob(ctx, p.ID, "full")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
@@ -104,7 +104,7 @@ func TestHighDimHalfvec(t *testing.T) {
 	if err := s.EnsureChunksTable(ctx, dims); err != nil {
 		t.Fatalf("EnsureChunksTable(%d): %v", dims, err)
 	}
-	pid, _ := s.UpsertProject(ctx, "hd", "/hd", "gemini-embedding-2")
+	pid, _ := s.UpsertProject(ctx, "hd", "/hd", "gemini-embedding-2", 0)
 	fid, _ := s.UpsertFile(ctx, pid, "doc.txt", "h", 10)
 
 	vec := make([]float32, dims)
@@ -150,7 +150,7 @@ func TestStoreErrorAndBoundaryPaths(t *testing.T) {
 	if err := s.EnsureChunksTable(ctx, 3); err != nil {
 		t.Fatalf("EnsureChunksTable: %v", err)
 	}
-	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d")
+	pid, _ := s.UpsertProject(ctx, "p", "/p", "test-3d", 0)
 	fid, _ := s.UpsertFile(ctx, pid, "f.go", "h", 1)
 
 	// Insert a known corpus so ranking and topK can be asserted exactly.
@@ -228,15 +228,15 @@ func TestStoreErrorAndBoundaryPaths(t *testing.T) {
 	}
 
 	errExp("Ping", s.Ping(cctx))
-	_, e := s.UpsertProject(cctx, "x", "/x", "m")
+	_, e := s.UpsertProject(cctx, "x", "/x", "m", 0)
 	errExp("UpsertProject", e)
-	_, e = s.CreateProject(cctx, "x", "m", "path", "", "")
+	_, e = s.CreateProject(cctx, "x", "m", "path", "", "", 0)
 	errExp("CreateProject", e)
 	_, e = s.GetProject(cctx, "p")
 	errExp("GetProject", e)
 	_, e = s.GetProjectByID(cctx, pid)
 	errExp("GetProjectByID", e)
-	_, e = s.ListProjects(cctx)
+	_, e = s.ListProjects(cctx, 0, 0)
 	errExp("ListProjects", e)
 	errExp("DeleteProject", s.DeleteProject(cctx, "p"))
 	errExp("UpdateProjectStatus", s.UpdateProjectStatus(cctx, pid, "ready"))
@@ -280,7 +280,7 @@ func TestStoreErrorAndBoundaryPaths(t *testing.T) {
 	errExp("GetUserByUsername", e)
 	_, e = s.GetUserByID(cctx, 1)
 	errExp("GetUserByID", e)
-	_, e = s.ListUsers(cctx)
+	_, e = s.ListUsers(cctx, 0, 0)
 	errExp("ListUsers", e)
 	errExp("SetUserPassword", s.SetUserPassword(cctx, 1, "h"))
 	errExp("SetUserDisabled", s.SetUserDisabled(cctx, 1, true))

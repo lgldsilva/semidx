@@ -80,13 +80,13 @@ func (f *fakeStore) GetProject(_ context.Context, name string) (*store.Project, 
 	}
 	return f.project, nil
 }
-func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gitURL, branch string) (*store.Project, error) {
+func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gitURL, branch string, _ int) (*store.Project, error) {
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
 	return &store.Project{Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch}, nil
 }
-func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) {
+func (f *fakeStore) ListProjects(context.Context, int, int) ([]store.Project, error) {
 	return f.listed, f.listErr
 }
 func (f *fakeStore) DeleteProject(context.Context, string) error { return f.deleteErr }

@@ -51,7 +51,7 @@ func TestGetProjectNotFound(t *testing.T) {
 func TestInsertChunksLengthMismatch(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	pid, _ := s.UpsertProject(ctx, "p", "/p", "m")
+	pid, _ := s.UpsertProject(ctx, "p", "/p", "m", 0)
 	fid, _ := s.UpsertFile(ctx, pid, "a.go", "h", 1)
 	err := s.InsertChunks(ctx, pid, fid,
 		[]chunker.Chunk{{Content: "a"}, {Content: "b"}},
@@ -64,7 +64,7 @@ func TestInsertChunksLengthMismatch(t *testing.T) {
 func TestSearchEmptyResults(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	pid, _ := s.UpsertProject(ctx, "p", "/p", "m")
+	pid, _ := s.UpsertProject(ctx, "p", "/p", "m", 0)
 
 	// No chunks at all → both searches return empty without error.
 	if res, err := s.SearchSimilar(ctx, pid, []float32{1, 0, 0}, 3, 5); err != nil || len(res) != 0 {
@@ -123,11 +123,11 @@ func TestClosedDBErrorPaths(t *testing.T) {
 	if err := s.Ping(ctx); err == nil {
 		t.Error("Ping on a closed DB should error")
 	}
-	_, err = s.UpsertProject(ctx, "p", "/p", "m")
+	_, err = s.UpsertProject(ctx, "p", "/p", "m", 0)
 	assertErr("UpsertProject", err)
-	_, err = s.CreateProject(ctx, "p", "m", "path", "", "")
+	_, err = s.CreateProject(ctx, "p", "m", "path", "", "", 0)
 	assertErr("CreateProject", err)
-	_, err = s.ListProjects(ctx)
+	_, err = s.ListProjects(ctx, 0, 0)
 	assertErr("ListProjects", err)
 	assertErr("DeleteProject", s.DeleteProject(ctx, "p"))
 	assertErr("UpdateProjectStatus", s.UpdateProjectStatus(ctx, 1, "ready"))

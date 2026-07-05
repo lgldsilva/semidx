@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type contextKey string
@@ -66,61 +67,64 @@ func (ce *ChainEmbedder) skip(p ProviderInstance, forceLocal bool) bool {
 	return (ce.privacy || forceLocal) && !p.Local
 }
 
-func (ce *ChainEmbedder) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {
+// tryEach iterates providers, calling fn on each non-skipped one, returning the
+// first successful result. Returns lastErr when all providers fail.
+func (ce *ChainEmbedder) tryEach(ctx context.Context, onEmpty string, fn func(context.Context, Embedder) error) error {
 	forceLocal := isForceLocal(ctx)
 	var lastErr error
 	for _, p := range ce.providers {
 		if ce.skip(p, forceLocal) {
 			continue
 		}
-		res, err := p.Embedder.Embed(ctx, model, inputs...)
+		timeout := 30 * time.Second
+		if p.Local {
+			timeout = 5 * time.Second
+		}
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
+		err := fn(callCtx, p.Embedder)
+		cancel()
 		if err == nil {
-			return res, nil
+			return nil
 		}
 		lastErr = err
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
 	}
-	return nil, fmt.Errorf("chain: failed to generate embeddings: %w", lastErr)
+	if lastErr == nil {
+		return fmt.Errorf("chain: %s: no embedding model available", onEmpty)
+	}
+	return fmt.Errorf("chain: %s: %w", onEmpty, lastErr)
+}
+
+func (ce *ChainEmbedder) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {
+	var result [][]float32
+	err := ce.tryEach(ctx, "failed to generate embeddings", func(ctx context.Context, e Embedder) error {
+		var eErr error
+		result, eErr = e.Embed(ctx, model, inputs...)
+		return eErr
+	})
+	return result, err
 }
 
 func (ce *ChainEmbedder) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
-	forceLocal := isForceLocal(ctx)
-	var lastErr error
-	for _, p := range ce.providers {
-		if ce.skip(p, forceLocal) {
-			continue
-		}
-		res, err := p.Embedder.EmbedSingle(ctx, model, text)
-		if err == nil {
-			return res, nil
-		}
-		lastErr = err
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-	}
-	return nil, fmt.Errorf("chain: failed to generate embedding: %w", lastErr)
+	var result []float32
+	err := ce.tryEach(ctx, "failed to generate embedding", func(ctx context.Context, e Embedder) error {
+		var eErr error
+		result, eErr = e.EmbedSingle(ctx, model, text)
+		return eErr
+	})
+	return result, err
 }
 
 func (ce *ChainEmbedder) ModelInfo(ctx context.Context, model string) (*ModelInfo, error) {
-	forceLocal := isForceLocal(ctx)
-	var lastErr error
-	for _, p := range ce.providers {
-		if ce.skip(p, forceLocal) {
-			continue
-		}
-		res, err := p.Embedder.ModelInfo(ctx, model)
-		if err == nil {
-			return res, nil
-		}
-		lastErr = err
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-	}
-	return nil, fmt.Errorf("chain: failed to get model info: %w", lastErr)
+	var result *ModelInfo
+	err := ce.tryEach(ctx, "failed to get model info", func(ctx context.Context, e Embedder) error {
+		var eErr error
+		result, eErr = e.ModelInfo(ctx, model)
+		return eErr
+	})
+	return result, err
 }
 
 func (ce *ChainEmbedder) ListModels(ctx context.Context) ([]string, error) {

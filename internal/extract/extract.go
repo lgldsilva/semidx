@@ -78,6 +78,16 @@ var byExt = map[string]extractor{
 	".rtf":   extractRTF,
 }
 
+// Register adds a custom extractor for the given extension (with leading dot,
+// e.g. ".proto"). Panics if ext is already registered (to catch duplicate
+// registrations at init time).
+func Register(ext string, fn extractor) {
+	if _, ok := byExt[ext]; ok {
+		panic("extract: duplicate registration for " + ext)
+	}
+	byExt[ext] = fn
+}
+
 // Extract returns the plain-text / lightweight-markdown content of a document,
 // dispatched by the file extension of name. Unknown/binary types return
 // ErrUnsupported, encrypted documents return ErrEncrypted, and any panic from a
