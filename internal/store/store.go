@@ -879,7 +879,7 @@ func (s *PgStore) CountUsers(ctx context.Context) (int, error) {
 func (s *PgStore) CreateSession(ctx context.Context, tokenHash string, userID int, expiresAt time.Time) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO web_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)
-	`, tokenHash, userID, expiresAt)
+	`, tokenHash, userID, expiresAt.UTC())
 	return err
 }
 
@@ -889,8 +889,8 @@ func (s *PgStore) SessionUser(ctx context.Context, tokenHash string) (*User, err
 	return s.scanUser(s.pool.QueryRow(ctx, `
 		SELECT u.id, u.username, u.password_hash, u.role, (u.disabled_at IS NOT NULL)
 		FROM web_sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = $1 AND s.expires_at > NOW() AND u.disabled_at IS NULL
-	`, tokenHash))
+		WHERE s.token_hash = $1 AND s.expires_at > $2 AND u.disabled_at IS NULL
+	`, tokenHash, time.Now().UTC()))
 }
 
 // DeleteSession removes a session (logout); idempotent.
@@ -901,7 +901,7 @@ func (s *PgStore) DeleteSession(ctx context.Context, tokenHash string) error {
 
 // DeleteExpiredSessions purges expired sessions and returns how many were removed.
 func (s *PgStore) DeleteExpiredSessions(ctx context.Context) (int64, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM web_sessions WHERE expires_at <= NOW()`)
+	tag, err := s.pool.Exec(ctx, `DELETE FROM web_sessions WHERE expires_at <= $1`, time.Now().UTC())
 	if err != nil {
 		return 0, err
 	}
