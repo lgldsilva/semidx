@@ -30,7 +30,7 @@ func (fakeEmbedder) EmbedSingle(context.Context, string, string) ([]float32, err
 func newAdminWith(t *testing.T, emb embedpkg.Embedder, jwt *jwtauth.Issuer) (*httptest.Server, *fakeStore) {
 	t.Helper()
 	fs := newFakeStore()
-	a, err := New(fs, emb, nil, false, jwt)
+	a, err := New(fs, emb, nil, false, jwt, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,7 +516,7 @@ func TestSessionCookieAttributes(t *testing.T) {
 	t.Run("secure server sets the Secure flag", func(t *testing.T) {
 		fs := newFakeStore()
 		fs.addUser("admin", "supersecret", "admin")
-		a, err := New(fs, nil, nil, true /* secureCookies */, nil)
+		a, err := New(fs, nil, nil, true /* secureCookies */, nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}

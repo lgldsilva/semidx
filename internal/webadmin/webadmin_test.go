@@ -240,7 +240,7 @@ func newTestAdmin(t *testing.T) (*httptest.Server, *fakeStore) {
 	t.Helper()
 	fs := newFakeStore()
 	iss, _ := jwtauth.New("test-secret")
-	a, err := New(fs, nil, nil, false, iss)
+	a, err := New(fs, nil, nil, false, iss, "")
 	if err != nil {
 		t.Fatal(err)
 	}
