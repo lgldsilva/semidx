@@ -15,6 +15,13 @@ coverage.html
 .idea/
 .vscode/
 .claude/
+.mcp.json
+.mcp.json.bak-*
+opencode.json
+opencode.json.bak-*
 
 # property-test regression seeds (transient)
 testdata/rapid/
+
+# Deepwork progress files (Orchestrator session state)
+.slim/deepwork/

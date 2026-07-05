@@ -1,13 +1,31 @@
 package server
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
+	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/store"
 )
+
+// Limits enforced on pre-embedded chunks pushed by clients.
+const (
+	maxPreChunksPerFile = 32
+	maxPreChunkChars    = 4000
+)
+
+// embeddedChunk is a pre-computed chunk sent by a client via files/batch.
+type embeddedChunk struct {
+	StartLine int       `json:"start_line"`
+	EndLine   int       `json:"end_line"`
+	Content   string    `json:"content"`
+	Embedding []float32 `json:"embedding"`
+}
 
 // handleFilesDiff reports which of the client's files are new/changed ("stale",
 // to upload) and which are indexed but no longer present ("deleted"). Read-only.
@@ -45,8 +63,10 @@ func (s *Server) handleFilesDiff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"stale": stale, "deleted": deleted})
 }
 
-// handleFilesBatch indexes uploaded file contents (the server chunks and embeds,
-// so credentials stay on the server) and removes any files in the delete list.
+// handleFilesBatch indexes uploaded file contents and removes any files in the
+// delete list. Files may carry pre-computed chunks with embeddings (the client
+// did the work) or raw content (the server chunks and embeds). Mixed batches
+// are supported: each file follows its own path.
 func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 	proj, ok := s.loadProject(w, r)
 	if !ok {
@@ -54,8 +74,9 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Files []struct {
-			Path    string `json:"path"`
-			Content string `json:"content"`
+			Path    string          `json:"path"`
+			Content string          `json:"content,omitempty"`
+			Chunks  []embeddedChunk `json:"chunks,omitempty"`
 		} `json:"files"`
 		Delete []string `json:"delete"`
 	}
@@ -84,20 +105,100 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, 0, false, false, "")
 	indexed, chunks, failed := 0, 0, 0
 	for _, f := range body.Files {
-		created, err := idx.IndexContent(ctx, proj.ID, f.Path, proj.Model, []byte(f.Content))
-		if err != nil {
+		if len(f.Chunks) > 0 {
+			// Pre-embedded: the client already chunked and embedded. Validate and
+			// store directly, bypassing the server-side chunk+embed pipeline.
+			created, hErr := s.indexPreEmbedded(ctx, proj, f.Path, f.Content, f.Chunks, info.Dims)
+			if hErr != nil {
+				failed++
+				s.log.Error("index pre-embedded file", "project", proj.Name, "path", f.Path, "err", hErr)
+				continue
+			}
+			indexed++
+			chunks += created
+		} else if f.Content != "" {
+			// Raw content: server handles chunking and embedding (current path).
+			created, hErr := idx.IndexContent(ctx, proj.ID, f.Path, proj.Model, []byte(f.Content))
+			if hErr != nil {
+				failed++
+				s.log.Error("index pushed file", "project", proj.Name, "path", f.Path, "err", hErr)
+				continue
+			}
+			indexed++
+			chunks += created
+		} else {
 			failed++
-			s.log.Error("index pushed file", "project", proj.Name, "path", f.Path, "err", err)
-			continue
+			s.log.Error("push file with no content or chunks", "project", proj.Name, "path", f.Path)
 		}
-		indexed++
-		chunks += created
 	}
 	_ = s.store.UpdateProjectStatus(ctx, proj.ID, "ready")
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"indexed": indexed, "chunks": chunks, "deleted": len(body.Delete), "errors": failed,
 	})
+}
+
+// indexPreEmbedded validates pre-computed chunk embeddings and stores them
+// directly. The raw content is still hashed and recorded for file dedup; only
+// chunking and embedding are skipped.
+func (s *Server) indexPreEmbedded(ctx context.Context, proj *store.Project, path, rawContent string, fileChunks []embeddedChunk, dims int) (int, error) {
+	// P0: validate dimensions match the project's model.
+	for i, ch := range fileChunks {
+		if len(ch.Embedding) != dims {
+			return 0, fmt.Errorf("embedding dimension mismatch (chunk %d): got %d dims, expected %d for model %q",
+				i, len(ch.Embedding), dims, proj.Model)
+		}
+	}
+
+	// P0: enforce chunk limits to prevent rogue clients from flooding the DB.
+	if len(fileChunks) > maxPreChunksPerFile {
+		return 0, fmt.Errorf("too many chunks: %d (max %d)", len(fileChunks), maxPreChunksPerFile)
+	}
+	for i, ch := range fileChunks {
+		if len(ch.Content) > maxPreChunkChars {
+			return 0, fmt.Errorf("chunk %d too large: %d chars (max %d)", i, len(ch.Content), maxPreChunkChars)
+		}
+	}
+
+	// Content-addressed dedup: same hash → file is unchanged, skip.
+	contentBytes := []byte(rawContent)
+	contentHash := fmt.Sprintf("%x", sha256.Sum256(contentBytes))
+
+	upToDate, err := s.store.FileUpToDate(ctx, proj.ID, path, contentHash, dims)
+	if err != nil {
+		return 0, fmt.Errorf("check file up-to-date: %w", err)
+	}
+	if upToDate {
+		return 0, nil
+	}
+
+	fileID, err := s.store.UpsertFile(ctx, proj.ID, path, contentHash, len(contentBytes))
+	if err != nil {
+		return 0, fmt.Errorf("upsert file: %w", err)
+	}
+
+	// Delete old chunks for this file before inserting the new set.
+	if err := s.store.DeleteChunksForFile(ctx, proj.ID, fileID, dims); err != nil {
+		return 0, fmt.Errorf("delete old chunks: %w", err)
+	}
+
+	// Convert to the store's chunk types and insert.
+	storeChunks := make([]chunker.Chunk, len(fileChunks))
+	embeddings := make([][]float32, len(fileChunks))
+	for i, ch := range fileChunks {
+		storeChunks[i] = chunker.Chunk{
+			Content:   ch.Content,
+			StartLine: ch.StartLine,
+			EndLine:   ch.EndLine,
+		}
+		embeddings[i] = ch.Embedding
+	}
+
+	if err := s.store.InsertChunks(ctx, proj.ID, fileID, storeChunks, embeddings, dims); err != nil {
+		return 0, fmt.Errorf("insert chunks: %w", err)
+	}
+
+	return len(fileChunks), nil
 }
 
 // loadProject resolves the {project} path value or writes 404/500 and returns false.

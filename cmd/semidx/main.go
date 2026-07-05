@@ -127,6 +127,9 @@ Run "semidx <command> --help" for details on any command.`,
   semidx index --project .
   semidx search --query "rate limiting middleware"
 
+  # Push local files to a server for remote indexing
+  semidx push --project . --embed-locally
+
   # Classic grep-style output (file:line:content)
   semidx sgrep --query "database connection pool"
 
@@ -178,7 +181,7 @@ Run "semidx <command> --help" for details on any command.`,
 			root.AddCommand(c)
 		}
 	}
-	addGroup("primary", newIndexCmd(d), newSearchCmd(d), newSgrepCmd(d), newUnlockCmd(d))
+	addGroup("primary", newIndexCmd(d), newPushCmd(d), newSearchCmd(d), newSgrepCmd(d), newUnlockCmd(d))
 	addGroup("setup", newConfigCmd(d), newLoginCmd(d), newModelsCmd(d))
 	addGroup("advanced", newServeCmd(d), newMCPCmd(d), newRepoCmd(d), newSkillsCmd(d))
 	addGroup("maintenance", newMigrateCmd(d), newUpgradeCmd(d), newDropCmd(d))
@@ -194,33 +197,42 @@ func projectNameFromPath(path string) string {
 }
 
 func buildChain(cfg *config.Config) embed.Embedder {
+	// Pool mode: when 2+ Ollama URLs are configured, create a ParallelEmbedder
+	// with one entry per Ollama instance plus one entry bundling all cloud
+	// providers as a fallback chain. This distributes requests across Ollama
+	// instances while cloud providers serve as an additional parallel lane.
+	if len(cfg.OllamaURLs) >= 2 {
+		return buildPool(cfg)
+	}
+
+	// Single-URL or no explicit URLs: current chain behaviour (backward compatible).
 	var providers []embed.ProviderInstance
 
 	if cfg.GeminiAPIKey != "" {
 		providers = append(providers, embed.ProviderInstance{
 			Name:     "gemini",
-			Embedder: embed.NewOpenAIClient("https://generativelanguage.googleapis.com/v1beta/openai", cfg.GeminiAPIKey),
+			Embedder: embed.NewOpenAIClient(cfg.GeminiBaseURL, cfg.GeminiAPIKey),
 			Local:    false,
 		})
 	}
 	if cfg.GroqAPIKey != "" {
 		providers = append(providers, embed.ProviderInstance{
 			Name:     "groq",
-			Embedder: embed.NewOpenAIClient("https://api.groq.com/openai/v1", cfg.GroqAPIKey),
+			Embedder: embed.NewOpenAIClient(cfg.GroqBaseURL, cfg.GroqAPIKey),
 			Local:    false,
 		})
 	}
 	if cfg.OpenRouterAPIKey != "" {
 		providers = append(providers, embed.ProviderInstance{
 			Name:     "openrouter",
-			Embedder: embed.NewOpenAIClient("https://openrouter.ai/api/v1", cfg.OpenRouterAPIKey),
+			Embedder: embed.NewOpenAIClient(cfg.OpenRouterBaseURL, cfg.OpenRouterAPIKey),
 			Local:    false,
 		})
 	}
 	if cfg.OllamaCloudAPIKey != "" {
 		providers = append(providers, embed.ProviderInstance{
 			Name:     "ollama-cloud",
-			Embedder: embed.NewOpenAIClient("https://ollama.com/v1", cfg.OllamaCloudAPIKey),
+			Embedder: embed.NewOpenAIClient(cfg.OllamaCloudBaseURL, cfg.OllamaCloudAPIKey),
 			Local:    false,
 		})
 	}
@@ -256,4 +268,66 @@ func buildChain(cfg *config.Config) embed.Embedder {
 	}
 
 	return embed.NewChainEmbedder(providers, cfg.Privacy)
+}
+
+// buildPool creates a ParallelEmbedder when multiple Ollama URLs are configured.
+// Each Ollama URL becomes an independent pool entry (local round-robin). Cloud
+// providers (Gemini, Groq, OpenRouter, OllamaCloud) are bundled as one
+// ChainEmbedder entry so they can still fall through to each other.
+func buildPool(cfg *config.Config) embed.Embedder {
+	var pool []embed.Embedder
+
+	// One entry per Ollama URL (local or remote).
+	for _, url := range cfg.OllamaURLs {
+		pool = append(pool, embed.NewOllamaClient(url))
+	}
+
+	// Cloud providers bundled as one fallback-chain entry.
+	var cloud []embed.ProviderInstance
+	if cfg.GeminiAPIKey != "" {
+		cloud = append(cloud, embed.ProviderInstance{
+			Name: "gemini", Embedder: embed.NewOpenAIClient(
+				cfg.GeminiBaseURL, cfg.GeminiAPIKey), Local: false,
+		})
+	}
+	if cfg.GroqAPIKey != "" {
+		cloud = append(cloud, embed.ProviderInstance{
+			Name: "groq", Embedder: embed.NewOpenAIClient(
+				cfg.GroqBaseURL, cfg.GroqAPIKey), Local: false,
+		})
+	}
+	if cfg.OpenRouterAPIKey != "" {
+		cloud = append(cloud, embed.ProviderInstance{
+			Name: "openrouter", Embedder: embed.NewOpenAIClient(
+				cfg.OpenRouterBaseURL, cfg.OpenRouterAPIKey), Local: false,
+		})
+	}
+	if cfg.OllamaCloudAPIKey != "" {
+		cloud = append(cloud, embed.ProviderInstance{
+			Name: "ollama-cloud", Embedder: embed.NewOpenAIClient(
+				cfg.OllamaCloudBaseURL, cfg.OllamaCloudAPIKey), Local: false,
+		})
+	}
+	if len(cloud) > 0 {
+		pool = append(pool, embed.NewChainEmbedder(cloud, cfg.Privacy))
+	}
+
+	// Custom provider, if configured, as its own pool entry.
+	if cfg.Provider != "" {
+		endpoint := cfg.Endpoint
+		if endpoint == "" {
+			if cfg.Provider == "ollama" {
+				endpoint = cfg.OllamaURLs[0] // use first Ollama URL for custom ollama
+			} else {
+				endpoint = "https://api.openai.com/v1"
+			}
+		}
+		if cfg.Provider == "openai" {
+			pool = append(pool, embed.NewOpenAIClient(endpoint, cfg.APIKey))
+		} else {
+			pool = append(pool, embed.NewOllamaClient(endpoint))
+		}
+	}
+
+	return embed.NewParallelEmbedder(pool)
 }
