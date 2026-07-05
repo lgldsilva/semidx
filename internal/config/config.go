@@ -154,6 +154,19 @@ func resolveLocalIndex(v string) string {
 	}
 }
 
+// Clone returns a deep copy of c. The slice fields (OllamaURLs) are copied so
+// callers can mutate the clone without affecting the original. Use Clone when a
+// command needs a tweaked config (e.g. overriding LocalIndexPath) instead of
+// mutating the shared loaded config — that keeps the loaded instance read-only
+// and safe for concurrent readers.
+func (c *Config) Clone() *Config {
+	cp := *c
+	if c.OllamaURLs != nil {
+		cp.OllamaURLs = append([]string(nil), c.OllamaURLs...)
+	}
+	return &cp
+}
+
 // Load resolves the configuration. A missing or unreadable .env file is not
 // an error; malformed lines in it are skipped. The persistent user config
 // file (see UserEnvPath) is layered in at the lowest file precedence.
