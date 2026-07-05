@@ -1070,15 +1070,24 @@ func (s *PgStore) probeDimsForProject(ctx context.Context, projectID int) int {
 		}
 	}
 
+	if len(tables) == 0 {
+		return 0
+	}
+
+	var parts []string
 	for _, tbl := range tables {
-		var exists int
-		q := fmt.Sprintf("SELECT 1 FROM %s WHERE project_id = $1 LIMIT 1", pgx.Identifier{tbl}.Sanitize())
-		if err := s.pool.QueryRow(ctx, q, projectID).Scan(&exists); err == nil && exists == 1 {
-			var d int
-			if _, err := fmt.Sscanf(tbl, "chunks_%d", &d); err == nil && d > 0 {
-				return d
-			}
-		}
+		sanitized := pgx.Identifier{tbl}.Sanitize()
+		parts = append(parts, fmt.Sprintf("SELECT '%s'::text AS tbl FROM %s WHERE project_id = $1", tbl, sanitized))
+	}
+	q := strings.Join(parts, " UNION ALL ") + " LIMIT 1"
+
+	var found string
+	if err := s.pool.QueryRow(ctx, q, projectID).Scan(&found); err != nil {
+		return 0
+	}
+	var d int
+	if _, err := fmt.Sscanf(found, "chunks_%d", &d); err == nil && d > 0 {
+		return d
 	}
 	return 0
 }

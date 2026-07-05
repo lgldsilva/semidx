@@ -80,7 +80,7 @@ func TestPipelineIndexThenSearchLocalStore(t *testing.T) {
 	}
 
 	emb := &semanticEmbedder{}
-	idx := NewIndexer(st, emb, 3, 2, false, false, "")
+	idx := NewIndexer(st, emb, 3, 2, 8, false, false, "")
 
 	stats, err := idx.IndexProject(ctx, pid, src, "m", 0)
 	if err != nil {
@@ -142,7 +142,7 @@ func TestPipelineIncrementalIdempotent(t *testing.T) {
 
 	pid, _ := st.UpsertProject(ctx, "proj", src, "m")
 	emb := &semanticEmbedder{}
-	idx := NewIndexer(st, emb, 3, 2, false, false, "")
+	idx := NewIndexer(st, emb, 3, 2, 8, false, false, "")
 
 	first, err := idx.IndexProject(ctx, pid, src, "m", 0)
 	if err != nil {

@@ -90,6 +90,24 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    content,
+    tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER IF NOT EXISTS chunks_fts_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_fts_bd BEFORE DELETE ON chunks BEGIN
+    DELETE FROM chunks_fts WHERE rowid = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_fts_au AFTER UPDATE ON chunks BEGIN
+    DELETE FROM chunks_fts WHERE rowid = old.id;
+    INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
+END;
 `
 
 // New opens (creating if absent) the SQLite database at path, creating the
@@ -140,7 +158,7 @@ func ensureSchema(db *sql.DB) error {
 		// enforcing UNIQUE on the projects table — i.e. UNIQUE(name) (pre-F14),
 		// which wrongly blocks two projects that share a basename.
 		if hasIdentity == 0 || strings.Contains(strings.ToUpper(ddl), "UNIQUE") {
-			for _, tbl := range []string{"chunks", "worktree_files", "files", "projects"} {
+			for _, tbl := range []string{"chunks_fts", "chunks", "worktree_files", "files", "projects"} {
 				if _, err := db.Exec("DROP TABLE IF EXISTS " + tbl); err != nil {
 					return err
 				}
@@ -549,8 +567,8 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 		return nil, nil
 	}
 
-	// Filter: skip words shorter than 3 characters and cap at 20 terms
-	// to prevent wasteful scans and DoS via query explosion.
+	// Filter: skip words shorter than 3 characters (FTS5's min token size) and
+	// cap at 20 terms to prevent wasteful scans and DoS via query explosion.
 	filtered := words[:0]
 	for _, w := range words {
 		if len(w) >= 3 {
@@ -565,32 +583,38 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 		words = words[:20]
 	}
 
-	// The worktree JOIN's placeholder appears first positionally when present.
+	// Build a FTS5 MATCH query with OR semantics (any word matches).
+	// Quote each word to handle special FTS5 characters.
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = `"` + strings.ReplaceAll(w, `"`, `""`) + `"`
+	}
+	ftsQuery := strings.Join(quoted, " OR ")
+
+	// Build the worktree join if filtering by worktree.
 	join := "JOIN files f ON f.id = c.file_id"
 	var args []any
 	if worktree != "" {
 		join = "JOIN files f ON f.id = c.file_id JOIN worktree_files w ON w.project_id = c.project_id AND w.path = f.path AND w.hash = f.hash AND w.worktree = ?"
 		args = append(args, worktree)
 	}
-	args = append(args, projectID)
 
-	clauses := make([]string, 0, len(words))
-	for _, w := range words {
-		clauses = append(clauses, "c.content LIKE ?")
-		args = append(args, "%"+w+"%")
-	}
 	if topK <= 0 {
 		topK = -1 // SQLite treats LIMIT -1 as "no limit"
 	}
-	args = append(args, topK)
 
-	// #nosec G201 -- interpolated fragments are constant literals; all values are bound as ? params.
+	// #nosec G201 -- join is one of two constant literals; all values are bound as ? params.
+	// Note: FTS5 MATCH requires the table name, not an alias.
 	query := fmt.Sprintf(`
 		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score
-		FROM chunks c `+"%s"+`
-		WHERE c.project_id = ? AND (%s)
+		FROM chunks c
+		JOIN chunks_fts ft ON ft.rowid = c.id
+		%s
+		WHERE chunks_fts MATCH ? AND c.project_id = ?
 		LIMIT ?
-	`, join, strings.Join(clauses, " OR "))
+	`, join)
+
+	args = append(args, ftsQuery, projectID, topK)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -626,6 +650,7 @@ func (s *SQLiteStore) DropAll(ctx context.Context) error {
 
 	for _, stmt := range []string{
 		`DELETE FROM chunks`,
+		`DELETE FROM chunks_fts`,
 		`DELETE FROM files`,
 		`DELETE FROM projects`,
 		`DELETE FROM sqlite_sequence WHERE name IN ('chunks', 'files', 'projects')`,

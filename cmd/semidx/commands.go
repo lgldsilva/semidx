@@ -160,7 +160,7 @@ With no embedding provider configured, add --keyword to index text-only.`,
 				return fmt.Errorf("register project: %w", err)
 			}
 
-			indexer := indexing.NewIndexer(db, d.emb, dims, d.cfg.IndexWorkers, verbose, gitMode, gitSince).
+			indexer := indexing.NewIndexer(db, d.emb, dims, d.cfg.IndexWorkers, d.cfg.EmbedBatchSize, verbose, gitMode, gitSince).
 				SetKeywordOnly(d.cfg.KeywordOnly).
 				SetWorktree(tgt.worktree)
 			start := time.Now()

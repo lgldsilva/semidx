@@ -36,21 +36,21 @@ const (
 	maxChunkChars       = 4000        // ~1000 tokens for bge-m3
 	maxChunksPerFile    = 32
 	logEvery            = 10
-	embedBatchSize      = 8
 	defaultIndexWorkers = 4
 )
 
 // Indexer indexes a project into an IndexStore using an Embedder.
 type Indexer struct {
-	db          store.IndexStore
-	embedder    embed.Embedder
-	dims        int
-	workers     int
-	verbose     bool
-	gitMode     bool
-	gitSince    string
-	keywordOnly bool   // when true, store text-only (no embeddings) for keyword search
-	worktree    string // when set, record this worktree's manifest + prune after indexing
+	db             store.IndexStore
+	embedder       embed.Embedder
+	dims           int
+	workers        int
+	embedBatchSize int
+	verbose        bool
+	gitMode        bool
+	gitSince       string
+	keywordOnly    bool   // when true, store text-only (no embeddings) for keyword search
+	worktree       string // when set, record this worktree's manifest + prune after indexing
 }
 
 // IndexStats summarizes an indexing run.
@@ -88,12 +88,16 @@ type fileResult struct {
 }
 
 // NewIndexer wires an Indexer. dims is the embedding dimension of model;
-// workers is the file concurrency (<1 falls back to defaultIndexWorkers).
-func NewIndexer(db store.IndexStore, emb embed.Embedder, dims, workers int, verbose, gitMode bool, gitSince string) *Indexer {
+// workers is the file concurrency (<1 falls back to defaultIndexWorkers);
+// embedBatchSize is texts per embed API call (<1 falls back to 8).
+func NewIndexer(db store.IndexStore, emb embed.Embedder, dims, workers, embedBatchSize int, verbose, gitMode bool, gitSince string) *Indexer {
 	if workers < 1 {
 		workers = defaultIndexWorkers
 	}
-	return &Indexer{db: db, embedder: emb, dims: dims, workers: workers, verbose: verbose, gitMode: gitMode, gitSince: gitSince}
+	if embedBatchSize < 1 {
+		embedBatchSize = 8
+	}
+	return &Indexer{db: db, embedder: emb, dims: dims, workers: workers, embedBatchSize: embedBatchSize, verbose: verbose, gitMode: gitMode, gitSince: gitSince}
 }
 
 // SetKeywordOnly switches the indexer to keyword-only mode: chunks are stored as
@@ -467,8 +471,8 @@ func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel,
 
 // embedAndInsert embeds chunks in sub-batches and inserts each successful batch.
 func (idx *Indexer) embedAndInsert(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, model, rel string) (created, softErrs int) {
-	for start := 0; start < len(chunks); start += embedBatchSize {
-		end := start + embedBatchSize
+	for start := 0; start < len(chunks); start += idx.embedBatchSize {
+		end := start + idx.embedBatchSize
 		if end > len(chunks) {
 			end = len(chunks)
 		}
