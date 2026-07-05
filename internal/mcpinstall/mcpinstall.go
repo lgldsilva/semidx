@@ -62,7 +62,7 @@ var Clients = []Client{
 		path: func(o Options) string { return filepath.Join(o.Project, "opencode.json") }},
 	{ID: "crush", Desc: "Charm Crush — <config>/crush/crush.json", kind: jsonCrush, applyable: true,
 		path: func(o Options) string { return filepath.Join(o.ConfigDir, "crush", "crush.json") }},
-	{ID: "codex", Desc: "OpenAI Codex CLI — ~/.codex/config.toml (print-only)", kind: tomlCodex, applyable: false,
+	{ID: "codex", Desc: "OpenAI Codex CLI — ~/.codex/config.toml", kind: tomlCodex, applyable: true,
 		path: func(o Options) string { return filepath.Join(o.Home, ".codex", "config.toml") }},
 	{ID: "cagent", Desc: "Docker cagent — per-agent YAML toolset (print-only)", kind: yamlCagent, applyable: false,
 		path: func(o Options) string { return filepath.Join(o.Project, "<your-agent>.yaml") }},
@@ -125,7 +125,12 @@ func Apply(o Options) (path string, err error) {
 		return "", err
 	}
 	existing, _ := os.ReadFile(p) // #nosec G304 -- config path is the resolved client config, not user input
-	merged, err := mergeJSON(c.kind, existing, o.Name, o.ExePath)
+	var merged []byte
+	if c.kind == tomlCodex {
+		merged = mergeTomlCodex(existing, o.Name, o.ExePath)
+	} else {
+		merged, err = mergeJSON(c.kind, existing, o.Name, o.ExePath)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -185,6 +190,39 @@ func mergeJSON(k kind, existing []byte, name, exe string) ([]byte, error) {
 	return json.MarshalIndent(root, "", "  ")
 }
 
+// mergeTomlCodex inserts/replaces the [mcp_servers.<name>] section in a TOML
+// config and preserves every other section and key.
+func mergeTomlCodex(existing []byte, name, exe string) []byte {
+	header := fmt.Sprintf("[mcp_servers.%s]", name)
+	entry := fmt.Sprintf("%s\ncommand = %q\nargs = [\"mcp\"]\n", header, exe)
+	if len(existing) == 0 {
+		return []byte(entry)
+	}
+	content := string(existing)
+	// does the section already exist?
+	idx := strings.Index(content, header+"\n")
+	if idx < 0 {
+		idx = strings.Index(content, header+" ") // edge case: inline comment or trailing space
+	}
+	if idx >= 0 {
+		// find the end: next line that starts with [ (a new section) or EOF
+		rest := content[idx+len(header):]
+		next := strings.Index(rest, "\n[")
+		if next >= 0 {
+			return []byte(content[:idx] + entry + rest[next+1:])
+		}
+		return []byte(content[:idx] + strings.TrimRight(entry, "\n"))
+	}
+	// not found — append at end, with a separating newline if needed
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	if !strings.HasSuffix(content, "\n\n") {
+		content += "\n"
+	}
+	return []byte(content + entry)
+}
+
 // render produces the human-facing snippet for a client (dry-run).
 func render(k kind, name, exe string) string {
 	switch k {
@@ -197,6 +235,20 @@ func render(k kind, name, exe string) string {
 		b, _ := mergeJSON(k, nil, name, exe)
 		return string(b) + "\n"
 	}
+}
+
+// IsApplyable reports whether this client supports automatic --apply.
+func (c Client) IsApplyable() bool { return c.applyable }
+
+// ApplyableClients returns only the clients that support --apply.
+func ApplyableClients() []Client {
+	out := make([]Client, 0, len(Clients))
+	for _, c := range Clients {
+		if c.applyable {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // ClientIDs returns the supported client ids (for help / validation).

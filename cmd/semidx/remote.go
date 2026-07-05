@@ -125,8 +125,10 @@ func newSkillsInstallCmd() *cobra.Command {
 		Use:   "install",
 		Short: "Write the bundled skills into a target directory",
 		Long: `Write semidx's bundled agent skills into a target directory: claude-code
-(~/.claude/skills), project (./.claude/skills), or an explicit --dir.`,
+(~/.claude/skills), cursor (~/.cursor/skills), windsurf (~/.codeium/windsurf/skills),
+project (./.claude/skills), or an explicit --dir.`,
 		Example: `  semidx skills install --target claude-code
+  semidx skills install --target cursor
   semidx skills install --dir ./.claude/skills`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			dest, err := resolveSkillsDir(target, dir)
@@ -144,7 +146,7 @@ func newSkillsInstallCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVar(&target, "target", "claude-code", "Install target: claude-code (~/.claude/skills) or project (./.claude/skills)")
+	c.Flags().StringVar(&target, "target", "claude-code", "Install target: claude-code (~/.claude/skills), cursor (~/.cursor/skills), windsurf (~/.codeium/windsurf/skills), or project (./.claude/skills)")
 	c.Flags().StringVar(&dir, "dir", "", "Explicit destination directory (overrides --target)")
 	return c
 }
@@ -155,17 +157,21 @@ func resolveSkillsDir(target, dir string) (string, error) {
 	if dir != "" {
 		return dir, nil
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
 	switch target {
 	case "claude-code":
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
 		return filepath.Join(home, ".claude", "skills"), nil
+	case "cursor":
+		return filepath.Join(home, ".cursor", "skills"), nil
+	case "windsurf":
+		return filepath.Join(home, ".codeium", "windsurf", "skills"), nil
 	case "project":
 		return filepath.Join(".claude", "skills"), nil
 	default:
-		return "", fmt.Errorf("unknown --target %q (use claude-code or project, or pass --dir)", target)
+		return "", fmt.Errorf("unknown --target %q (use claude-code, cursor, windsurf, or project, or pass --dir)", target)
 	}
 }
 
