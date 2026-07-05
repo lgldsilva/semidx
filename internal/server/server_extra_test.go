@@ -280,6 +280,91 @@ func TestHandleFilesBatchEmptyContent(t *testing.T) {
 	}
 }
 
+func TestHandleFilesBatchPreEmbedded(t *testing.T) {
+	// A file carrying pre-computed chunks (client embedded) is stored directly,
+	// bypassing the server-side chunk+embed pipeline. cfgEmbedder's default is 3
+	// dims, so the embedding must have length 3 to pass validation.
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}}
+	srv := New(fs, cfgEmbedder{}, nil)
+	body := `{"files":[{"path":"a.go","content":"x","chunks":[{"start_line":1,"end_line":2,"content":"x","embedding":[0.1,0.2,0.3]}]}]}`
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	if rec.Code != 200 {
+		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"indexed":1`) || !strings.Contains(rec.Body.String(), `"chunks":1`) {
+		t.Errorf("pre-embedded file should index with one chunk; body %s", rec.Body.String())
+	}
+}
+
+func TestHandleFilesBatchPreEmbeddedDimMismatch(t *testing.T) {
+	// An embedding whose length differs from the model's dims is rejected by
+	// indexPreEmbedded, so the file is counted as a per-file error (not a 500).
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}}
+	srv := New(fs, cfgEmbedder{}, nil) // default dims = 3
+	body := `{"files":[{"path":"a.go","content":"x","chunks":[{"start_line":1,"end_line":2,"content":"x","embedding":[0.1,0.2]}]}]}`
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	if rec.Code != 200 {
+		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"errors":1`) || !strings.Contains(rec.Body.String(), `"indexed":0`) {
+		t.Errorf("dimension mismatch should count as a per-file error; body %s", rec.Body.String())
+	}
+}
+
+func TestHandleFilesBatchNoContentNoChunks(t *testing.T) {
+	// A file with neither raw content nor pre-computed chunks has nothing to
+	// index and is counted as a per-file error.
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}}
+	srv := New(fs, cfgEmbedder{}, nil)
+	body := `{"files":[{"path":"empty.go"}]}`
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	if rec.Code != 200 {
+		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"errors":1`) || !strings.Contains(rec.Body.String(), `"indexed":0`) {
+		t.Errorf("a file with no content or chunks should be a per-file error; body %s", rec.Body.String())
+	}
+}
+
+func TestHandleFilesBatchPreEmbeddedChunkTooLarge(t *testing.T) {
+	// A chunk exceeding maxPreChunkChars is rejected → per-file error.
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}}
+	srv := New(fs, cfgEmbedder{}, nil)
+	big := strings.Repeat("x", 4001) // > maxPreChunkChars (4000)
+	body := `{"files":[{"path":"a.go","content":"x","chunks":[{"start_line":1,"end_line":2,"content":"` + big + `","embedding":[0.1,0.2,0.3]}]}]}`
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	if rec.Code != 200 {
+		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"errors":1`) {
+		t.Errorf("oversized chunk should be a per-file error; body %s", rec.Body.String())
+	}
+}
+
+func TestHandleFilesBatchPreEmbeddedTooManyChunks(t *testing.T) {
+	// More than maxPreChunksPerFile chunks is rejected → per-file error.
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}}
+	srv := New(fs, cfgEmbedder{}, nil)
+	one := `{"start_line":1,"end_line":2,"content":"x","embedding":[0.1,0.2,0.3]}`
+	chunks := make([]string, 33) // > maxPreChunksPerFile (32)
+	for i := range chunks {
+		chunks[i] = one
+	}
+	body := `{"files":[{"path":"a.go","content":"x","chunks":[` + strings.Join(chunks, ",") + `]}]}`
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	if rec.Code != 200 {
+		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"errors":1`) {
+		t.Errorf("too many chunks should be a per-file error; body %s", rec.Body.String())
+	}
+}
+
 // --- 500 / error paths across handlers ---
 
 func TestServerErrorPaths(t *testing.T) {

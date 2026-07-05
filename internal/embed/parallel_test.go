@@ -116,6 +116,13 @@ func (f *forceLocalFake) Embed(ctx context.Context, model string, inputs ...stri
 	return f.stubEmbedder.Embed(ctx, model, inputs...)
 }
 
+func (f *forceLocalFake) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
+	if isForceLocal(ctx) {
+		return nil, context.DeadlineExceeded // simulate non-local entry failing
+	}
+	return f.stubEmbedder.EmbedSingle(ctx, model, text)
+}
+
 func TestParallelEmbedderPrivacyFallback(t *testing.T) {
 	bad := &forceLocalFake{stubEmbedder: &stubEmbedder{name: "cloud", dims: 1024}}
 	good := &stubEmbedder{name: "ollama", dims: 1024}
@@ -188,5 +195,37 @@ func TestParallelEmbedderSingleEntry(t *testing.T) {
 	// Single entry → always goes to e1
 	if e1.callCount != 5 {
 		t.Errorf("callCount = %d, want 5", e1.callCount)
+	}
+}
+
+// EmbedSingle mirrors Embed's privacy behavior: when the round-robin entry fails
+// under force-local, it retries the remaining entries until one succeeds.
+func TestParallelEmbedderEmbedSinglePrivacyFallback(t *testing.T) {
+	bad := &forceLocalFake{stubEmbedder: &stubEmbedder{name: "cloud", dims: 1024}}
+	good := &stubEmbedder{name: "ollama", dims: 1024}
+	pool := NewParallelEmbedder([]Embedder{bad, good})
+
+	ctx := WithForceLocal(context.Background(), true)
+	res, err := pool.EmbedSingle(ctx, "bge-m3", "hello")
+	if err != nil {
+		t.Fatalf("privacy fallback failed: %v", err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("expected 1 embedding value, got %d", len(res))
+	}
+}
+
+// When every entry fails in privacy mode, EmbedSingle must wrap the real
+// underlying failure rather than return a nil error.
+func TestParallelEmbedderEmbedSingleAllFail(t *testing.T) {
+	bad1 := &forceLocalFake{stubEmbedder: &stubEmbedder{name: "cloud-1", dims: 1024}}
+	bad2 := &forceLocalFake{stubEmbedder: &stubEmbedder{name: "cloud-2", dims: 1024}}
+	pool := NewParallelEmbedder([]Embedder{bad1, bad2})
+
+	ctx := WithForceLocal(context.Background(), true)
+	if _, err := pool.EmbedSingle(ctx, "bge-m3", "hello"); err == nil {
+		t.Fatal("expected an error when all entries fail")
+	} else if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error must wrap the underlying failure, got: %v", err)
 	}
 }
