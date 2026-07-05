@@ -33,6 +33,7 @@ const (
 	defaultOpenRouterURL  = "https://openrouter.ai/api/v1"
 	defaultOllamaCloudURL = "https://ollama.com/v1"
 	defaultIndexWorkers   = 4
+	defaultEmbedBatchSize = 8
 	defaultListenAddr     = ":8080"
 	defaultDataDir        = "/var/lib/semidx"
 )
@@ -71,6 +72,9 @@ type Config struct {
 	// IndexWorkers is how many files are indexed concurrently
 	// (SEMIDX_INDEX_WORKERS). Defaults to defaultIndexWorkers.
 	IndexWorkers int
+	// EmbedBatchSize controls how many texts are sent per embedding API call
+	// (SEMIDX_EMBED_BATCH_SIZE). Defaults to defaultEmbedBatchSize.
+	EmbedBatchSize int
 
 	// ListenAddr is the server bind address (SEMIDX_LISTEN_ADDR, e.g. ":8080").
 	ListenAddr string
@@ -155,6 +159,7 @@ func Load() *Config {
 		OllamaCloudBaseURL: env.get("SEMIDX_OLLAMA_CLOUD_BASE_URL", defaultOllamaCloudURL),
 		Privacy:            env.get("EMBED_PRIVACY", "") == "true",
 		IndexWorkers:       atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
+		EmbedBatchSize:     atoiDefault(env.get("SEMIDX_EMBED_BATCH_SIZE", ""), defaultEmbedBatchSize),
 		ListenAddr:         env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
 		BootstrapToken:     env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
 		DataDir:            env.get("SEMIDX_DATA_DIR", defaultDataDir),
@@ -209,6 +214,7 @@ var KnownKeys = []KeySpec{
 	{"EMBED_API_KEY", "Custom provider API key", true},
 	{"EMBED_PRIVACY", "Force local-only embedding providers (true)", false},
 	{"SEMIDX_INDEX_WORKERS", "Concurrent index workers (positive int)", false},
+	{"SEMIDX_EMBED_BATCH_SIZE", "Texts per embedding API call (positive int)", false},
 	{"SEMIDX_JAVA_DECOMPILER", "External Java decompiler command for .class in JARs", false},
 	// Self-update (semidx upgrade) — override to point at a different release host.
 	{"SEMIDX_UPDATE_API", "Releases API base for `semidx upgrade` (default: homelab Gitea)", false},

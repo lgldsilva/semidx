@@ -64,7 +64,7 @@ func connectLocal(t *testing.T) *mcp.ClientSession {
 		t.Fatalf("UpsertProject: %v", err)
 	}
 	emb := basisEmbedder{}
-	if _, err := indexing.NewIndexer(st, emb, 3, 2, false, false, "").IndexProject(ctx, pid, src, "m", 0); err != nil {
+	if _, err := indexing.NewIndexer(st, emb, 3, 2, 8, false, false, "").IndexProject(ctx, pid, src, "m", 0); err != nil {
 		t.Fatalf("IndexProject: %v", err)
 	}
 

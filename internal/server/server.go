@@ -30,17 +30,17 @@ const headerContentType = "Content-Type"
 // Server is the HTTP API. It owns the store, embedder and search service; token
 // auth is enforced per route.
 type Server struct {
-	store  store.Store
-	emb    embed.Embedder
-	search *search.Service
-	log    *slog.Logger
-	reg              *prometheus.Registry
-	reqs             *prometheus.CounterVec
-	searchDuration   *prometheus.HistogramVec
-	requestDuration  *prometheus.HistogramVec
-	activeRequests   *prometheus.GaugeVec
-	admin            http.Handler    // the /admin management UI, nil unless MountAdmin was called
-	jwt    *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
+	store           store.Store
+	emb             embed.Embedder
+	search          *search.Service
+	log             *slog.Logger
+	reg             *prometheus.Registry
+	reqs            *prometheus.CounterVec
+	searchDuration  *prometheus.HistogramVec
+	requestDuration *prometheus.HistogramVec
+	activeRequests  *prometheus.GaugeVec
+	admin           http.Handler    // the /admin management UI, nil unless MountAdmin was called
+	jwt             *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
 
 	apiLimiter *apiRateLimiter // per-key API rate limiter
 }
