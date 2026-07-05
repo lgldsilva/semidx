@@ -1006,25 +1006,9 @@ func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText s
 		return nil, err
 	}
 
-	words := strings.Fields(queryText)
+	words := filterSearchWords(queryText)
 	if len(words) == 0 {
 		return nil, nil
-	}
-
-	// Filter: skip words shorter than 3 characters and cap at 20 terms
-	// to prevent wasteful scans and DoS via query explosion.
-	filtered := words[:0]
-	for _, w := range words {
-		if len(w) >= 3 {
-			filtered = append(filtered, w)
-		}
-	}
-	words = filtered
-	if len(words) == 0 {
-		return nil, nil
-	}
-	if len(words) > 20 {
-		words = words[:20]
 	}
 
 	clauses := make([]string, 0, len(words))
@@ -1057,6 +1041,29 @@ func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText s
 	defer rows.Close()
 
 	return scanSearchRows(rows)
+}
+
+// filterSearchWords filters and normalises query words for keyword search:
+// removes terms shorter than 3 characters and caps at 20 terms to prevent
+// wasteful scans and DoS via query explosion. Returns nil if no valid words remain.
+func filterSearchWords(queryText string) []string {
+	words := strings.Fields(queryText)
+	if len(words) == 0 {
+		return nil
+	}
+	filtered := words[:0]
+	for _, w := range words {
+		if len(w) >= 3 {
+			filtered = append(filtered, w)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	if len(filtered) > 20 {
+		filtered = filtered[:20]
+	}
+	return filtered
 }
 
 // probeDimsForProject scans existing chunks_<dims> tables for one holding rows

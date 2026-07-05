@@ -95,7 +95,7 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 		return
 	}
 
-	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, 0, 0, 0, 0, false, job.Type == "git_history", "30.days", nil)
+	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, indexing.IndexerOpts{GitMode: job.Type == "git_history", GitSince: "30.days"})
 	stats, err := idx.IndexProject(ctx, job.ProjectID, path, proj.Model, 0)
 	if err != nil {
 		fail("index: " + err.Error())

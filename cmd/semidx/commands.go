@@ -160,7 +160,15 @@ With no embedding provider configured, add --keyword to index text-only.`,
 				return fmt.Errorf("register project: %w", err)
 			}
 
-			indexer := indexing.NewIndexer(db, d.emb, dims, d.cfg.IndexWorkers, d.cfg.EmbedBatchSize, d.cfg.MaxFileSize, d.cfg.MaxChunksPerFile, verbose, gitMode, gitSince, nil).
+			indexer := indexing.NewIndexer(db, d.emb, dims, indexing.IndexerOpts{
+				Workers:          d.cfg.IndexWorkers,
+				EmbedBatchSize:   d.cfg.EmbedBatchSize,
+				MaxFileSize:      d.cfg.MaxFileSize,
+				MaxChunksPerFile: d.cfg.MaxChunksPerFile,
+				Verbose:          verbose,
+				GitMode:          gitMode,
+				GitSince:         gitSince,
+			}).
 				SetKeywordOnly(d.cfg.KeywordOnly).
 				SetWorktree(tgt.worktree)
 			start := time.Now()
