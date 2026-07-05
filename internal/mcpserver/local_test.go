@@ -59,12 +59,12 @@ func connectLocal(t *testing.T) *mcp.ClientSession {
 	writeFile(t, src, "alpha.go", "package a\nfunc Alpha() {} // token alpha here\n")
 	writeFile(t, src, "beta.go", "package b\nfunc Beta() {} // token beta here\n")
 
-	pid, err := st.UpsertProject(ctx, "proj", src, "m")
+	pid, err := st.UpsertProject(ctx, "proj", src, "m", 0)
 	if err != nil {
 		t.Fatalf("UpsertProject: %v", err)
 	}
 	emb := basisEmbedder{}
-	if _, err := indexing.NewIndexer(st, emb, 3, 2, 8, false, false, "").IndexProject(ctx, pid, src, "m", 0); err != nil {
+	if _, err := indexing.NewIndexer(st, emb, 3, 2, 8, 1024*1024, 32, false, false, "", nil).IndexProject(ctx, pid, src, "m", 0); err != nil {
 		t.Fatalf("IndexProject: %v", err)
 	}
 

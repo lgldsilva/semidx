@@ -1,92 +1,92 @@
-# Decisões de Design (ADRs)
+# Design Decisions (ADRs)
 
-Este documento registra as principais decisões arquiteturais tomadas durante a evolução deste POC, motivadas por incidentes reais ocorridos no homelab.
+This document records the main architectural decisions made during the evolution of this POC, motivated by real incidents that occurred in the homelab.
 
 ---
 
-## 1. Abstração e Chain de Provedores com Fallback
+## 1. Provider Abstraction and Fallback Chain
 
-- **Decisão**: Criar a interface `Embedder` e a implementação `ChainEmbedder` permitindo que múltiplos provedores de embedding sejam varridos em ordem de preferência.
+- **Decision**: Create the `Embedder` interface and the `ChainEmbedder` implementation allowing multiple embedding providers to be iterated in order of preference.
 - **Why**: 
-  - *Incidente*: Chaves de API externas (ou o Ollama local) ocasionalmente falham por timeout, queda de rede ou estouro de cota (rate limits no free tier). Deixar o CLI amarrado a um único provedor causava interrupção completa da indexação.
+  - *Incident*: External API keys (or the local Ollama) occasionally fail due to timeout, network outage, or quota exhaustion (rate limits on free tier). Tying the CLI to a single provider caused complete indexing interruption.
 - **How**: 
-  - Implementado em `embedder.go`. O `ChainEmbedder` recebe uma lista de provedores ordenados. Qualquer falha de rede ou timeout na geração do embedding chaveia automaticamente para o próximo da lista (ex: Gemini -> OpenRouter -> Ollama Local).
+  - Implemented in `embedder.go`. `ChainEmbedder` receives a list of ordered providers. Any network failure or timeout during embedding generation automatically switches to the next in the list (e.g., Gemini -> OpenRouter -> Local Ollama).
 - **Trade-offs**: 
-  - Diferentes modelos geram vetores de dimensões diferentes (ex: bge-m3 1024d vs Gemini 3072d). A busca semântica **não funciona** se misturarmos vetores de modelos diferentes no mesmo índice (gerará lixo matemático). Por isso, a chain só pode fazer fallback entre endpoints servindo o *mesmo* modelo ou modelos com dimensões equivalentes, ou o projeto deve ser reindexado do zero se houver troca de modelo.
+  - Different models generate vectors of different dimensions (e.g., bge-m3 1024d vs Gemini 3072d). Semantic search **does not work** if we mix vectors from different models in the same index (produces mathematical garbage). Therefore, the chain can only fallback between endpoints serving the *same* model or models with equivalent dimensions, or the project must be reindexed from scratch if the model is changed.
 
 ---
 
-## 2. Tabelas Dinâmicas de Vetores baseadas em Dimensão
+## 2. Dynamic Vector Tables Based on Dimension
 
-- **Decisão**: Abandonar a tabela única `chunks` com tamanho fixo `vector(1024)` em favor de tabelas dinâmicas como `chunks_768`, `chunks_1024` e `chunks_3072`.
+- **Decision**: Abandon the single `chunks` table with fixed size `vector(1024)` in favor of dynamic tables such as `chunks_768`, `chunks_1024`, and `chunks_3072`.
 - **Why**: 
-  - *Incidente*: O pgvector exige tamanho fixo na declaração da coluna (ex: `vector(1024)`). Modelos mais leves (como `nomic-embed-text` de 768d) ou mais precisos (como `gemini-embedding-2` de 3072d) quebravam a inserção SQL com erro de sintaxe e violação de restrição.
+  - *Incident*: pgvector requires a fixed size in the column declaration (e.g., `vector(1024)`). Lighter models (like `nomic-embed-text` at 768d) or more precise ones (like `gemini-embedding-2` at 3072d) broke the SQL insert with syntax errors and constraint violations.
 - **How**: 
-  - Implementado em `db.go`. O método `EnsureChunksTable(ctx, dims)` cria dinamicamente a tabela correspondente (`chunks_X`) baseada nas dimensões reportadas pelo modelo durante a inicialização.
+  - Implemented in `db.go`. The `EnsureChunksTable(ctx, dims)` method dynamically creates the corresponding table (`chunks_X`) based on the dimensions reported by the model during initialization.
 - **Trade-offs**: 
-  - Adiciona complexidade ao SQL (usando concatenação de strings para os nomes das tabelas). Porém, mantém o banco de dados limpo e flexível para aceitar qualquer modelo do mercado sem migrações manuais de schema.
+  - Adds complexity to SQL (using string concatenation for table names). However, it keeps the database clean and flexible to accept any model on the market without manual schema migrations.
 
 ---
 
-## 3. Sandboxing de Indexação via Docker com Capping de RAM (512MB)
+## 3. Indexing Sandboxing via Docker with RAM Capping (512MB)
 
-- **Decisão**: Executar a indexação pesada estritamente dentro de containers Docker com limites rígidos de memória (`--memory 512m`).
+- **Decision**: Run heavy indexing strictly inside Docker containers with hard memory limits (`--memory 512m`).
 - **Why**: 
-  - *Incidente*: O processo de indexação do `opencode` convencional (baseado em Bun) e as primeiras execuções do Go POC inflaram a memória RAM do homelab de 20GB a 23GB, esgotando o swap de 4GB e causando travamento total (thrashing/freezing) da máquina física de 31GB antes de serem mortos pelo OOM-killer.
+  - *Incident*: The conventional `opencode` indexing process (Bun-based) and early runs of the Go POC inflated the homelab RAM from 20GB to 23GB, exhausting the 4GB swap and causing total system freeze (thrashing) of the 31GB physical machine before being killed by the OOM-killer.
 - **How**: 
-  - Criado o script `/home/lgldsilva/poc-semantic-indexer/index-project.sh`. Ele compila a aplicação estaticamente (`CGO_ENABLED=0`) e a executa em um container `alpine` leve com limites de cgroup aplicados no próprio runtime do Docker.
+  - Created the script `/home/lgldsilva/poc-semantic-indexer/index-project.sh`. It compiles the application statically (`CGO_ENABLED=0`) and runs it in a lightweight `alpine` container with cgroup limits applied by Docker's runtime.
 - **Trade-offs**: 
-  - Requer que o Docker esteja instalado e rodando no host. No entanto, protege a máquina física contra qualquer vazamento de memória ou picos de processamento, tornando a execução 100% segura.
+  - Requires Docker to be installed and running on the host. However, it protects the physical machine against any memory leaks or processing spikes, making execution 100% safe.
 
 ---
 
-## 4. Roteamento e Proteção de Arquivos Sensíveis
+## 4. Routing and Protection of Sensitive Files
 
-- **Decisão**: Detectar arquivos contendo segredos ou informações confidenciais (`.env`, `auth`, `secret`, `key`) e forçar a geração de embeddings estritamente de forma **local** (via Ollama). Se o projeto estiver usando um modelo de nuvem (como o Gemini), o arquivo sensível é indexado apenas como **texto puro local** (sem enviar para a nuvem).
+- **Decision**: Detect files containing secrets or confidential information (`.env`, `auth`, `secret`, `key`) and force embedding generation strictly **locally** (via Ollama). If the project is using a cloud model (like Gemini), the sensitive file is indexed only as **local plain text** (without sending to the cloud).
 - **Why**: 
-  - *Incidente*: Enviar arquivos de configuração, credenciais de banco ou chaves privadas para APIs na nuvem (Google Gemini/OpenRouter) viola regras básicas de segurança e expõe segredos do homelab.
+  - *Incident*: Sending configuration files, database credentials, or private keys to cloud APIs (Google Gemini/OpenRouter) violates basic security rules and exposes homelab secrets.
 - **How**: 
-  - Implementado em `chunker.go` (`IsSensitive`) e `indexer.go`. O indexador usa a flag `WithForceLocal` via contexto Go. Se a geração local do modelo falhar ou não for suportada (ex: Gemini na nuvem), o indexador salva o chunk de texto com o vetor `embedding` setado como `NULL`.
+  - Implemented in `chunker.go` (`IsSensitive`) and `indexer.go`. The indexer uses the `WithForceLocal` flag via Go context. If the local model generation fails or is not supported (e.g., Gemini in the cloud), the indexer saves the text chunk with the `embedding` vector set to `NULL`.
 - **Trade-offs**: 
-  - Chunks sensíveis indexados sem embedding não aparecem na busca semântica pura. Porém, eles continuam localizados pelo mecanismo de **Search Fallback por palavra-chave (FTS)**, garantindo segurança sem perder a capacidade de busca.
+  - Sensitive chunks indexed without embedding do not appear in pure semantic search. However, they remain discoverable by the **Keyword Search Fallback (FTS)** mechanism, ensuring security without losing searchability.
 
 ---
 
-## 5. Fallback por Palavras-Chave (SQL ILIKE) e Auto-Detecção de Tabela
+## 5. Keyword Fallback (SQL ILIKE) and Auto-Detection of Table
 
-- **Decisão**: Implementar busca textual clássica com suporte a varredura automática de tabelas do banco caso a API de embeddings esteja completamente offline.
+- **Decision**: Implement classic text search with automatic database table scanning support if the embedding API is completely offline.
 - **Why**: 
-  - *Incidente*: Se o Ollama local estiver desligado e a internet cair, a busca semântica quebra porque não consegue converter a query em vetor.
+  - *Incident*: If the local Ollama is shut down and the internet is down, semantic search breaks because it cannot convert the query into a vector.
 - **How**: 
-  - Implementado em `db.go` (`SearchSimilarKeywords`). O método divide a query em palavras e executa buscas combinadas por `ILIKE` no banco. Se não soubermos o modelo ou a dimensão, o Go POC consulta a tabela do sistema `pg_tables` para achar qual tabela `chunks_*` tem registros gravados para aquele projeto.
+  - Implemented in `db.go` (`SearchSimilarKeywords`). The method splits the query into words and runs combined searches using `ILIKE` in the database. If we don't know the model or the dimension, the Go POC queries the system table `pg_tables` to find which `chunks_*` table has records written for that project.
 - **Trade-offs**: 
-  - A busca textual não entende sinônimos (ex: buscar "usuário" não achará "user"), mas mantém a busca operacional e resiliente sob qualquer circunstância de falha de infraestrutura.
+  - Text search does not understand synonyms (e.g., searching for "user" in Portuguese won't find "usuario"), but it keeps search operational and resilient under any infrastructure failure circumstances.
 
 ---
 
-## 6. Índice ANN (HNSW/halfvec) e Números de Linha no Banco
+## 6. ANN Index (HNSW/halfvec) and Line Numbers in the Database
 
-- **Decisão**: Criar um índice **HNSW** de cosseno em cada tabela `chunks_<dims>` e persistir `start_line`/`end_line` de cada chunk no banco (revertendo a decisão original de calcular a linha lendo o arquivo em tempo de busca).
+- **Decision**: Create an **HNSW** cosine index on each `chunks_<dims>` table and persist `start_line`/`end_line` for each chunk in the database (reverting the original decision to calculate the line by reading the file at search time).
 - **Why**:
-  - Sem índice ANN a busca vetorial fazia *sequential scan* — inaceitável conforme os projetos crescem.
-  - O cálculo de linha lendo o arquivo (`findLineInFile`) exige que o arquivo esteja acessível no host da busca — impossível na arquitetura cliente-servidor (o servidor não tem os arquivos) — e o algoritmo achava a *primeira* ocorrência da linha em qualquer lugar do arquivo (frágil).
+  - Without an ANN index, vector search performed *sequential scan* — unacceptable as projects grow.
+  - The line calculation by reading the file (`findLineInFile`) requires the file to be accessible on the search host — impossible in the client-server architecture (the server does not have the files) — and the algorithm found the *first* occurrence of the line anywhere in the file (fragile).
 - **How**:
-  - `EnsureChunksTable` cria `CREATE INDEX ... USING hnsw`. **Gotcha do pgvector**: HNSW sobre o tipo `vector` limita a **2000 dimensões**; modelos maiores (Gemini 3072) indexam o cast `halfvec` (`(embedding::halfvec(N)) halfvec_cosine_ops`), e `SearchSimilar` consulta a expressão equivalente para que o índice seja usado.
-  - `Chunk` carrega `StartLine`/`EndLine` (calculados no `chunker`), persistidos em `chunks_<dims>` e retornados no `SearchResult`. O `GrepFormatter` usa a linha do banco; `findLineInFile` foi removido.
+  - `EnsureChunksTable` creates `CREATE INDEX ... USING hnsw`. **pgvector gotcha**: HNSW on the `vector` type is limited to **2000 dimensions**; larger models (Gemini 3072) index using the `halfvec` cast (`(embedding::halfvec(N)) halfvec_cosine_ops`), and `SearchSimilar` queries the equivalent expression so the index is used.
+  - `Chunk` carries `StartLine`/`EndLine` (computed in the `chunker`), persisted in `chunks_<dims>` and returned in `SearchResult`. `GrepFormatter` uses the line from the database; `findLineInFile` was removed.
 - **Trade-offs**:
-  - `halfvec` reduz a precisão do índice (meia precisão) para modelos >2000d — aceitável para recall aproximado; a distância exata ainda usa o `vector`. Tabelas antigas recebem as colunas via `ALTER TABLE ADD COLUMN IF NOT EXISTS` (upgrade sem `drop`), mas dados pré-migração ficam com linha nula (reindexar para popular).
+  - `halfvec` reduces index precision (half precision) for models >2000d — acceptable for approximate recall; exact distance still uses `vector`. Old tables receive the columns via `ALTER TABLE ADD COLUMN IF NOT EXISTS` (upgrade without `drop`), but pre-migration data stays with null line data (reindex to populate).
 
 ---
 
-## 🚫 O que NÃO faremos (por enquanto)
+## 🚫 What we will NOT do (for now)
 
-- **Tabela `models` no banco**: `InferDims` (mapa nome→dimensão) já é fonte única em `internal/embed`; mover para uma tabela no banco acoplaria `embed`→`store` por benefício marginal. Reavaliar se/quando precisar de config por-modelo (provider/local) sem recompilar.
-- **Indexação de Arquivos Grandes (>1MB)**: Arquivos gigantes são ignorados ou truncados. Este projeto é otimizado para código-fonte e documentação estruturada em markdown.
+- **`models` table in the database**: `InferDims` (name→dimension map) is already the single source in `internal/embed`; moving it to a database table would couple `embed`→`store` for marginal benefit. Re-evaluate if/when per-model config (provider/local) without recompilation is needed.
+- **Indexing Large Files (>1MB)**: Giant files are ignored or truncated. This project is optimized for source code and structured markdown documentation.
 
 ---
 
-## ⚠️ Checklist de Erros a Evitar
+## ⚠️ Error Checklist to Avoid
 
-- [ ] **Não use `os.ReadFile` puro**: Ele aloca o arquivo inteiro em memória antes de fatiar. Sempre use `os.Open` + `io.LimitReader` para arquivos de tamanho incerto.
-- [ ] **Não use `\r` em logs de background**: Caracteres de retorno de carro quebram o buffer de visualização de TUIs de agentes, causando lentidão e travamentos de renderização. Use logs estruturados por linhas com `\n`.
-- [ ] **Não misture modelos no mesmo projeto**: Mantenha o mesmo modelo (ex: `bge-m3`) em todas as indexações de um projeto, ou chame `drop` antes de mudar.
+- [ ] **Don't use `os.ReadFile` directly**: It allocates the entire file in memory before splitting. Always use `os.Open` + `io.LimitReader` for files of uncertain size.
+- [ ] **Don't use `\r` in background logs**: Carriage return characters break the display buffer of agent TUIs, causing slowness and rendering freezes. Use line-based structured logs with `\n`.
+- [ ] **Don't mix models in the same project**: Keep the same model (e.g., `bge-m3`) across all index operations for a project, or call `drop` before switching.

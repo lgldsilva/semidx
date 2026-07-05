@@ -60,11 +60,11 @@ func TestClientBackendAgainstRealServer(t *testing.T) {
 	if err := st.EnsureChunksTable(ctx, 3); err != nil {
 		t.Fatalf("EnsureChunksTable: %v", err)
 	}
-	pid, err := st.UpsertProject(ctx, "proj", src, "m")
+	pid, err := st.UpsertProject(ctx, "proj", src, "m", 0)
 	if err != nil {
 		t.Fatalf("UpsertProject: %v", err)
 	}
-	if _, err := indexing.NewIndexer(st, emb, 3, 2, 8, false, false, "").IndexProject(ctx, pid, src, "m", 0); err != nil {
+	if _, err := indexing.NewIndexer(st, emb, 3, 2, 8, 1024*1024, 32, false, false, "", nil).IndexProject(ctx, pid, src, "m", 0); err != nil {
 		t.Fatalf("IndexProject: %v", err)
 	}
 

@@ -80,7 +80,7 @@ func (f *fakeStore) GetProject(_ context.Context, name string) (*store.Project, 
 	}
 	return f.project, nil
 }
-func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gitURL, branch string) (*store.Project, error) {
+func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gitURL, branch string, _ int) (*store.Project, error) {
 	if f.createErr != nil {
 		return nil, f.createErr
 	}

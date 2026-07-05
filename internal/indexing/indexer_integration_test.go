@@ -74,13 +74,13 @@ func TestPipelineIndexThenSearchLocalStore(t *testing.T) {
 	writeFile(t, src, "beta.go", "package b\nfunc Beta() {} // token beta here\n")
 	writeFile(t, src, "gamma.go", "package g\nfunc Gamma() {} // token gamma here\n")
 
-	pid, err := st.UpsertProject(ctx, "proj", src, "m")
+	pid, err := st.UpsertProject(ctx, "proj", src, "m", 0)
 	if err != nil {
 		t.Fatalf("UpsertProject: %v", err)
 	}
 
 	emb := &semanticEmbedder{}
-	idx := NewIndexer(st, emb, 3, 2, 8, false, false, "")
+	idx := NewIndexer(st, emb, 3, 2, 8, 1024*1024, 32, false, false, "", nil)
 
 	stats, err := idx.IndexProject(ctx, pid, src, "m", 0)
 	if err != nil {
@@ -140,9 +140,9 @@ func TestPipelineIncrementalIdempotent(t *testing.T) {
 	writeFile(t, src, "alpha.go", "package a\nfunc Alpha() {} // alpha\n")
 	writeFile(t, src, "beta.go", "package b\nfunc Beta() {} // beta\n")
 
-	pid, _ := st.UpsertProject(ctx, "proj", src, "m")
+	pid, _ := st.UpsertProject(ctx, "proj", src, "m", 0)
 	emb := &semanticEmbedder{}
-	idx := NewIndexer(st, emb, 3, 2, 8, false, false, "")
+	idx := NewIndexer(st, emb, 3, 2, 8, 1024*1024, 32, false, false, "", nil)
 
 	first, err := idx.IndexProject(ctx, pid, src, "m", 0)
 	if err != nil {

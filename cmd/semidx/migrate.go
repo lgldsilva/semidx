@@ -95,7 +95,7 @@ func migrateProject(ctx context.Context, src *localstore.SQLiteStore, pg *store.
 	if identity == "" {
 		identity = "path:" + p.Path
 	}
-	pid, err := pg.EnsureProjectIdentity(ctx, identity, p.Name, p.Path, p.Model, p.SourceType)
+	pid, err := pg.EnsureProjectIdentity(ctx, identity, p.Name, p.Path, p.Model, p.SourceType, p.Dims)
 	if err != nil {
 		return 0, 0, fmt.Errorf("register project %q: %w", p.Name, err)
 	}
