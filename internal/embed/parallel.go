@@ -61,10 +61,11 @@ func (p *ParallelEmbedder) embedFallback(ctx context.Context, model string, inpu
 	var lastErr error
 	for i := 1; i < len(p.entries); i++ {
 		idx := (start + i) % len(p.entries)
-		res, lastErr := p.entries[idx].Embed(ctx, model, inputs...)
-		if lastErr == nil {
+		res, err := p.entries[idx].Embed(ctx, model, inputs...)
+		if err == nil {
 			return res, nil
 		}
+		lastErr = err
 	}
 	return nil, fmt.Errorf("parallel: all %d entries failed with force-local: %w", len(p.entries), lastErr)
 }

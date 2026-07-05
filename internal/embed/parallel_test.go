@@ -2,6 +2,7 @@ package embed
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -129,6 +130,23 @@ func TestParallelEmbedderPrivacyFallback(t *testing.T) {
 	}
 	if len(res) != 1 {
 		t.Fatalf("expected 1 embedding, got %d", len(res))
+	}
+}
+
+// When every entry fails in privacy mode, the returned error must wrap the real
+// underlying failure — not nil. Guards against the lastErr shadowing regression.
+func TestParallelEmbedderPrivacyFallbackAllFail(t *testing.T) {
+	bad1 := &forceLocalFake{stubEmbedder: &stubEmbedder{name: "cloud-1", dims: 1024}}
+	bad2 := &forceLocalFake{stubEmbedder: &stubEmbedder{name: "cloud-2", dims: 1024}}
+	pool := NewParallelEmbedder([]Embedder{bad1, bad2})
+
+	ctx := WithForceLocal(context.Background(), true)
+	_, err := pool.Embed(ctx, "bge-m3", "hello")
+	if err == nil {
+		t.Fatal("expected an error when all entries fail")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error must wrap the underlying failure, got: %v", err)
 	}
 }
 
