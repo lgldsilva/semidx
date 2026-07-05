@@ -1,6 +1,7 @@
 package webadmin
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -119,20 +120,28 @@ func (a *Admin) dashboard(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 type searchData struct {
 	Project  string
 	Query    string
+	Top      int
 	Results  []store.SearchResult
 	Fallback bool
 	Ran      bool
 }
 
 func (a *Admin) searchPage(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	topK := 10
+	if ts := strings.TrimSpace(r.URL.Query().Get("top")); ts != "" {
+		if n, err := strconv.Atoi(ts); err == nil && n > 0 && n <= 100 {
+			topK = n
+		}
+	}
 	d := searchData{
 		Project: strings.TrimSpace(r.URL.Query().Get("project")),
 		Query:   strings.TrimSpace(r.URL.Query().Get("q")),
+		Top:     topK,
 	}
 	p := page{User: ac.user, CSRF: ac.csrf, Active: "search", Data: &d}
 	if d.Project != "" && d.Query != "" {
 		d.Ran = true
-		resp, err := a.search.Search(r.Context(), search.Request{Project: d.Project, Query: d.Query, TopK: 10})
+		resp, err := a.search.Search(r.Context(), search.Request{Project: d.Project, Query: d.Query, TopK: topK})
 		if err != nil {
 			p.Err = err.Error()
 		} else {
@@ -141,6 +150,32 @@ func (a *Admin) searchPage(w http.ResponseWriter, r *http.Request, ac *authCtx) 
 		}
 	}
 	a.render(w, "search.html", p)
+}
+
+type projectItem struct {
+	Name   string `json:"name"`
+	Model  string `json:"model"`
+	Status string `json:"status"`
+}
+
+func (a *Admin) projectsAPI(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	projects, err := a.store.ListProjects(r.Context())
+	if err != nil {
+		a.log.Error("list projects (api) failed", "err", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "internal error"}) //nolint:errcheck
+		return
+	}
+	items := make([]projectItem, 0, len(projects))
+	for _, p := range projects {
+		items = append(items, projectItem{Name: p.Name, Model: p.Model, Status: p.Status})
+	}
+	if items == nil {
+		items = []projectItem{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"projects": items}) //nolint:errcheck
 }
 
 // --- API keys ----------------------------------------------------------------
