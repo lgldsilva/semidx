@@ -470,7 +470,7 @@ func TestSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s.CreateSession(ctx, "sess-hash", u.ID, time.Now().Add(time.Hour)); err != nil {
+	if err := s.CreateSession(ctx, "sess-hash", u.ID, time.Now().UTC().Add(time.Hour)); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	got, err := s.SessionUser(ctx, "sess-hash")
@@ -479,7 +479,7 @@ func TestSessions(t *testing.T) {
 	}
 
 	// Expired session → ErrNotFound.
-	if err := s.CreateSession(ctx, "old", u.ID, time.Now().Add(-time.Minute)); err != nil {
+	if err := s.CreateSession(ctx, "old", u.ID, time.Now().UTC().Add(-time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.SessionUser(ctx, "old"); !errors.Is(err, ErrNotFound) {
