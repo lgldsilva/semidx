@@ -118,7 +118,7 @@ func (idx *Indexer) SetWorktree(worktree string) *Indexer {
 func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath, model string, maxFiles int) (*IndexStats, error) {
 	stats := &IndexStats{}
 
-	files, err := scanFiles(projectPath, maxFiles)
+	files, err := ScanFiles(projectPath, maxFiles)
 	if err != nil {
 		return nil, err
 	}
@@ -225,9 +225,9 @@ func (idx *Indexer) recordWorktree(ctx context.Context, projectID int, manifest 
 	}
 }
 
-// scanFiles walks projectPath, skipping ignored dirs and non-indexable files,
+// ScanFiles walks projectPath, skipping ignored dirs and non-indexable files,
 // and caps the result at maxFiles (0 = unlimited).
-func scanFiles(projectPath string, maxFiles int) ([]string, error) {
+func ScanFiles(projectPath string, maxFiles int) ([]string, error) {
 	var files []string
 	err := filepath.WalkDir(projectPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

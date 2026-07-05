@@ -61,11 +61,11 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
 
 - **Not a SaaS and not a grep replacement.** Use plain grep/ripgrep for exact
   strings; semidx is for intent/behavior queries.
-- **The CLI does not push an index to the server over the API.** `semidx index`
-  writes to a store it reaches **directly** — local SQLite or Postgres
-  (`SEMIDX_DB_DSN`). Server-side indexing is for **git** sources the server
-  clones itself. (A `push` project + files/diff+batch API exists on the server,
-  but the CLI's `index` path is direct-to-store.)
+- **The CLI `index` command writes directly to a local store**, not through the
+  server API. Use `semidx push` to send local files to a server for remote
+  indexing — in raw mode (server chunks+embeds) or `--embed-locally` mode
+  (client chunks+embeds locally, server stores). `semidx repo add` handles
+  server-side git cloning.
 - **MCP `semantic_reindex` is server-only.** In standalone mode it returns an
   in-band message pointing at `semidx index`.
 - **No PR/branch SonarQube analysis** — the homelab Sonar is **Community

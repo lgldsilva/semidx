@@ -26,11 +26,15 @@ const (
 	// Credential-free local-dev default: points at the dev Postgres but carries no
 	// password in source. Real deployments set SEMIDX_DB_DSN (the compose does);
 	// a local dev supplies credentials via SEMIDX_DB_DSN or the standard PG* env.
-	defaultDatabaseURL  = "postgres://localhost:55432/semantic_indexer"
-	defaultOllamaURL    = "http://localhost:11434"
-	defaultIndexWorkers = 4
-	defaultListenAddr   = ":8080"
-	defaultDataDir      = "/var/lib/semidx"
+	defaultDatabaseURL    = "postgres://localhost:55432/semantic_indexer"
+	defaultOllamaURL      = "http://localhost:11434"
+	defaultGeminiBaseURL  = "https://generativelanguage.googleapis.com/v1beta/openai"
+	defaultGroqBaseURL    = "https://api.groq.com/openai/v1"
+	defaultOpenRouterURL  = "https://openrouter.ai/api/v1"
+	defaultOllamaCloudURL = "https://ollama.com/v1"
+	defaultIndexWorkers   = 4
+	defaultListenAddr     = ":8080"
+	defaultDataDir        = "/var/lib/semidx"
 )
 
 // Config holds every runtime setting the CLI and MCP server need.
@@ -39,6 +43,12 @@ type Config struct {
 	DatabaseURL string
 	// OllamaURL is the local Ollama endpoint (SEMIDX_OLLAMA_URL, legacy OLLAMA_URL).
 	OllamaURL string
+	// OllamaURLs, when non-empty, enables parallel embedding mode: each URL
+	// becomes its own pool entry (round-robin). Cloud providers (Gemini, Groq,
+	// OpenRouter, OllamaCloud) are bundled as one additional pool entry.
+	// (SEMIDX_OLLAMA_URLS, comma-separated). Overrides single SEMIDX_OLLAMA_URL
+	// when set.
+	OllamaURLs []string
 
 	// Provider optionally prepends a custom provider to the embedding chain
 	// (EMBED_PROVIDER: "openai" or "ollama"), served at Endpoint with APIKey.
@@ -46,10 +56,14 @@ type Config struct {
 	Endpoint string
 	APIKey   string
 
-	GeminiAPIKey      string
-	GroqAPIKey        string
-	OpenRouterAPIKey  string
-	OllamaCloudAPIKey string
+	GeminiAPIKey       string
+	GeminiBaseURL      string
+	GroqAPIKey         string
+	GroqBaseURL        string
+	OpenRouterAPIKey   string
+	OpenRouterBaseURL  string
+	OllamaCloudAPIKey  string
+	OllamaCloudBaseURL string
 
 	// Privacy forces local-only embedding providers (EMBED_PRIVACY=true).
 	Privacy bool
@@ -122,20 +136,25 @@ func Load() *Config {
 	}
 	env := newResolver(paths...)
 	return &Config{
-		DatabaseURL:       env.get("SEMIDX_DB_DSN", defaultDatabaseURL),
-		OllamaURL:         env.first("SEMIDX_OLLAMA_URL", "OLLAMA_URL", defaultOllamaURL),
-		Provider:          env.get("EMBED_PROVIDER", ""),
-		Endpoint:          env.get("EMBED_ENDPOINT", ""),
-		APIKey:            env.get("EMBED_API_KEY", ""),
-		GeminiAPIKey:      env.get("GEMINI_API_KEY", ""),
-		GroqAPIKey:        env.get("GROQ_API_KEY", ""),
-		OpenRouterAPIKey:  env.get("OPENROUTER_API_KEY", ""),
-		OllamaCloudAPIKey: env.get("OLLAMA_CLOUD_API_KEY", ""),
-		Privacy:           env.get("EMBED_PRIVACY", "") == "true",
-		IndexWorkers:      atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
-		ListenAddr:        env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
-		BootstrapToken:    env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
-		DataDir:           env.get("SEMIDX_DATA_DIR", defaultDataDir),
+		DatabaseURL:        env.get("SEMIDX_DB_DSN", defaultDatabaseURL),
+		OllamaURL:          env.first("SEMIDX_OLLAMA_URL", "OLLAMA_URL", defaultOllamaURL),
+		OllamaURLs:         parseCommaSep(env.get("SEMIDX_OLLAMA_URLS", "")),
+		Provider:           env.get("EMBED_PROVIDER", ""),
+		Endpoint:           env.get("EMBED_ENDPOINT", ""),
+		APIKey:             env.get("EMBED_API_KEY", ""),
+		GeminiAPIKey:       env.get("GEMINI_API_KEY", ""),
+		GeminiBaseURL:      env.get("SEMIDX_GEMINI_BASE_URL", defaultGeminiBaseURL),
+		GroqAPIKey:         env.get("GROQ_API_KEY", ""),
+		GroqBaseURL:        env.get("SEMIDX_GROQ_BASE_URL", defaultGroqBaseURL),
+		OpenRouterAPIKey:   env.get("OPENROUTER_API_KEY", ""),
+		OpenRouterBaseURL:  env.get("SEMIDX_OPENROUTER_BASE_URL", defaultOpenRouterURL),
+		OllamaCloudAPIKey:  env.get("OLLAMA_CLOUD_API_KEY", ""),
+		OllamaCloudBaseURL: env.get("SEMIDX_OLLAMA_CLOUD_BASE_URL", defaultOllamaCloudURL),
+		Privacy:            env.get("EMBED_PRIVACY", "") == "true",
+		IndexWorkers:       atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
+		ListenAddr:         env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
+		BootstrapToken:     env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
+		DataDir:            env.get("SEMIDX_DATA_DIR", defaultDataDir),
 
 		BootstrapAdminUser:     env.get("SEMIDX_BOOTSTRAP_ADMIN_USER", "admin"),
 		BootstrapAdminPassword: env.get("SEMIDX_BOOTSTRAP_ADMIN_PASSWORD", ""),
@@ -172,10 +191,15 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_EMBED_MODE", "Set to \"none\" for keyword-only indexing (no embedding model)", false},
 	// Embedding providers (chain, highest priority first; local Ollama is the fallback).
 	{"GEMINI_API_KEY", "Google Gemini embedding key", true},
+	{"SEMIDX_GEMINI_BASE_URL", "Gemini API base URL", false},
 	{"GROQ_API_KEY", "Groq embedding key", true},
+	{"SEMIDX_GROQ_BASE_URL", "Groq API base URL", false},
 	{"OPENROUTER_API_KEY", "OpenRouter embedding key", true},
+	{"SEMIDX_OPENROUTER_BASE_URL", "OpenRouter API base URL", false},
 	{"OLLAMA_CLOUD_API_KEY", "Ollama Cloud embedding key", true},
+	{"SEMIDX_OLLAMA_CLOUD_BASE_URL", "Ollama Cloud API base URL", false},
 	{"SEMIDX_OLLAMA_URL", "Local Ollama endpoint (embedding fallback)", false},
+	{"SEMIDX_OLLAMA_URLS", "Comma-separated Ollama URLs for parallel embedding pool", false},
 	{"EMBED_PROVIDER", "Custom provider prepended to the chain (openai|ollama)", false},
 	{"EMBED_ENDPOINT", "Custom provider endpoint URL", false},
 	{"EMBED_API_KEY", "Custom provider API key", true},
@@ -302,6 +326,23 @@ func atoiDefault(s string, def int) int {
 		return n
 	}
 	return def
+}
+
+// parseCommaSep splits s by comma, trims whitespace, and drops empty entries.
+// Returns nil when the input is blank.
+func parseCommaSep(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // resolver looks a key up in the real environment first, then in each parsed

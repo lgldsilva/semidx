@@ -337,20 +337,20 @@ func TestScanFilesRespectsMaxAndIgnores(t *testing.T) {
 	writeFile(t, dir, "c.go", "z")
 	writeFile(t, dir, "vendor/d.go", "ignored")
 
-	all, err := scanFiles(dir, 0)
+	all, err := ScanFiles(dir, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(all) != 3 {
-		t.Errorf("scanFiles(0) = %d files, want 3 (vendor ignored)", len(all))
+		t.Errorf("ScanFiles(0) = %d files, want 3 (vendor ignored)", len(all))
 	}
 
-	capped, err := scanFiles(dir, 2)
+	capped, err := ScanFiles(dir, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(capped) != 2 {
-		t.Errorf("scanFiles(2) = %d files, want 2", len(capped))
+		t.Errorf("ScanFiles(2) = %d files, want 2", len(capped))
 	}
 }
 

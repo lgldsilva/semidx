@@ -195,3 +195,34 @@ func TestLoadLocalIndexFromEnv(t *testing.T) {
 		t.Errorf("LocalIndexPath = %q, want /tmp/x.db", got)
 	}
 }
+
+func TestParseCommaSep(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"", nil},
+		{"  ", nil},
+		{"a", []string{"a"}},
+		{"a,b,c", []string{"a", "b", "c"}},
+		{" a , b , c ", []string{"a", "b", "c"}},
+		{"http://a:11434,http://b:11434", []string{"http://a:11434", "http://b:11434"}},
+		{"a,,b", []string{"a", "b"}},
+		{",,,", nil},
+	}
+	for _, tt := range tests {
+		got := parseCommaSep(tt.input)
+		if len(got) != len(tt.want) {
+			t.Errorf("parseCommaSep(%q) len = %d, want %d", tt.input, len(got), len(tt.want))
+			continue
+		}
+		if tt.want == nil && got == nil {
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("parseCommaSep(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+			}
+		}
+	}
+}

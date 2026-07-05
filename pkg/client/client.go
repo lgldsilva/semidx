@@ -99,9 +99,20 @@ type DiffResponse struct {
 	Deleted []string `json:"deleted"`
 }
 
+// EmbeddedChunk carries a pre-computed embedding for one chunk of a file. When a
+// BatchFile includes Chunks, the server stores the embeddings directly instead of
+// running its own chunking + embedding pipeline.
+type EmbeddedChunk struct {
+	StartLine int       `json:"start_line"`
+	EndLine   int       `json:"end_line"`
+	Content   string    `json:"content"`
+	Embedding []float32 `json:"embedding"`
+}
+
 type BatchFile struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
+	Path    string          `json:"path"`
+	Content string          `json:"content,omitempty"`
+	Chunks  []EmbeddedChunk `json:"chunks,omitempty"`
 }
 
 type BatchResponse struct {
