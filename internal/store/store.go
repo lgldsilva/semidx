@@ -104,7 +104,7 @@ type IndexStore interface {
 	GetProject(ctx context.Context, name string) (*Project, error)
 	GetProjectByID(ctx context.Context, id int) (*Project, error)
 	GetProjectByIdentity(ctx context.Context, identity string) (*Project, error)
-	ListProjects(ctx context.Context) ([]Project, error)
+	ListProjects(ctx context.Context, limit, offset int) ([]Project, error)
 	DeleteProject(ctx context.Context, name string) error
 	UpdateProjectStatus(ctx context.Context, id int, status string) error
 	UpsertFile(ctx context.Context, projectID int, path, hash string, size int) (int, error)
@@ -139,7 +139,7 @@ type Store interface {
 	CreateUser(ctx context.Context, username, passwordHash, role string) (*User, error)
 	GetUserByUsername(ctx context.Context, username string) (*User, error)
 	GetUserByID(ctx context.Context, id int) (*User, error)
-	ListUsers(ctx context.Context) ([]User, error)
+	ListUsers(ctx context.Context, limit, offset int) ([]User, error)
 	SetUserPassword(ctx context.Context, id int, passwordHash string) error
 	SetUserDisabled(ctx context.Context, id int, disabled bool) error
 	CountUsers(ctx context.Context) (int, error)
@@ -223,7 +223,11 @@ func NewPgStore(ctx context.Context, connString string) (*PgStore, error) {
 		pool.Close()
 		return nil, fmt.Errorf("apply migrations: %w", err)
 	}
-	return &PgStore{pool: pool}, nil
+	s := &PgStore{pool: pool}
+	if err := s.applyTrigramIndexes(ctx); err != nil {
+		slog.Warn("trigram indexes (non-fatal)", "err", err)
+	}
+	return s, nil
 }
 
 func (s *PgStore) Close() {
@@ -292,8 +296,36 @@ func (s *PgStore) EnsureChunksTable(ctx context.Context, dims int) error {
 	if dims > hnswVectorLimit {
 		opclass = fmt.Sprintf("((embedding::halfvec(%d)) halfvec_cosine_ops)", dims)
 	}
-	_, err = s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING hnsw %s", idxHNSW, table, opclass))
+	if _, err := s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING hnsw %s", idxHNSW, table, opclass)); err != nil {
+		return err
+	}
+
+	// GIN trigram index for ILIKE keyword search (see searchKeywords).
+	trgmIdx := pgx.Identifier{fmt.Sprintf("chunks_%d_content_trgm", dims)}.Sanitize()
+	_, err = s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING gin (content gin_trgm_ops)", trgmIdx, table))
 	return err
+}
+
+// applyTrigramIndexes scans for existing chunks_* tables (from prior runs) and
+// adds GIN trigram indexes to each. Tables created after the migration runs
+// via EnsureChunksTable already get the index; this catches tables that existed
+// before the migration was applied.
+func (s *PgStore) applyTrigramIndexes(ctx context.Context) error {
+	rows, err := s.pool.Query(ctx, `SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'chunks_%'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tbl string
+		if err := rows.Scan(&tbl); err != nil {
+			continue
+		}
+		idx := pgx.Identifier{tbl + "_content_trgm"}.Sanitize()
+		tblSafe := pgx.Identifier{tbl}.Sanitize()
+		_, _ = s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING gin (content gin_trgm_ops)", idx, tblSafe))
+	}
+	return rows.Err()
 }
 
 // distanceExpr is the cosine-distance SQL expression against query param $1,
@@ -355,12 +387,25 @@ func (s *PgStore) SetWorktreeFiles(ctx context.Context, projectID int, worktree 
 	if _, err := tx.Exec(ctx, `DELETE FROM worktree_files WHERE project_id = $1 AND worktree = $2`, projectID, worktree); err != nil {
 		return err
 	}
+	if len(files) == 0 {
+		return tx.Commit(ctx)
+	}
+
+	batch := &pgx.Batch{}
 	for path, hash := range files {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO worktree_files (project_id, worktree, path, hash) VALUES ($1, $2, $3, $4)`,
-			projectID, worktree, path, hash); err != nil {
+		batch.Queue(`INSERT INTO worktree_files (project_id, worktree, path, hash) VALUES ($1, $2, $3, $4)`,
+			projectID, worktree, path, hash)
+	}
+	br := tx.SendBatch(ctx, batch)
+	defer func() { _ = br.Close() }()
+
+	for range files {
+		if _, err := br.Exec(); err != nil {
 			return err
 		}
+	}
+	if err := br.Close(); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }
@@ -425,8 +470,12 @@ func (s *PgStore) CreateProject(ctx context.Context, name, model, sourceType, gi
 	return &Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name}, nil
 }
 
-func (s *PgStore) ListProjects(ctx context.Context) ([]Project, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY name`)
+func (s *PgStore) ListProjects(ctx context.Context, limit, offset int) ([]Project, error) {
+	var limitArg any
+	if limit > 0 {
+		limitArg = limit
+	} // nil → LIMIT NULL (no limit)
+	rows, err := s.pool.Query(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY name LIMIT $1 OFFSET $2`, limitArg, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -817,10 +866,14 @@ func (s *PgStore) GetUserByID(ctx context.Context, id int) (*User, error) {
 }
 
 // ListUsers returns all users ordered by username.
-func (s *PgStore) ListUsers(ctx context.Context) ([]User, error) {
+func (s *PgStore) ListUsers(ctx context.Context, limit, offset int) ([]User, error) {
+	var limitArg any
+	if limit > 0 {
+		limitArg = limit
+	} // nil → LIMIT NULL (no limit)
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, username, password_hash, role, (disabled_at IS NOT NULL) FROM users ORDER BY username
-	`)
+		SELECT id, username, password_hash, role, (disabled_at IS NOT NULL) FROM users ORDER BY username LIMIT $1 OFFSET $2
+	`, limitArg, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -950,6 +1003,22 @@ func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText s
 	words := strings.Fields(queryText)
 	if len(words) == 0 {
 		return nil, nil
+	}
+
+	// Filter: skip words shorter than 3 characters and cap at 20 terms
+	// to prevent wasteful scans and DoS via query explosion.
+	filtered := words[:0]
+	for _, w := range words {
+		if len(w) >= 3 {
+			filtered = append(filtered, w)
+		}
+	}
+	words = filtered
+	if len(words) == 0 {
+		return nil, nil
+	}
+	if len(words) > 20 {
+		words = words[:20]
 	}
 
 	clauses := make([]string, 0, len(words))

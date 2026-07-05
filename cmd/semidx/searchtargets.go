@@ -129,7 +129,7 @@ func (d *deps) resolveSearchProjects(ctx context.Context, db store.IndexStore, p
 			return []*store.Project{p}, nil
 		}
 	}
-	projects, err := db.ListProjects(ctx)
+	projects, err := db.ListProjects(ctx, 0, 0)
 	if err != nil {
 		return nil, err
 	}

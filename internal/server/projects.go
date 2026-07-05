@@ -73,7 +73,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	projects, err := s.store.ListProjects(r.Context())
+	projects, err := s.store.ListProjects(r.Context(), 0, 0)
 	if err != nil {
 		s.log.Error("list projects", "err", err)
 		writeJSONError(w, http.StatusInternalServerError, "could not list projects")

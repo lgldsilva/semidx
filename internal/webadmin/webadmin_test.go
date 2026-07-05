@@ -97,7 +97,7 @@ func (f *fakeStore) CreateUser(_ context.Context, username, hash, role string) (
 	return u, nil
 }
 
-func (f *fakeStore) ListUsers(context.Context) ([]store.User, error) {
+func (f *fakeStore) ListUsers(context.Context, int, int) ([]store.User, error) {
 	if f.listUsersErr != nil {
 		return nil, f.listUsersErr
 	}
@@ -213,7 +213,7 @@ func (f *fakeStore) RevokeUserToken(_ context.Context, userID, id int) error {
 	return nil
 }
 
-func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) {
+func (f *fakeStore) ListProjects(context.Context, int, int) ([]store.Project, error) {
 	return f.projects, f.listProjectsErr
 }
 

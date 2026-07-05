@@ -197,10 +197,18 @@ func (s *SQLiteStore) SetWorktreeFiles(ctx context.Context, projectID int, workt
 	if _, err := tx.ExecContext(ctx, `DELETE FROM worktree_files WHERE project_id = ? AND worktree = ?`, projectID, worktree); err != nil {
 		return err
 	}
+	if len(files) == 0 {
+		return tx.Commit()
+	}
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO worktree_files (project_id, worktree, path, hash) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+
 	for path, hash := range files {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO worktree_files (project_id, worktree, path, hash) VALUES (?, ?, ?, ?)`,
-			projectID, worktree, path, hash); err != nil {
+		if _, err := stmt.ExecContext(ctx, projectID, worktree, path, hash); err != nil {
 			return err
 		}
 	}
@@ -279,8 +287,11 @@ func (s *SQLiteStore) GetProjectByIdentity(ctx context.Context, identity string)
 	return p, err
 }
 
-func (s *SQLiteStore) ListProjects(ctx context.Context) ([]store.Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY name`)
+func (s *SQLiteStore) ListProjects(ctx context.Context, limit, offset int) ([]store.Project, error) {
+	if limit <= 0 {
+		limit = -1 // SQLite treats LIMIT -1 as "no limit"
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY name LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -498,11 +509,27 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 		return nil, err
 	}
 
-	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
-	if topK > 0 && len(results) > topK {
-		results = results[:topK]
+	if topK <= 0 || topK >= len(results) {
+		sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+		return results, nil
 	}
-	return results, nil
+	// Min-heap of size topK: keep only the top-K scoring results during the
+	// scan, reducing O(n log n) sort + O(n) memory to O(n) scan + O(k log k)
+	// sort + O(k) memory. For typical topK=20 with 50k chunks this is a
+	// significant improvement.
+	top := make([]store.SearchResult, topK)
+	copy(top, results[:topK])
+	for j := topK/2 - 1; j >= 0; j-- {
+		siftDown(top, j, topK)
+	}
+	for i := topK; i < len(results); i++ {
+		if results[i].Score > top[0].Score {
+			top[0] = results[i]
+			siftDown(top, 0, topK)
+		}
+	}
+	sort.SliceStable(top, func(i, j int) bool { return top[i].Score > top[j].Score })
+	return top, nil
 }
 
 // SearchSimilarKeywords finds chunks whose content matches every query word via
@@ -520,6 +547,22 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 	words := strings.Fields(queryText)
 	if len(words) == 0 {
 		return nil, nil
+	}
+
+	// Filter: skip words shorter than 3 characters and cap at 20 terms
+	// to prevent wasteful scans and DoS via query explosion.
+	filtered := words[:0]
+	for _, w := range words {
+		if len(w) >= 3 {
+			filtered = append(filtered, w)
+		}
+	}
+	words = filtered
+	if len(words) == 0 {
+		return nil, nil
+	}
+	if len(words) > 20 {
+		words = words[:20]
 	}
 
 	// The worktree JOIN's placeholder appears first positionally when present.
@@ -673,6 +716,27 @@ func cosineSimilarity(a, b []float32) float64 {
 		return 0
 	}
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
+}
+
+// siftDown is the min-heap sift-down operation used by the top-K selection in
+// searchSimilar. It maintains the heap invariant: parent <= children.
+func siftDown(items []store.SearchResult, i, n int) {
+	for {
+		smallest := i
+		left := 2*i + 1
+		right := 2*i + 2
+		if left < n && items[left].Score < items[smallest].Score {
+			smallest = left
+		}
+		if right < n && items[right].Score < items[smallest].Score {
+			smallest = right
+		}
+		if smallest == i {
+			break
+		}
+		items[i], items[smallest] = items[smallest], items[i]
+		i = smallest
+	}
 }
 
 // isUniqueViolation reports whether err is a SQLite UNIQUE/PRIMARY KEY

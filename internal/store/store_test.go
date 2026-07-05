@@ -278,7 +278,7 @@ func TestProjectCRUD(t *testing.T) {
 	}
 
 	// List includes it.
-	list, err := s.ListProjects(ctx)
+	list, err := s.ListProjects(ctx, 0, 0)
 	if err != nil || len(list) != 1 || list[0].Name != "repo" {
 		t.Errorf("ListProjects = %+v, err %v", list, err)
 	}
@@ -452,7 +452,7 @@ func TestUsers(t *testing.T) {
 	if _, err := s.CreateUser(ctx, "bob", "h", "member"); err != nil {
 		t.Fatalf("CreateUser bob: %v", err)
 	}
-	users, err := s.ListUsers(ctx)
+	users, err := s.ListUsers(ctx, 0, 0)
 	if err != nil || len(users) != 2 {
 		t.Fatalf("ListUsers = %d users, err %v; want 2", len(users), err)
 	}

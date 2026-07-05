@@ -47,7 +47,7 @@ func newMigrateCmd(d *deps) *cobra.Command {
 			}
 			defer pg.Close()
 
-			projects, err := src.ListProjects(ctx)
+			projects, err := src.ListProjects(ctx, 0, 0)
 			if err != nil {
 				return fmt.Errorf("list source projects: %w", err)
 			}
