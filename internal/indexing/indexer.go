@@ -89,28 +89,37 @@ type fileResult struct {
 	err      error
 }
 
-// NewIndexer wires an Indexer. dims is the embedding dimension of model;
-// workers is the file concurrency (<1 falls back to defaultIndexWorkers);
-// embedBatchSize is texts per embed API call (<1 falls back to 8);
-// maxFileSize is the largest file the indexer will process (<=0 falls back to 1MB);
-// maxChunksPerFile caps chunks per file (<=0 falls back to 32).
-func NewIndexer(db store.IndexStore, emb embed.Embedder, dims, workers, embedBatchSize, maxFileSize, maxChunksPerFile int, verbose, gitMode bool, gitSince string, logger *slog.Logger) *Indexer {
-	if workers < 1 {
-		workers = defaultIndexWorkers
+// IndexerOpts groups optional tuning parameters for NewIndexer.
+type IndexerOpts struct {
+	Workers          int
+	EmbedBatchSize   int
+	MaxFileSize      int
+	MaxChunksPerFile int
+	Verbose          bool
+	GitMode          bool
+	GitSince         string
+	Logger           *slog.Logger
+}
+
+// NewIndexer wires an Indexer. dims is the embedding dimension of the model;
+// opts carries optional tuning parameters (zero-valued fields get defaults).
+func NewIndexer(db store.IndexStore, emb embed.Embedder, dims int, opts IndexerOpts) *Indexer {
+	if opts.Workers < 1 {
+		opts.Workers = defaultIndexWorkers
 	}
-	if embedBatchSize < 1 {
-		embedBatchSize = 8
+	if opts.EmbedBatchSize < 1 {
+		opts.EmbedBatchSize = 8
 	}
-	if maxFileSize < 1 {
-		maxFileSize = 1024 * 1024
+	if opts.MaxFileSize < 1 {
+		opts.MaxFileSize = 1024 * 1024
 	}
-	if maxChunksPerFile < 1 {
-		maxChunksPerFile = 32
+	if opts.MaxChunksPerFile < 1 {
+		opts.MaxChunksPerFile = 32
 	}
-	if logger == nil {
-		logger = slog.Default()
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
 	}
-	return &Indexer{db: db, embedder: emb, dims: dims, workers: workers, embedBatchSize: embedBatchSize, maxFileSize: maxFileSize, maxChunksPerFile: maxChunksPerFile, maxChunkChars: 4000, verbose: verbose, gitMode: gitMode, gitSince: gitSince, log: logger}
+	return &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger}
 }
 
 // SetKeywordOnly switches the indexer to keyword-only mode: chunks are stored as

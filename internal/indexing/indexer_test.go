@@ -115,7 +115,7 @@ func TestPrivacyRoutingTextOnlyWhenNoLocalProvider(t *testing.T) {
 	writeFile(t, dir, "node_modules/lib.js", "console.log(1)") // must be skipped
 
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: false}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
+	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: false}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
 
 	stats, err := idx.IndexProject(context.Background(), 1, dir, "gemini-embedding-2", 0)
 	if err != nil {
@@ -153,7 +153,7 @@ func TestPrivacyRoutingEmbedsLocallyWhenAvailable(t *testing.T) {
 	writeFile(t, dir, "config/secret.txt", "API_KEY=local-embeds-this\n")
 
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: true}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
+	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: true}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
 
 	if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
 		t.Fatalf("IndexProject: %v", err)
@@ -174,7 +174,7 @@ func TestIncrementalSkipsUnchanged(t *testing.T) {
 	writeFile(t, dir, "b.go", "package b\n\nfunc B() {}\n")
 
 	fs := &fakeStore{upToDate: true}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
 
 	stats, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0)
 	if err != nil {
@@ -200,7 +200,7 @@ func TestSkipsEmptyAndCountsChunks(t *testing.T) {
 	writeFile(t, dir, "code.go", "package x\n\nfunc A() {}\n\nfunc B() {}\n")
 
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
 
 	stats, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0)
 	if err != nil {
@@ -230,7 +230,7 @@ func TestIndexProjectStopsOnCancel(t *testing.T) {
 	// must see the cancellation and bail out.
 	emb := &fakeEmbedder{}
 	emb.onEmbed = func() { cancel() }
-	idx := NewIndexer(&fakeStore{}, emb, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
+	idx := NewIndexer(&fakeStore{}, emb, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
 
 	stats, err := idx.IndexProject(ctx, 1, dir, "bge-m3", 0)
 	if !errors.Is(err, context.Canceled) {
@@ -267,7 +267,7 @@ func TestConcurrentIndexingIsComplete(t *testing.T) {
 	}
 
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 8, 8, 1024*1024, 32, false, false, "", nil)
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{Workers: 8, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
 
 	stats, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0)
 	if err != nil {
@@ -293,7 +293,7 @@ func TestWorkerPoolParallelizes(t *testing.T) {
 			writeFile(t, dir, fmt.Sprintf("f%d.go", i), fmt.Sprintf("package p%d\nfunc F%d() {}\n", i, i))
 		}
 		emb := &fakeEmbedder{onEmbed: func() { time.Sleep(20 * time.Millisecond) }}
-		idx := NewIndexer(&fakeStore{}, emb, 3, workers, 8, 1024*1024, 32, false, false, "", nil)
+		idx := NewIndexer(&fakeStore{}, emb, 3, IndexerOpts{Workers: workers, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
 		start := time.Now()
 		if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
 			t.Fatalf("IndexProject: %v", err)
@@ -311,7 +311,7 @@ func TestWorkerPoolParallelizes(t *testing.T) {
 // IndexContent (the push path) indexes in-memory content without touching disk.
 func TestIndexContent(t *testing.T) {
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
 
 	created, err := idx.IndexContent(context.Background(), 1, "x.go", "bge-m3", []byte("package x\nfunc F() {}\n"))
 	if err != nil {
@@ -359,7 +359,7 @@ func TestScanFilesRespectsMaxAndIgnores(t *testing.T) {
 // index holds the readable content — not the markup.
 func TestIndexContentExtractsDocuments(t *testing.T) {
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: true}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
+	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: true}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
 
 	html := []byte("<html><body><h1>Payment retry</h1><p>exponential backoff</p></body></html>")
 	created, err := idx.IndexContent(context.Background(), 1, "docs/guide.html", "m", html)
@@ -379,7 +379,7 @@ func TestIndexContentExtractsDocuments(t *testing.T) {
 // crashes the indexer and is skipped without a fatal error.
 func TestIndexContentSkipsUnreadableDocument(t *testing.T) {
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: true}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
+	idx := NewIndexer(fs, &fakeEmbedder{localAvailable: true}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
 
 	created, err := idx.IndexContent(context.Background(), 1, "broken.pdf", "m", []byte("this is not a real pdf"))
 	if err != nil {
@@ -396,7 +396,7 @@ func TestKeywordOnlyStoresTextWithoutEmbedding(t *testing.T) {
 	fs := &fakeStore{}
 	embedCalls := 0
 	emb := &fakeEmbedder{localAvailable: true, onEmbed: func() { embedCalls++ }}
-	idx := NewIndexer(fs, emb, 1, 4, 8, 1024*1024, 32, false, false, "", nil).SetKeywordOnly(true)
+	idx := NewIndexer(fs, emb, 1, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32}).SetKeywordOnly(true)
 	created, err := idx.IndexContent(context.Background(), 1, "notes.txt", "", []byte("exponential backoff and jitter"))
 	if err != nil || created == 0 {
 		t.Fatalf("IndexContent = %d, err %v; want chunks", created, err)

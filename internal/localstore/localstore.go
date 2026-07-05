@@ -563,25 +563,9 @@ func (s *SQLiteStore) SearchSimilarKeywordsWorktree(ctx context.Context, project
 }
 
 func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryText string, topK int, worktree string) ([]store.SearchResult, error) {
-	words := strings.Fields(queryText)
+	words := filterSearchWords(queryText)
 	if len(words) == 0 {
 		return nil, nil
-	}
-
-	// Filter: skip words shorter than 3 characters (FTS5's min token size) and
-	// cap at 20 terms to prevent wasteful scans and DoS via query explosion.
-	filtered := words[:0]
-	for _, w := range words {
-		if len(w) >= 3 {
-			filtered = append(filtered, w)
-		}
-	}
-	words = filtered
-	if len(words) == 0 {
-		return nil, nil
-	}
-	if len(words) > 20 {
-		words = words[:20]
 	}
 
 	// Build a FTS5 MATCH query with OR semantics (any word matches).
@@ -638,6 +622,29 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 		results = append(results, r)
 	}
 	return results, rows.Err()
+}
+
+// filterSearchWords filters and normalises query words for keyword search:
+// removes terms shorter than 3 characters and caps at 20 terms to prevent
+// wasteful scans and DoS via query explosion. Returns nil if no valid words remain.
+func filterSearchWords(queryText string) []string {
+	words := strings.Fields(queryText)
+	if len(words) == 0 {
+		return nil
+	}
+	filtered := words[:0]
+	for _, w := range words {
+		if len(w) >= 3 {
+			filtered = append(filtered, w)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	if len(filtered) > 20 {
+		filtered = filtered[:20]
+	}
+	return filtered
 }
 
 // DropAll clears all indexed data and resets the auto-increment counters
