@@ -39,20 +39,21 @@ const (
 
 // Indexer indexes a project into an IndexStore using an Embedder.
 type Indexer struct {
-	db               store.IndexStore
-	embedder         embed.Embedder
-	dims             int
-	workers          int
-	embedBatchSize   int
-	maxFileSize      int // files larger than this are truncated; 0 = use default
-	maxChunksPerFile int // cap on chunks per file; 0 = use default
-	maxChunkChars    int // max characters per chunk (~1000 tokens for bge-m3)
-	log              *slog.Logger
-	verbose          bool
-	gitMode          bool
-	gitSince         string
-	keywordOnly      bool   // when true, store text-only (no embeddings) for keyword search
-	worktree         string // when set, record this worktree's manifest + prune after indexing
+	db                  store.IndexStore
+	embedder            embed.Embedder
+	dims                int
+	workers             int
+	embedBatchSize      int
+	maxFileSize         int // files larger than this are truncated; 0 = use default
+	maxChunksPerFile    int // cap on chunks per file; 0 = use default
+	maxChunksPerProject int // cap on total chunks per project; 0 = unlimited
+	maxChunkChars       int // max characters per chunk (~1000 tokens for bge-m3)
+	log                 *slog.Logger
+	verbose             bool
+	gitMode             bool
+	gitSince            string
+	keywordOnly         bool   // when true, store text-only (no embeddings) for keyword search
+	worktree            string // when set, record this worktree's manifest + prune after indexing
 }
 
 // IndexStats summarizes an indexing run.
@@ -91,14 +92,15 @@ type fileResult struct {
 
 // IndexerOpts groups optional tuning parameters for NewIndexer.
 type IndexerOpts struct {
-	Workers          int
-	EmbedBatchSize   int
-	MaxFileSize      int
-	MaxChunksPerFile int
-	Verbose          bool
-	GitMode          bool
-	GitSince         string
-	Logger           *slog.Logger
+	Workers             int
+	EmbedBatchSize      int
+	MaxFileSize         int
+	MaxChunksPerFile    int
+	MaxChunksPerProject int
+	Verbose             bool
+	GitMode             bool
+	GitSince            string
+	Logger              *slog.Logger
 }
 
 // NewIndexer wires an Indexer. dims is the embedding dimension of the model;
@@ -119,7 +121,7 @@ func NewIndexer(db store.IndexStore, emb embed.Embedder, dims int, opts IndexerO
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	return &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger}
+	return &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunksPerProject: opts.MaxChunksPerProject, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger}
 }
 
 // SetKeywordOnly switches the indexer to keyword-only mode: chunks are stored as
@@ -223,7 +225,15 @@ func (idx *Indexer) accumulate(stats *IndexStats, manifest map[string]string, re
 		stats.Errors++
 		idx.logf("[err] %s: %s", rel, truncateErr(r.err, 200))
 	case r.outcome == outcomeIndexed:
-		stats.ChunksCreated += r.created
+		// Per-project chunk cap: if the total would exceed the limit, log a
+		// warning and skip the chunks (the file is still marked indexed so the
+		// caller knows it was processed).
+		if idx.maxChunksPerProject > 0 && stats.ChunksCreated+r.created > idx.maxChunksPerProject {
+			idx.logf("[warn] project chunk limit (%d) reached, not counting %d chunk(s) from %s",
+				idx.maxChunksPerProject, r.created, rel)
+		} else {
+			stats.ChunksCreated += r.created
+		}
 		stats.FilesIndexed++
 	case r.outcome == outcomeSkippedUnchanged:
 		stats.FilesSkipped++
