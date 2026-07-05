@@ -175,6 +175,13 @@ type JobStore interface {
 	GetJob(ctx context.Context, id int) (*Job, error)
 }
 
+// JobNotifier is an optional extension for immediate job dispatch via Postgres
+// LISTEN/NOTIFY. Implemented by PgStore; stores that don't support it (SQLite,
+// remote client) return an error or are detected via interface assertion.
+type JobNotifier interface {
+	ListenJobInsert(ctx context.Context) (<-chan string, error)
+}
+
 // Store is the full persistence surface the server depends on. It composes all
 // narrower role interfaces so callers that only need a subset can depend on
 // the appropriate interface (ProjectStore, UserStore, TokenStore, SessionStore,
