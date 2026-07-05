@@ -474,6 +474,7 @@ func newMCPInstallCmd() *cobra.Command {
 		apply      bool
 		configFile string
 		list       bool
+		all        bool
 	)
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -481,8 +482,9 @@ func newMCPInstallCmd() *cobra.Command {
 		Long: "Register semidx's stdio MCP server in a coding agent's configuration.\n\n" +
 			"By default it PRINTS the config snippet and its target path; pass --apply to\n" +
 			"merge it in place (a timestamped .bak is written first and other servers are\n" +
-			"preserved). Supported clients:\n\n" + mcpinstall.ClientList(),
-		Example: "  semidx mcp install --list\n  semidx mcp install --client claude-code --apply",
+			"preserved). Pass --all to apply to every supported client at once.\n\n" +
+			"Supported clients:\n\n" + mcpinstall.ClientList(),
+		Example: "  semidx mcp install --list\n  semidx mcp install --client claude-code --apply\n  semidx mcp install --all --apply",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if list {
 				fmt.Print(mcpinstall.ClientList())
@@ -498,6 +500,9 @@ func newMCPInstallCmd() *cobra.Command {
 			home, _ := os.UserHomeDir()
 			configDir, _ := os.UserConfigDir()
 			project, _ := os.Getwd()
+			if all {
+				return installAll(exe, home, configDir, project, name, apply)
+			}
 			opts := mcpinstall.Options{
 				Client:    clientID,
 				Name:      name,
@@ -529,5 +534,37 @@ func newMCPInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&apply, "apply", false, "write the config in place (default: print the snippet)")
 	cmd.Flags().StringVar(&configFile, "config-file", "", "override the client's config file path")
 	cmd.Flags().BoolVar(&list, "list", false, "list supported clients and exit")
+	cmd.Flags().BoolVar(&all, "all", false, "apply to every supported client at once (implies --apply)")
 	return cmd
+}
+
+// installAll applies the MCP server entry to every applyable client.
+func installAll(exe, home, configDir, project, name string, apply bool) error {
+	clients := mcpinstall.ApplyableClients()
+	for _, c := range clients {
+		opts := mcpinstall.Options{
+			Client:    c.ID,
+			Name:      name,
+			ExePath:   exe,
+			Home:      home,
+			ConfigDir: configDir,
+			Project:   project,
+		}
+		if apply {
+			written, err := mcpinstall.Apply(opts)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "skipping %s: %v\n", c.ID, err)
+				continue
+			}
+			fmt.Printf("Registered MCP server %q for %s in %s\n", name, c.ID, written)
+		} else {
+			path, snippet, err := mcpinstall.Snippet(opts)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "skipping %s: %v\n", c.ID, err)
+				continue
+			}
+			fmt.Printf("# %s — add to %s:\n\n%s\n", c.ID, path, snippet)
+		}
+	}
+	return nil
 }

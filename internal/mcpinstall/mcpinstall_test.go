@@ -82,7 +82,7 @@ func TestSnippetCagentIsYAML(t *testing.T) {
 }
 
 func TestApplyRejectsPrintOnlyClients(t *testing.T) {
-	for _, id := range []string{"codex", "cagent"} {
+	for _, id := range []string{"cagent"} {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "cfg")
 		if _, err := Apply(Options{Client: id, Name: "semidx", ExePath: "/opt/semidx", FilePath: p}); err == nil {
@@ -197,14 +197,48 @@ func TestApplyCreatesMissingParentDir(t *testing.T) {
 	}
 }
 
-func TestApplyRejectsCodex(t *testing.T) {
+func TestApplyCodexTOML(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.toml")
-	if _, err := Apply(Options{Client: "codex", Name: "semidx", ExePath: "/opt/semidx", FilePath: cfg}); err == nil {
-		t.Error("codex apply should error (print-only)")
+	// Pre-existing TOML with another mcp_server we must preserve.
+	seed := "[mcp_servers.ai-memory]\nurl = \"http://localhost/mcp\"\n"
+	if err := os.WriteFile(cfg, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(cfg); !os.IsNotExist(err) {
-		t.Error("codex apply must not write a file")
+	written, err := Apply(Options{Client: "codex", Name: "semidx", ExePath: "/opt/semidx", FilePath: cfg})
+	if err != nil {
+		t.Fatalf("codex apply should succeed: %v", err)
+	}
+	if written != cfg {
+		t.Fatalf("wrote %s; want %s", written, cfg)
+	}
+	b, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(b)
+	// Verify semidx section was added.
+	if !strings.Contains(content, "[mcp_servers.semidx]") {
+		t.Errorf("missing semidx section:\n%s", content)
+	}
+	if !strings.Contains(content, `"/opt/semidx"`) {
+		t.Errorf("missing exe path:\n%s", content)
+	}
+	// Existing ai-memory section preserved.
+	if !strings.Contains(content, "[mcp_servers.ai-memory]") {
+		t.Errorf("pre-existing ai-memory section lost:\n%s", content)
+	}
+	// Backup was written.
+	if _, err := os.Stat(cfg + ".bak-TEST"); err != nil {
+		t.Errorf("no backup written: %v", err)
+	}
+	// Idempotent: re-apply does not duplicate.
+	if _, err := Apply(Options{Client: "codex", Name: "semidx", ExePath: "/opt/semidx", FilePath: cfg}); err != nil {
+		t.Fatal(err)
+	}
+	b2, _ := os.ReadFile(cfg)
+	if strings.Count(string(b2), "[mcp_servers.semidx]") != 1 {
+		t.Errorf("re-apply duplicated the semidx section:\n%s", string(b2))
 	}
 }
 
