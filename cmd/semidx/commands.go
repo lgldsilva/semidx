@@ -155,12 +155,12 @@ With no embedding provider configured, add --keyword to index text-only.`,
 			if err := db.EnsureChunksTable(ctx, dims); err != nil {
 				return fmt.Errorf("ensure chunks table: %w", err)
 			}
-			projectID, err := db.EnsureProjectIdentity(ctx, tgt.identity, tgt.name, tgt.indexPath, model, tgt.sourceType)
+			projectID, err := db.EnsureProjectIdentity(ctx, tgt.identity, tgt.name, tgt.indexPath, model, tgt.sourceType, dims)
 			if err != nil {
 				return fmt.Errorf("register project: %w", err)
 			}
 
-			indexer := indexing.NewIndexer(db, d.emb, dims, d.cfg.IndexWorkers, d.cfg.EmbedBatchSize, verbose, gitMode, gitSince).
+			indexer := indexing.NewIndexer(db, d.emb, dims, d.cfg.IndexWorkers, d.cfg.EmbedBatchSize, d.cfg.MaxFileSize, d.cfg.MaxChunksPerFile, verbose, gitMode, gitSince, nil).
 				SetKeywordOnly(d.cfg.KeywordOnly).
 				SetWorktree(tgt.worktree)
 			start := time.Now()

@@ -38,7 +38,7 @@ var _ store.IndexStore = (*SQLiteStore)(nil)
 
 // projectColumns is the canonical projection order shared by the project
 // getters so scanProject can read any of them.
-const projectColumns = `id, name, path, model, status, source_type, git_url, branch, COALESCE(identity, '')`
+const projectColumns = `id, name, path, model, status, source_type, git_url, branch, COALESCE(identity, ''), COALESCE(dims, 0)`
 
 // schema mirrors the pgvector layout conceptually as plain tables: an embedding
 // BLOB replaces the vector column and there is one chunks table instead of the
@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS projects (
     source_type TEXT NOT NULL DEFAULT 'path',
     git_url     TEXT NOT NULL DEFAULT '',
     branch      TEXT NOT NULL DEFAULT '',
-    identity    TEXT
+    identity    TEXT,
+    dims        INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_identity ON projects(identity);
 CREATE TABLE IF NOT EXISTS files (
@@ -178,29 +179,29 @@ func (s *SQLiteStore) Ping(ctx context.Context) error { return s.db.PingContext(
 // chunks table created on open, so there is no per-dimension table to build.
 func (s *SQLiteStore) EnsureChunksTable(_ context.Context, _ int) error { return nil }
 
-func (s *SQLiteStore) UpsertProject(ctx context.Context, name, path, model string) (int, error) {
+func (s *SQLiteStore) UpsertProject(ctx context.Context, name, path, model string, dims int) (int, error) {
 	var id int
 	// name is no longer UNIQUE (F14), so upsert on identity instead — for this
 	// legacy by-name API the identity is the name, keeping it idempotent per name.
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, identity)
-		VALUES (?, ?, ?, 'indexing', 'path', ?)
-		ON CONFLICT(identity) DO UPDATE SET path = excluded.path, model = excluded.model, status = 'indexing'
+		INSERT INTO projects (name, path, model, status, source_type, identity, dims)
+		VALUES (?, ?, ?, 'indexing', 'path', ?, ?)
+		ON CONFLICT(identity) DO UPDATE SET path = excluded.path, model = excluded.model, status = 'indexing', dims = excluded.dims
 		RETURNING id
-	`, name, path, model, name).Scan(&id)
+	`, name, path, model, name, dims).Scan(&id)
 	return id, err
 }
 
 // EnsureProjectIdentity upserts a project keyed by its stable identity so all
 // worktrees of a repo map to one row.
-func (s *SQLiteStore) EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string) (int, error) {
+func (s *SQLiteStore) EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string, dims int) (int, error) {
 	var id int
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, identity)
-		VALUES (?, ?, ?, 'indexing', ?, ?)
-		ON CONFLICT(identity) DO UPDATE SET path = excluded.path, model = excluded.model, status = 'indexing'
+		INSERT INTO projects (name, path, model, status, source_type, identity, dims)
+		VALUES (?, ?, ?, 'indexing', ?, ?, ?)
+		ON CONFLICT(identity) DO UPDATE SET path = excluded.path, model = excluded.model, status = 'indexing', dims = excluded.dims
 		RETURNING id
-	`, name, path, model, sourceType, identity).Scan(&id)
+	`, name, path, model, sourceType, identity, dims).Scan(&id)
 	return id, err
 }
 
@@ -253,27 +254,27 @@ func (s *SQLiteStore) PruneUnreferencedFiles(ctx context.Context, projectID int)
 
 // CreateProject registers a project with its content source, returning
 // ErrProjectExists when the name is already taken.
-func (s *SQLiteStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*store.Project, error) {
+func (s *SQLiteStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string, dims int) (*store.Project, error) {
 	var id int
 	// identity = name (see PgStore.CreateProject): name uniqueness for registered
 	// projects is enforced via the identity unique index, since UNIQUE(name) is gone.
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, git_url, branch, identity)
-		VALUES (?, '', ?, 'registered', ?, ?, ?, ?)
+		INSERT INTO projects (name, path, model, status, source_type, git_url, branch, identity, dims)
+		VALUES (?, '', ?, 'registered', ?, ?, ?, ?, ?)
 		RETURNING id
-	`, name, model, sourceType, gitURL, branch, name).Scan(&id)
+	`, name, model, sourceType, gitURL, branch, name, dims).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrProjectExists
 		}
 		return nil, err
 	}
-	return &store.Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name}, nil
+	return &store.Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name, Dims: dims}, nil
 }
 
 func scanProject(row interface{ Scan(...any) error }) (*store.Project, error) {
 	var p store.Project
-	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity, &p.Dims); err != nil {
 		return nil, err
 	}
 	return &p, nil

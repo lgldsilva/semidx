@@ -59,7 +59,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, err := s.store.CreateProject(r.Context(), body.Name, body.Model, body.Source.Type, body.Source.URL, body.Source.Branch)
+	p, err := s.store.CreateProject(r.Context(), body.Name, body.Model, body.Source.Type, body.Source.URL, body.Source.Branch, 0)
 	switch {
 	case errors.Is(err, store.ErrProjectExists):
 		writeJSONError(w, http.StatusConflict, "project already exists: "+body.Name)

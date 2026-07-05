@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -32,25 +33,26 @@ import (
 )
 
 const (
-	maxFileSize         = 1024 * 1024 // 1MB
-	maxChunkChars       = 4000        // ~1000 tokens for bge-m3
-	maxChunksPerFile    = 32
 	logEvery            = 10
 	defaultIndexWorkers = 4
 )
 
 // Indexer indexes a project into an IndexStore using an Embedder.
 type Indexer struct {
-	db             store.IndexStore
-	embedder       embed.Embedder
-	dims           int
-	workers        int
-	embedBatchSize int
-	verbose        bool
-	gitMode        bool
-	gitSince       string
-	keywordOnly    bool   // when true, store text-only (no embeddings) for keyword search
-	worktree       string // when set, record this worktree's manifest + prune after indexing
+	db               store.IndexStore
+	embedder         embed.Embedder
+	dims             int
+	workers          int
+	embedBatchSize   int
+	maxFileSize      int // files larger than this are truncated; 0 = use default
+	maxChunksPerFile int // cap on chunks per file; 0 = use default
+	maxChunkChars    int // max characters per chunk (~1000 tokens for bge-m3)
+	log              *slog.Logger
+	verbose          bool
+	gitMode          bool
+	gitSince         string
+	keywordOnly      bool   // when true, store text-only (no embeddings) for keyword search
+	worktree         string // when set, record this worktree's manifest + prune after indexing
 }
 
 // IndexStats summarizes an indexing run.
@@ -89,15 +91,26 @@ type fileResult struct {
 
 // NewIndexer wires an Indexer. dims is the embedding dimension of model;
 // workers is the file concurrency (<1 falls back to defaultIndexWorkers);
-// embedBatchSize is texts per embed API call (<1 falls back to 8).
-func NewIndexer(db store.IndexStore, emb embed.Embedder, dims, workers, embedBatchSize int, verbose, gitMode bool, gitSince string) *Indexer {
+// embedBatchSize is texts per embed API call (<1 falls back to 8);
+// maxFileSize is the largest file the indexer will process (<=0 falls back to 1MB);
+// maxChunksPerFile caps chunks per file (<=0 falls back to 32).
+func NewIndexer(db store.IndexStore, emb embed.Embedder, dims, workers, embedBatchSize, maxFileSize, maxChunksPerFile int, verbose, gitMode bool, gitSince string, logger *slog.Logger) *Indexer {
 	if workers < 1 {
 		workers = defaultIndexWorkers
 	}
 	if embedBatchSize < 1 {
 		embedBatchSize = 8
 	}
-	return &Indexer{db: db, embedder: emb, dims: dims, workers: workers, embedBatchSize: embedBatchSize, verbose: verbose, gitMode: gitMode, gitSince: gitSince}
+	if maxFileSize < 1 {
+		maxFileSize = 1024 * 1024
+	}
+	if maxChunksPerFile < 1 {
+		maxChunksPerFile = 32
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Indexer{db: db, embedder: emb, dims: dims, workers: workers, embedBatchSize: embedBatchSize, maxFileSize: maxFileSize, maxChunksPerFile: maxChunksPerFile, maxChunkChars: 4000, verbose: verbose, gitMode: gitMode, gitSince: gitSince, log: logger}
 }
 
 // SetKeywordOnly switches the indexer to keyword-only mode: chunks are stored as
@@ -268,7 +281,7 @@ func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, mod
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, nil, err
 	}
-	content, err := io.ReadAll(io.LimitReader(f, maxFileSize))
+	content, err := io.ReadAll(io.LimitReader(f, int64(idx.maxFileSize)))
 	_ = f.Close()
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, nil, err
@@ -301,7 +314,7 @@ func (idx *Indexer) IndexEncryptedFile(ctx context.Context, projectID int, path,
 	if err != nil {
 		return false, nil, err
 	}
-	content, err := io.ReadAll(io.LimitReader(f, maxFileSize))
+	content, err := io.ReadAll(io.LimitReader(f, int64(idx.maxFileSize)))
 	_ = f.Close()
 	if err != nil {
 		return false, nil, err
@@ -334,8 +347,8 @@ func (idx *Indexer) indexContent(ctx context.Context, projectID int, rel, model 
 	if len(strings.TrimSpace(string(content))) == 0 {
 		return 0, 0, outcomeSkippedEmpty, nil, nil
 	}
-	if len(content) > maxFileSize {
-		content = content[:maxFileSize]
+	if len(content) > idx.maxFileSize {
+		content = content[:idx.maxFileSize]
 	}
 
 	if extract.Supported(rel) {
@@ -415,12 +428,12 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		return 0, 0, outcomeSkippedEmpty, "", err
 	}
 
-	chunks := chunker.ChunkFile(rel, content, maxChunkChars)
+	chunks := chunker.ChunkFile(rel, content, idx.maxChunkChars)
 	if len(chunks) == 0 {
 		return 0, 0, outcomeSkippedEmpty, "", nil
 	}
-	if len(chunks) > maxChunksPerFile {
-		chunks = chunks[:maxChunksPerFile]
+	if len(chunks) > idx.maxChunksPerFile {
+		chunks = chunks[:idx.maxChunksPerFile]
 	}
 
 	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
@@ -566,8 +579,10 @@ func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectP
 		if i > 0 {
 			commit = append([]byte("commit "), commit...)
 		}
-		if idx.indexCommit(ctx, projectID, model, commit) && idx.verbose && i%10 == 0 {
-			fmt.Printf("  [git] processed %d commits\n", i+1)
+		if idx.indexCommit(ctx, projectID, model, commit) {
+			if idx.verbose && i%10 == 0 {
+				idx.log.Info("git indexing progress", "commits_processed", i+1)
+			}
 		}
 	}
 	return nil
@@ -577,8 +592,8 @@ func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectP
 // returning true only when the chunk was stored. Every step is best-effort: any
 // error skips this commit without failing the history pass.
 func (idx *Indexer) indexCommit(ctx context.Context, projectID int, model string, commit []byte) bool {
-	if len(commit) > maxChunkChars {
-		commit = commit[:maxChunkChars]
+	if len(commit) > idx.maxChunkChars {
+		commit = commit[:idx.maxChunkChars]
 	}
 
 	firstLine := bytes.SplitN(commit, []byte("\n"), 2)
@@ -602,7 +617,7 @@ func (idx *Indexer) indexCommit(ctx context.Context, projectID int, model string
 
 func (idx *Indexer) logf(format string, args ...any) {
 	if idx.verbose {
-		fmt.Printf(format+"\n", args...)
+		idx.log.Info(fmt.Sprintf(format, args...))
 	}
 }
 
@@ -610,10 +625,14 @@ func (idx *Indexer) progress(done, total int, rel string, chunks int) {
 	if idx.verbose {
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)
-		fmt.Printf("  [%d/%d] %s (%d chunks) | HeapAlloc: %d MB, Sys: %d MB\n",
-			done, total, rel, chunks, m.Alloc/1024/1024, m.Sys/1024/1024)
+		idx.log.Info("file indexed",
+			"progress", fmt.Sprintf("%d/%d", done, total),
+			"path", rel, "chunks", chunks,
+			"heap_mb", m.Alloc/1024/1024, "sys_mb", m.Sys/1024/1024)
 	} else if done%logEvery == 0 || done == total {
-		fmt.Printf("  ...%d/%d files (%d chunks)\n", done, total, chunks)
+		idx.log.Info("indexing progress",
+			"progress", fmt.Sprintf("%d/%d", done, total),
+			"chunks", chunks)
 	}
 }
 

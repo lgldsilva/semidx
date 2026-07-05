@@ -58,15 +58,28 @@ func initRepo(t *testing.T) string {
 	return dir
 }
 
-// TestNewIndexerDefaultsWorkers covers the workers<1 fallback branch.
+// TestNewIndexerDefaultsWorkers covers the workers<1, maxFileSize<1 and
+// maxChunksPerFile<1 fallback branches.
 func TestNewIndexerDefaultsWorkers(t *testing.T) {
-	idx := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, 0, 8, false, false, "")
+	idx := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, 0, 8, 0, 0, false, false, "", nil)
 	if idx.workers != defaultIndexWorkers {
 		t.Errorf("workers = %d, want default %d", idx.workers, defaultIndexWorkers)
 	}
-	idx2 := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, 7, 8, false, false, "")
+	if idx.maxFileSize != 1024*1024 {
+		t.Errorf("maxFileSize = %d, want %d", idx.maxFileSize, 1024*1024)
+	}
+	if idx.maxChunksPerFile != 32 {
+		t.Errorf("maxChunksPerFile = %d, want %d", idx.maxChunksPerFile, 32)
+	}
+	idx2 := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, 7, 8, 2*1024*1024, 64, false, false, "", nil)
 	if idx2.workers != 7 {
 		t.Errorf("workers = %d, want 7", idx2.workers)
+	}
+	if idx2.maxFileSize != 2*1024*1024 {
+		t.Errorf("maxFileSize = %d, want %d", idx2.maxFileSize, 2*1024*1024)
+	}
+	if idx2.maxChunksPerFile != 64 {
+		t.Errorf("maxChunksPerFile = %d, want %d", idx2.maxChunksPerFile, 64)
 	}
 }
 
@@ -91,7 +104,7 @@ func TestTruncateErr(t *testing.T) {
 func TestIndexGitHistorySuccess(t *testing.T) {
 	dir := initRepo(t)
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, false, true, "") // gitMode=true
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, false, true, "", nil)
 
 	stats, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0)
 	if err != nil {
@@ -115,7 +128,7 @@ func TestIndexGitHistorySuccess(t *testing.T) {
 func TestIndexGitHistoryVerbose(t *testing.T) {
 	dir := initRepo(t)
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 1, 8, true, true, "") // verbose + gitMode
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 1, 8, 1024*1024, 32, true, true, "", nil)
 
 	if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
 		t.Fatalf("IndexProject: %v", err)
@@ -133,7 +146,7 @@ func TestIndexProjectGitHistoryErrorNonRepo(t *testing.T) {
 	writeFile(t, dir, "a.go", "package a\nfunc A() {}\n")
 
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, false, true, "")
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, false, true, "", nil)
 
 	stats, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0)
 	if err != nil {
@@ -149,7 +162,7 @@ func TestIndexProjectGitHistoryErrorNonRepo(t *testing.T) {
 
 // TestIndexFileOpenError covers the os.Open failure branch of indexFile.
 func TestIndexFileOpenError(t *testing.T) {
-	idx := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, 4, 8, false, false, "")
+	idx := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
 	_, _, outcome, _, err := idx.indexFile(context.Background(), 1, "/does/not/exist.go", "exist.go", "m")
 	if err == nil {
 		t.Error("indexFile on a missing path should return an error")
@@ -197,7 +210,7 @@ func (e *errStore) UpdateProjectStatus(ctx context.Context, id int, status strin
 
 func TestIndexContentUpsertFileError(t *testing.T) {
 	es := &errStore{upsertFileErr: errors.New("upsert boom")}
-	idx := NewIndexer(es, &fakeEmbedder{}, 3, 4, 8, false, false, "")
+	idx := NewIndexer(es, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
 	if _, err := idx.IndexContent(context.Background(), 1, "a.go", "m", []byte("package a\nfunc A() {}\n")); err == nil {
 		t.Error("UpsertFile error should surface as a hard error")
 	}
@@ -205,7 +218,7 @@ func TestIndexContentUpsertFileError(t *testing.T) {
 
 func TestIndexContentDeleteChunksError(t *testing.T) {
 	es := &errStore{deleteErr: errors.New("delete boom")}
-	idx := NewIndexer(es, &fakeEmbedder{}, 3, 4, 8, false, false, "")
+	idx := NewIndexer(es, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
 	if _, err := idx.IndexContent(context.Background(), 1, "a.go", "m", []byte("package a\nfunc A() {}\n")); err == nil {
 		t.Error("DeleteChunksForFile error should surface as a hard error")
 	}
@@ -213,7 +226,7 @@ func TestIndexContentDeleteChunksError(t *testing.T) {
 
 func TestIndexContentKeywordOnlyInsertError(t *testing.T) {
 	es := &errStore{insertTextErr: errors.New("insert-text boom")}
-	idx := NewIndexer(es, &fakeEmbedder{}, 3, 4, 8, false, false, "").SetKeywordOnly(true)
+	idx := NewIndexer(es, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, false, false, "", nil).SetKeywordOnly(true)
 	if _, err := idx.IndexContent(context.Background(), 1, "a.go", "m", []byte("package a\nfunc A() {}\n")); err == nil {
 		t.Error("keyword-only InsertChunksTextOnly error should surface")
 	}
@@ -223,7 +236,7 @@ func TestIndexContentKeywordOnlyInsertError(t *testing.T) {
 // fails, it must surface as a hard error.
 func TestIndexContentSensitiveTextOnlyInsertError(t *testing.T) {
 	es := &errStore{insertTextErr: errors.New("insert-text boom")}
-	idx := NewIndexer(es, &fakeEmbedder{localAvailable: false}, 3, 4, 8, false, false, "")
+	idx := NewIndexer(es, &fakeEmbedder{localAvailable: false}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
 	if _, err := idx.IndexContent(context.Background(), 1, "config/secret.txt", "gemini-embedding-2", []byte("API_KEY=xyz\n")); err == nil {
 		t.Error("sensitive text-only InsertChunksTextOnly error should surface")
 	}
@@ -253,7 +266,7 @@ func (f *flakyEmbedder) Embed(ctx context.Context, model string, inputs ...strin
 }
 
 func TestEmbedWithRetrySucceedsAfterFailure(t *testing.T) {
-	idx := NewIndexer(&fakeStore{}, &flakyEmbedder{failCount: 1}, 3, 4, 8, false, false, "")
+	idx := NewIndexer(&fakeStore{}, &flakyEmbedder{failCount: 1}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
 	got, err := idx.embedWithRetry(context.Background(), "m", []string{"x"})
 	if err != nil {
 		t.Fatalf("embedWithRetry: %v", err)
@@ -271,7 +284,7 @@ func (f *alwaysFailEmbedder) Embed(ctx context.Context, model string, inputs ...
 }
 
 func TestEmbedWithRetryExhausts(t *testing.T) {
-	idx := NewIndexer(&fakeStore{}, &alwaysFailEmbedder{}, 3, 4, 8, false, false, "")
+	idx := NewIndexer(&fakeStore{}, &alwaysFailEmbedder{}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
 	if _, err := idx.embedWithRetry(context.Background(), "m", []string{"x"}); err == nil {
 		t.Error("embedWithRetry should return the last error after exhausting attempts")
 	}
@@ -282,7 +295,7 @@ func TestEmbedWithRetryCancelDuringLoop(t *testing.T) {
 	// in-loop ctx.Err() early-return branch.
 	ctx, cancel := context.WithCancel(context.Background())
 	fe := &cancelEmbedder{cancel: cancel}
-	idx := NewIndexer(&fakeStore{}, fe, 3, 4, 8, false, false, "")
+	idx := NewIndexer(&fakeStore{}, fe, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
 	if _, err := idx.embedWithRetry(ctx, "m", []string{"x"}); !errors.Is(err, context.Canceled) {
 		t.Errorf("embedWithRetry = %v, want context.Canceled", err)
 	}
@@ -303,7 +316,7 @@ func (f *cancelEmbedder) Embed(ctx context.Context, model string, inputs ...stri
 // exercised.
 func TestEmbedAndInsertSoftErrorOnEmbedFailure(t *testing.T) {
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &alwaysFailEmbedder{}, 3, 4, 8, true, false, "") // verbose
+	idx := NewIndexer(fs, &alwaysFailEmbedder{}, 3, 4, 8, 1024*1024, 32, true, false, "", nil)
 	created, softErrs := idx.embedAndInsert(context.Background(), 1, 1,
 		[]chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, "m", "a.go")
 	if created != 0 {
@@ -318,7 +331,7 @@ func TestEmbedAndInsertSoftErrorOnEmbedFailure(t *testing.T) {
 // error too (batch skipped, run continues).
 func TestEmbedAndInsertSoftErrorOnInsertFailure(t *testing.T) {
 	es := &errStore{insertErr: errors.New("insert boom")}
-	idx := NewIndexer(es, &fakeEmbedder{}, 3, 4, 8, true, false, "") // verbose
+	idx := NewIndexer(es, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, true, false, "", nil)
 	created, softErrs := idx.embedAndInsert(context.Background(), 1, 1,
 		[]chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, "m", "a.go")
 	if created != 0 {
@@ -334,7 +347,7 @@ func TestEmbedAndInsertSoftErrorOnInsertFailure(t *testing.T) {
 func TestIndexGitHistoryNoMatchingCommits(t *testing.T) {
 	dir := initRepo(t)
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, false, true, "2099-01-01")
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, false, true, "2099-01-01", nil)
 
 	if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
 		t.Fatalf("IndexProject: %v", err)
@@ -365,7 +378,7 @@ func TestIndexGitHistoryContinuesOnInsertError(t *testing.T) {
 	runGit(t, dir, "commit", "-q", "-m", "big commit")
 
 	es := &errStore{insertErr: errors.New("insert boom")}
-	idx := NewIndexer(es, &fakeEmbedder{}, 3, 1, 8, true, true, "") // verbose + gitMode
+	idx := NewIndexer(es, &fakeEmbedder{}, 3, 1, 8, 1024*1024, 32, true, true, "", nil)
 
 	if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
 		t.Fatalf("IndexProject: %v", err)
@@ -384,7 +397,7 @@ func (g *gitEmbedFailer) EmbedSingle(ctx context.Context, model, text string) ([
 func TestIndexGitHistoryContinuesOnEmbedSingleError(t *testing.T) {
 	dir := initRepo(t)
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &gitEmbedFailer{}, 3, 4, 8, false, true, "")
+	idx := NewIndexer(fs, &gitEmbedFailer{}, 3, 4, 8, 1024*1024, 32, false, true, "", nil)
 
 	if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
 		t.Fatalf("IndexProject: %v", err)
@@ -399,10 +412,10 @@ func TestIndexGitHistoryContinuesOnEmbedSingleError(t *testing.T) {
 // branch in indexContent.
 func TestIndexContentTruncatesOversizedContent(t *testing.T) {
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, false, false, "")
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
 	oversized := []byte("package x\n" + strings.Repeat("var _ = 1\n", 200000)) // >1MB
-	if len(oversized) <= maxFileSize {
-		t.Fatalf("test content is only %d bytes, want > maxFileSize", len(oversized))
+	if len(oversized) <= 1024*1024 {
+		t.Fatalf("test content is only %d bytes, want > 1MB", len(oversized))
 	}
 	if _, err := idx.IndexContent(context.Background(), 1, "big.go", "bge-m3", oversized); err != nil {
 		t.Fatalf("IndexContent: %v", err)
@@ -413,18 +426,18 @@ func TestIndexContentTruncatesOversizedContent(t *testing.T) {
 // a file with more blank-line-separated blocks than the cap.
 func TestIndexContentCapsChunksPerFile(t *testing.T) {
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, false, false, "")
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 4, 8, 1024*1024, 32, false, false, "", nil)
 
 	var b strings.Builder
-	for i := 0; i < maxChunksPerFile+10; i++ {
+	for i := 0; i < 32+10; i++ {
 		b.WriteString("func F() { return }\n\n") // each block → its own chunk
 	}
 	created, err := idx.IndexContent(context.Background(), 1, "many.go", "bge-m3", []byte(b.String()))
 	if err != nil {
 		t.Fatalf("IndexContent: %v", err)
 	}
-	if created != maxChunksPerFile {
-		t.Errorf("created = %d, want capped at %d", created, maxChunksPerFile)
+	if created != 32 {
+		t.Errorf("created = %d, want capped at %d", created, 32)
 	}
 }
 
@@ -434,7 +447,7 @@ func TestVerboseProgress(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a.go", "package a\nfunc A() {}\n")
 	fs := &fakeStore{}
-	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 1, 8, true, false, "") // verbose
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, 1, 8, 1024*1024, 32, true, false, "", nil)
 	if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
 		t.Fatalf("IndexProject: %v", err)
 	}

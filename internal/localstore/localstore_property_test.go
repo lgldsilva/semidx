@@ -79,7 +79,7 @@ func TestCosineSimilarityProperty(t *testing.T) {
 func TestSearchSimilarTopKProperty(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	pid, _ := s.UpsertProject(ctx, "p", "/p", "m")
+	pid, _ := s.UpsertProject(ctx, "p", "/p", "m", 0)
 	fid, _ := s.UpsertFile(ctx, pid, "f.go", "h", 1)
 
 	const total = 25
@@ -118,7 +118,7 @@ func TestSearchSimilarTopKProperty(t *testing.T) {
 func TestKeywordSearchTopKProperty(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	pid, _ := s.UpsertProject(ctx, "p", "/p", "m")
+	pid, _ := s.UpsertProject(ctx, "p", "/p", "m", 0)
 	fid, _ := s.UpsertFile(ctx, pid, "f.go", "h", 1)
 
 	const total = 20

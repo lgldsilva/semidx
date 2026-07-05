@@ -41,6 +41,7 @@ type Project struct {
 	GitURL     string // set when SourceType == "git"
 	Branch     string // optional git branch
 	Identity   string // stable dedup key (git remote/common-dir, or absolute path)
+	Dims       int    // embedding dimension used for this project (0 = unknown/probe)
 }
 
 // Sentinel errors so callers (e.g. the HTTP layer) can map to status codes
@@ -96,11 +97,11 @@ type IndexStore interface {
 	Close()
 	Ping(ctx context.Context) error
 	EnsureChunksTable(ctx context.Context, dims int) error
-	UpsertProject(ctx context.Context, name, path, model string) (int, error)
-	EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string) (int, error)
+	UpsertProject(ctx context.Context, name, path, model string, dims int) (int, error)
+	EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string, dims int) (int, error)
 	SetWorktreeFiles(ctx context.Context, projectID int, worktree string, files map[string]string) error
 	PruneUnreferencedFiles(ctx context.Context, projectID int) (int64, error)
-	CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*Project, error)
+	CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string, dims int) (*Project, error)
 	GetProject(ctx context.Context, name string) (*Project, error)
 	GetProjectByID(ctx context.Context, id int) (*Project, error)
 	GetProjectByIdentity(ctx context.Context, identity string) (*Project, error)
@@ -337,24 +338,24 @@ func distanceExpr(dims int) string {
 	return "c.embedding <=> $1"
 }
 
-func (s *PgStore) UpsertProject(ctx context.Context, name, path, model string) (int, error) {
+func (s *PgStore) UpsertProject(ctx context.Context, name, path, model string, dims int) (int, error) {
 	var id int
 	// name is no longer UNIQUE (F14), so upsert on identity instead — for this
 	// legacy by-name API the identity is the name, keeping it idempotent per name.
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO projects (name, path, model, status, identity)
-		VALUES ($1, $2, $3, 'indexing', $1)
-		ON CONFLICT (identity) DO UPDATE SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing'
+		INSERT INTO projects (name, path, model, status, identity, dims)
+		VALUES ($1, $2, $3, 'indexing', $1, $4)
+		ON CONFLICT (identity) DO UPDATE SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing', dims = EXCLUDED.dims
 		RETURNING id
-	`, name, path, model).Scan(&id)
+	`, name, path, model, dims).Scan(&id)
 	return id, err
 }
 
-const projectColumns = `id, name, path, model, status, source_type, COALESCE(git_url, ''), COALESCE(branch, ''), COALESCE(identity, '')`
+const projectColumns = `id, name, path, model, status, source_type, COALESCE(git_url, ''), COALESCE(branch, ''), COALESCE(identity, ''), COALESCE(dims, 0)`
 
 func scanProject(row pgx.Row) (*Project, error) {
 	var p Project
-	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity, &p.Dims); err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -363,15 +364,15 @@ func scanProject(row pgx.Row) (*Project, error) {
 // EnsureProjectIdentity upserts a project keyed by its stable identity, so any
 // worktree or clone of the same repo maps to one project row. It returns the
 // project id and sets status to "indexing".
-func (s *PgStore) EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string) (int, error) {
+func (s *PgStore) EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string, dims int) (int, error) {
 	var id int
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, identity)
-		VALUES ($1, $2, $3, 'indexing', $4, $5)
+		INSERT INTO projects (name, path, model, status, source_type, identity, dims)
+		VALUES ($1, $2, $3, 'indexing', $4, $5, $6)
 		ON CONFLICT (identity) DO UPDATE
-		  SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing'
+		  SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing', dims = EXCLUDED.dims
 		RETURNING id
-	`, name, path, model, sourceType, identity).Scan(&id)
+	`, name, path, model, sourceType, identity, dims).Scan(&id)
 	return id, err
 }
 
@@ -449,17 +450,17 @@ func (s *PgStore) GetProjectByIdentity(ctx context.Context, identity string) (*P
 
 // CreateProject registers a project with its content source. Returns
 // ErrProjectExists if the name is taken.
-func (s *PgStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*Project, error) {
+func (s *PgStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string, dims int) (*Project, error) {
 	var id int
 	// identity = name: server-registered projects are keyed by their (user-chosen,
 	// unique) name via the identity unique index — the UNIQUE(name) constraint is
 	// gone (F14, so index-path projects can share a basename), so name uniqueness
 	// for API projects is preserved through identity instead.
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, git_url, branch, identity)
-		VALUES ($1, '', $2, 'registered', $3, NULLIF($4, ''), NULLIF($5, ''), $1)
+		INSERT INTO projects (name, path, model, status, source_type, git_url, branch, identity, dims)
+		VALUES ($1, '', $2, 'registered', $3, NULLIF($4, ''), NULLIF($5, ''), $1, $6)
 		RETURNING id
-	`, name, model, sourceType, gitURL, branch).Scan(&id)
+	`, name, model, sourceType, gitURL, branch, dims).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation (identity)
@@ -467,7 +468,7 @@ func (s *PgStore) CreateProject(ctx context.Context, name, model, sourceType, gi
 		}
 		return nil, err
 	}
-	return &Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name}, nil
+	return &Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name, Dims: dims}, nil
 }
 
 func (s *PgStore) ListProjects(ctx context.Context, limit, offset int) ([]Project, error) {
@@ -988,6 +989,11 @@ func (s *PgStore) SearchSimilarKeywordsWorktree(ctx context.Context, projectID i
 }
 
 func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]SearchResult, error) {
+	if dims <= 0 {
+		if p, err := s.GetProjectByID(ctx, projectID); err == nil && p.Dims > 0 {
+			dims = p.Dims
+		}
+	}
 	if dims <= 0 {
 		dims = s.probeDimsForProject(ctx, projectID)
 	}

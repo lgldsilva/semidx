@@ -35,12 +35,12 @@ func TestLifecycle(t *testing.T) {
 		t.Fatalf("EnsureChunksTable: %v", err)
 	}
 
-	projectID, err := s.UpsertProject(ctx, "demo", "/tmp/demo", "bge-m3")
+	projectID, err := s.UpsertProject(ctx, "demo", "/tmp/demo", "bge-m3", 0)
 	if err != nil {
 		t.Fatalf("UpsertProject: %v", err)
 	}
 	// UpsertProject is idempotent on name and must return the same id.
-	if again, err := s.UpsertProject(ctx, "demo", "/tmp/demo2", "bge-m3"); err != nil || again != projectID {
+	if again, err := s.UpsertProject(ctx, "demo", "/tmp/demo2", "bge-m3", 0); err != nil || again != projectID {
 		t.Fatalf("UpsertProject re-run: id=%d err=%v (want id=%d)", again, err, projectID)
 	}
 
@@ -103,7 +103,7 @@ func TestKeywordSearch(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
-	projectID, err := s.UpsertProject(ctx, "kw", "/tmp/kw", "bge-m3")
+	projectID, err := s.UpsertProject(ctx, "kw", "/tmp/kw", "bge-m3", 0)
 	if err != nil {
 		t.Fatalf("UpsertProject: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestTextOnlyExcludedFromVectorSearch(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
-	projectID, _ := s.UpsertProject(ctx, "sensitive", "/tmp/s", "bge-m3")
+	projectID, _ := s.UpsertProject(ctx, "sensitive", "/tmp/s", "bge-m3", 0)
 	fileID, _ := s.UpsertFile(ctx, projectID, ".env", "e1", 20)
 	chunks := []chunker.Chunk{{Content: "SECRET=topsecret", StartLine: 1, EndLine: 1}}
 	if err := s.InsertChunksTextOnly(ctx, projectID, fileID, chunks, 3); err != nil {
@@ -162,7 +162,7 @@ func TestIncrementalFileUpToDate(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
-	projectID, _ := s.UpsertProject(ctx, "inc", "/tmp/inc", "bge-m3")
+	projectID, _ := s.UpsertProject(ctx, "inc", "/tmp/inc", "bge-m3", 0)
 
 	// Unknown file → not up to date.
 	if up, err := s.FileUpToDate(ctx, projectID, "a.go", "h1", 2); err != nil || up {
@@ -207,7 +207,7 @@ func TestCreateProjectAndDuplicate(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
-	p, err := s.CreateProject(ctx, "git-proj", "bge-m3", "git", "https://example.com/r.git", "main")
+	p, err := s.CreateProject(ctx, "git-proj", "bge-m3", "git", "https://example.com/r.git", "main", 0)
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestCreateProjectAndDuplicate(t *testing.T) {
 	}
 
 	// A duplicate name maps to the shared sentinel.
-	if _, err := s.CreateProject(ctx, "git-proj", "bge-m3", "git", "", ""); err != store.ErrProjectExists {
+	if _, err := s.CreateProject(ctx, "git-proj", "bge-m3", "git", "", "", 0); err != store.ErrProjectExists {
 		t.Fatalf("duplicate CreateProject err = %v, want ErrProjectExists", err)
 	}
 
@@ -230,7 +230,7 @@ func TestDeleteAndCascade(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
-	projectID, _ := s.UpsertProject(ctx, "del", "/tmp/del", "bge-m3")
+	projectID, _ := s.UpsertProject(ctx, "del", "/tmp/del", "bge-m3", 0)
 	fileID, _ := s.UpsertFile(ctx, projectID, "a.go", "h1", 10)
 	if err := s.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, [][]float32{{1, 0}}, 2); err != nil {
 		t.Fatalf("InsertChunks: %v", err)
@@ -274,7 +274,7 @@ func TestUpdateProjectStatus(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
-	projectID, _ := s.UpsertProject(ctx, "st", "/tmp/st", "bge-m3")
+	projectID, _ := s.UpsertProject(ctx, "st", "/tmp/st", "bge-m3", 0)
 	if err := s.UpdateProjectStatus(ctx, projectID, "ready"); err != nil {
 		t.Fatalf("UpdateProjectStatus: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestDropAll(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
-	projectID, _ := s.UpsertProject(ctx, "d1", "/tmp/d1", "bge-m3")
+	projectID, _ := s.UpsertProject(ctx, "d1", "/tmp/d1", "bge-m3", 0)
 	fileID, _ := s.UpsertFile(ctx, projectID, "a.go", "h1", 10)
 	if err := s.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, [][]float32{{1, 0}}, 2); err != nil {
 		t.Fatalf("InsertChunks: %v", err)
@@ -302,7 +302,7 @@ func TestDropAll(t *testing.T) {
 	}
 
 	// Identity is reset: the next project gets id 1 again.
-	newID, _ := s.UpsertProject(ctx, "d2", "/tmp/d2", "bge-m3")
+	newID, _ := s.UpsertProject(ctx, "d2", "/tmp/d2", "bge-m3", 0)
 	if newID != 1 {
 		t.Fatalf("post-DropAll id = %d, want 1 (identity reset)", newID)
 	}
@@ -329,11 +329,11 @@ func TestSameBasenameProjectsCoexist(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
-	id1, err := s.EnsureProjectIdentity(ctx, "path:/one/backend", "backend", "/one/backend", "bge-m3", "docs")
+	id1, err := s.EnsureProjectIdentity(ctx, "path:/one/backend", "backend", "/one/backend", "bge-m3", "docs", 0)
 	if err != nil {
 		t.Fatalf("first backend: %v", err)
 	}
-	id2, err := s.EnsureProjectIdentity(ctx, "path:/two/backend", "backend", "/two/backend", "bge-m3", "docs")
+	id2, err := s.EnsureProjectIdentity(ctx, "path:/two/backend", "backend", "/two/backend", "bge-m3", "docs", 0)
 	if err != nil {
 		t.Fatalf("second backend (same name) must not collide: %v", err)
 	}
