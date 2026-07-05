@@ -533,8 +533,16 @@ func sleepBackoff(ctx context.Context, attempt int) error {
 }
 
 func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectPath, model string) error {
+	// Only pass --since when a window is set: an empty --since= is parsed
+	// inconsistently across git versions (some ignore it and show all history,
+	// newer ones treat the empty approxidate as "now" and return nothing), which
+	// made history indexing silently no-op on some hosts.
+	args := []string{"-C", projectPath, "log", "-p"}
+	if idx.gitSince != "" {
+		args = append(args, "--since="+idx.gitSince)
+	}
 	// #nosec G204 -- fixed "git" executable; projectPath is a local dir and gitSince a bounded flag value.
-	cmd := exec.Command("git", "-C", projectPath, "log", "-p", "--since="+idx.gitSince)
+	cmd := exec.Command("git", args...)
 	// Strip any inherited GIT_DIR/GIT_WORK_TREE so `git -C projectPath` reads that
 	// repo's history, not an ambient repo leaked by a hook or bare-repo worktree.
 	cmd.Env = gitenv.Clean(cmd.Environ())
