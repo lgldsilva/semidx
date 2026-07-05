@@ -26,15 +26,18 @@ const (
 	// Credential-free local-dev default: points at the dev Postgres but carries no
 	// password in source. Real deployments set SEMIDX_DB_DSN (the compose does);
 	// a local dev supplies credentials via SEMIDX_DB_DSN or the standard PG* env.
-	defaultDatabaseURL    = "postgres://localhost:55432/semantic_indexer"
-	defaultOllamaURL      = "http://localhost:11434"
-	defaultGeminiBaseURL  = "https://generativelanguage.googleapis.com/v1beta/openai"
-	defaultGroqBaseURL    = "https://api.groq.com/openai/v1"
-	defaultOpenRouterURL  = "https://openrouter.ai/api/v1"
-	defaultOllamaCloudURL = "https://ollama.com/v1"
-	defaultIndexWorkers   = 4
-	defaultListenAddr     = ":8080"
-	defaultDataDir        = "/var/lib/semidx"
+	defaultDatabaseURL      = "postgres://localhost:55432/semantic_indexer"
+	defaultOllamaURL        = "http://localhost:11434"
+	defaultGeminiBaseURL    = "https://generativelanguage.googleapis.com/v1beta/openai"
+	defaultGroqBaseURL      = "https://api.groq.com/openai/v1"
+	defaultOpenRouterURL    = "https://openrouter.ai/api/v1"
+	defaultOllamaCloudURL   = "https://ollama.com/v1"
+	defaultIndexWorkers     = 4
+	defaultEmbedBatchSize   = 8
+	defaultMaxFileSize      = 1024 * 1024 // 1MB
+	defaultMaxChunksPerFile = 32
+	defaultListenAddr       = ":8080"
+	defaultDataDir          = "/var/lib/semidx"
 )
 
 // Config holds every runtime setting the CLI and MCP server need.
@@ -71,6 +74,16 @@ type Config struct {
 	// IndexWorkers is how many files are indexed concurrently
 	// (SEMIDX_INDEX_WORKERS). Defaults to defaultIndexWorkers.
 	IndexWorkers int
+	// EmbedBatchSize controls how many texts are sent per embedding API call
+	// (SEMIDX_EMBED_BATCH_SIZE). Defaults to defaultEmbedBatchSize.
+	EmbedBatchSize int
+	// MaxFileSize is the largest file (bytes) the indexer will process
+	// (SEMIDX_MAX_FILE_SIZE). Files larger than this are silently skipped.
+	// Defaults to 1MB.
+	MaxFileSize int
+	// MaxChunksPerFile caps how many chunks a single file can produce
+	// (SEMIDX_MAX_CHUNKS_PER_FILE). Defaults to 32.
+	MaxChunksPerFile int
 
 	// ListenAddr is the server bind address (SEMIDX_LISTEN_ADDR, e.g. ":8080").
 	ListenAddr string
@@ -92,6 +105,9 @@ type Config struct {
 	// JWTSecret is the HS256 signing key for control tokens
 	// (SEMIDX_JWT_SECRET). When empty, JWT control tokens are disabled.
 	JWTSecret string
+	// CSRFKey is the secret used to derive CSRF tokens for the web admin
+	// (SEMIDX_CSRF_KEY). When empty, a random key is generated on each restart.
+	CSRFKey string
 	// LocalIndexPath, when non-empty, makes the CLI index and search a local
 	// SQLite file instead of PostgreSQL (SEMIDX_LOCAL_INDEX: a path, or a truthy
 	// value to use the default location). Empty means server/Postgres mode.
@@ -152,6 +168,9 @@ func Load() *Config {
 		OllamaCloudBaseURL: env.get("SEMIDX_OLLAMA_CLOUD_BASE_URL", defaultOllamaCloudURL),
 		Privacy:            env.get("EMBED_PRIVACY", "") == "true",
 		IndexWorkers:       atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
+		EmbedBatchSize:     atoiDefault(env.get("SEMIDX_EMBED_BATCH_SIZE", ""), defaultEmbedBatchSize),
+		MaxFileSize:        atoiDefault(env.get("SEMIDX_MAX_FILE_SIZE", ""), defaultMaxFileSize),
+		MaxChunksPerFile:   atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_FILE", ""), defaultMaxChunksPerFile),
 		ListenAddr:         env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
 		BootstrapToken:     env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
 		DataDir:            env.get("SEMIDX_DATA_DIR", defaultDataDir),
@@ -160,6 +179,7 @@ func Load() *Config {
 		BootstrapAdminPassword: env.get("SEMIDX_BOOTSTRAP_ADMIN_PASSWORD", ""),
 		CookieSecure:           env.get("SEMIDX_COOKIE_SECURE", "true") != "false",
 		JWTSecret:              env.get("SEMIDX_JWT_SECRET", ""),
+		CSRFKey:                env.get("SEMIDX_CSRF_KEY", ""),
 		// If a Postgres DSN is explicitly configured, it takes precedence over
 		// SEMIDX_LOCAL_INDEX (Postgres (configured) > SQLite > Postgres (default)).
 		LocalIndexPath: func() string {
@@ -205,6 +225,9 @@ var KnownKeys = []KeySpec{
 	{"EMBED_API_KEY", "Custom provider API key", true},
 	{"EMBED_PRIVACY", "Force local-only embedding providers (true)", false},
 	{"SEMIDX_INDEX_WORKERS", "Concurrent index workers (positive int)", false},
+	{"SEMIDX_EMBED_BATCH_SIZE", "Texts per embedding API call (positive int)", false},
+	{"SEMIDX_MAX_FILE_SIZE", "Largest file the indexer processes (bytes, positive int)", false},
+	{"SEMIDX_MAX_CHUNKS_PER_FILE", "Maximum chunks a single file can produce (positive int)", false},
 	{"SEMIDX_JAVA_DECOMPILER", "External Java decompiler command for .class in JARs", false},
 	// Self-update (semidx upgrade) — override to point at a different release host.
 	{"SEMIDX_UPDATE_API", "Releases API base for `semidx upgrade` (default: homelab Gitea)", false},
@@ -215,6 +238,7 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_LISTEN_ADDR", "Server bind address, e.g. :8080 (serve)", false},
 	{"SEMIDX_DATA_DIR", "Where the server clones git projects (serve)", false},
 	{"SEMIDX_JWT_SECRET", "HS256 secret enabling JWT control tokens (serve)", true},
+	{"SEMIDX_CSRF_KEY", "HMAC key for web-admin CSRF tokens; persistent across restarts (serve)", true},
 	{"SEMIDX_COOKIE_SECURE", "Secure flag on web-admin cookies; false only over HTTP (serve)", false},
 }
 

@@ -23,11 +23,11 @@ func TestWorktreeDivergentContent(t *testing.T) {
 	defer s.Close()
 
 	// Two worktrees of the same repo map to ONE project (by identity).
-	pidA, err := s.EnsureProjectIdentity(ctx, "remote:example.com/acme/app", "app", "/wt/A", "bge-m3", "git")
+	pidA, err := s.EnsureProjectIdentity(ctx, "remote:example.com/acme/app", "app", "/wt/A", "bge-m3", "git", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pidB, err := s.EnsureProjectIdentity(ctx, "remote:example.com/acme/app", "app", "/wt/B", "bge-m3", "git")
+	pidB, err := s.EnsureProjectIdentity(ctx, "remote:example.com/acme/app", "app", "/wt/B", "bge-m3", "git", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestWorktreeSharedContentDedups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	pid, _ := s.EnsureProjectIdentity(ctx, "remote:x", "app", "/wt/A", "m", "git")
+	pid, _ := s.EnsureProjectIdentity(ctx, "remote:x", "app", "/wt/A", "m", "git", 0)
 
 	fid1, _ := s.UpsertFile(ctx, pid, "shared.go", "hSame", 10)
 	_ = s.InsertChunks(ctx, pid, fid1, []chunker.Chunk{{Content: "same", StartLine: 1, EndLine: 1}}, [][]float32{{1, 0, 0}}, 3)

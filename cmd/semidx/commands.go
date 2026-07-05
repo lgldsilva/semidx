@@ -155,12 +155,12 @@ With no embedding provider configured, add --keyword to index text-only.`,
 			if err := db.EnsureChunksTable(ctx, dims); err != nil {
 				return fmt.Errorf("ensure chunks table: %w", err)
 			}
-			projectID, err := db.EnsureProjectIdentity(ctx, tgt.identity, tgt.name, tgt.indexPath, model, tgt.sourceType)
+			projectID, err := db.EnsureProjectIdentity(ctx, tgt.identity, tgt.name, tgt.indexPath, model, tgt.sourceType, dims)
 			if err != nil {
 				return fmt.Errorf("register project: %w", err)
 			}
 
-			indexer := indexing.NewIndexer(db, d.emb, dims, d.cfg.IndexWorkers, verbose, gitMode, gitSince).
+			indexer := indexing.NewIndexer(db, d.emb, dims, d.cfg.IndexWorkers, d.cfg.EmbedBatchSize, d.cfg.MaxFileSize, d.cfg.MaxChunksPerFile, verbose, gitMode, gitSince, nil).
 				SetKeywordOnly(d.cfg.KeywordOnly).
 				SetWorktree(tgt.worktree)
 			start := time.Now()
@@ -382,11 +382,12 @@ store. This is destructive and cannot be undone. You must confirm: either type
 }
 
 func newServeCmd(d *deps) *cobra.Command {
-	return &cobra.Command{
+	var showBootstrapToken bool
+	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the HTTP API server",
 		Long: `Run the semidx HTTP API server (and the embedded web admin at /admin). On
-first run it prints a one-time bootstrap admin token. Requires Postgres
+first run it generates a one-time bootstrap admin token. Requires Postgres
 (SEMIDX_DB_DSN); listens on SEMIDX_LISTEN_ADDR.`,
 		Example: `  semidx serve
   SEMIDX_LISTEN_ADDR=:8080 semidx serve`,
@@ -398,24 +399,41 @@ first run it prints a one-time bootstrap admin token. Requires Postgres
 			log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 			srv := server.New(db, d.emb, log)
 
-			if err := d.bootstrapServer(cmd.Context(), srv); err != nil {
+			if err := d.bootstrapServer(cmd.Context(), srv, showBootstrapToken); err != nil {
 				return err
 			}
 			srv.StartWorkers(cmd.Context(), d.cfg.IndexWorkers, d.cfg.DataDir)
 			return srv.Run(cmd.Context(), d.cfg.ListenAddr)
 		},
 	}
+	cmd.Flags().BoolVar(&showBootstrapToken, "show-bootstrap-token", false, "Display the one-time bootstrap admin token (generated on first run)")
+	return cmd
 }
 
 // bootstrapServer runs the one-time server setup: bootstrap admin token + user,
-// optional JWT control tokens, and mounting the web admin UI.
-func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server) error {
+// optional JWT control tokens, and mounting the web admin UI. The bootstrap
+// token is written to a file inside DataDir (bootstrap-token.txt) so it never
+// leaks to stderr/systemd/journald; pass showBootstrapToken=true to also print
+// it to stderr for interactive use.
+func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server, showBootstrapToken bool) error {
 	token, err := srv.EnsureBootstrapToken(ctx, d.cfg.BootstrapToken)
 	if err != nil {
 		return fmt.Errorf("bootstrap token: %w", err)
 	}
 	if token != "" {
-		fmt.Fprintf(os.Stderr, "bootstrap admin token (shown once — save it): %s\n", token)
+		// Write to a well-known file with restricted permissions, never to stderr
+		// so it doesn't leak into systemd/journald logs.
+		tokenFile := filepath.Join(d.cfg.DataDir, "bootstrap-token.txt")
+		if err := os.MkdirAll(filepath.Dir(tokenFile), 0o700); err != nil {
+			return fmt.Errorf("bootstrap token dir: %w", err)
+		}
+		if err := os.WriteFile(tokenFile, []byte(token+"\n"), 0o600); err != nil {
+			return fmt.Errorf("bootstrap token file: %w", err)
+		}
+		if showBootstrapToken {
+			fmt.Fprintf(os.Stderr, "bootstrap admin token (shown once — save it): %s\n", token)
+		}
+		fmt.Fprintf(os.Stderr, "bootstrap admin token saved to %s (use --show-bootstrap-token to display it)\n", tokenFile)
 	}
 	admin, err := srv.EnsureBootstrapAdmin(ctx, d.cfg.BootstrapAdminUser, d.cfg.BootstrapAdminPassword)
 	if err != nil {
@@ -429,7 +447,7 @@ func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server) error {
 			return fmt.Errorf("enable JWT control tokens: %w", err)
 		}
 	}
-	if err := srv.MountAdmin(d.cfg.CookieSecure); err != nil {
+	if err := srv.MountAdmin(d.cfg.CookieSecure, d.cfg.CSRFKey); err != nil {
 		return fmt.Errorf("mount admin UI: %w", err)
 	}
 	return nil

@@ -11,7 +11,7 @@ import (
 // projectLister is the subset of the local store the MCP backend needs to list
 // projects (satisfied by store.IndexStore).
 type projectLister interface {
-	ListProjects(ctx context.Context) ([]store.Project, error)
+	ListProjects(ctx context.Context, limit, offset int) ([]store.Project, error)
 }
 
 // localBackend adapts the standalone index (search service + local store) to the
@@ -45,7 +45,7 @@ func (b *localBackend) Search(ctx context.Context, project, query, model string,
 }
 
 func (b *localBackend) Projects(ctx context.Context) ([]ProjectInfo, error) {
-	projects, err := b.projects.ListProjects(ctx)
+	projects, err := b.projects.ListProjects(ctx, 0, 0)
 	if err != nil {
 		return nil, err
 	}

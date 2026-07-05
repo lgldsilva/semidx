@@ -12,6 +12,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -50,7 +51,7 @@ type Admin struct {
 // New builds the admin UI. secureCookies must be true when the server is reached
 // over HTTPS (directly or via a TLS-terminating proxy). jwt may be nil, which
 // hides the control-tokens feature.
-func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies bool, jwt *jwtauth.Issuer) (*Admin, error) {
+func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies bool, jwt *jwtauth.Issuer, csrfKeyHex string) (*Admin, error) {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(discard{}, nil))
 	}
@@ -65,10 +66,21 @@ func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies 
 	if err != nil {
 		return nil, err
 	}
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
+	var key []byte
+	if csrfKeyHex != "" {
+		var err error
+		key, err = hex.DecodeString(csrfKeyHex)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CSRF key: %w", err)
+		}
+	} else {
+		key = make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			return nil, err
+		}
 	}
+	limiter := &loginLimiter{tries: map[string][]time.Time{}}
+	go limiter.reap()
 	return &Admin{
 		store:   st,
 		search:  search.NewService(st, emb),
@@ -76,7 +88,7 @@ func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies 
 		log:     log,
 		secure:  secureCookies,
 		csrfKey: key,
-		limiter: &loginLimiter{tries: map[string][]time.Time{}},
+		limiter: limiter,
 		jwt:     jwt,
 	}, nil
 }
@@ -240,6 +252,29 @@ func (l *loginLimiter) reset(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.tries, key)
+}
+
+// reap periodically removes keys whose last attempt is outside the login window.
+func (l *loginLimiter) reap() {
+	for {
+		time.Sleep(5 * time.Minute)
+		l.mu.Lock()
+		now := time.Now()
+		cutoff := now.Add(-loginWindow)
+		for key, tries := range l.tries {
+			allStale := true
+			for _, t := range tries {
+				if t.After(cutoff) {
+					allStale = false
+					break
+				}
+			}
+			if allStale {
+				delete(l.tries, key)
+			}
+		}
+		l.mu.Unlock()
+	}
 }
 
 func prune(ts []time.Time, cutoff time.Time) []time.Time {

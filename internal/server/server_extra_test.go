@@ -186,7 +186,7 @@ func TestEnableJWTError(t *testing.T) {
 
 func TestMountAdmin(t *testing.T) {
 	srv := New(&fakeStore{}, fakeEmbedder{}, nil)
-	if err := srv.MountAdmin(false); err != nil {
+	if err := srv.MountAdmin(false, ""); err != nil {
 		t.Fatalf("MountAdmin = %v", err)
 	}
 	// The /admin/ route is now wired; an unauthenticated hit is handled by the

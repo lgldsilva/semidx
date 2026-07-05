@@ -38,7 +38,7 @@ var _ store.IndexStore = (*SQLiteStore)(nil)
 
 // projectColumns is the canonical projection order shared by the project
 // getters so scanProject can read any of them.
-const projectColumns = `id, name, path, model, status, source_type, git_url, branch, COALESCE(identity, '')`
+const projectColumns = `id, name, path, model, status, source_type, git_url, branch, COALESCE(identity, ''), COALESCE(dims, 0)`
 
 // schema mirrors the pgvector layout conceptually as plain tables: an embedding
 // BLOB replaces the vector column and there is one chunks table instead of the
@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS projects (
     source_type TEXT NOT NULL DEFAULT 'path',
     git_url     TEXT NOT NULL DEFAULT '',
     branch      TEXT NOT NULL DEFAULT '',
-    identity    TEXT
+    identity    TEXT,
+    dims        INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_identity ON projects(identity);
 CREATE TABLE IF NOT EXISTS files (
@@ -90,6 +91,24 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    content,
+    tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER IF NOT EXISTS chunks_fts_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_fts_bd BEFORE DELETE ON chunks BEGIN
+    DELETE FROM chunks_fts WHERE rowid = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_fts_au AFTER UPDATE ON chunks BEGIN
+    DELETE FROM chunks_fts WHERE rowid = old.id;
+    INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
+END;
 `
 
 // New opens (creating if absent) the SQLite database at path, creating the
@@ -140,7 +159,7 @@ func ensureSchema(db *sql.DB) error {
 		// enforcing UNIQUE on the projects table — i.e. UNIQUE(name) (pre-F14),
 		// which wrongly blocks two projects that share a basename.
 		if hasIdentity == 0 || strings.Contains(strings.ToUpper(ddl), "UNIQUE") {
-			for _, tbl := range []string{"chunks", "worktree_files", "files", "projects"} {
+			for _, tbl := range []string{"chunks_fts", "chunks", "worktree_files", "files", "projects"} {
 				if _, err := db.Exec("DROP TABLE IF EXISTS " + tbl); err != nil {
 					return err
 				}
@@ -160,29 +179,29 @@ func (s *SQLiteStore) Ping(ctx context.Context) error { return s.db.PingContext(
 // chunks table created on open, so there is no per-dimension table to build.
 func (s *SQLiteStore) EnsureChunksTable(_ context.Context, _ int) error { return nil }
 
-func (s *SQLiteStore) UpsertProject(ctx context.Context, name, path, model string) (int, error) {
+func (s *SQLiteStore) UpsertProject(ctx context.Context, name, path, model string, dims int) (int, error) {
 	var id int
 	// name is no longer UNIQUE (F14), so upsert on identity instead — for this
 	// legacy by-name API the identity is the name, keeping it idempotent per name.
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, identity)
-		VALUES (?, ?, ?, 'indexing', 'path', ?)
-		ON CONFLICT(identity) DO UPDATE SET path = excluded.path, model = excluded.model, status = 'indexing'
+		INSERT INTO projects (name, path, model, status, source_type, identity, dims)
+		VALUES (?, ?, ?, 'indexing', 'path', ?, ?)
+		ON CONFLICT(identity) DO UPDATE SET path = excluded.path, model = excluded.model, status = 'indexing', dims = excluded.dims
 		RETURNING id
-	`, name, path, model, name).Scan(&id)
+	`, name, path, model, name, dims).Scan(&id)
 	return id, err
 }
 
 // EnsureProjectIdentity upserts a project keyed by its stable identity so all
 // worktrees of a repo map to one row.
-func (s *SQLiteStore) EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string) (int, error) {
+func (s *SQLiteStore) EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string, dims int) (int, error) {
 	var id int
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, identity)
-		VALUES (?, ?, ?, 'indexing', ?, ?)
-		ON CONFLICT(identity) DO UPDATE SET path = excluded.path, model = excluded.model, status = 'indexing'
+		INSERT INTO projects (name, path, model, status, source_type, identity, dims)
+		VALUES (?, ?, ?, 'indexing', ?, ?, ?)
+		ON CONFLICT(identity) DO UPDATE SET path = excluded.path, model = excluded.model, status = 'indexing', dims = excluded.dims
 		RETURNING id
-	`, name, path, model, sourceType, identity).Scan(&id)
+	`, name, path, model, sourceType, identity, dims).Scan(&id)
 	return id, err
 }
 
@@ -197,10 +216,18 @@ func (s *SQLiteStore) SetWorktreeFiles(ctx context.Context, projectID int, workt
 	if _, err := tx.ExecContext(ctx, `DELETE FROM worktree_files WHERE project_id = ? AND worktree = ?`, projectID, worktree); err != nil {
 		return err
 	}
+	if len(files) == 0 {
+		return tx.Commit()
+	}
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO worktree_files (project_id, worktree, path, hash) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+
 	for path, hash := range files {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO worktree_files (project_id, worktree, path, hash) VALUES (?, ?, ?, ?)`,
-			projectID, worktree, path, hash); err != nil {
+		if _, err := stmt.ExecContext(ctx, projectID, worktree, path, hash); err != nil {
 			return err
 		}
 	}
@@ -227,27 +254,27 @@ func (s *SQLiteStore) PruneUnreferencedFiles(ctx context.Context, projectID int)
 
 // CreateProject registers a project with its content source, returning
 // ErrProjectExists when the name is already taken.
-func (s *SQLiteStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*store.Project, error) {
+func (s *SQLiteStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string, dims int) (*store.Project, error) {
 	var id int
 	// identity = name (see PgStore.CreateProject): name uniqueness for registered
 	// projects is enforced via the identity unique index, since UNIQUE(name) is gone.
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, git_url, branch, identity)
-		VALUES (?, '', ?, 'registered', ?, ?, ?, ?)
+		INSERT INTO projects (name, path, model, status, source_type, git_url, branch, identity, dims)
+		VALUES (?, '', ?, 'registered', ?, ?, ?, ?, ?)
 		RETURNING id
-	`, name, model, sourceType, gitURL, branch, name).Scan(&id)
+	`, name, model, sourceType, gitURL, branch, name, dims).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrProjectExists
 		}
 		return nil, err
 	}
-	return &store.Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name}, nil
+	return &store.Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name, Dims: dims}, nil
 }
 
 func scanProject(row interface{ Scan(...any) error }) (*store.Project, error) {
 	var p store.Project
-	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity, &p.Dims); err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -279,8 +306,11 @@ func (s *SQLiteStore) GetProjectByIdentity(ctx context.Context, identity string)
 	return p, err
 }
 
-func (s *SQLiteStore) ListProjects(ctx context.Context) ([]store.Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY name`)
+func (s *SQLiteStore) ListProjects(ctx context.Context, limit, offset int) ([]store.Project, error) {
+	if limit <= 0 {
+		limit = -1 // SQLite treats LIMIT -1 as "no limit"
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY name LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -498,11 +528,27 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 		return nil, err
 	}
 
-	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
-	if topK > 0 && len(results) > topK {
-		results = results[:topK]
+	if topK <= 0 || topK >= len(results) {
+		sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+		return results, nil
 	}
-	return results, nil
+	// Min-heap of size topK: keep only the top-K scoring results during the
+	// scan, reducing O(n log n) sort + O(n) memory to O(n) scan + O(k log k)
+	// sort + O(k) memory. For typical topK=20 with 50k chunks this is a
+	// significant improvement.
+	top := make([]store.SearchResult, topK)
+	copy(top, results[:topK])
+	for j := topK/2 - 1; j >= 0; j-- {
+		siftDown(top, j, topK)
+	}
+	for i := topK; i < len(results); i++ {
+		if results[i].Score > top[0].Score {
+			top[0] = results[i]
+			siftDown(top, 0, topK)
+		}
+	}
+	sort.SliceStable(top, func(i, j int) bool { return top[i].Score > top[j].Score })
+	return top, nil
 }
 
 // SearchSimilarKeywords finds chunks whose content matches every query word via
@@ -522,32 +568,54 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 		return nil, nil
 	}
 
-	// The worktree JOIN's placeholder appears first positionally when present.
+	// Filter: skip words shorter than 3 characters (FTS5's min token size) and
+	// cap at 20 terms to prevent wasteful scans and DoS via query explosion.
+	filtered := words[:0]
+	for _, w := range words {
+		if len(w) >= 3 {
+			filtered = append(filtered, w)
+		}
+	}
+	words = filtered
+	if len(words) == 0 {
+		return nil, nil
+	}
+	if len(words) > 20 {
+		words = words[:20]
+	}
+
+	// Build a FTS5 MATCH query with OR semantics (any word matches).
+	// Quote each word to handle special FTS5 characters.
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = `"` + strings.ReplaceAll(w, `"`, `""`) + `"`
+	}
+	ftsQuery := strings.Join(quoted, " OR ")
+
+	// Build the worktree join if filtering by worktree.
 	join := "JOIN files f ON f.id = c.file_id"
 	var args []any
 	if worktree != "" {
 		join = "JOIN files f ON f.id = c.file_id JOIN worktree_files w ON w.project_id = c.project_id AND w.path = f.path AND w.hash = f.hash AND w.worktree = ?"
 		args = append(args, worktree)
 	}
-	args = append(args, projectID)
 
-	clauses := make([]string, 0, len(words))
-	for _, w := range words {
-		clauses = append(clauses, "c.content LIKE ?")
-		args = append(args, "%"+w+"%")
-	}
 	if topK <= 0 {
 		topK = -1 // SQLite treats LIMIT -1 as "no limit"
 	}
-	args = append(args, topK)
 
-	// #nosec G201 -- interpolated fragments are constant literals; all values are bound as ? params.
+	// #nosec G201 -- join is one of two constant literals; all values are bound as ? params.
+	// Note: FTS5 MATCH requires the table name, not an alias.
 	query := fmt.Sprintf(`
 		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score
-		FROM chunks c `+"%s"+`
-		WHERE c.project_id = ? AND (%s)
+		FROM chunks c
+		JOIN chunks_fts ft ON ft.rowid = c.id
+		%s
+		WHERE chunks_fts MATCH ? AND c.project_id = ?
 		LIMIT ?
-	`, join, strings.Join(clauses, " OR "))
+	`, join)
+
+	args = append(args, ftsQuery, projectID, topK)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -583,6 +651,7 @@ func (s *SQLiteStore) DropAll(ctx context.Context) error {
 
 	for _, stmt := range []string{
 		`DELETE FROM chunks`,
+		`DELETE FROM chunks_fts`,
 		`DELETE FROM files`,
 		`DELETE FROM projects`,
 		`DELETE FROM sqlite_sequence WHERE name IN ('chunks', 'files', 'projects')`,
@@ -673,6 +742,27 @@ func cosineSimilarity(a, b []float32) float64 {
 		return 0
 	}
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
+}
+
+// siftDown is the min-heap sift-down operation used by the top-K selection in
+// searchSimilar. It maintains the heap invariant: parent <= children.
+func siftDown(items []store.SearchResult, i, n int) {
+	for {
+		smallest := i
+		left := 2*i + 1
+		right := 2*i + 2
+		if left < n && items[left].Score < items[smallest].Score {
+			smallest = left
+		}
+		if right < n && items[right].Score < items[smallest].Score {
+			smallest = right
+		}
+		if smallest == i {
+			break
+		}
+		items[i], items[smallest] = items[smallest], items[i]
+		i = smallest
+	}
 }
 
 // isUniqueViolation reports whether err is a SQLite UNIQUE/PRIMARY KEY

@@ -96,7 +96,8 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	info, err := s.emb.ModelInfo(ctx, proj.Model)
 	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, "model unavailable: "+err.Error())
+		s.log.Warn("model info lookup failed", "project", proj.Name, "model", proj.Model, "err", err)
+		writeJSONError(w, http.StatusBadGateway, "model unavailable")
 		return
 	}
 	if err := s.store.EnsureChunksTable(ctx, info.Dims); err != nil {
@@ -110,7 +111,7 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, 0, false, false, "")
+	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, 0, 0, 0, 0, false, false, "", nil)
 	indexed, chunks, failed := 0, 0, 0
 	for _, f := range body.Files {
 		created, hErr := s.indexBatchFile(ctx, proj, idx, f, info.Dims)
