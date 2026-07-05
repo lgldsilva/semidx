@@ -55,6 +55,13 @@ type Indexer struct {
 	gitSince            string
 	keywordOnly         bool   // when true, store text-only (no embeddings) for keyword search
 	worktree            string // when set, record this worktree's manifest + prune after indexing
+
+	// mem throttling for the verbose progress path: ReadMemStats triggers a
+	// stop-the-world, so we cache results and refresh at most once per 10s.
+	memMu       sync.Mutex
+	memAt       time.Time
+	lastHeapMB  uint64
+	lastSysMB   uint64
 }
 
 // IndexStats summarizes an indexing run.
@@ -646,17 +653,41 @@ func (idx *Indexer) logf(format string, args ...any) {
 
 func (idx *Indexer) progress(done, total int, rel string, chunks int) {
 	if idx.verbose {
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
+		heapMB, sysMB := idx.memStats()
 		idx.log.Info("file indexed",
 			"progress", fmt.Sprintf("%d/%d", done, total),
 			"path", rel, "chunks", chunks,
-			"heap_mb", m.Alloc/1024/1024, "sys_mb", m.Sys/1024/1024)
+			"heap_mb", heapMB, "sys_mb", sysMB)
 	} else if done%logEvery == 0 || done == total {
 		idx.log.Info("indexing progress",
 			"progress", fmt.Sprintf("%d/%d", done, total),
 			"chunks", chunks)
 	}
+}
+
+// memStats returns the live heap and system allocation sizes in MB,
+// throttled to one runtime.ReadMemStats call per 10s. ReadMemStats triggers a
+// stop-the-world; calling it on every progress tick (every file) measurably
+// slows indexing with many workers, so the throttle sacrifices sub-second
+// resolution for throughput.
+func (idx *Indexer) memStats() (uint64, uint64) {
+	now := time.Now()
+	idx.memMu.Lock()
+	if now.Sub(idx.memAt) < 10*time.Second {
+		h, s := idx.lastHeapMB, idx.lastSysMB
+		idx.memMu.Unlock()
+		return h, s
+	}
+	idx.memAt = now
+	idx.memMu.Unlock()
+
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	h, s := m.Alloc/1024/1024, m.Sys/1024/1024
+	idx.memMu.Lock()
+	idx.lastHeapMB, idx.lastSysMB = h, s
+	idx.memMu.Unlock()
+	return h, s
 }
 
 func truncateErr(err error, maxLen int) string {
