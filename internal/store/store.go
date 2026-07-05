@@ -988,18 +988,27 @@ func (s *PgStore) SearchSimilarKeywordsWorktree(ctx context.Context, projectID i
 	return s.searchKeywords(ctx, projectID, queryText, dims, topK, worktree)
 }
 
-func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]SearchResult, error) {
+// resolveDims determines the embedding dimension for a project's chunks table,
+// falling back to probing when the passed dims is non-positive.
+func (s *PgStore) resolveDims(ctx context.Context, projectID, dims int) int {
 	if dims <= 0 {
 		if p, err := s.GetProjectByID(ctx, projectID); err == nil && p.Dims > 0 {
-			dims = p.Dims
+			return p.Dims
 		}
 	}
 	if dims <= 0 {
-		dims = s.probeDimsForProject(ctx, projectID)
+		if d := s.probeDimsForProject(ctx, projectID); d > 0 {
+			return d
+		}
 	}
 	if dims <= 0 {
-		dims = 1024 // final fallback when no chunks_* table has rows for the project
+		return 1024
 	}
+	return dims
+}
+
+func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]SearchResult, error) {
+	dims = s.resolveDims(ctx, projectID, dims)
 
 	table, err := chunksTable(dims)
 	if err != nil {
