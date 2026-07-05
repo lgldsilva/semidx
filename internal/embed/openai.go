@@ -35,7 +35,7 @@ func NewOpenAIClient(baseURL, apiKey string) *OpenAIClient {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		client: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 10,

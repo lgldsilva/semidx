@@ -3,6 +3,7 @@ package webadmin
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,6 +34,8 @@ func (a *Admin) render(w http.ResponseWriter, name string, p page) {
 	w.Header().Set(headerContentType, "text/html; charset=utf-8")
 	if err := a.tmpl.ExecuteTemplate(w, name, p); err != nil {
 		a.log.Error("render failed", "template", name, "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, "Internal server error")
 	}
 }
 
