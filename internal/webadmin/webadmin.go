@@ -88,6 +88,7 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/login", a.loginSubmit)
 	mux.HandleFunc("POST /admin/logout", a.protect("", a.logout))
 	mux.HandleFunc("GET /admin/{$}", a.protect("", a.dashboard))
+	mux.HandleFunc("GET /admin/api/projects", a.protect("", a.projectsAPI))
 	mux.HandleFunc("GET /admin/search", a.protect("", a.searchPage))
 	mux.HandleFunc("GET /admin/keys", a.protect("", a.keysList))
 	mux.HandleFunc("POST /admin/keys", a.protect("", a.keysCreate))
