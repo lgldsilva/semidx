@@ -13,33 +13,27 @@ func TestBuildChainSingleOllama(t *testing.T) {
 	if emb == nil {
 		t.Fatal("buildChain returned nil")
 	}
-	// Should return a ChainEmbedder (not ParallelEmbedder) since only 1 Ollama.
-	info, err := emb.ModelInfo(t.Context(), "bge-m3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Dims == 0 {
-		t.Error("expected non-zero dims from Ollama ModelInfo")
+	// A single Ollama URL yields a ChainEmbedder, not a ParallelEmbedder.
+	// Assert the wiring without a live provider (ModelInfo would hit the network).
+	if _, ok := emb.(*embed.ChainEmbedder); !ok {
+		t.Errorf("expected *ChainEmbedder, got %T", emb)
 	}
 }
 
 func TestBuildChainWithGemini(t *testing.T) {
 	cfg := &config.Config{
-		OllamaURL:    "http://localhost:11434",
-		GeminiAPIKey: "test-key",
+		OllamaURL:     "http://localhost:11434",
+		GeminiAPIKey:  "test-key",
 		GeminiBaseURL: "http://localhost:9999/v1",
 	}
 	emb := buildChain(cfg)
 	if emb == nil {
 		t.Fatal("buildChain returned nil")
 	}
-	// ChainEmbedder with gemini + ollama
-	info, err := emb.ModelInfo(t.Context(), "bge-m3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Dims == 0 {
-		t.Error("expected non-zero dims")
+	// Gemini + Ollama still composes into a ChainEmbedder. Assert the type
+	// rather than calling ModelInfo, which would require live providers.
+	if _, ok := emb.(*embed.ChainEmbedder); !ok {
+		t.Errorf("expected *ChainEmbedder, got %T", emb)
 	}
 }
 
@@ -60,14 +54,14 @@ func TestBuildPoolWithTwoOllamas(t *testing.T) {
 
 func TestBuildPoolWithCloudProviders(t *testing.T) {
 	cfg := &config.Config{
-		OllamaURLs:        []string{"http://localhost:11434", "http://localhost:11434"},
-		GeminiAPIKey:      "gk",
-		GeminiBaseURL:     "http://g:1/v1",
-		GroqAPIKey:        "grk",
-		GroqBaseURL:       "http://gq:1/v1",
-		OpenRouterAPIKey:  "ork",
-		OpenRouterBaseURL: "http://or:1/v1",
-		OllamaCloudAPIKey: "ock",
+		OllamaURLs:         []string{"http://localhost:11434", "http://localhost:11434"},
+		GeminiAPIKey:       "gk",
+		GeminiBaseURL:      "http://g:1/v1",
+		GroqAPIKey:         "grk",
+		GroqBaseURL:        "http://gq:1/v1",
+		OpenRouterAPIKey:   "ork",
+		OpenRouterBaseURL:  "http://or:1/v1",
+		OllamaCloudAPIKey:  "ock",
 		OllamaCloudBaseURL: "http://oc:1/v1",
 	}
 	emb := buildChain(cfg)
