@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -27,14 +28,17 @@ const (
 	defaultPushWorkers = 4
 )
 
+// pushOptions holds the flag values bound by newPushCmd.
+type pushOptions struct {
+	projectPath, name, model string
+	maxFiles                 int
+	docs, verbose            bool
+	embedLocally, priv       bool
+	workers                  int
+}
+
 func newPushCmd(d *deps) *cobra.Command {
-	var (
-		projectPath, name, model string
-		maxFiles                 int
-		docs, verbose            bool
-		embedLocally, priv       bool
-		workers                  int
-	)
+	o := &pushOptions{}
 	c := &cobra.Command{
 		Use:   "push",
 		Short: "Push local files to a semidx server for indexing",
@@ -62,146 +66,158 @@ Use "semidx repo add" to index a full git repository server-side instead.`,
   semidx push --project ./docs --docs --name my-docs
   semidx push --project . --max-files 100          # limit to first 100 files`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !d.remote() {
-				return fmt.Errorf("no server configured — run \"semidx login <url> --token ...\" first")
-			}
-			if d.cfg.LocalIndexPath != "" {
-				return fmt.Errorf("--local is not compatible with push (push requires a server)")
-			}
-			if d.cfg.KeywordOnly {
-				return fmt.Errorf("--keyword is not compatible with push (use \"semidx index --keyword\" for keyword-only indexing)")
-			}
-			if priv && !embedLocally {
-				return fmt.Errorf("--privacy requires --embed-locally")
-			}
-			if systemDirs[filepath.Clean(projectPath)] {
-				return fmt.Errorf("refusing to push system directory: %s", filepath.Clean(projectPath))
-			}
-
-			d.applyPrivacy(priv)
-			ctx := cmd.Context()
-			cli := d.apiClient()
-
-			tgt := resolveTarget(ctx, projectPath, docs)
-			projectName := name
-			if projectName == "" {
-				projectName = tgt.name
-			}
-
-			// 1. Scan files.
-			if verbose {
-				fmt.Printf("Scanning %s ...\n", tgt.indexPath)
-			}
-			files, err := indexing.ScanFiles(tgt.indexPath, maxFiles)
-			if err != nil {
-				return fmt.Errorf("scan files: %w", err)
-			}
-			if len(files) == 0 {
-				fmt.Println("No indexable files found.")
-				return nil
-			}
-			fmt.Printf("Found %d files to push\n", len(files))
-
-			// 2. Create project on the server (idempotent — ok if already exists).
-			if verbose {
-				fmt.Printf("Creating project %q on server ...\n", projectName)
-			}
-			_, err = cli.CreateProject(ctx, projectName, model, "push", "", "")
-			if err != nil {
-				if _, gef := cli.GetProject(ctx, projectName); gef != nil {
-					return fmt.Errorf("create project %q: %w", projectName, err)
-				}
-			}
-
-			// 3. Push — branch on mode.
-			if workers < 1 {
-				workers = defaultPushWorkers
-			}
-			if embedLocally {
-				return pushEmbedded(ctx, d, cli, tgt, projectName, model, files, verbose, workers)
-			}
-			return pushRaw(ctx, cli, tgt, projectName, model, files, verbose)
+			return runPush(cmd, d, o)
 		},
 	}
-	c.Flags().StringVar(&projectPath, "project", ".", "Path to the project directory")
-	c.Flags().StringVar(&name, "name", "", "Project name on the server (default: directory basename)")
-	c.Flags().StringVar(&model, "model", "bge-m3", "Embedding model name")
-	c.Flags().IntVar(&maxFiles, "max-files", 0, "Limit number of files (0 = all)")
-	c.Flags().IntVar(&workers, "workers", defaultPushWorkers, "How many files to process concurrently when --embed-locally is active")
-	c.Flags().BoolVar(&docs, "docs", false, "Treat the path as a document folder, even inside a git repo")
-	c.Flags().BoolVar(&verbose, "verbose", false, "Show detailed progress")
-	c.Flags().BoolVar(&embedLocally, "embed-locally", false, "Chunk and embed files locally (client-side) instead of sending raw content")
-	c.Flags().BoolVar(&priv, "privacy", false, "Force local-only embedding providers (Ollama); requires --embed-locally")
+	c.Flags().StringVar(&o.projectPath, "project", ".", "Path to the project directory")
+	c.Flags().StringVar(&o.name, "name", "", "Project name on the server (default: directory basename)")
+	c.Flags().StringVar(&o.model, "model", "bge-m3", "Embedding model name")
+	c.Flags().IntVar(&o.maxFiles, "max-files", 0, "Limit number of files (0 = all)")
+	c.Flags().IntVar(&o.workers, "workers", defaultPushWorkers, "How many files to process concurrently when --embed-locally is active")
+	c.Flags().BoolVar(&o.docs, "docs", false, "Treat the path as a document folder, even inside a git repo")
+	c.Flags().BoolVar(&o.verbose, "verbose", false, "Show detailed progress")
+	c.Flags().BoolVar(&o.embedLocally, "embed-locally", false, "Chunk and embed files locally (client-side) instead of sending raw content")
+	c.Flags().BoolVar(&o.priv, "privacy", false, "Force local-only embedding providers (Ollama); requires --embed-locally")
 	return c
 }
 
-// pushRaw sends raw file content to the server (current/default behavior). Only
-// text files that are stale (different from server) are pushed.
-func pushRaw(ctx context.Context, cli *client.Client, tgt indexTarget, projectName, model string, files []string, verbose bool) error {
-	// 1. Hash all files, collect text content.
-	hashes := make(map[string]string, len(files))
-	contents := make(map[string]string, len(files))
-	var skippedBin int
+// runPush validates preconditions, scans the project, ensures the server
+// project exists, and dispatches to the raw or embed-locally push path.
+func runPush(cmd *cobra.Command, d *deps, o *pushOptions) error {
+	if err := validatePushPreconditions(d, o); err != nil {
+		return err
+	}
 
-	for i, path := range files {
-		if verbose && i%100 == 0 {
-			fmt.Printf("  hashing %d/%d ...\n", i+1, len(files))
-		}
-		rel, err := filepath.Rel(tgt.indexPath, path)
-		if err != nil {
-			rel = path
-		}
-		hash, content, isText, rErr := readAndHash(path)
-		if rErr != nil {
-			if verbose {
-				fmt.Fprintf(os.Stderr, "[warn] %s: %v\n", rel, rErr)
-			}
-			continue
-		}
-		hashes[rel] = hash
-		if isText {
-			contents[rel] = content
-		} else {
-			skippedBin++
-			if verbose {
-				fmt.Fprintf(os.Stderr, "[warn] skipping binary: %s\n", rel)
-			}
+	d.applyPrivacy(o.priv)
+	ctx := cmd.Context()
+	cli := d.apiClient()
+
+	tgt := resolveTarget(ctx, o.projectPath, o.docs)
+	projectName := o.name
+	if projectName == "" {
+		projectName = tgt.name
+	}
+
+	files, err := scanPushFiles(tgt, o.maxFiles, o.verbose)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil // scanPushFiles already reported "no files"
+	}
+
+	if err := ensureServerProject(ctx, cli, projectName, o.model, o.verbose); err != nil {
+		return err
+	}
+
+	workers := o.workers
+	if workers < 1 {
+		workers = defaultPushWorkers
+	}
+	p := &pusher{d: d, cli: cli, tgt: tgt, projectName: projectName, model: o.model, verbose: o.verbose, workers: workers}
+	if o.embedLocally {
+		return p.embedded(ctx, files)
+	}
+	return p.raw(ctx, files)
+}
+
+// validatePushPreconditions rejects flag combinations that push cannot honour.
+func validatePushPreconditions(d *deps, o *pushOptions) error {
+	switch {
+	case !d.remote():
+		return fmt.Errorf("no server configured — run \"semidx login <url> --token ...\" first")
+	case d.cfg.LocalIndexPath != "":
+		return fmt.Errorf("--local is not compatible with push (push requires a server)")
+	case d.cfg.KeywordOnly:
+		return fmt.Errorf("--keyword is not compatible with push (use \"semidx index --keyword\" for keyword-only indexing)")
+	case o.priv && !o.embedLocally:
+		return fmt.Errorf("--privacy requires --embed-locally")
+	case systemDirs[filepath.Clean(o.projectPath)]:
+		return fmt.Errorf("refusing to push system directory: %s", filepath.Clean(o.projectPath))
+	}
+	return nil
+}
+
+// scanPushFiles scans the target for indexable files. It prints progress and a
+// summary; an empty result (with nil error) means there is nothing to push.
+func scanPushFiles(tgt indexTarget, maxFiles int, verbose bool) ([]string, error) {
+	if verbose {
+		fmt.Printf("Scanning %s ...\n", tgt.indexPath)
+	}
+	files, err := indexing.ScanFiles(tgt.indexPath, maxFiles)
+	if err != nil {
+		return nil, fmt.Errorf("scan files: %w", err)
+	}
+	if len(files) == 0 {
+		fmt.Println("No indexable files found.")
+		return nil, nil
+	}
+	fmt.Printf("Found %d files to push\n", len(files))
+	return files, nil
+}
+
+// ensureServerProject creates the project on the server, tolerating an existing
+// one (create is idempotent — ok if the project already exists).
+func ensureServerProject(ctx context.Context, cli *client.Client, projectName, model string, verbose bool) error {
+	if verbose {
+		fmt.Printf("Creating project %q on server ...\n", projectName)
+	}
+	if _, err := cli.CreateProject(ctx, projectName, model, "push", "", ""); err != nil {
+		if _, gef := cli.GetProject(ctx, projectName); gef != nil {
+			return fmt.Errorf("create project %q: %w", projectName, err)
 		}
 	}
+	return nil
+}
+
+// pusher carries the shared state for a single push run so the raw and embedded
+// paths need not thread the same arguments through every call.
+type pusher struct {
+	d           *deps
+	cli         *client.Client
+	tgt         indexTarget
+	projectName string
+	model       string
+	verbose     bool
+	workers     int
+}
+
+// rel returns path relative to the push target, falling back to the absolute
+// path when a relative form cannot be computed.
+func (p *pusher) rel(path string) string {
+	rel, err := filepath.Rel(p.tgt.indexPath, path)
+	if err != nil {
+		return path
+	}
+	return rel
+}
+
+// raw sends raw file content to the server (current/default behavior). Only
+// text files that are stale (different from server) are pushed.
+func (p *pusher) raw(ctx context.Context, files []string) error {
+	// 1. Hash all files, collect text content.
+	hashes, contents, skippedBin := p.hashFiles(files)
 	if skippedBin > 0 {
 		fmt.Printf("Skipped %d binary files (JARs, images, etc.)\n", skippedBin)
 	}
 
 	// 2. Diff with server.
-	if verbose {
+	if p.verbose {
 		fmt.Printf("Diffing with server ...\n")
 	}
-	diff, err := cli.FilesDiff(ctx, projectName, hashes)
+	diff, err := p.cli.FilesDiff(ctx, p.projectName, hashes)
 	if err != nil {
 		return fmt.Errorf("diff files: %w", err)
 	}
-	if verbose {
+	if p.verbose {
 		fmt.Printf("  stale: %d, deleted: %d\n", len(diff.Stale), len(diff.Deleted))
 	}
 
 	// 3. Build batch — only text files that are stale.
-	var batch []client.BatchFile
-	var skippedNoContent int
-	for _, p := range diff.Stale {
-		content, ok := contents[p]
-		if !ok {
-			skippedNoContent++
-			if verbose {
-				fmt.Fprintf(os.Stderr, "[warn] skipping (no content): %s\n", p)
-			}
-			continue
-		}
-		batch = append(batch, client.BatchFile{Path: p, Content: content})
-	}
+	batch, skippedNoContent := p.buildStaleBatch(diff.Stale, contents)
 	if skippedNoContent > 0 {
 		fmt.Printf("Skipped %d stale files (binary or unreadable)\n", skippedNoContent)
 	}
-
 	if len(batch) == 0 && len(diff.Deleted) == 0 {
 		fmt.Println("Everything up to date — nothing to push.")
 		return nil
@@ -210,7 +226,7 @@ func pushRaw(ctx context.Context, cli *client.Client, tgt indexTarget, projectNa
 	// 4. Push.
 	start := time.Now()
 	fmt.Printf("Pushing %d files, deleting %d ...\n", len(batch), len(diff.Deleted))
-	resp, err := cli.FilesBatch(ctx, projectName, batch, diff.Deleted)
+	resp, err := p.cli.FilesBatch(ctx, p.projectName, batch, diff.Deleted)
 	if err != nil {
 		return fmt.Errorf("push files: %w", err)
 	}
@@ -220,123 +236,112 @@ func pushRaw(ctx context.Context, cli *client.Client, tgt indexTarget, projectNa
 	return nil
 }
 
-// pushEmbedded chunks and embeds files locally in parallel, then pushes
-// pre-computed embeddings to the server. Falls back to raw push for individual
-// files when embedding fails.
-func pushEmbedded(ctx context.Context, d *deps, cli *client.Client, tgt indexTarget, projectName, model string, files []string, verbose bool, workers int) error {
-	// 1. Verify local embedding provider is reachable.
-	if _, err := d.emb.ModelInfo(ctx, model); err != nil {
-		fmt.Fprintf(os.Stderr, "[warn] local embedding provider not available for model %s: %v\n", model, err)
-		fmt.Fprintf(os.Stderr, "       falling back to raw push (server will embed).\n")
-		return pushRaw(ctx, cli, tgt, projectName, model, files, verbose)
+// hashFiles hashes every file and, for text files, collects their content.
+// It returns the path→hash and path→content maps plus the count of skipped
+// binary files. Both maps are keyed by the path relative to the push target.
+func (p *pusher) hashFiles(files []string) (hashes, contents map[string]string, skippedBin int) {
+	hashes = make(map[string]string, len(files))
+	contents = make(map[string]string, len(files))
+	for i, path := range files {
+		if p.verbose && i%100 == 0 {
+			fmt.Printf("  hashing %d/%d ...\n", i+1, len(files))
+		}
+		rel := p.rel(path)
+		hash, content, isText, rErr := readAndHash(path)
+		if rErr != nil {
+			if p.verbose {
+				fmt.Fprintf(os.Stderr, "[warn] %s: %v\n", rel, rErr)
+			}
+			continue
+		}
+		hashes[rel] = hash
+		if isText {
+			contents[rel] = content
+		} else {
+			skippedBin++
+			if p.verbose {
+				fmt.Fprintf(os.Stderr, "[warn] skipping binary: %s\n", rel)
+			}
+		}
 	}
-	fmt.Printf("Embedding locally with model %s (workers: %d, skipping diff)\n", model, workers)
+	return hashes, contents, skippedBin
+}
+
+// buildStaleBatch turns the server's stale-path list into a batch of text
+// files, skipping any path whose content was not collected (binary/unreadable).
+func (p *pusher) buildStaleBatch(stale []string, contents map[string]string) (batch []client.BatchFile, skippedNoContent int) {
+	for _, path := range stale {
+		content, ok := contents[path]
+		if !ok {
+			skippedNoContent++
+			if p.verbose {
+				fmt.Fprintf(os.Stderr, "[warn] skipping (no content): %s\n", path)
+			}
+			continue
+		}
+		batch = append(batch, client.BatchFile{Path: path, Content: content})
+	}
+	return batch, skippedNoContent
+}
+
+// embedResult is the outcome of embedding a single file in the embed-locally path.
+type embedResult struct {
+	file       client.BatchFile
+	include    bool // add file to the push batch
+	skippedBin bool // skipped as a binary file
+	fellBack   bool // embedding failed; file included as raw for server-side embed
+}
+
+// embedStats accumulates per-file outcomes across the concurrent embed run.
+type embedStats struct {
+	skippedBin  int
+	embedFailed int
+	fallback    int
+}
+
+// embedAccumulator collects embed results from concurrent workers behind a mutex.
+type embedAccumulator struct {
+	mu    sync.Mutex
+	batch []client.BatchFile
+	stats embedStats
+}
+
+func (a *embedAccumulator) add(res embedResult) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if res.skippedBin {
+		a.stats.skippedBin++
+	}
+	if res.fellBack {
+		a.stats.embedFailed++
+		a.stats.fallback++
+	}
+	if res.include {
+		a.batch = append(a.batch, res.file)
+	}
+}
+
+// embedded chunks and embeds files locally in parallel, then pushes
+// pre-computed embeddings to the server. Falls back to raw push for individual
+// files when embedding fails, or wholesale when the provider is unavailable.
+func (p *pusher) embedded(ctx context.Context, files []string) error {
+	// 1. Verify local embedding provider is reachable.
+	if _, err := p.d.emb.ModelInfo(ctx, p.model); err != nil {
+		fmt.Fprintf(os.Stderr, "[warn] local embedding provider not available for model %s: %v\n", p.model, err)
+		fmt.Fprintf(os.Stderr, "       falling back to raw push (server will embed).\n")
+		return p.raw(ctx, files)
+	}
+	fmt.Printf("Embedding locally with model %s (workers: %d, skipping diff)\n", p.model, p.workers)
 
 	// 2. Read files, chunk, embed concurrently — same pattern as the indexer.
-	var (
-		mu                                sync.Mutex
-		batch                             []client.BatchFile
-		skippedBin, embedFailed, fallback int
-		processed                         int
-		g                                 errgroup.Group
-	)
-	g.SetLimit(workers)
 	start := time.Now()
-
-	for i, path := range files {
-		i, path := i, path // capture for goroutine
-		g.Go(func() error {
-			rel, relErr := filepath.Rel(tgt.indexPath, path)
-			if relErr != nil {
-				rel = path
-			}
-
-			mu.Lock()
-			processed++
-			n := processed
-			mu.Unlock()
-			if verbose && n%10 == 0 {
-				fmt.Printf("  embedding %d/%d ...\n", n, len(files))
-			}
-
-			// Read file.
-			content, isText, rErr := readFileContent(path)
-			if rErr != nil {
-				if verbose {
-					fmt.Fprintf(os.Stderr, "[warn] %s: %v\n", rel, rErr)
-				}
-				return nil
-			}
-			if !isText {
-				mu.Lock()
-				skippedBin++
-				mu.Unlock()
-				if verbose {
-					fmt.Fprintf(os.Stderr, "[warn] skipping binary: %s\n", rel)
-				}
-				return nil
-			}
-
-			// Chunk.
-			chunks := chunker.ChunkFile(path, []byte(content), pushMaxChunkChars)
-			if len(chunks) > pushMaxChunks {
-				if verbose {
-					fmt.Fprintf(os.Stderr, "[warn] %s: truncated %d chunks to %d\n", rel, len(chunks), pushMaxChunks)
-				}
-				chunks = chunks[:pushMaxChunks]
-			}
-			if len(chunks) == 0 {
-				return nil
-			}
-
-			// Embed chunks in batches.
-			var chunkTexts []string
-			for _, ch := range chunks {
-				chunkTexts = append(chunkTexts, ch.Content)
-			}
-			embeddings, embErr := embedChunks(ctx, d, model, chunkTexts)
-			if embErr != nil {
-				mu.Lock()
-				embedFailed++
-				fallback++
-				mu.Unlock()
-				if verbose {
-					fmt.Fprintf(os.Stderr, "[warn] embedding failed for %s, falling back to raw push: %v\n", rel, embErr)
-				}
-				mu.Lock()
-				batch = append(batch, client.BatchFile{Path: rel, Content: content})
-				mu.Unlock()
-				return nil
-			}
-
-			// Build pre-computed chunks.
-			fileChunks := make([]client.EmbeddedChunk, len(chunks))
-			for j, ch := range chunks {
-				fileChunks[j] = client.EmbeddedChunk{
-					StartLine: ch.StartLine,
-					EndLine:   ch.EndLine,
-					Content:   ch.Content,
-					Embedding: embeddings[j],
-				}
-			}
-			mu.Lock()
-			batch = append(batch, client.BatchFile{Path: rel, Content: content, Chunks: fileChunks})
-			mu.Unlock()
-			return nil
-		})
-		_ = i // suppress unused variable warning
+	batch, stats := p.embedAll(ctx, files)
+	if stats.skippedBin > 0 {
+		fmt.Printf("Skipped %d binary files (JARs, images, etc.)\n", stats.skippedBin)
 	}
-	if err := g.Wait(); err != nil {
-		return fmt.Errorf("embed files: %w", err)
+	if stats.embedFailed > 0 {
+		fmt.Printf("Embedding failed for %d files (%d fell back to raw push)\n", stats.embedFailed, stats.fallback)
 	}
-
-	if skippedBin > 0 {
-		fmt.Printf("Skipped %d binary files (JARs, images, etc.)\n", skippedBin)
-	}
-	if embedFailed > 0 {
-		fmt.Printf("Embedding failed for %d files (%d fell back to raw push)\n", embedFailed, fallback)
-	}
-
 	if len(batch) == 0 {
 		fmt.Println("No text files to push.")
 		return nil
@@ -344,7 +349,7 @@ func pushEmbedded(ctx context.Context, d *deps, cli *client.Client, tgt indexTar
 
 	// 3. Push all files (no diff — we embed everything to ensure embeddings are present).
 	fmt.Printf("Pushing %d files (pre-embedded) ...\n", len(batch))
-	resp, err := cli.FilesBatch(ctx, projectName, batch, nil)
+	resp, err := p.cli.FilesBatch(ctx, p.projectName, batch, nil)
 	if err != nil {
 		return fmt.Errorf("push files: %w", err)
 	}
@@ -352,6 +357,84 @@ func pushEmbedded(ctx context.Context, d *deps, cli *client.Client, tgt indexTar
 		time.Since(start).Round(time.Millisecond),
 		resp.Indexed, resp.Chunks, resp.Errors)
 	return nil
+}
+
+// embedAll runs the concurrent read/chunk/embed pipeline over files and returns
+// the assembled push batch plus the aggregated per-file statistics.
+func (p *pusher) embedAll(ctx context.Context, files []string) ([]client.BatchFile, embedStats) {
+	var (
+		acc       embedAccumulator
+		processed atomic.Int64
+		g         errgroup.Group
+	)
+	g.SetLimit(p.workers)
+	for _, path := range files {
+		path := path // capture for goroutine
+		g.Go(func() error {
+			if n := processed.Add(1); p.verbose && n%10 == 0 {
+				fmt.Printf("  embedding %d/%d ...\n", n, len(files))
+			}
+			acc.add(p.embedOneFile(ctx, path))
+			return nil
+		})
+	}
+	_ = g.Wait() // embedOneFile never returns an error; failures are captured in embedResult
+	return acc.batch, acc.stats
+}
+
+// embedOneFile reads, chunks and embeds a single file, returning what should be
+// added to the push batch. On embedding failure it returns the file as a raw
+// fallback so the server can embed it; unreadable files return an empty result.
+func (p *pusher) embedOneFile(ctx context.Context, path string) embedResult {
+	rel := p.rel(path)
+
+	content, isText, rErr := readFileContent(path)
+	if rErr != nil {
+		if p.verbose {
+			fmt.Fprintf(os.Stderr, "[warn] %s: %v\n", rel, rErr)
+		}
+		return embedResult{}
+	}
+	if !isText {
+		if p.verbose {
+			fmt.Fprintf(os.Stderr, "[warn] skipping binary: %s\n", rel)
+		}
+		return embedResult{skippedBin: true}
+	}
+
+	chunks := chunker.ChunkFile(path, []byte(content), pushMaxChunkChars)
+	if len(chunks) > pushMaxChunks {
+		if p.verbose {
+			fmt.Fprintf(os.Stderr, "[warn] %s: truncated %d chunks to %d\n", rel, len(chunks), pushMaxChunks)
+		}
+		chunks = chunks[:pushMaxChunks]
+	}
+	if len(chunks) == 0 {
+		return embedResult{}
+	}
+
+	chunkTexts := make([]string, len(chunks))
+	for i, ch := range chunks {
+		chunkTexts[i] = ch.Content
+	}
+	embeddings, embErr := embedChunks(ctx, p.d, p.model, chunkTexts)
+	if embErr != nil {
+		if p.verbose {
+			fmt.Fprintf(os.Stderr, "[warn] embedding failed for %s, falling back to raw push: %v\n", rel, embErr)
+		}
+		return embedResult{file: client.BatchFile{Path: rel, Content: content}, include: true, fellBack: true}
+	}
+
+	fileChunks := make([]client.EmbeddedChunk, len(chunks))
+	for j, ch := range chunks {
+		fileChunks[j] = client.EmbeddedChunk{
+			StartLine: ch.StartLine,
+			EndLine:   ch.EndLine,
+			Content:   ch.Content,
+			Embedding: embeddings[j],
+		}
+	}
+	return embedResult{file: client.BatchFile{Path: rel, Content: content, Chunks: fileChunks}, include: true}
 }
 
 // embedChunks embeds a batch of texts, respecting privacy mode for sensitive
@@ -366,8 +449,7 @@ func embedChunks(ctx context.Context, d *deps, model string, texts []string) ([]
 		}
 		batch := texts[i:end]
 
-		embedCtx := ctx
-		embeddings, err := d.emb.Embed(embedCtx, model, batch...)
+		embeddings, err := d.emb.Embed(ctx, model, batch...)
 		if err != nil {
 			return nil, fmt.Errorf("embed batch %d: %w", i/embedBatchSize, err)
 		}

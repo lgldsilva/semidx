@@ -27,6 +27,18 @@ type embeddedChunk struct {
 	Embedding []float32 `json:"embedding"`
 }
 
+// batchFileInput is one file in a files/batch push: pre-embedded chunks, raw
+// content, or (invalid) neither.
+type batchFileInput struct {
+	Path    string          `json:"path"`
+	Content string          `json:"content,omitempty"`
+	Chunks  []embeddedChunk `json:"chunks,omitempty"`
+}
+
+// errNoContentOrChunks marks a pushed file that carried neither raw content nor
+// pre-computed chunks — nothing to index.
+var errNoContentOrChunks = errors.New("file has no content or chunks")
+
 // handleFilesDiff reports which of the client's files are new/changed ("stale",
 // to upload) and which are indexed but no longer present ("deleted"). Read-only.
 func (s *Server) handleFilesDiff(w http.ResponseWriter, r *http.Request) {
@@ -73,12 +85,8 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Files []struct {
-			Path    string          `json:"path"`
-			Content string          `json:"content,omitempty"`
-			Chunks  []embeddedChunk `json:"chunks,omitempty"`
-		} `json:"files"`
-		Delete []string `json:"delete"`
+		Files  []batchFileInput `json:"files"`
+		Delete []string         `json:"delete"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
@@ -105,37 +113,37 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, 0, false, false, "")
 	indexed, chunks, failed := 0, 0, 0
 	for _, f := range body.Files {
-		if len(f.Chunks) > 0 {
-			// Pre-embedded: the client already chunked and embedded. Validate and
-			// store directly, bypassing the server-side chunk+embed pipeline.
-			created, hErr := s.indexPreEmbedded(ctx, proj, f.Path, f.Content, f.Chunks, info.Dims)
-			if hErr != nil {
-				failed++
-				s.log.Error("index pre-embedded file", "project", proj.Name, "path", f.Path, "err", hErr)
-				continue
-			}
-			indexed++
-			chunks += created
-		} else if f.Content != "" {
-			// Raw content: server handles chunking and embedding (current path).
-			created, hErr := idx.IndexContent(ctx, proj.ID, f.Path, proj.Model, []byte(f.Content))
-			if hErr != nil {
-				failed++
-				s.log.Error("index pushed file", "project", proj.Name, "path", f.Path, "err", hErr)
-				continue
-			}
-			indexed++
-			chunks += created
-		} else {
+		created, hErr := s.indexBatchFile(ctx, proj, idx, f, info.Dims)
+		if hErr != nil {
 			failed++
-			s.log.Error("push file with no content or chunks", "project", proj.Name, "path", f.Path)
+			s.log.Error("index pushed file", "project", proj.Name, "path", f.Path, "err", hErr)
+			continue
 		}
+		indexed++
+		chunks += created
 	}
 	_ = s.store.UpdateProjectStatus(ctx, proj.ID, "ready")
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"indexed": indexed, "chunks": chunks, "deleted": len(body.Delete), "errors": failed,
 	})
+}
+
+// indexBatchFile stores one pushed file, dispatching on its shape: pre-embedded
+// chunks are validated and stored directly; raw content goes through the
+// server-side chunk+embed pipeline; a file with neither is an error. It returns
+// the number of chunks created.
+func (s *Server) indexBatchFile(ctx context.Context, proj *store.Project, idx *indexing.Indexer, f batchFileInput, dims int) (int, error) {
+	switch {
+	case len(f.Chunks) > 0:
+		// Pre-embedded: the client already chunked and embedded.
+		return s.indexPreEmbedded(ctx, proj, f.Path, f.Content, f.Chunks, dims)
+	case f.Content != "":
+		// Raw content: server handles chunking and embedding.
+		return idx.IndexContent(ctx, proj.ID, f.Path, proj.Model, []byte(f.Content))
+	default:
+		return 0, errNoContentOrChunks
+	}
 }
 
 // indexPreEmbedded validates pre-computed chunk embeddings and stores them

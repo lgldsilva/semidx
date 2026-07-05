@@ -11,8 +11,8 @@
   <div class="row">
     <div class="grow autocomplete-wrap">
       <label for="project-input">Project</label>
-      <input id="project-input" type="text" name="project" value="{{$d.Project}}" required autocomplete="off" aria-autocomplete="list" aria-controls="project-listbox" aria-expanded="false" role="combobox" placeholder="Start typing a project name…">
-      <div id="project-listbox" class="autocomplete-dropdown" role="listbox" aria-label="Projects"></div>
+      <input id="project-input" type="text" name="project" value="{{$d.Project}}" required autocomplete="off" list="project-options" placeholder="Start typing a project name…">
+      <datalist id="project-options"></datalist>
       <span id="project-status" class="autocomplete-status" aria-live="polite"></span>
     </div>
     <label class="grow">Query<input type="search" name="q" value="{{$d.Query}}" required placeholder="Describe what you're looking for…"></label>
@@ -50,200 +50,46 @@
 {{end}}
 
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-  const input = document.getElementById('project-input');
-  const listbox = document.getElementById('project-listbox');
+// Native <datalist> autocomplete: the browser handles filtering, keyboard
+// navigation and selection, so this only loads the option list and drives the
+// "top results" pill selector.
+document.addEventListener('DOMContentLoaded', function () {
+  const datalist = document.getElementById('project-options');
   const status = document.getElementById('project-status');
   const topInput = document.getElementById('top-input');
   const topButtons = document.querySelectorAll('.top-selector .pill-btn');
 
-  let allProjects = [];
-  let filtered = [];
-  let activeIndex = -1;
-  let loading = true;
-
-  function setStatus(msg) {
-    status.textContent = msg;
-  }
-
-  function escapeHtml(str) {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-
-  function filterProjects(query) {
-    const q = query.trim().toLowerCase();
-    if (!q) return allProjects.slice(0, 50);
-    return allProjects.filter(function(p) { return p.name.toLowerCase().indexOf(q) !== -1; });
-  }
-
-  function open() {
-    listbox.classList.add('open');
-    input.setAttribute('aria-expanded', 'true');
-  }
-
-  function close() {
-    listbox.classList.remove('open');
-    input.setAttribute('aria-expanded', 'false');
-    input.removeAttribute('aria-activedescendant');
-    activeIndex = -1;
-  }
-
-  function updateActive() {
-    const items = listbox.querySelectorAll('.autocomplete-item');
-    items.forEach(function(item, i) {
-      if (i === activeIndex) {
-        item.classList.add('active');
-        item.setAttribute('aria-selected', 'true');
-        input.setAttribute('aria-activedescendant', item.id);
-        item.scrollIntoView({ block: 'nearest' });
-      } else {
-        item.classList.remove('active');
-        item.setAttribute('aria-selected', 'false');
-      }
-    });
-  }
-
-  function render() {
-    listbox.innerHTML = '';
-    if (loading) {
-      const div = document.createElement('div');
-      div.className = 'autocomplete-loading';
-      div.textContent = 'Loading projects…';
-      listbox.appendChild(div);
-      open();
-      return;
-    }
-    if (allProjects.length === 0) {
-      const div = document.createElement('div');
-      div.className = 'autocomplete-empty';
-      div.textContent = 'No projects indexed yet';
-      listbox.appendChild(div);
-      open();
-      return;
-    }
-    if (filtered.length === 0) {
-      const div = document.createElement('div');
-      div.className = 'autocomplete-empty';
-      div.textContent = 'No matching projects';
-      listbox.appendChild(div);
-      open();
-      return;
-    }
-    filtered.forEach(function(p, i) {
-      const option = document.createElement('div');
-      option.className = 'autocomplete-item';
-      option.id = 'project-option-' + i;
-      option.setAttribute('role', 'option');
-      option.setAttribute('aria-selected', 'false');
-      option.dataset.value = p.name;
-      option.innerHTML = '<span class="autocomplete-name">' + escapeHtml(p.name) + '</span>' +
-                         '<span class="autocomplete-meta">' + escapeHtml(p.model || '') + '</span>';
-      option.addEventListener('mousedown', function() { select(p.name); });
-      option.addEventListener('mouseenter', function() { setActive(i); });
-      listbox.appendChild(option);
-    });
-    open();
-    updateActive();
-  }
-
-  function setActive(index) {
-    activeIndex = index;
-    updateActive();
-  }
-
-  function select(name) {
-    input.value = name;
-    close();
-    setStatus(name + ' selected');
-  }
-
-  input.addEventListener('input', function() {
-    filtered = filterProjects(input.value);
-    activeIndex = filtered.length > 0 ? 0 : -1;
-    render();
-  });
-
-  input.addEventListener('focus', function() {
-    filtered = filterProjects(input.value);
-    activeIndex = filtered.length > 0 ? 0 : -1;
-    render();
-  });
-
-  input.addEventListener('blur', function() {
-    setTimeout(function() { close(); }, 150);
-  });
-
-  input.addEventListener('keydown', function(e) {
-    const isOpen = listbox.classList.contains('open');
-    if (!isOpen) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        filtered = filterProjects(input.value);
-        activeIndex = filtered.length > 0 ? 0 : -1;
-        render();
-      }
-      return;
-    }
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      if (filtered.length === 0) return;
-      activeIndex = (activeIndex + 1) % filtered.length;
-      updateActive();
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (filtered.length === 0) return;
-      activeIndex = (activeIndex - 1 + filtered.length) % filtered.length;
-      updateActive();
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      if (activeIndex >= 0 && filtered[activeIndex]) {
-        select(filtered[activeIndex].name);
-      }
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      close();
-    }
-  });
-
-  topButtons.forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      topButtons.forEach(function(b) { b.classList.remove('active'); });
-      btn.classList.add('active');
-      topInput.value = btn.dataset.value;
-    });
-  });
-
   function setTop(value) {
     topInput.value = value;
-    topButtons.forEach(function(btn) {
-      if (btn.dataset.value === value) {
-        btn.classList.add('active');
-      } else {
-        btn.classList.remove('active');
-      }
+    topButtons.forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.value === value);
     });
   }
+  topButtons.forEach(function (btn) {
+    btn.addEventListener('click', function () { setTop(btn.dataset.value); });
+  });
   setTop(topInput.value || '10');
 
   fetch('/admin/api/projects')
-    .then(function(r) {
+    .then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     })
-    .then(function(data) {
-      allProjects = (data.projects || []).slice().sort(function(a, b) { return a.name.localeCompare(b.name); });
-      loading = false;
-      filtered = filterProjects(input.value);
-      activeIndex = filtered.length > 0 ? 0 : -1;
-      render();
-      setStatus(allProjects.length + ' project' + (allProjects.length === 1 ? '' : 's') + ' available');
+    .then(function (data) {
+      const projects = (data.projects || []).slice().sort(function (a, b) {
+        return a.name.localeCompare(b.name);
+      });
+      // DOM APIs escape values, so no manual HTML-escaping is needed.
+      projects.forEach(function (p) {
+        const opt = document.createElement('option');
+        opt.value = p.name;
+        if (p.model) { opt.label = p.model; }
+        datalist.appendChild(opt);
+      });
+      status.textContent = projects.length + ' project' + (projects.length === 1 ? '' : 's') + ' available';
     })
-    .catch(function(err) {
-      loading = false;
-      allProjects = [];
-      filtered = [];
-      render();
-      setStatus('Error loading projects: ' + err.message);
+    .catch(function (err) {
+      status.textContent = 'Error loading projects: ' + err.message;
     });
 });
 </script>

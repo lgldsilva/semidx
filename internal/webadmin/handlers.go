@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	tmplLogin        = "login.html"
-	msgInternalError = "internal error"
+	tmplLogin         = "login.html"
+	msgInternalError  = "internal error"
+	headerContentType = "Content-Type"
 )
 
 // page is the data every rendered template receives.
@@ -29,7 +30,7 @@ type page struct {
 }
 
 func (a *Admin) render(w http.ResponseWriter, name string, p page) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set(headerContentType, "text/html; charset=utf-8")
 	if err := a.tmpl.ExecuteTemplate(w, name, p); err != nil {
 		a.log.Error("render failed", "template", name, "err", err)
 	}
@@ -162,7 +163,7 @@ func (a *Admin) projectsAPI(w http.ResponseWriter, r *http.Request, ac *authCtx)
 	projects, err := a.store.ListProjects(r.Context())
 	if err != nil {
 		a.log.Error("list projects (api) failed", "err", err)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal error"})
 		return
@@ -174,7 +175,7 @@ func (a *Admin) projectsAPI(w http.ResponseWriter, r *http.Request, ac *authCtx)
 	if items == nil {
 		items = []projectItem{}
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"projects": items})
 }
 

@@ -293,3 +293,19 @@ func TestDefaultPathsAreClientAppropriate(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyableClientsAndIsApplyable(t *testing.T) {
+	applyable := ApplyableClients()
+	if len(applyable) == 0 {
+		t.Fatal("expected at least one applyable client")
+	}
+	for _, c := range applyable {
+		if !c.IsApplyable() {
+			t.Errorf("ApplyableClients returned non-applyable client %q", c.ID)
+		}
+	}
+	// codex and cagent are print-only, so applyable must be a strict subset.
+	if len(applyable) >= len(Clients) {
+		t.Errorf("expected some print-only clients; applyable=%d total=%d", len(applyable), len(Clients))
+	}
+}

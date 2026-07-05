@@ -283,6 +283,22 @@ func buildPool(cfg *config.Config) embed.Embedder {
 	}
 
 	// Cloud providers bundled as one fallback-chain entry.
+	if cloud := buildCloudChain(cfg); cloud != nil {
+		pool = append(pool, cloud)
+	}
+
+	// Custom provider, if configured, as its own pool entry.
+	if custom := customPoolEntry(cfg); custom != nil {
+		pool = append(pool, custom)
+	}
+
+	return embed.NewParallelEmbedder(pool)
+}
+
+// buildCloudChain bundles the configured cloud providers (Gemini, Groq,
+// OpenRouter, OllamaCloud) into a single fallback-chain embedder so they can
+// fall through to each other. Returns nil when no cloud provider is configured.
+func buildCloudChain(cfg *config.Config) embed.Embedder {
 	var cloud []embed.ProviderInstance
 	if cfg.GeminiAPIKey != "" {
 		cloud = append(cloud, embed.ProviderInstance{
@@ -308,26 +324,28 @@ func buildPool(cfg *config.Config) embed.Embedder {
 				cfg.OllamaCloudBaseURL, cfg.OllamaCloudAPIKey), Local: false,
 		})
 	}
-	if len(cloud) > 0 {
-		pool = append(pool, embed.NewChainEmbedder(cloud, cfg.Privacy))
+	if len(cloud) == 0 {
+		return nil
 	}
+	return embed.NewChainEmbedder(cloud, cfg.Privacy)
+}
 
-	// Custom provider, if configured, as its own pool entry.
-	if cfg.Provider != "" {
-		endpoint := cfg.Endpoint
-		if endpoint == "" {
-			if cfg.Provider == "ollama" {
-				endpoint = cfg.OllamaURLs[0] // use first Ollama URL for custom ollama
-			} else {
-				endpoint = "https://api.openai.com/v1"
-			}
-		}
-		if cfg.Provider == "openai" {
-			pool = append(pool, embed.NewOpenAIClient(endpoint, cfg.APIKey))
+// customPoolEntry builds the optional custom-provider pool entry from cfg, or
+// returns nil when no custom provider is configured.
+func customPoolEntry(cfg *config.Config) embed.Embedder {
+	if cfg.Provider == "" {
+		return nil
+	}
+	endpoint := cfg.Endpoint
+	if endpoint == "" {
+		if cfg.Provider == "ollama" {
+			endpoint = cfg.OllamaURLs[0] // use first Ollama URL for custom ollama
 		} else {
-			pool = append(pool, embed.NewOllamaClient(endpoint))
+			endpoint = "https://api.openai.com/v1"
 		}
 	}
-
-	return embed.NewParallelEmbedder(pool)
+	if cfg.Provider == "openai" {
+		return embed.NewOpenAIClient(endpoint, cfg.APIKey)
+	}
+	return embed.NewOllamaClient(endpoint)
 }
