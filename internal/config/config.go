@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -120,6 +121,13 @@ type Config struct {
 	// stored and matched by keyword (SEMIDX_EMBED_MODE=none). The zero-dependency
 	// baseline for a machine with no GPU, API key or Ollama.
 	KeywordOnly bool
+
+	// EmbedCircuitThreshold is the consecutive failure count before the circuit
+	// breaker opens for a provider (SEMIDX_EMBED_CIRCUIT_THRESHOLD, default 3).
+	EmbedCircuitThreshold int
+	// EmbedCircuitCooldown is how long the circuit stays open before allowing a
+	// probe request (SEMIDX_EMBED_CIRCUIT_COOLDOWN, default "30s").
+	EmbedCircuitCooldown time.Duration
 }
 
 // DefaultLocalIndexPath is the standalone index location. It uses the OS-native
@@ -194,6 +202,17 @@ func Load() *Config {
 			return resolveLocalIndex(env.get("SEMIDX_LOCAL_INDEX", ""))
 		}(),
 		KeywordOnly: env.get("SEMIDX_EMBED_MODE", "") == "none",
+
+		EmbedCircuitThreshold: func() int {
+			return atoiDefault(env.get("SEMIDX_EMBED_CIRCUIT_THRESHOLD", ""), 3)
+		}(),
+		EmbedCircuitCooldown: func() time.Duration {
+			s := env.get("SEMIDX_EMBED_CIRCUIT_COOLDOWN", "")
+			if d, err := time.ParseDuration(s); err == nil && d > 0 {
+				return d
+			}
+			return 30 * time.Second
+		}(),
 	}
 }
 
@@ -229,6 +248,8 @@ var KnownKeys = []KeySpec{
 	{"EMBED_ENDPOINT", "Custom provider endpoint URL", false},
 	{"EMBED_API_KEY", "Custom provider API key", true},
 	{"EMBED_PRIVACY", "Force local-only embedding providers (true)", false},
+	{"SEMIDX_EMBED_CIRCUIT_THRESHOLD", "Consecutive failures before circuit breaker opens (default 3)", false},
+	{"SEMIDX_EMBED_CIRCUIT_COOLDOWN", "How long the circuit stays open (e.g. 30s, 1m, default 30s)", false},
 	{"SEMIDX_INDEX_WORKERS", "Concurrent index workers (positive int)", false},
 	{"SEMIDX_EMBED_BATCH_SIZE", "Texts per embedding API call (positive int)", false},
 	{"SEMIDX_MAX_FILE_SIZE", "Largest file the indexer processes (bytes, positive int)", false},

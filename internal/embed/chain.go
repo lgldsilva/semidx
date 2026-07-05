@@ -1,6 +1,8 @@
 // Package embed — see embed.go for overview.
 package embed
 
+import "time"
+
 // ChainConfig holds the provider settings needed to build an embedder chain.
 type ChainConfig struct {
 	// OllamaURL is the default local Ollama endpoint.
@@ -25,6 +27,13 @@ type ChainConfig struct {
 
 	// Privacy forces local-only embedding providers.
 	Privacy bool
+
+	// CircuitThreshold is the consecutive failure count before the circuit
+	// breaker opens for a provider. Zero means the default (3).
+	CircuitThreshold int
+	// CircuitCooldown is the duration the circuit stays open before allowing
+	// a probe request. Zero means the default (30s).
+	CircuitCooldown time.Duration
 }
 
 // NewChainFromConfig builds the embedding chain from the application config.
@@ -44,41 +53,34 @@ func NewChainFromConfig(cfg ChainConfig) Embedder {
 	// Single-URL or no explicit URLs: current chain behaviour (backward compatible).
 	var providers []ProviderInstance
 
+	wrap := func(name string, inner Embedder, local bool) ProviderInstance {
+		return ProviderInstance{
+			Name:     name,
+			Embedder: wrapWithCircuit(name, inner, cfg.CircuitThreshold, cfg.CircuitCooldown),
+			Local:    local,
+		}
+	}
+
 	if cfg.GeminiAPIKey != "" {
-		providers = append(providers, ProviderInstance{
-			Name:     "gemini",
-			Embedder: NewOpenAIClient(cfg.GeminiBaseURL, cfg.GeminiAPIKey),
-			Local:    false,
-		})
+		providers = append(providers, wrap("gemini",
+			NewOpenAIClient(cfg.GeminiBaseURL, cfg.GeminiAPIKey), false))
 	}
 	if cfg.GroqAPIKey != "" {
-		providers = append(providers, ProviderInstance{
-			Name:     "groq",
-			Embedder: NewOpenAIClient(cfg.GroqBaseURL, cfg.GroqAPIKey),
-			Local:    false,
-		})
+		providers = append(providers, wrap("groq",
+			NewOpenAIClient(cfg.GroqBaseURL, cfg.GroqAPIKey), false))
 	}
 	if cfg.OpenRouterAPIKey != "" {
-		providers = append(providers, ProviderInstance{
-			Name:     "openrouter",
-			Embedder: NewOpenAIClient(cfg.OpenRouterBaseURL, cfg.OpenRouterAPIKey),
-			Local:    false,
-		})
+		providers = append(providers, wrap("openrouter",
+			NewOpenAIClient(cfg.OpenRouterBaseURL, cfg.OpenRouterAPIKey), false))
 	}
 	if cfg.OllamaCloudAPIKey != "" {
-		providers = append(providers, ProviderInstance{
-			Name:     "ollama-cloud",
-			Embedder: NewOpenAIClient(cfg.OllamaCloudBaseURL, cfg.OllamaCloudAPIKey),
-			Local:    false,
-		})
+		providers = append(providers, wrap("ollama-cloud",
+			NewOpenAIClient(cfg.OllamaCloudBaseURL, cfg.OllamaCloudAPIKey), false))
 	}
 
 	// Local Ollama is always the final fallback.
-	providers = append(providers, ProviderInstance{
-		Name:     "ollama",
-		Embedder: NewOllamaClient(cfg.OllamaURL),
-		Local:    true,
-	})
+	providers = append(providers, wrap("ollama",
+		NewOllamaClient(cfg.OllamaURL), true))
 
 	// A custom EMBED_PROVIDER override is prepended ahead of the defaults.
 	if cfg.Provider != "" {
@@ -96,11 +98,7 @@ func NewChainFromConfig(cfg ChainConfig) Embedder {
 		} else {
 			custom = NewOllamaClient(endpoint)
 		}
-		providers = append([]ProviderInstance{{
-			Name:     "custom",
-			Embedder: custom,
-			Local:    cfg.Provider == "ollama",
-		}}, providers...)
+		providers = append([]ProviderInstance{wrap("custom", custom, cfg.Provider == "ollama")}, providers...)
 	}
 
 	return NewChainEmbedder(providers, cfg.Privacy)
@@ -115,17 +113,20 @@ func buildPool(cfg ChainConfig) Embedder {
 
 	// One entry per Ollama URL (local or remote).
 	for _, url := range cfg.OllamaURLs {
-		pool = append(pool, NewOllamaClient(url))
+		pool = append(pool,
+			wrapWithCircuit(url, NewOllamaClient(url), cfg.CircuitThreshold, cfg.CircuitCooldown))
 	}
 
 	// Cloud providers bundled as one fallback-chain entry.
 	if cloud := buildCloudChain(cfg); cloud != nil {
-		pool = append(pool, cloud)
+		pool = append(pool,
+			wrapWithCircuit("cloud", cloud, cfg.CircuitThreshold, cfg.CircuitCooldown))
 	}
 
 	// Custom provider, if configured, as its own pool entry.
 	if custom := customPoolEntry(cfg); custom != nil {
-		pool = append(pool, custom)
+		pool = append(pool,
+			wrapWithCircuit("custom", custom, cfg.CircuitThreshold, cfg.CircuitCooldown))
 	}
 
 	return NewParallelEmbedder(pool)
@@ -135,30 +136,25 @@ func buildPool(cfg ChainConfig) Embedder {
 // OpenRouter, OllamaCloud) into a single fallback-chain embedder so they can
 // fall through to each other. Returns nil when no cloud provider is configured.
 func buildCloudChain(cfg ChainConfig) Embedder {
+	wrap := func(name string, inner Embedder) ProviderInstance {
+		return ProviderInstance{
+			Name:     name,
+			Embedder: wrapWithCircuit(name, inner, cfg.CircuitThreshold, cfg.CircuitCooldown),
+			Local:    false,
+		}
+	}
 	var cloud []ProviderInstance
 	if cfg.GeminiAPIKey != "" {
-		cloud = append(cloud, ProviderInstance{
-			Name: "gemini", Embedder: NewOpenAIClient(
-				cfg.GeminiBaseURL, cfg.GeminiAPIKey), Local: false,
-		})
+		cloud = append(cloud, wrap("gemini", NewOpenAIClient(cfg.GeminiBaseURL, cfg.GeminiAPIKey)))
 	}
 	if cfg.GroqAPIKey != "" {
-		cloud = append(cloud, ProviderInstance{
-			Name: "groq", Embedder: NewOpenAIClient(
-				cfg.GroqBaseURL, cfg.GroqAPIKey), Local: false,
-		})
+		cloud = append(cloud, wrap("groq", NewOpenAIClient(cfg.GroqBaseURL, cfg.GroqAPIKey)))
 	}
 	if cfg.OpenRouterAPIKey != "" {
-		cloud = append(cloud, ProviderInstance{
-			Name: "openrouter", Embedder: NewOpenAIClient(
-				cfg.OpenRouterBaseURL, cfg.OpenRouterAPIKey), Local: false,
-		})
+		cloud = append(cloud, wrap("openrouter", NewOpenAIClient(cfg.OpenRouterBaseURL, cfg.OpenRouterAPIKey)))
 	}
 	if cfg.OllamaCloudAPIKey != "" {
-		cloud = append(cloud, ProviderInstance{
-			Name: "ollama-cloud", Embedder: NewOpenAIClient(
-				cfg.OllamaCloudBaseURL, cfg.OllamaCloudAPIKey), Local: false,
-		})
+		cloud = append(cloud, wrap("ollama-cloud", NewOpenAIClient(cfg.OllamaCloudBaseURL, cfg.OllamaCloudAPIKey)))
 	}
 	if len(cloud) == 0 {
 		return nil
