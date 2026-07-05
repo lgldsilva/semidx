@@ -51,6 +51,10 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       # Soft heap cap so the runtime GCs before the container limit.
       GOMEMLIMIT: ${GOMEMLIMIT:-900MiB}
+    # Make the OLLAMA_URL host.docker.internal default resolve on Linux hosts
+    # (Docker Desktop provides it automatically; plain Linux does not).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${SEMIDX_HTTP_PORT:-8080}:8080" # only the API is exposed
     volumes:
