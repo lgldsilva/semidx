@@ -113,13 +113,14 @@ func (d *deps) prepareUnlockIndexer(ctx context.Context, db store.IndexStore, tg
 		return nil, 0, fmt.Errorf("register project: %w", err)
 	}
 	idx := indexing.NewIndexer(db, d.emb, dims, indexing.IndexerOpts{
-		Workers:          d.cfg.IndexWorkers,
-		EmbedBatchSize:   d.cfg.EmbedBatchSize,
-		MaxFileSize:      d.cfg.MaxFileSize,
-		MaxChunksPerFile: d.cfg.MaxChunksPerFile,
-		Verbose:          verbose,
+		Workers:             d.cfg.IndexWorkers,
+		EmbedBatchSize:      d.cfg.EmbedBatchSize,
+		MaxFileSize:         d.cfg.MaxFileSize,
+		MaxChunksPerFile:    d.cfg.MaxChunksPerFile,
+		MaxChunksPerProject: d.cfg.MaxChunksPerProject,
+		Verbose:             verbose,
 	}).
-		SetKeywordOnly(d.cfg.KeywordOnly).
+		SetKeywordOnly(d.keywordOnly).
 		SetWorktree(tgt.worktree)
 	return idx, projectID, nil
 }

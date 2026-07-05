@@ -29,11 +29,22 @@ func IsSensitive(path string) bool {
 	parts := strings.Split(path, string(filepath.Separator))
 	for _, part := range parts {
 		for _, kw := range sensitiveKeywords {
-			if strings.Contains(part, kw) {
+			if segmentMatches(part, kw) {
 				return true
 			}
 		}
 	}
 
 	return sensitiveExts[filepath.Ext(path)]
+}
+
+// segmentMatches reports whether a path segment contains kw as a whole
+// sub-segment (e.g. "api_key" matches "key", but "keyboard" does not).
+func segmentMatches(part, kw string) bool {
+	for _, token := range strings.FieldsFunc(part, func(r rune) bool { return r == '.' || r == '_' || r == '-' }) {
+		if token == kw {
+			return true
+		}
+	}
+	return false
 }

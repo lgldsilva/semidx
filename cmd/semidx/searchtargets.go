@@ -98,7 +98,7 @@ func (d *deps) runSearchTargets(cmd *cobra.Command, projectArg, query, model str
 
 	out := make([]projSearch, 0, len(targets))
 	for _, p := range targets {
-		req := search.Request{Identity: p.Identity, Query: query, Model: model, TopK: topK, KeywordOnly: d.cfg.KeywordOnly}
+		req := search.Request{Identity: p.Identity, Query: query, Model: model, TopK: topK, KeywordOnly: d.keywordOnly}
 		if p.SourceType == "git" && cwdGit.IsGit && cwdGit.Identity == p.Identity {
 			req.Worktree = cwdGit.Toplevel
 		}

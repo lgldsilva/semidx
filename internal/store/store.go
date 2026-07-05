@@ -122,12 +122,32 @@ type IndexStore interface {
 	DropAll(ctx context.Context) error
 }
 
-// Store is the full persistence surface the server depends on: the indexing and
-// search subset (IndexStore) plus the server-only token, user, session and job
-// operations.
-type Store interface {
-	IndexStore
+// ProjectStore groups project lifecycle operations.
+type ProjectStore interface {
+	UpsertProject(ctx context.Context, name, path, model string, dims int) (int, error)
+	EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string, dims int) (int, error)
+	CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string, dims int) (*Project, error)
+	GetProject(ctx context.Context, name string) (*Project, error)
+	GetProjectByID(ctx context.Context, id int) (*Project, error)
+	GetProjectByIdentity(ctx context.Context, identity string) (*Project, error)
+	ListProjects(ctx context.Context, limit, offset int) ([]Project, error)
+	DeleteProject(ctx context.Context, name string) error
+	UpdateProjectStatus(ctx context.Context, id int, status string) error
+}
 
+// UserStore groups user management operations.
+type UserStore interface {
+	CreateUser(ctx context.Context, username, passwordHash, role string) (*User, error)
+	GetUserByUsername(ctx context.Context, username string) (*User, error)
+	GetUserByID(ctx context.Context, id int) (*User, error)
+	ListUsers(ctx context.Context, limit, offset int) ([]User, error)
+	SetUserPassword(ctx context.Context, id int, passwordHash string) error
+	SetUserDisabled(ctx context.Context, id int, disabled bool) error
+	CountUsers(ctx context.Context) (int, error)
+}
+
+// TokenStore groups API-token lifecycle operations.
+type TokenStore interface {
 	CreateToken(ctx context.Context, name, tokenHash string, scopes []string) (int, error)
 	CreateUserToken(ctx context.Context, userID int, name, tokenHash string, scopes []string) (int, error)
 	CreateJWTToken(ctx context.Context, userID int, name, jti string, scopes []string, expiresAt *time.Time) (int, error)
@@ -136,25 +156,43 @@ type Store interface {
 	RevokeUserToken(ctx context.Context, userID, id int) error
 	ListUserTokens(ctx context.Context, userID int, kind string) ([]Token, error)
 	CountTokens(ctx context.Context) (int, error)
+}
 
-	CreateUser(ctx context.Context, username, passwordHash, role string) (*User, error)
-	GetUserByUsername(ctx context.Context, username string) (*User, error)
-	GetUserByID(ctx context.Context, id int) (*User, error)
-	ListUsers(ctx context.Context, limit, offset int) ([]User, error)
-	SetUserPassword(ctx context.Context, id int, passwordHash string) error
-	SetUserDisabled(ctx context.Context, id int, disabled bool) error
-	CountUsers(ctx context.Context) (int, error)
-
+// SessionStore groups web session operations.
+type SessionStore interface {
 	CreateSession(ctx context.Context, tokenHash string, userID int, expiresAt time.Time) error
 	SessionUser(ctx context.Context, tokenHash string) (*User, error)
 	DeleteSession(ctx context.Context, tokenHash string) error
 	DeleteExpiredSessions(ctx context.Context) (int64, error)
+}
 
+// JobStore groups job-queue operations.
+type JobStore interface {
 	EnqueueJob(ctx context.Context, projectID int, jobType string) (int, error)
 	ClaimJob(ctx context.Context) (*Job, error)
 	CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated int) error
 	FailJob(ctx context.Context, id int, errMsg string) error
 	GetJob(ctx context.Context, id int) (*Job, error)
+}
+
+// JobNotifier is an optional extension for immediate job dispatch via Postgres
+// LISTEN/NOTIFY. Implemented by PgStore; stores that don't support it (SQLite,
+// remote client) return an error or are detected via interface assertion.
+type JobNotifier interface {
+	ListenJobInsert(ctx context.Context) (<-chan string, error)
+}
+
+// Store is the full persistence surface the server depends on. It composes all
+// narrower role interfaces so callers that only need a subset can depend on
+// the appropriate interface (ProjectStore, UserStore, TokenStore, SessionStore,
+// JobStore or IndexStore) instead.
+type Store interface {
+	IndexStore
+	ProjectStore
+	UserStore
+	TokenStore
+	SessionStore
+	JobStore
 }
 
 // PgStore is the PostgreSQL/pgvector implementation of Store.

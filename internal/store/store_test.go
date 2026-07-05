@@ -44,7 +44,7 @@ func newTestStore(t *testing.T) *PgStore {
 		postgres.WithPassword("semantic"),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(90*time.Second),
+				WithOccurrence(2).WithStartupTimeout(180*time.Second),
 		),
 	)
 	if err != nil {

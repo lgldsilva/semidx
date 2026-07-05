@@ -46,7 +46,7 @@ func NewOllamaClient(baseURL string) *OllamaClient {
 	return &OllamaClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 10,

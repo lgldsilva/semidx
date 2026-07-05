@@ -6,6 +6,10 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/lgldsilva/semidx/internal/observ"
 )
 
 // ParallelEmbedder distributes embedding requests across N sub-embedders using
@@ -30,6 +34,10 @@ func NewParallelEmbedder(entries []Embedder) *ParallelEmbedder {
 }
 
 func (p *ParallelEmbedder) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {
+	ctx, span := observ.StartSpan(ctx, "embed.ParallelEmbedder.Embed")
+	defer span.End()
+	span.SetAttributes(attribute.String("model", model), attribute.Int("inputs", len(inputs)))
+
 	start := p.nextEntry()
 	res, err := p.entries[start].Embed(ctx, model, inputs...)
 	if err == nil || !isForceLocal(ctx) {

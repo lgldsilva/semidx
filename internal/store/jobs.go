@@ -49,6 +49,41 @@ func (s *PgStore) ClaimJob(ctx context.Context) (*Job, error) {
 	return &j, nil
 }
 
+// ListenJobInsert acquires a dedicated connection and listens for
+// job_inserted notifications. Each notification's payload is the inserted
+// job ID as a decimal string. The returned channel is closed when ctx is
+// cancelled or the connection drops.
+//
+// Only one LISTEN connection should be active at a time per PgStore; callers
+// should not call ListenJobInsert concurrently.
+func (s *PgStore) ListenJobInsert(ctx context.Context) (<-chan string, error) {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.Exec(ctx, "LISTEN job_inserted"); err != nil {
+		conn.Release()
+		return nil, err
+	}
+	ch := make(chan string, 10)
+	go func() {
+		defer conn.Release()
+		defer close(ch)
+		for {
+			n, err := conn.Conn().WaitForNotification(ctx)
+			if err != nil {
+				return // context cancelled or connection closed
+			}
+			select {
+			case ch <- n.Payload:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, nil
+}
+
 // CompleteJob marks a job succeeded with its result counts.
 func (s *PgStore) CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated int) error {
 	_, err := s.pool.Exec(ctx, `

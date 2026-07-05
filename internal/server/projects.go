@@ -4,9 +4,27 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 
 	"github.com/lgldsilva/semidx/internal/store"
 )
+
+// validProjectName allows letters, digits, hyphens, underscores, and dots,
+// must start with alphanumeric, and is at most 255 characters.
+var validProjectName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$`)
+
+func validateProjectName(name string) error {
+	if name == "" {
+		return errors.New("project name is required")
+	}
+	if len(name) > 255 {
+		return errors.New("project name must be at most 255 characters")
+	}
+	if !validProjectName.MatchString(name) {
+		return errors.New("project name must start with alphanumeric and contain only letters, digits, hyphens, underscores, and dots")
+	}
+	return nil
+}
 
 type projectView struct {
 	Name       string `json:"name"`
@@ -38,8 +56,8 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if body.Name == "" {
-		writeJSONError(w, http.StatusBadRequest, "name is required")
+	if err := validateProjectName(body.Name); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if body.Model == "" {
