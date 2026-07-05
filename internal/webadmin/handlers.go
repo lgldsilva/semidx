@@ -164,7 +164,7 @@ func (a *Admin) projectsAPI(w http.ResponseWriter, r *http.Request, ac *authCtx)
 		a.log.Error("list projects (api) failed", "err", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "internal error"}) //nolint:errcheck
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal error"})
 		return
 	}
 	items := make([]projectItem, 0, len(projects))
@@ -175,7 +175,7 @@ func (a *Admin) projectsAPI(w http.ResponseWriter, r *http.Request, ac *authCtx)
 		items = []projectItem{}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"projects": items}) //nolint:errcheck
+	_ = json.NewEncoder(w).Encode(map[string]any{"projects": items})
 }
 
 // --- API keys ----------------------------------------------------------------
