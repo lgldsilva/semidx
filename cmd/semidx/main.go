@@ -163,6 +163,8 @@ Run "semidx <command> --help" for details on any command.`,
 				OllamaCloudAPIKey:  d.cfg.OllamaCloudAPIKey,
 				OllamaCloudBaseURL: d.cfg.OllamaCloudBaseURL,
 				Privacy:            d.cfg.Privacy,
+				CircuitThreshold:   d.cfg.EmbedCircuitThreshold,
+				CircuitCooldown:    d.cfg.EmbedCircuitCooldown,
 			})
 			cc, err := clientconfig.Load()
 			if err != nil {
