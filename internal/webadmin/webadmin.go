@@ -30,6 +30,7 @@ var templatesFS embed.FS
 const (
 	sessionCookie = "semidx_session"
 	sessionTTL    = 24 * time.Hour
+	rememberMeTTL = 30 * 24 * time.Hour
 	loginWindow   = 15 * time.Minute
 	loginMaxTries = 5
 )
@@ -149,7 +150,7 @@ func (a *Admin) protect(role string, fn authedHandler) http.HandlerFunc {
 
 // --- sessions & cookies ------------------------------------------------------
 
-func (a *Admin) setSession(w http.ResponseWriter, plaintext string) {
+func (a *Admin) setSession(w http.ResponseWriter, plaintext string, ttl time.Duration) {
 	// #nosec G124 -- Secure is set from config (SEMIDX_COOKIE_SECURE, default true); it is false only when an operator deliberately serves the admin over plain HTTP.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
@@ -158,7 +159,7 @@ func (a *Admin) setSession(w http.ResponseWriter, plaintext string) {
 		HttpOnly: true,
 		Secure:   a.secure,
 		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Now().Add(sessionTTL),
+		Expires:  time.Now().Add(ttl),
 	})
 }
 
