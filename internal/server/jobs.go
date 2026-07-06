@@ -105,7 +105,7 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 
 	path := proj.Path
 	if proj.SourceType == "git" {
-		p, err := gitsync.Sync(ctx, dataDir, proj.Name, proj.GitURL, proj.Branch)
+		p, err := gitsync.Sync(ctx, dataDir, proj.Name, proj.GitURL, proj.Branch, s.gitAllowFile)
 		if err != nil {
 			fail(err.Error())
 			return

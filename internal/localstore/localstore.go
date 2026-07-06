@@ -21,11 +21,11 @@ import (
 	"sort"
 	"strings"
 
-	"golang.org/x/sys/unix"
 	sqlite "modernc.org/sqlite"
 	sqlitelib "modernc.org/sqlite/lib"
 
 	"github.com/lgldsilva/semidx/internal/chunker"
+	"github.com/lgldsilva/semidx/internal/keyword"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -131,22 +131,22 @@ func New(path string) (*SQLiteStore, error) {
 	// busy_timeout handles concurrent reads/writes during normal operation,
 	// but FTS5 virtual-table creation and trigger setup can race when two
 	// processes (e.g. index + search) call ensureSchema simultaneously.
-lockPath := schemaLockPath(path)
-// #nosec G304 -- lockPath is a fixed .lock sidecar next to the db file,
-// intentionally derived from the user-provided db path (same trust model as the
-// db file itself opened via sql.Open below).
-lockFile, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
+	lockPath := schemaLockPath(path)
+	// #nosec G304 -- lockPath is a fixed .lock sidecar next to the db file,
+	// intentionally derived from the user-provided db path (same trust model as the
+	// db file itself opened via sql.Open below).
+	lockFile, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open schema lock: %w", err)
 	}
-	if err := unix.Flock(int(lockFile.Fd()), unix.LOCK_EX); err != nil {
+	if err := flockExclusive(lockFile); err != nil {
 		_ = lockFile.Close()
 		return nil, fmt.Errorf("lock schema: %w", err)
 	}
 	// Keep the lock held until ensureSchema completes, then release so other
 	// waiters can also verify the schema (IF NOT EXISTS handles idempotency).
 	defer func() {
-		_ = unix.Flock(int(lockFile.Fd()), unix.LOCK_UN)
+		_ = flockUnlock(lockFile)
 		_ = lockFile.Close()
 	}()
 
@@ -592,7 +592,7 @@ func (s *SQLiteStore) SearchSimilarKeywordsWorktree(ctx context.Context, project
 }
 
 func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryText string, topK int, worktree string) ([]store.SearchResult, error) {
-	words := filterSearchWords(queryText)
+	words := keyword.FilterSearchWords(queryText)
 	if len(words) == 0 {
 		return nil, nil
 	}
@@ -651,29 +651,6 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 		results = append(results, r)
 	}
 	return results, rows.Err()
-}
-
-// filterSearchWords filters and normalises query words for keyword search:
-// removes terms shorter than 3 characters and caps at 20 terms to prevent
-// wasteful scans and DoS via query explosion. Returns nil if no valid words remain.
-func filterSearchWords(queryText string) []string {
-	words := strings.Fields(queryText)
-	if len(words) == 0 {
-		return nil
-	}
-	filtered := words[:0]
-	for _, w := range words {
-		if len(w) >= 3 {
-			filtered = append(filtered, w)
-		}
-	}
-	if len(filtered) == 0 {
-		return nil
-	}
-	if len(filtered) > 20 {
-		filtered = filtered[:20]
-	}
-	return filtered
 }
 
 // DropAll clears all indexed data and resets the auto-increment counters

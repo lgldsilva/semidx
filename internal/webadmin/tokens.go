@@ -46,13 +46,9 @@ func (a *Admin) tokensCreate(w http.ResponseWriter, r *http.Request, ac *authCtx
 		a.renderTokens(w, r, ac, "", "", "a token name is required")
 		return
 	}
-	scopes := r.Form["scopes"]
-	if len(scopes) == 0 {
-		scopes = []string{"read"}
-	}
-	// Non-admins cannot mint an admin-scoped token.
-	if contains(scopes, "admin") && ac.user.Role != "admin" {
-		a.renderTokens(w, r, ac, "", "", "only admins can issue admin-scoped tokens")
+	scopes, err := scopesFromForm(r.Form["scopes"], ac.user.Role)
+	if err != nil {
+		a.renderTokens(w, r, ac, "", "", err.Error())
 		return
 	}
 

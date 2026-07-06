@@ -147,41 +147,8 @@ Run "semidx <command> --help" for details on any command.`,
 		Version:       fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
-			d.cfg = config.Load()
-			// Resolve the local index path without mutating the loaded config.
-			// --local forces standalone mode at the default path unless a path was
-			// already given via SEMIDX_LOCAL_INDEX.
-			d.localIndexPath = d.cfg.LocalIndexPath
-			if forceLocal && d.localIndexPath == "" {
-				d.localIndexPath = config.DefaultLocalIndexPath()
-			}
-			// Resolve keyword-only mode without mutating the loaded config.
-			d.keywordOnly = d.cfg.KeywordOnly || keywordOnly
-			d.emb = embed.NewChainFromConfig(embed.ChainConfig{
-				OllamaURL:          d.cfg.OllamaURL,
-				OllamaURLs:         d.cfg.OllamaURLs,
-				Provider:           d.cfg.Provider,
-				Endpoint:           d.cfg.Endpoint,
-				APIKey:             d.cfg.APIKey,
-				GeminiAPIKey:       d.cfg.GeminiAPIKey,
-				GeminiBaseURL:      d.cfg.GeminiBaseURL,
-				GroqAPIKey:         d.cfg.GroqAPIKey,
-				GroqBaseURL:        d.cfg.GroqBaseURL,
-				OpenRouterAPIKey:   d.cfg.OpenRouterAPIKey,
-				OpenRouterBaseURL:  d.cfg.OpenRouterBaseURL,
-				OllamaCloudAPIKey:  d.cfg.OllamaCloudAPIKey,
-				OllamaCloudBaseURL: d.cfg.OllamaCloudBaseURL,
-				Privacy:            d.cfg.Privacy,
-				CircuitThreshold:   d.cfg.EmbedCircuitThreshold,
-				CircuitCooldown:    d.cfg.EmbedCircuitCooldown,
-			})
-			cc, err := clientconfig.Load()
-			if err != nil {
-				return fmt.Errorf("load client config: %w", err)
-			}
-			d.client = cc
-			return nil
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			return d.setup(cmd, forceLocal, keywordOnly)
 		},
 		PersistentPostRun: func(_ *cobra.Command, _ []string) {
 			if d.db != nil {

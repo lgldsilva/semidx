@@ -16,9 +16,10 @@ import (
 
 // Sync ensures dataDir/repos/<name> holds an up-to-date checkout of url and
 // returns its path. It clones (shallow) on first use and fast-forward pulls
-// afterwards. Only https:// and git@ (SSH) URLs are accepted.
-func Sync(ctx context.Context, dataDir, name, url, branch string) (string, error) {
-	if !validURL(url) {
+// afterwards. Only https:// and git@ (SSH) URLs are accepted by default; file://
+// is allowed only when allowFileURL is true (SEMIDX_GIT_ALLOW_FILE).
+func Sync(ctx context.Context, dataDir, name, url, branch string, allowFileURL bool) (string, error) {
+	if !validURL(url, allowFileURL) {
 		return "", fmt.Errorf("unsupported git url %q (want https:// or git@)", url)
 	}
 	repoPath := filepath.Join(dataDir, "repos", name)
@@ -44,12 +45,11 @@ func Sync(ctx context.Context, dataDir, name, url, branch string) (string, error
 	return repoPath, nil
 }
 
-func validURL(url string) bool {
-	// https:// and git@ (SSH) for remotes; file:// for a local mirror on the same
-	// host (the admin controls the URL on a self-hosted server).
-	return strings.HasPrefix(url, "https://") ||
-		strings.HasPrefix(url, "git@") ||
-		strings.HasPrefix(url, "file://")
+func validURL(url string, allowFile bool) bool {
+	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "git@") {
+		return true
+	}
+	return allowFile && strings.HasPrefix(url, "file://")
 }
 
 func run(ctx context.Context, dir string, args ...string) error {

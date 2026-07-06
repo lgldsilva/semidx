@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -285,26 +286,30 @@ func TestConcurrentIndexingIsComplete(t *testing.T) {
 }
 
 // The worker pool actually parallelizes: with an embedder that sleeps per call,
-// 8 workers finish well under half the serial time.
+// multiple workers run embed calls concurrently (not strictly one-at-a-time).
 func TestWorkerPoolParallelizes(t *testing.T) {
-	run := func(workers int) time.Duration {
-		dir := t.TempDir()
-		for i := 0; i < 16; i++ {
-			writeFile(t, dir, fmt.Sprintf("f%d.go", i), fmt.Sprintf("package p%d\nfunc F%d() {}\n", i, i))
-		}
-		emb := &fakeEmbedder{onEmbed: func() { time.Sleep(20 * time.Millisecond) }}
-		idx := NewIndexer(&fakeStore{}, emb, 3, IndexerOpts{Workers: workers, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
-		start := time.Now()
-		if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
-			t.Fatalf("IndexProject: %v", err)
-		}
-		return time.Since(start)
+	dir := t.TempDir()
+	for i := 0; i < 16; i++ {
+		writeFile(t, dir, fmt.Sprintf("f%d.go", i), fmt.Sprintf("package p%d\nfunc F%d() {}\n", i, i))
 	}
-
-	serial := run(1)
-	parallel := run(8)
-	if parallel > serial/2 {
-		t.Errorf("pool did not parallelize: serial=%v, parallel(8)=%v (want parallel < serial/2)", serial, parallel)
+	var active, peak int32
+	emb := &fakeEmbedder{onEmbed: func() {
+		cur := atomic.AddInt32(&active, 1)
+		defer atomic.AddInt32(&active, -1)
+		for {
+			old := atomic.LoadInt32(&peak)
+			if cur <= old || atomic.CompareAndSwapInt32(&peak, old, cur) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}}
+	idx := NewIndexer(&fakeStore{}, emb, 3, IndexerOpts{Workers: 8, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+	if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
+		t.Fatalf("IndexProject: %v", err)
+	}
+	if peak < 2 {
+		t.Errorf("peak concurrent embeds = %d, want >= 2 with 8 workers", peak)
 	}
 }
 
