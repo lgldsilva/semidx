@@ -50,9 +50,24 @@ detect_arch() {
   esac
 }
 
-# Resolve the version from the latest release when not pinned.
+# Resolve the version from the latest release when not pinned. Gitea often
+# returns 404 on /releases/latest (unlike GitHub), so fall back to the list.
 if [ -z "$VERSION" ]; then
-  VERSION="$($CURL "$API/releases/latest" | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4)"
+  VERSION="$($CURL "$API/releases/latest" 2>/dev/null | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+  if [ -z "$VERSION" ]; then
+    VERSION="$($CURL "$API/releases?limit=50" | python3 -c "
+import json, re, sys
+releases = json.load(sys.stdin)
+pat = re.compile(r'^v?(\\d+)\\.(\\d+)\\.(\\d+)')
+def key(tag):
+    m = pat.match(tag or '')
+    return tuple(map(int, m.groups())) if m else (0, 0, 0)
+tags = [r['tag_name'] for r in releases if not r.get('draft') and r.get('tag_name')]
+if not tags:
+    sys.exit(1)
+print(max(tags, key=key))
+")"
+  fi
   [ -n "$VERSION" ] || die "could not resolve the latest release from $API"
 fi
 VER_NOV="${VERSION#v}"
