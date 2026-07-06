@@ -12,6 +12,17 @@ const (
 	defaultCooldown         = 30 * time.Second // how long the circuit stays open
 )
 
+// RetryableError wraps an error with a retry-after duration for transient
+// failures where retrying after the cooldown is appropriate.
+type RetryableError struct {
+	Err   error
+	After time.Duration
+}
+
+func (e *RetryableError) Error() string             { return e.Err.Error() }
+func (e *RetryableError) Unwrap() error             { return e.Err }
+func (e *RetryableError) RetryAfter() time.Duration { return e.After }
+
 // circuitBreaker tracks a single provider's failure state.
 type circuitBreaker struct {
 	mu        sync.Mutex
@@ -35,19 +46,20 @@ func newCircuitBreaker(threshold int, cooldown time.Duration) *circuitBreaker {
 }
 
 // allow checks whether the circuit is closed (allow call). When the circuit
-// is open (cooldown period), returns false. After the cooldown expires the
-// circuit enters a half-open state and returns true once (probing).
-func (cb *circuitBreaker) allow() bool {
+// is open (cooldown period), returns false and the remaining cooldown duration.
+// After the cooldown expires the circuit enters a half-open state and returns
+// true once (probing).
+func (cb *circuitBreaker) allow() (bool, time.Duration) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-	if time.Now().Before(cb.openUntil) {
-		return false
+	if remaining := time.Until(cb.openUntil); remaining > 0 {
+		return false, remaining
 	}
 	// Half-open: allow one probe, reset timer.
 	if cb.failures >= cb.threshold {
 		cb.openUntil = time.Time{}
 	}
-	return true
+	return true, 0
 }
 
 func (cb *circuitBreaker) recordSuccess() {
@@ -75,8 +87,11 @@ type circuitEmbedder struct {
 }
 
 func (ce *circuitEmbedder) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {
-	if !ce.cb.allow() {
-		return nil, fmt.Errorf("circuit breaker open for %s", ce.name)
+	if ok, remaining := ce.cb.allow(); !ok {
+		return nil, &RetryableError{
+			Err:   fmt.Errorf("circuit breaker open for %s", ce.name),
+			After: remaining,
+		}
 	}
 	result, err := ce.inner.Embed(ctx, model, inputs...)
 	if err != nil {
@@ -88,8 +103,11 @@ func (ce *circuitEmbedder) Embed(ctx context.Context, model string, inputs ...st
 }
 
 func (ce *circuitEmbedder) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
-	if !ce.cb.allow() {
-		return nil, fmt.Errorf("circuit breaker open for %s", ce.name)
+	if ok, remaining := ce.cb.allow(); !ok {
+		return nil, &RetryableError{
+			Err:   fmt.Errorf("circuit breaker open for %s", ce.name),
+			After: remaining,
+		}
 	}
 	result, err := ce.inner.EmbedSingle(ctx, model, text)
 	if err != nil {
@@ -101,8 +119,11 @@ func (ce *circuitEmbedder) EmbedSingle(ctx context.Context, model, text string) 
 }
 
 func (ce *circuitEmbedder) ModelInfo(ctx context.Context, model string) (*ModelInfo, error) {
-	if !ce.cb.allow() {
-		return nil, fmt.Errorf("circuit breaker open for %s", ce.name)
+	if ok, remaining := ce.cb.allow(); !ok {
+		return nil, &RetryableError{
+			Err:   fmt.Errorf("circuit breaker open for %s", ce.name),
+			After: remaining,
+		}
 	}
 	result, err := ce.inner.ModelInfo(ctx, model)
 	if err != nil {
@@ -114,8 +135,11 @@ func (ce *circuitEmbedder) ModelInfo(ctx context.Context, model string) (*ModelI
 }
 
 func (ce *circuitEmbedder) ListModels(ctx context.Context) ([]string, error) {
-	if !ce.cb.allow() {
-		return nil, fmt.Errorf("circuit breaker open for %s", ce.name)
+	if ok, remaining := ce.cb.allow(); !ok {
+		return nil, &RetryableError{
+			Err:   fmt.Errorf("circuit breaker open for %s", ce.name),
+			After: remaining,
+		}
 	}
 	result, err := ce.inner.ListModels(ctx)
 	if err != nil {

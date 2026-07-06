@@ -49,10 +49,15 @@ func (f *fakeStore) ClaimJob(context.Context) (*store.Job, error) {
 	return j, nil
 }
 
-func (f *fakeStore) CompleteJob(_ context.Context, _, filesIndexed, chunksCreated int) error {
+func (f *fakeStore) CompleteJob(_ context.Context, _, filesIndexed, chunksCreated, deletedFiles, errorCount int) error {
 	f.compCalled = true
 	f.compFiles, f.compChunks = filesIndexed, chunksCreated
+	f.compDeleted, f.compErrors = deletedFiles, errorCount
 	return nil
+}
+
+func (f *fakeStore) EnqueueBatchJob(_ context.Context, _ int, _ string) (int, error) {
+	return f.enqueuedID, f.enqueueErr
 }
 
 func (f *fakeStore) FailJob(_ context.Context, _ int, msg string) error {
@@ -232,7 +237,7 @@ func TestHandleFilesBatchFull(t *testing.T) {
 	srv := New(fs, cfgEmbedder{}, nil)
 
 	body := `{"files":[{"path":"a.go","content":"package main\n\nfunc main() {}\n"}],"delete":["gone.go"]}`
-	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch?sync=true", "tok", body)
 	if rec.Code != 200 {
 		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -248,7 +253,7 @@ func TestHandleFilesBatchModelUnavailable(t *testing.T) {
 	writeTok := &store.Token{Scopes: []string{"write"}}
 	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}}
 	srv := New(fs, cfgEmbedder{modelInfoErr: errors.New("ollama down")}, nil)
-	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", `{"files":[]}`)
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch?sync=true", "tok", `{"files":[]}`)
 	if rec.Code != http.StatusBadGateway {
 		t.Errorf("model unavailable = %d, want 502", rec.Code)
 	}
@@ -258,7 +263,7 @@ func TestHandleFilesBatchEnsureError(t *testing.T) {
 	writeTok := &store.Token{Scopes: []string{"write"}}
 	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}, ensureErr: errors.New("no table")}
 	srv := New(fs, cfgEmbedder{}, nil)
-	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", `{"files":[]}`)
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch?sync=true", "tok", `{"files":[]}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("ensure table error = %d, want 500", rec.Code)
 	}
@@ -271,7 +276,7 @@ func TestHandleFilesBatchEmptyContent(t *testing.T) {
 	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}}
 	srv := New(fs, cfgEmbedder{}, nil)
 	body := `{"files":[{"path":"empty.go","content":"   "}]}`
-	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch?sync=true", "tok", body)
 	if rec.Code != 200 {
 		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -288,7 +293,7 @@ func TestHandleFilesBatchPreEmbedded(t *testing.T) {
 	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}}
 	srv := New(fs, cfgEmbedder{}, nil)
 	body := `{"files":[{"path":"a.go","content":"x","chunks":[{"start_line":1,"end_line":2,"content":"x","embedding":[0.1,0.2,0.3]}]}]}`
-	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch?sync=true", "tok", body)
 	if rec.Code != 200 {
 		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -304,7 +309,7 @@ func TestHandleFilesBatchPreEmbeddedDimMismatch(t *testing.T) {
 	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}}
 	srv := New(fs, cfgEmbedder{}, nil) // default dims = 3
 	body := `{"files":[{"path":"a.go","content":"x","chunks":[{"start_line":1,"end_line":2,"content":"x","embedding":[0.1,0.2]}]}]}`
-	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch?sync=true", "tok", body)
 	if rec.Code != 200 {
 		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -320,7 +325,7 @@ func TestHandleFilesBatchNoContentNoChunks(t *testing.T) {
 	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}}
 	srv := New(fs, cfgEmbedder{}, nil)
 	body := `{"files":[{"path":"empty.go"}]}`
-	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch?sync=true", "tok", body)
 	if rec.Code != 200 {
 		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -336,7 +341,7 @@ func TestHandleFilesBatchPreEmbeddedChunkTooLarge(t *testing.T) {
 	srv := New(fs, cfgEmbedder{}, nil)
 	big := strings.Repeat("x", 4001) // > maxPreChunkChars (4000)
 	body := `{"files":[{"path":"a.go","content":"x","chunks":[{"start_line":1,"end_line":2,"content":"` + big + `","embedding":[0.1,0.2,0.3]}]}]}`
-	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch?sync=true", "tok", body)
 	if rec.Code != 200 {
 		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -356,12 +361,45 @@ func TestHandleFilesBatchPreEmbeddedTooManyChunks(t *testing.T) {
 		chunks[i] = one
 	}
 	body := `{"files":[{"path":"a.go","content":"x","chunks":[` + strings.Join(chunks, ",") + `]}]}`
-	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch?sync=true", "tok", body)
 	if rec.Code != 200 {
 		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"errors":1`) {
 		t.Errorf("too many chunks should be a per-file error; body %s", rec.Body.String())
+	}
+}
+
+func TestHandleFilesBatchAsync(t *testing.T) {
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	fs := &fakeStore{
+		token:      writeTok,
+		project:    &store.Project{ID: 1, Name: "p", Model: "m", SourceType: "push"},
+		enqueuedID: 42,
+	}
+	srv := New(fs, cfgEmbedder{}, nil)
+
+	body := `{"files":[{"path":"a.go","content":"package main"}],"delete":["old.go"]}`
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("async batch = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"job_id":42`) || !strings.Contains(rec.Body.String(), `"status":"queued"`) {
+		t.Errorf("expected job_id and status; body %s", rec.Body.String())
+	}
+}
+
+func TestHandleFilesBatchAsyncNoSourceType(t *testing.T) {
+	// A non-push project should refuse async batch.
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	fs := &fakeStore{
+		token:   writeTok,
+		project: &store.Project{ID: 1, Name: "p", Model: "m"}, // SourceType defaults to ""
+	}
+	srv := New(fs, cfgEmbedder{}, nil)
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", `{"files":[]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("async batch for non-push project = %d, want 400; body %s", rec.Code, rec.Body.String())
 	}
 }
 

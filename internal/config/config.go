@@ -167,15 +167,24 @@ func (c *Config) Clone() *Config {
 	return &cp
 }
 
-// Load resolves the configuration. A missing or unreadable .env file is not
-// an error; malformed lines in it are skipped. The persistent user config
-// file (see UserEnvPath) is layered in at the lowest file precedence.
+// Load resolves the configuration using the real OS environment. A missing
+// or unreadable .env file is not an error; malformed lines in it are skipped.
+// The persistent user config file (see UserEnvPath) is layered in at the
+// lowest file precedence.
 func Load() *Config {
+	return LoadWithLookup(os.LookupEnv)
+}
+
+// LoadWithLookup resolves the configuration using the provided envLookup
+// function instead of os.LookupEnv. The .env file and user config file layers
+// are still read from disk; only the "real environment" level is replaced.
+// Use this in tests with [mapLookup] to avoid depending on OS env vars.
+func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 	paths := []string{".env"}
 	if p, err := UserEnvPath(); err == nil {
 		paths = append(paths, p)
 	}
-	env := newResolver(paths...)
+	env := newResolverWithLookup(envLookup, paths...)
 	return &Config{
 		DatabaseURL:         env.get("SEMIDX_DB_DSN", defaultDatabaseURL),
 		OllamaURL:           env.first("SEMIDX_OLLAMA_URL", "OLLAMA_URL", defaultOllamaURL),
@@ -413,11 +422,16 @@ func parseCommaSep(s string) []string {
 // env-file layer in precedence order, then falls back to the given default.
 // Empty values count as unset at every level.
 type resolver struct {
-	layers []map[string]string // highest file precedence first
+	lookup func(string) (string, bool) // env var lookup (e.g. os.LookupEnv)
+	layers []map[string]string         // highest file precedence first
 }
 
 func newResolver(paths ...string) *resolver {
-	r := &resolver{}
+	return newResolverWithLookup(os.LookupEnv, paths...)
+}
+
+func newResolverWithLookup(lookup func(string) (string, bool), paths ...string) *resolver {
+	r := &resolver{lookup: lookup}
 	for _, p := range paths {
 		r.layers = append(r.layers, parseEnvFile(p))
 	}
@@ -448,7 +462,7 @@ func parseEnvFile(path string) map[string]string {
 }
 
 func (r *resolver) get(key, def string) string {
-	if v := os.Getenv(key); v != "" {
+	if v, ok := r.lookup(key); ok && v != "" {
 		return v
 	}
 	for _, m := range r.layers {
@@ -463,10 +477,10 @@ func (r *resolver) get(key, def string) string {
 // available level, checking both keys against the real environment before
 // descending through the file layers.
 func (r *resolver) first(primary, legacy, def string) string {
-	if v := os.Getenv(primary); v != "" {
+	if v, ok := r.lookup(primary); ok && v != "" {
 		return v
 	}
-	if v := os.Getenv(legacy); v != "" {
+	if v, ok := r.lookup(legacy); ok && v != "" {
 		return v
 	}
 	for _, m := range r.layers {

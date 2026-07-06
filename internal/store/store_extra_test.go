@@ -298,7 +298,7 @@ func TestStoreErrorAndBoundaryPaths(t *testing.T) {
 	errExp("EnqueueJob", e)
 	_, e = s.ClaimJob(cctx)
 	errExp("ClaimJob", e)
-	errExp("CompleteJob", s.CompleteJob(cctx, 1, 1, 1))
+	errExp("CompleteJob", s.CompleteJob(cctx, 1, 1, 1, 0, 0))
 	errExp("FailJob", s.FailJob(cctx, 1, "x"))
 	_, e = s.GetJob(cctx, 1)
 	errExp("GetJob", e)

@@ -75,24 +75,55 @@ func (s *Server) handleFilesDiff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"stale": stale, "deleted": deleted})
 }
 
+// batchRequestBody is the JSON shape accepted by the files/batch endpoint.
+type batchRequestBody struct {
+	Files  []batchFileInput `json:"files"`
+	Delete []string         `json:"delete"`
+}
+
 // handleFilesBatch indexes uploaded file contents and removes any files in the
-// delete list. Files may carry pre-computed chunks with embeddings (the client
-// did the work) or raw content (the server chunks and embeds). Mixed batches
-// are supported: each file follows its own path.
+// delete list. By default it returns 202 Accepted and processes the batch
+// asynchronously via a background job. Pass ?sync=true to get the old
+// synchronous behaviour (200 OK with inline results).
 func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 	proj, ok := s.loadProject(w, r)
 	if !ok {
 		return
 	}
-	var body struct {
-		Files  []batchFileInput `json:"files"`
-		Delete []string         `json:"delete"`
-	}
+	var body batchRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 
+	if r.URL.Query().Get("sync") == "true" {
+		s.handleFilesBatchSync(w, r, proj, &body)
+		return
+	}
+
+	// Async path: enqueue a batch job.
+	if proj.SourceType != "push" {
+		writeJSONError(w, http.StatusBadRequest, "async batch is only supported for push projects")
+		return
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		s.log.Error("marshal batch payload", "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "could not serialize payload")
+		return
+	}
+	jobID, err := s.store.EnqueueBatchJob(r.Context(), proj.ID, string(payload))
+	if err != nil {
+		s.log.Error("enqueue batch job", "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "could not enqueue batch job")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"job_id": jobID, "status": "queued"})
+}
+
+// handleFilesBatchSync runs the batch synchronously and returns 200 with
+// indexing counts — the original behaviour preserved behind ?sync=true.
+func (s *Server) handleFilesBatchSync(w http.ResponseWriter, r *http.Request, proj *store.Project, body *batchRequestBody) {
 	ctx := r.Context()
 	info, err := s.emb.ModelInfo(ctx, proj.Model)
 	if err != nil {
@@ -104,30 +135,38 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "could not prepare storage")
 		return
 	}
+	indexed, chunks, deleted, errors := s.processBatchFiles(ctx, proj, body.Files, body.Delete, info.Dims)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"indexed": indexed, "chunks": chunks, "deleted": deleted, "errors": errors,
+	})
+}
 
-	for _, p := range body.Delete {
+// processBatchFiles indexes pushed files and removes deleted ones, sharing the
+// same core logic between the synchronous API path and the background batch
+// worker. Expects the chunks table and model info to already be set up.
+func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, files []batchFileInput, del []string, dims int) (indexed, chunks, deleted, errors int) {
+	deleted = len(del)
+	for _, p := range del {
 		if err := s.store.DeleteFileByPath(ctx, proj.ID, p); err != nil {
 			s.log.Error("delete file", "project", proj.Name, "path", p, "err", err)
 		}
 	}
 
-	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, indexing.IndexerOpts{})
-	indexed, chunks, failed := 0, 0, 0
-	for _, f := range body.Files {
-		created, hErr := s.indexBatchFile(ctx, proj, idx, f, info.Dims)
+	idx := indexing.NewIndexer(s.store, s.emb, dims, indexing.IndexerOpts{})
+	for _, f := range files {
+		created, hErr := s.indexBatchFile(ctx, proj, idx, f, dims)
 		if hErr != nil {
-			failed++
+			errors++
 			s.log.Error("index pushed file", "project", proj.Name, "path", f.Path, "err", hErr)
 			continue
 		}
 		indexed++
 		chunks += created
 	}
-	_ = s.store.UpdateProjectStatus(ctx, proj.ID, "ready")
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"indexed": indexed, "chunks": chunks, "deleted": len(body.Delete), "errors": failed,
-	})
+	if err := s.store.UpdateProjectStatus(ctx, proj.ID, "ready"); err != nil {
+		s.log.Warn("update project status", "project", proj.ID, "err", err)
+	}
+	return
 }
 
 // indexBatchFile stores one pushed file, dispatching on its shape: pre-embedded

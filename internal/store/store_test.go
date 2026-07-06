@@ -316,7 +316,7 @@ func TestIndexJobs(t *testing.T) {
 		t.Errorf("second ClaimJob = %+v, want nil", again)
 	}
 
-	if err := s.CompleteJob(ctx, id, 7, 42); err != nil {
+	if err := s.CompleteJob(ctx, id, 7, 42, 0, 0); err != nil {
 		t.Fatalf("CompleteJob: %v", err)
 	}
 	job, _ := s.GetJob(ctx, id)
