@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -179,6 +181,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.log.Warn("search failed", "project", project, "err", err)
+		var re interface{ RetryAfter() time.Duration }
+		if errors.As(err, &re) {
+			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(re.RetryAfter().Seconds()))))
+			writeJSONError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		writeJSONError(w, http.StatusNotFound, "project not found")
 		return
 	}

@@ -10,7 +10,8 @@ import (
 
 func TestCircuitBreakerAllowOnFirstCall(t *testing.T) {
 	cb := newCircuitBreaker(3, time.Minute)
-	if !cb.allow() {
+	ok, _ := cb.allow()
+	if !ok {
 		t.Error("expected allow on fresh circuit breaker")
 	}
 }
@@ -22,7 +23,7 @@ func TestCircuitBreakerSuccessResets(t *testing.T) {
 	cb.recordFailure()
 	cb.recordSuccess() // resets to 0
 
-	if !cb.allow() {
+	if ok, _ := cb.allow(); !ok {
 		t.Error("expected allow after success resets failures")
 	}
 }
@@ -34,7 +35,7 @@ func TestCircuitBreakerBlocksAfterThreshold(t *testing.T) {
 	cb.recordFailure()
 	cb.recordFailure()
 
-	if cb.allow() {
+	if ok, _ := cb.allow(); ok {
 		t.Error("expected block after 3 consecutive failures")
 	}
 }
@@ -46,14 +47,14 @@ func TestCircuitBreakerHalfOpenAfterCooldown(t *testing.T) {
 	cb.recordFailure()
 	cb.recordFailure()
 
-	if cb.allow() {
+	if ok, _ := cb.allow(); ok {
 		t.Fatal("expected immediate block after 3 failures")
 	}
 
 	// Wait for cooldown to expire.
 	time.Sleep(5 * time.Millisecond)
 
-	if !cb.allow() {
+	if ok, _ := cb.allow(); !ok {
 		t.Fatal("expected allow after cooldown (half-open)")
 	}
 }
@@ -70,14 +71,14 @@ func TestCircuitBreakerReopensAfterFailedProbe(t *testing.T) {
 	time.Sleep(80 * time.Millisecond)
 
 	// Half-open probe: allow succeeds.
-	if !cb.allow() {
+	if ok, _ := cb.allow(); !ok {
 		t.Fatal("expected half-open probe to be allowed")
 	}
 	// Probe fails -> circuit reopens.
 	cb.recordFailure()
 
 	// Should be blocked again (failures = 4 >= 3, openUntil reset).
-	if cb.allow() {
+	if ok, _ := cb.allow(); ok {
 		t.Error("expected circuit to reopen after failed probe")
 	}
 }
@@ -94,13 +95,13 @@ func TestCircuitBreakerClosesAfterSuccessfulProbe(t *testing.T) {
 	time.Sleep(80 * time.Millisecond)
 
 	// Half-open probe succeeds.
-	if !cb.allow() {
+	if ok, _ := cb.allow(); !ok {
 		t.Fatal("expected half-open probe to be allowed")
 	}
 	cb.recordSuccess()
 
 	// Circuit should be closed now — allow succeeds.
-	if !cb.allow() {
+	if ok, _ := cb.allow(); !ok {
 		t.Error("expected circuit to close after successful probe")
 	}
 }
@@ -112,7 +113,7 @@ func TestCircuitBreakerUnderThreshold(t *testing.T) {
 	cb.recordFailure()
 
 	// 2 failures < 3 threshold -> still allowed.
-	if !cb.allow() {
+	if ok, _ := cb.allow(); !ok {
 		t.Error("expected allow with 2 failures (under threshold)")
 	}
 }

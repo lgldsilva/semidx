@@ -7,7 +7,9 @@ package search
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -116,6 +118,13 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 
 	vec, err := s.emb.EmbedSingle(ctx, model, req.Query)
 	if err != nil {
+		// Propagate retryable errors (e.g. circuit breaker open) directly
+		// instead of falling back to keyword search — the caller should
+		// back off and retry after the indicated duration.
+		var re interface{ RetryAfter() time.Duration }
+		if errors.As(err, &re) {
+			return nil, err
+		}
 		resp.Fallback = true
 		resp.Keyword = true
 		results, kerr := s.keywordSearch(ctx, project.ID, req.Query, dims, req.TopK, worktree)
