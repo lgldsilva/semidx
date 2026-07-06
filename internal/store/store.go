@@ -120,6 +120,21 @@ type IndexStore interface {
 	SearchSimilarKeywords(ctx context.Context, projectID int, queryText string, dims, topK int) ([]SearchResult, error)
 	SearchSimilarWorktree(ctx context.Context, projectID int, embedding []float32, dims, topK int, worktree string) ([]SearchResult, error)
 	SearchSimilarKeywordsWorktree(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]SearchResult, error)
+
+	// InsertFileDependencies records import/dependency edges for a source file.
+	// Each edge is identified by (project_id, source_file, target_file) which
+	// form the primary key. Duplicate edges are silently ignored (upsert).
+	InsertFileDependencies(ctx context.Context, projectID int, sourceFile string, targets []string) error
+
+	// FetchGraphNeighbors returns the full dependency graph for a project as
+	// source_file -> [target_file, ...] pairs. Returns an empty map if no
+	// edges exist.
+	FetchGraphNeighbors(ctx context.Context, projectID int) (map[string][]string, error)
+
+	// FetchChunksByPath returns chunks for a specific file path, ordered by
+	// chunk_index. Returns empty slice if the file has no chunks.
+	FetchChunksByPath(ctx context.Context, projectID int, filePath string, dims, limit int) ([]SearchResult, error)
+
 	DropAll(ctx context.Context) error
 }
 
@@ -1000,6 +1015,78 @@ func (s *PgStore) DeleteExpiredSessions(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
+// InsertFileDependencies records import/dependency edges for a source file.
+// Each edge is identified by (project_id, source_file, target_file) which
+// form the primary key. Duplicate edges are silently ignored (upsert).
+func (s *PgStore) InsertFileDependencies(ctx context.Context, projectID int, sourceFile string, targets []string) error {
+	if len(targets) == 0 {
+		return nil
+	}
+
+	batch := &pgx.Batch{}
+	for _, target := range targets {
+		batch.Queue(`
+			INSERT INTO file_dependencies (project_id, source_file, target_file)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (project_id, source_file, target_file) DO NOTHING
+		`, projectID, sourceFile, target)
+	}
+
+	br := s.pool.SendBatch(ctx, batch)
+	defer func() { _ = br.Close() }()
+
+	for range targets {
+		if _, err := br.Exec(); err != nil {
+			return err
+		}
+	}
+	return br.Close()
+}
+
+// FetchGraphNeighbors returns the full dependency graph for a project as
+// source_file -> [target_file, ...] pairs. Returns an empty map if no
+// edges exist.
+func (s *PgStore) FetchGraphNeighbors(ctx context.Context, projectID int) (map[string][]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT source_file, target_file
+		FROM file_dependencies
+		WHERE project_id = $1
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string][]string)
+	for rows.Next() {
+		var src, tgt string
+		if err := rows.Scan(&src, &tgt); err != nil {
+			return nil, err
+		}
+		out[src] = append(out[src], tgt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// FetchChunksByPath returns chunks for a specific file path, ordered by
+// chunk_index. Returns an empty slice if the file has no chunks.
+func (s *PgStore) FetchChunksByPath(ctx context.Context, projectID int, filePath string, dims, limit int) ([]SearchResult, error) {
+	table, err := chunksTable(dims)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path = $2 ORDER BY c.chunk_index LIMIT $3`, table)
+	rows, err := s.pool.Query(ctx, query, projectID, filePath, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanSearchRows(rows)
+}
+
 func (s *PgStore) DropAll(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `
 		DO $$
@@ -1011,7 +1098,7 @@ func (s *PgStore) DropAll(ctx context.Context) error {
 				EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(tbl) || ' CASCADE';
 			END LOOP;
 		END $$;
-		TRUNCATE files, projects RESTART IDENTITY CASCADE;
+		TRUNCATE file_dependencies, files, projects RESTART IDENTITY CASCADE;
 	`)
 	return err
 }

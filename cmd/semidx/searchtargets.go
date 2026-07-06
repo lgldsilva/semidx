@@ -69,6 +69,9 @@ type projSearch struct {
 func (d *deps) runSearchTargets(cmd *cobra.Command, projectArg, query, model string, topK int, privacy bool) ([]projSearch, error) {
 	ctx := cmd.Context()
 
+	graph, _ := cmd.Flags().GetBool("graph")
+	graphDepth, _ := cmd.Flags().GetInt("graph-depth")
+
 	if d.remote() {
 		if projectArg == "" {
 			return nil, fmt.Errorf("--project is required in remote mode")
@@ -108,7 +111,7 @@ func (d *deps) runSearchTargets(cmd *cobra.Command, projectArg, query, model str
 
 	out := make([]projSearch, 0, len(targets))
 	for _, p := range targets {
-		req := search.Request{Query: query, Model: model, TopK: topK, KeywordOnly: d.keywordOnly}
+		req := search.Request{Query: query, Model: model, TopK: topK, KeywordOnly: d.keywordOnly, Graph: graph, GraphMaxDepth: graphDepth}
 		if p.Identity != "" {
 			req.Identity = p.Identity
 		} else {
