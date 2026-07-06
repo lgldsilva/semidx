@@ -148,52 +148,7 @@ Run "semidx <command> --help" for details on any command.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			d.cfg = config.Load()
-			// Resolve the local index path without mutating the loaded config.
-			// --local forces standalone mode at the default path unless a path was
-			// already given via SEMIDX_LOCAL_INDEX.
-			d.localIndexPath = d.cfg.LocalIndexPath
-			if forceLocal && d.localIndexPath == "" {
-				d.localIndexPath = config.DefaultLocalIndexPath()
-			}
-			// Resolve keyword-only mode without mutating the loaded config.
-			d.keywordOnly = d.cfg.KeywordOnly || keywordOnly
-
-			cc, err := clientconfig.Load()
-			if err != nil {
-				return fmt.Errorf("load client config: %w", err)
-			}
-			d.client = cc
-
-			// Zero-config: when nothing is configured, default to local SQLite +
-			// keyword-only search so a new user can index and search immediately.
-			if !forceLocal && !keywordOnly && config.ZeroConfigRecommended(d.cfg, d.client.ServerURL != "") {
-				d.localIndexPath = config.DefaultLocalIndexPath()
-				d.keywordOnly = true
-				if cmd.Name() != "help" && cmd.Name() != "completion" {
-					fmt.Fprintln(os.Stderr, "[info] no database or embedding provider configured — using local keyword-only mode (configure GEMINI_API_KEY or SEMIDX_DB_DSN for semantic search)")
-				}
-			}
-
-			d.emb = embed.NewChainFromConfig(embed.ChainConfig{
-				OllamaURL:          d.cfg.OllamaURL,
-				OllamaURLs:         d.cfg.OllamaURLs,
-				Provider:           d.cfg.Provider,
-				Endpoint:           d.cfg.Endpoint,
-				APIKey:             d.cfg.APIKey,
-				GeminiAPIKey:       d.cfg.GeminiAPIKey,
-				GeminiBaseURL:      d.cfg.GeminiBaseURL,
-				GroqAPIKey:         d.cfg.GroqAPIKey,
-				GroqBaseURL:        d.cfg.GroqBaseURL,
-				OpenRouterAPIKey:   d.cfg.OpenRouterAPIKey,
-				OpenRouterBaseURL:  d.cfg.OpenRouterBaseURL,
-				OllamaCloudAPIKey:  d.cfg.OllamaCloudAPIKey,
-				OllamaCloudBaseURL: d.cfg.OllamaCloudBaseURL,
-				Privacy:            d.cfg.Privacy,
-				CircuitThreshold:   d.cfg.EmbedCircuitThreshold,
-				CircuitCooldown:    d.cfg.EmbedCircuitCooldown,
-			})
-			return nil
+			return d.setup(cmd, forceLocal, keywordOnly)
 		},
 		PersistentPostRun: func(_ *cobra.Command, _ []string) {
 			if d.db != nil {
