@@ -38,7 +38,7 @@ func (d *deps) applyPrivacy(force bool) {
 // bucket in keyword-only mode, otherwise the provider's reported dims. Callers
 // wrap the error with their own context.
 func (d *deps) modelDims(ctx context.Context, model string) (int, error) {
-	if d.cfg.KeywordOnly {
+	if d.keywordOnly {
 		return store.KeywordDims, nil
 	}
 	info, err := d.emb.ModelInfo(ctx, model)
@@ -150,7 +150,7 @@ With no embedding provider configured, add --keyword to index text-only.`,
 			if err != nil {
 				return fmt.Errorf("model info for %s: %w (no embedding provider reachable? re-run with --keyword to index text-only)", model, err)
 			}
-			printIndexHeader(tgt, model, dims, d.cfg.KeywordOnly)
+			printIndexHeader(tgt, model, dims, d.keywordOnly)
 
 			if err := db.EnsureChunksTable(ctx, dims); err != nil {
 				return fmt.Errorf("ensure chunks table: %w", err)
@@ -161,15 +161,16 @@ With no embedding provider configured, add --keyword to index text-only.`,
 			}
 
 			indexer := indexing.NewIndexer(db, d.emb, dims, indexing.IndexerOpts{
-				Workers:          d.cfg.IndexWorkers,
-				EmbedBatchSize:   d.cfg.EmbedBatchSize,
-				MaxFileSize:      d.cfg.MaxFileSize,
-				MaxChunksPerFile: d.cfg.MaxChunksPerFile,
-				Verbose:          verbose,
-				GitMode:          gitMode,
-				GitSince:         gitSince,
+				Workers:             d.cfg.IndexWorkers,
+				EmbedBatchSize:      d.cfg.EmbedBatchSize,
+				MaxFileSize:         d.cfg.MaxFileSize,
+				MaxChunksPerFile:    d.cfg.MaxChunksPerFile,
+				MaxChunksPerProject: d.cfg.MaxChunksPerProject,
+				Verbose:             verbose,
+				GitMode:             gitMode,
+				GitSince:            gitSince,
 			}).
-				SetKeywordOnly(d.cfg.KeywordOnly).
+				SetKeywordOnly(d.keywordOnly).
 				SetWorktree(tgt.worktree)
 			start := time.Now()
 			stats, err := indexer.IndexProject(ctx, projectID, tgt.indexPath, model, maxFiles)
@@ -482,7 +483,7 @@ into an agent client. (stdout carries the protocol — logs go to stderr.)`,
 			if err != nil {
 				return err
 			}
-			backend := mcpserver.NewLocalBackend(search.NewService(db, d.emb), db, d.cfg.KeywordOnly)
+			backend := mcpserver.NewLocalBackend(search.NewService(db, d.emb), db, d.keywordOnly)
 			return mcpserver.Run(ctx, backend)
 		},
 	}

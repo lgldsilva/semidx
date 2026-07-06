@@ -4,6 +4,23 @@ The server (`semidx serve`) exposes a small REST API under `/api/v1`, plus
 unauthenticated health and metrics endpoints. All request and response bodies
 are JSON. A Go SDK for this surface lives in [`pkg/client`](../pkg/client).
 
+## Versioning
+
+The API is versioned via the URL path (`/api/v1/`). Within the same major version
+semidx guarantees **no breaking changes** (no removed or renamed fields, no
+changed semantics, no new required request fields). The following changes are
+**not** considered breaking and may appear in any minor/patch release:
+
+- Adding new optional request fields (ignored by older clients).
+- Adding new response fields (older clients safely ignore unknown JSON keys).
+- Adding new endpoints.
+- Changing the order of enum values in responses.
+
+The version number does **not** track the semidx binary version — an `x.y.z`
+binary release may carry the same `/api/v1` surface. A theoretical `/api/v2`
+would only appear when breaking changes are unavoidable, and the old `/api/v1`
+would be deprecated but kept for at least one full release cycle.
+
 ## Authentication
 
 Authenticated endpoints require a bearer token:
@@ -144,9 +161,14 @@ chunks cascade). `404` if unknown.
 }
 ```
 
-`fallback` is `true` when embedding was unavailable and the server used keyword
-search (results are literal, not semantically ranked). `404` if the project does
-not exist.
+- `fallback` is `true` when embedding was unavailable and the server used keyword
+  search (results are literal, not semantically ranked).
+- `took_ms` is the server-side wall-clock time for the search in milliseconds,
+  including both the embedding call (when applicable) and the database query.
+  Use it for latency monitoring but do not rely on its precision for
+  benchmarking — it is measured with `time.Since` and reflects coarse
+  application-level timing.
+- `404` if the project does not exist.
 
 ### Enqueue an index job
 

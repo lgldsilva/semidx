@@ -82,8 +82,8 @@ func (d *deps) resolveMigrateSource(fromPath string) string {
 	if fromPath != "" {
 		return fromPath
 	}
-	if d.cfg.LocalIndexPath != "" {
-		return d.cfg.LocalIndexPath
+	if d.localIndexPath != "" {
+		return d.localIndexPath
 	}
 	return config.DefaultLocalIndexPath()
 }

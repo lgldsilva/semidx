@@ -28,6 +28,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/extract"
 	"github.com/lgldsilva/semidx/internal/gitenv"
+	"github.com/lgldsilva/semidx/internal/observ"
 	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -39,20 +40,28 @@ const (
 
 // Indexer indexes a project into an IndexStore using an Embedder.
 type Indexer struct {
-	db               store.IndexStore
-	embedder         embed.Embedder
-	dims             int
-	workers          int
-	embedBatchSize   int
-	maxFileSize      int // files larger than this are truncated; 0 = use default
-	maxChunksPerFile int // cap on chunks per file; 0 = use default
-	maxChunkChars    int // max characters per chunk (~1000 tokens for bge-m3)
-	log              *slog.Logger
-	verbose          bool
-	gitMode          bool
-	gitSince         string
-	keywordOnly      bool   // when true, store text-only (no embeddings) for keyword search
-	worktree         string // when set, record this worktree's manifest + prune after indexing
+	db                  store.IndexStore
+	embedder            embed.Embedder
+	dims                int
+	workers             int
+	embedBatchSize      int
+	maxFileSize         int // files larger than this are truncated; 0 = use default
+	maxChunksPerFile    int // cap on chunks per file; 0 = use default
+	maxChunksPerProject int // cap on total chunks per project; 0 = unlimited
+	maxChunkChars       int // max characters per chunk (~1000 tokens for bge-m3)
+	log                 *slog.Logger
+	verbose             bool
+	gitMode             bool
+	gitSince            string
+	keywordOnly         bool   // when true, store text-only (no embeddings) for keyword search
+	worktree            string // when set, record this worktree's manifest + prune after indexing
+
+	// mem throttling for the verbose progress path: ReadMemStats triggers a
+	// stop-the-world, so we cache results and refresh at most once per 10s.
+	memMu       sync.Mutex
+	memAt       time.Time
+	lastHeapMB  uint64
+	lastSysMB   uint64
 }
 
 // IndexStats summarizes an indexing run.
@@ -91,14 +100,15 @@ type fileResult struct {
 
 // IndexerOpts groups optional tuning parameters for NewIndexer.
 type IndexerOpts struct {
-	Workers          int
-	EmbedBatchSize   int
-	MaxFileSize      int
-	MaxChunksPerFile int
-	Verbose          bool
-	GitMode          bool
-	GitSince         string
-	Logger           *slog.Logger
+	Workers             int
+	EmbedBatchSize      int
+	MaxFileSize         int
+	MaxChunksPerFile    int
+	MaxChunksPerProject int
+	Verbose             bool
+	GitMode             bool
+	GitSince            string
+	Logger              *slog.Logger
 }
 
 // NewIndexer wires an Indexer. dims is the embedding dimension of the model;
@@ -119,7 +129,7 @@ func NewIndexer(db store.IndexStore, emb embed.Embedder, dims int, opts IndexerO
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	return &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger}
+	return &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunksPerProject: opts.MaxChunksPerProject, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger}
 }
 
 // SetKeywordOnly switches the indexer to keyword-only mode: chunks are stored as
@@ -142,6 +152,9 @@ func (idx *Indexer) SetWorktree(worktree string) *Indexer {
 // IndexProject scans projectPath, indexes each eligible file, optionally indexes
 // git history, and marks the project ready.
 func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath, model string, maxFiles int) (*IndexStats, error) {
+	ctx, span := observ.StartSpan(ctx, "indexing.Indexer.IndexProject")
+	defer span.End()
+
 	stats := &IndexStats{}
 
 	files, err := ScanFiles(projectPath, maxFiles)
@@ -223,7 +236,15 @@ func (idx *Indexer) accumulate(stats *IndexStats, manifest map[string]string, re
 		stats.Errors++
 		idx.logf("[err] %s: %s", rel, truncateErr(r.err, 200))
 	case r.outcome == outcomeIndexed:
-		stats.ChunksCreated += r.created
+		// Per-project chunk cap: if the total would exceed the limit, log a
+		// warning and skip the chunks (the file is still marked indexed so the
+		// caller knows it was processed).
+		if idx.maxChunksPerProject > 0 && stats.ChunksCreated+r.created > idx.maxChunksPerProject {
+			idx.logf("[warn] project chunk limit (%d) reached, not counting %d chunk(s) from %s",
+				idx.maxChunksPerProject, r.created, rel)
+		} else {
+			stats.ChunksCreated += r.created
+		}
 		stats.FilesIndexed++
 	case r.outcome == outcomeSkippedUnchanged:
 		stats.FilesSkipped++
@@ -632,17 +653,41 @@ func (idx *Indexer) logf(format string, args ...any) {
 
 func (idx *Indexer) progress(done, total int, rel string, chunks int) {
 	if idx.verbose {
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
+		heapMB, sysMB := idx.memStats()
 		idx.log.Info("file indexed",
 			"progress", fmt.Sprintf("%d/%d", done, total),
 			"path", rel, "chunks", chunks,
-			"heap_mb", m.Alloc/1024/1024, "sys_mb", m.Sys/1024/1024)
+			"heap_mb", heapMB, "sys_mb", sysMB)
 	} else if done%logEvery == 0 || done == total {
 		idx.log.Info("indexing progress",
 			"progress", fmt.Sprintf("%d/%d", done, total),
 			"chunks", chunks)
 	}
+}
+
+// memStats returns the live heap and system allocation sizes in MB,
+// throttled to one runtime.ReadMemStats call per 10s. ReadMemStats triggers a
+// stop-the-world; calling it on every progress tick (every file) measurably
+// slows indexing with many workers, so the throttle sacrifices sub-second
+// resolution for throughput.
+func (idx *Indexer) memStats() (uint64, uint64) {
+	now := time.Now()
+	idx.memMu.Lock()
+	if now.Sub(idx.memAt) < 10*time.Second {
+		h, s := idx.lastHeapMB, idx.lastSysMB
+		idx.memMu.Unlock()
+		return h, s
+	}
+	idx.memAt = now
+	idx.memMu.Unlock()
+
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	h, s := m.Alloc/1024/1024, m.Sys/1024/1024
+	idx.memMu.Lock()
+	idx.lastHeapMB, idx.lastSysMB = h, s
+	idx.memMu.Unlock()
+	return h, s
 }
 
 func truncateErr(err error, maxLen int) string {

@@ -26,18 +26,44 @@ func (s *Server) StartWorkers(ctx context.Context, n int, dataDir string) {
 }
 
 func (s *Server) worker(ctx context.Context, dataDir string) {
-	ticker := time.NewTicker(2 * time.Second)
+	// Try LISTEN/NOTIFY for immediate job dispatch.
+	var notifyCh <-chan string
+	if jn, ok := s.store.(store.JobNotifier); ok {
+		var err error
+		notifyCh, err = jn.ListenJobInsert(ctx)
+		if err != nil {
+			s.log.Warn("LISTEN/NOTIFY unavailable, falling back to polling", "err", err)
+			notifyCh = nil
+		}
+	}
+
+	ticker := time.NewTicker(2 * time.Second) // fallback polling
 	defer ticker.Stop()
+
 	for {
-		select {
-		case <-ctx.Done():
+		// Drain all currently-queued jobs before sleeping again.
+		for s.claimAndRun(ctx, dataDir) {
+			if ctx.Err() != nil {
+				return
+			}
+		}
+		if ctx.Err() != nil {
 			return
-		case <-ticker.C:
-			// Drain all currently-queued jobs before sleeping again.
-			for s.claimAndRun(ctx, dataDir) {
-				if ctx.Err() != nil {
-					return
-				}
+		}
+
+		// No job available — wait for notification or ticker.
+		if notifyCh != nil {
+			select {
+			case <-notifyCh:
+			case <-ticker.C:
+			case <-ctx.Done():
+				return
+			}
+		} else {
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}
