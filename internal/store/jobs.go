@@ -11,11 +11,14 @@ import (
 type Job struct {
 	ID            int
 	ProjectID     int
-	Type          string // "full" | "git_history"
+	Type          string // "full" | "git_history" | "batch"
 	Status        string // queued | running | succeeded | failed
 	Error         string
 	FilesIndexed  int
 	ChunksCreated int
+	Payload       string // JSON payload for batch jobs
+	DeletedFiles  int
+	ErrorCount    int
 }
 
 // EnqueueJob queues an indexing job for a project.
@@ -24,6 +27,15 @@ func (s *PgStore) EnqueueJob(ctx context.Context, projectID int, jobType string)
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO index_jobs (project_id, type) VALUES ($1, $2) RETURNING id`,
 		projectID, jobType).Scan(&id)
+	return id, err
+}
+
+// EnqueueBatchJob queues a batch indexing job with a JSON payload.
+func (s *PgStore) EnqueueBatchJob(ctx context.Context, projectID int, payload string) (int, error) {
+	var id int
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO index_jobs (project_id, type, payload) VALUES ($1, 'batch', $2) RETURNING id`,
+		projectID, payload).Scan(&id)
 	return id, err
 }
 
@@ -38,8 +50,8 @@ func (s *PgStore) ClaimJob(ctx context.Context) (*Job, error) {
 			SELECT id FROM index_jobs WHERE status = 'queued'
 			ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1
 		)
-		RETURNING id, project_id, type, status
-	`).Scan(&j.ID, &j.ProjectID, &j.Type, &j.Status)
+		RETURNING id, project_id, type, status, COALESCE(payload, '')
+	`).Scan(&j.ID, &j.ProjectID, &j.Type, &j.Status, &j.Payload)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -85,11 +97,12 @@ func (s *PgStore) ListenJobInsert(ctx context.Context) (<-chan string, error) {
 }
 
 // CompleteJob marks a job succeeded with its result counts.
-func (s *PgStore) CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated int) error {
+func (s *PgStore) CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated, deletedFiles, errorCount int) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE index_jobs SET status = 'succeeded', finished_at = NOW(),
-			files_indexed = $2, chunks_created = $3 WHERE id = $1
-	`, id, filesIndexed, chunksCreated)
+			files_indexed = $2, chunks_created = $3, deleted_files = $4, error_count = $5
+		WHERE id = $1
+	`, id, filesIndexed, chunksCreated, deletedFiles, errorCount)
 	return err
 }
 
@@ -105,9 +118,11 @@ func (s *PgStore) FailJob(ctx context.Context, id int, errMsg string) error {
 func (s *PgStore) GetJob(ctx context.Context, id int) (*Job, error) {
 	var j Job
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, project_id, type, status, COALESCE(error, ''), files_indexed, chunks_created
+		SELECT id, project_id, type, status, COALESCE(error, ''), files_indexed, chunks_created,
+			COALESCE(payload, ''), deleted_files, error_count
 		FROM index_jobs WHERE id = $1
-	`, id).Scan(&j.ID, &j.ProjectID, &j.Type, &j.Status, &j.Error, &j.FilesIndexed, &j.ChunksCreated)
+	`, id).Scan(&j.ID, &j.ProjectID, &j.Type, &j.Status, &j.Error, &j.FilesIndexed, &j.ChunksCreated,
+		&j.Payload, &j.DeletedFiles, &j.ErrorCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

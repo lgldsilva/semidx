@@ -169,8 +169,9 @@ type SessionStore interface {
 // JobStore groups job-queue operations.
 type JobStore interface {
 	EnqueueJob(ctx context.Context, projectID int, jobType string) (int, error)
+	EnqueueBatchJob(ctx context.Context, projectID int, payload string) (int, error)
 	ClaimJob(ctx context.Context) (*Job, error)
-	CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated int) error
+	CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated, deletedFiles, errorCount int) error
 	FailJob(ctx context.Context, id int, errMsg string) error
 	GetJob(ctx context.Context, id int) (*Job, error)
 }

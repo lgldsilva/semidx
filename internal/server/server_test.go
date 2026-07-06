@@ -56,6 +56,8 @@ type fakeStore struct {
 	failCh      chan string // if set, FailJob sends its message (for async worker tests)
 	compFiles   int         // last CompleteJob filesIndexed
 	compChunks  int         // last CompleteJob chunksCreated
+	compDeleted int         // last CompleteJob deletedFiles
+	compErrors  int         // last CompleteJob errorCount
 	compCalled  bool
 }
 
