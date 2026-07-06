@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lgldsilva/semidx/internal/xdg"
 )
 
 const (
@@ -139,11 +141,7 @@ type Config struct {
 // per-user data dir (os.UserCacheDir: %LocalAppData% on Windows, ~/Library/Caches
 // on macOS, $XDG_CACHE_HOME or ~/.cache on Linux), so semidx works cross-platform.
 func DefaultLocalIndexPath() string {
-	dir, err := os.UserCacheDir()
-	if err != nil {
-		return "semidx-index.db"
-	}
-	return filepath.Join(dir, "semidx", "index.db")
+	return xdg.DefaultLocalIndexPath()
 }
 
 // resolveLocalIndex maps SEMIDX_LOCAL_INDEX to a path: empty → "" (server mode);
@@ -350,11 +348,7 @@ func IsSecret(key string) bool {
 // XDG_CONFIG_HOME (usually ~/.config/semidx/semidx.env). It is the lowest-
 // precedence file layer, below a project .env and the real environment.
 func UserEnvPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "semidx", "semidx.env"), nil
+	return xdg.UserEnvPath()
 }
 
 // LoadUserEnv returns the persisted key/value pairs (empty when the file is
