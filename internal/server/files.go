@@ -10,6 +10,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/indexing"
+	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -62,6 +63,10 @@ func (s *Server) handleFilesDiff(w http.ResponseWriter, r *http.Request) {
 
 	stale := make([]string, 0)
 	for path, hash := range body.Files {
+		if err := validateRelativePath(path); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid path "+path+": "+err.Error())
+			return
+		}
 		if existing[path] != hash { // new or changed
 			stale = append(stale, path)
 		}
@@ -93,6 +98,10 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 	var body batchRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := validateBatchBody(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -139,6 +148,20 @@ func (s *Server) handleFilesBatchSync(w http.ResponseWriter, r *http.Request, pr
 	writeJSON(w, http.StatusOK, map[string]any{
 		"indexed": indexed, "chunks": chunks, "deleted": deleted, "errors": errors,
 	})
+}
+
+func validateBatchBody(body *batchRequestBody) error {
+	for _, f := range body.Files {
+		if err := validateRelativePath(f.Path); err != nil {
+			return fmt.Errorf("invalid path %s: %w", f.Path, err)
+		}
+	}
+	for _, p := range body.Delete {
+		if err := validateRelativePath(p); err != nil {
+			return fmt.Errorf("invalid delete path %s: %w", p, err)
+		}
+	}
+	return nil
 }
 
 // processBatchFiles indexes pushed files and removes deleted ones, sharing the
@@ -190,6 +213,10 @@ func (s *Server) indexBatchFile(ctx context.Context, proj *store.Project, idx *i
 // directly. The raw content is still hashed and recorded for file dedup; only
 // chunking and embedding are skipped.
 func (s *Server) indexPreEmbedded(ctx context.Context, proj *store.Project, path, rawContent string, fileChunks []embeddedChunk, dims int) (int, error) {
+	if privacy.IsSensitive(path) {
+		return 0, fmt.Errorf("path %q is classified as sensitive; pre-embedded uploads are not allowed", path)
+	}
+
 	// P0: validate dimensions match the project's model.
 	for i, ch := range fileChunks {
 		if len(ch.Embedding) != dims {

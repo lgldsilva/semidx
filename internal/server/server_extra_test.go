@@ -390,16 +390,53 @@ func TestHandleFilesBatchAsync(t *testing.T) {
 }
 
 func TestHandleFilesBatchAsyncNoSourceType(t *testing.T) {
-	// A non-push project should refuse async batch.
 	writeTok := &store.Token{Scopes: []string{"write"}}
 	fs := &fakeStore{
 		token:   writeTok,
-		project: &store.Project{ID: 1, Name: "p", Model: "m"}, // SourceType defaults to ""
+		project: &store.Project{ID: 1, Name: "p", Model: "m"},
 	}
 	srv := New(fs, cfgEmbedder{}, nil)
 	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", `{"files":[]}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("async batch for non-push project = %d, want 400; body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleFilesBatchInvalidPath(t *testing.T) {
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m", SourceType: "push"}}
+	srv := New(fs, cfgEmbedder{}, nil)
+	body := `{"files":[{"path":"../etc/passwd","content":"x"}]}`
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch", "tok", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("traversal path = %d, want 400; body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMetricsTokenRequired(t *testing.T) {
+	srv := New(&fakeStore{}, fakeEmbedder{}, nil)
+	srv.SetMetricsToken("secret-metrics")
+	rec := do(t, srv, "GET", "/metrics", "", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("metrics without token = %d, want 401", rec.Code)
+	}
+	rec = do(t, srv, "GET", "/metrics", "secret-metrics", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("metrics with token = %d, want 200", rec.Code)
+	}
+}
+
+func TestHandleFilesBatchPreEmbeddedSensitivePath(t *testing.T) {
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	fs := &fakeStore{token: writeTok, project: &store.Project{ID: 1, Name: "p", Model: "m"}}
+	srv := New(fs, cfgEmbedder{}, nil)
+	body := `{"files":[{"path":".env","content":"SECRET=x","chunks":[{"start_line":1,"end_line":1,"content":"SECRET=x","embedding":[0.1,0.2,0.3]}]}]}`
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch?sync=true", "tok", body)
+	if rec.Code != 200 {
+		t.Fatalf("batch = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"errors":1`) {
+		t.Errorf("sensitive pre-embedded path should be rejected; body %s", rec.Body.String())
 	}
 }
 

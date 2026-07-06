@@ -114,7 +114,8 @@ func (a *Admin) logout(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 // --- dashboard & search ------------------------------------------------------
 
 func (a *Admin) dashboard(w http.ResponseWriter, r *http.Request, ac *authCtx) {
-	projects, err := a.store.ListProjects(r.Context(), 0, 0)
+	limit, offset := parseListParams(r)
+	projects, err := a.store.ListProjects(r.Context(), limit, offset)
 	if err != nil {
 		a.log.Error("list projects failed", "err", err)
 	}
@@ -147,7 +148,11 @@ func (a *Admin) searchPage(w http.ResponseWriter, r *http.Request, ac *authCtx) 
 		d.Ran = true
 		resp, err := a.search.Search(r.Context(), search.Request{Project: d.Project, Query: d.Query, TopK: topK})
 		if err != nil {
-			p.Err = err.Error()
+			if errors.Is(err, store.ErrNotFound) {
+				p.Err = "project not found"
+			} else {
+				p.Err = err.Error()
+			}
 		} else {
 			d.Results = resp.Results
 			d.Fallback = resp.Fallback
@@ -163,7 +168,8 @@ type projectItem struct {
 }
 
 func (a *Admin) projectsAPI(w http.ResponseWriter, r *http.Request, ac *authCtx) {
-	projects, err := a.store.ListProjects(r.Context(), 0, 0)
+	limit, offset := parseListParams(r)
+	projects, err := a.store.ListProjects(r.Context(), limit, offset)
 	if err != nil {
 		a.log.Error("list projects (api) failed", "err", err)
 		w.Header().Set(headerContentType, "application/json")
@@ -211,9 +217,10 @@ func (a *Admin) keysCreate(w http.ResponseWriter, r *http.Request, ac *authCtx) 
 		a.renderKeys(w, r, ac, "", "", "a key name is required")
 		return
 	}
-	scopes := r.Form["scopes"]
-	if len(scopes) == 0 {
-		scopes = []string{"read"}
+	scopes, err := scopesFromForm(r.Form["scopes"], ac.user.Role)
+	if err != nil {
+		a.renderKeys(w, r, ac, "", "", err.Error())
+		return
 	}
 	plaintext, hash, err := generateAPIToken()
 	if err != nil {
@@ -285,7 +292,8 @@ func (a *Admin) usersList(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 }
 
 func (a *Admin) renderUsers(w http.ResponseWriter, r *http.Request, ac *authCtx, flash, errMsg string) {
-	users, err := a.store.ListUsers(r.Context(), 0, 0)
+	limit, offset := parseListParams(r)
+	users, err := a.store.ListUsers(r.Context(), limit, offset)
 	if err != nil {
 		a.log.Error("list users failed", "err", err)
 		errMsg = "could not load users"

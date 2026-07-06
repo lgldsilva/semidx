@@ -415,6 +415,32 @@ func TestTokensNonAdminAdminScope(t *testing.T) {
 	}
 }
 
+func TestKeysNonAdminAdminScope(t *testing.T) {
+	srv, fs := newTestAdmin(t)
+	fs.addUser("bob", "supersecret", "member")
+	c := newClient(t)
+	login(t, c, srv.URL, "bob", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+	if _, body := post(t, c, srv.URL+"/admin/keys", url.Values{
+		"csrf_token": {csrf}, "name": {"laptop"}, "scopes": {"admin"},
+	}); !strings.Contains(body, "only admins can issue admin-scoped tokens") {
+		t.Errorf("member issuing admin API key not blocked; body=%q", body)
+	}
+}
+
+func TestKeysInvalidScope(t *testing.T) {
+	srv, fs := newTestAdmin(t)
+	fs.addUser("admin", "supersecret", "admin")
+	c := newClient(t)
+	login(t, c, srv.URL, "admin", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+	if _, body := post(t, c, srv.URL+"/admin/keys", url.Values{
+		"csrf_token": {csrf}, "name": {"x"}, "scopes": {"superuser"},
+	}); !strings.Contains(body, "invalid scope") {
+		t.Errorf("invalid scope not reported; body=%q", body)
+	}
+}
+
 func TestTokensDisabled(t *testing.T) {
 	// jwt nil → control tokens feature is off.
 	srv, fs := newAdminWith(t, nil, nil)

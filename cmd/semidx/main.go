@@ -147,7 +147,7 @@ Run "semidx <command> --help" for details on any command.`,
 		Version:       fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			d.cfg = config.Load()
 			// Resolve the local index path without mutating the loaded config.
 			// --local forces standalone mode at the default path unless a path was
@@ -158,6 +158,23 @@ Run "semidx <command> --help" for details on any command.`,
 			}
 			// Resolve keyword-only mode without mutating the loaded config.
 			d.keywordOnly = d.cfg.KeywordOnly || keywordOnly
+
+			cc, err := clientconfig.Load()
+			if err != nil {
+				return fmt.Errorf("load client config: %w", err)
+			}
+			d.client = cc
+
+			// Zero-config: when nothing is configured, default to local SQLite +
+			// keyword-only search so a new user can index and search immediately.
+			if !forceLocal && !keywordOnly && config.ZeroConfigRecommended(d.cfg, d.client.ServerURL != "") {
+				d.localIndexPath = config.DefaultLocalIndexPath()
+				d.keywordOnly = true
+				if cmd.Name() != "help" && cmd.Name() != "completion" {
+					fmt.Fprintln(os.Stderr, "[info] no database or embedding provider configured — using local keyword-only mode (configure GEMINI_API_KEY or SEMIDX_DB_DSN for semantic search)")
+				}
+			}
+
 			d.emb = embed.NewChainFromConfig(embed.ChainConfig{
 				OllamaURL:          d.cfg.OllamaURL,
 				OllamaURLs:         d.cfg.OllamaURLs,
@@ -176,11 +193,6 @@ Run "semidx <command> --help" for details on any command.`,
 				CircuitThreshold:   d.cfg.EmbedCircuitThreshold,
 				CircuitCooldown:    d.cfg.EmbedCircuitCooldown,
 			})
-			cc, err := clientconfig.Load()
-			if err != nil {
-				return fmt.Errorf("load client config: %w", err)
-			}
-			d.client = cc
 			return nil
 		},
 		PersistentPostRun: func(_ *cobra.Command, _ []string) {
