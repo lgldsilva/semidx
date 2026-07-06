@@ -87,6 +87,15 @@ func (f *fakeStore) GetProject(_ context.Context, name string) (*store.Project, 
 	}
 	return f.project, nil
 }
+func (f *fakeStore) GetProjectByIdentity(_ context.Context, identity string) (*store.Project, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	if f.project != nil && f.project.Identity == identity {
+		return f.project, nil
+	}
+	return nil, store.ErrNotFound
+}
 func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gitURL, branch string, _ int) (*store.Project, error) {
 	if f.createErr != nil {
 		return nil, f.createErr

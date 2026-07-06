@@ -181,6 +181,38 @@ func TestSearchPage(t *testing.T) {
 		}
 	})
 
+	t.Run("search all projects dedupes by identity", func(t *testing.T) {
+		srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+		fs.addUser("admin", "supersecret", "admin")
+		fs.projects = []store.Project{
+			{ID: 1, Name: "jackui-a", Identity: "git:example/jackui", Model: "bge-m3"},
+			{ID: 2, Name: "jackui-b", Identity: "git:example/jackui", Model: "bge-m3"},
+		}
+		fs.searchResults = []store.SearchResult{{FilePath: "main.go", Content: "hit", Score: 0.85}}
+		c := newClient(t)
+		login(t, c, srv.URL, "admin", "supersecret")
+		code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello&top=5")
+		if code != 200 {
+			t.Fatalf("status = %d", code)
+		}
+		if !strings.Contains(body, "Searched 1 project") {
+			t.Errorf("expected deduped project count, body=%q", body)
+		}
+	})
+
+	t.Run("case-insensitive project name resolves", func(t *testing.T) {
+		srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+		fs.addUser("admin", "supersecret", "admin")
+		fs.projects = []store.Project{{ID: 1, Name: "jackui", Model: "bge-m3"}}
+		fs.searchResults = []store.SearchResult{{FilePath: "a.go", Content: "hit", Score: 0.9}}
+		c := newClient(t)
+		login(t, c, srv.URL, "admin", "supersecret")
+		code, body := getBody(t, c, srv.URL+"/admin/search?project=JackUI&q=hello")
+		if code != 200 || !strings.Contains(body, "a.go") {
+			t.Errorf("case-insensitive search = %d, body=%q", code, body)
+		}
+	})
+
 	t.Run("search all projects merges and labels results", func(t *testing.T) {
 		srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
 		fs.addUser("admin", "supersecret", "admin")

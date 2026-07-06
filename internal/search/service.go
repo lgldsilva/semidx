@@ -15,6 +15,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/observ"
+	"github.com/lgldsilva/semidx/internal/projectref"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -153,12 +154,15 @@ func (s *Service) searchSemantic(ctx context.Context, projectID int, req Request
 }
 
 // resolveProject looks the project up by unique identity when the request carries
-// one, else by name (backward-compatible).
+// one, else by flexible ref (path, identity, or name).
 func (s *Service) resolveProject(ctx context.Context, req Request) (*store.Project, error) {
 	if req.Identity != "" {
 		return s.store.GetProjectByIdentity(ctx, req.Identity)
 	}
-	return s.store.GetProject(ctx, req.Project)
+	if req.Project != "" {
+		return projectref.Resolve(ctx, s.store, req.Project)
+	}
+	return nil, store.ErrNotFound
 }
 
 // vectorSearch runs a vector similarity search, scoped to a worktree's checked-out

@@ -28,6 +28,21 @@ func (f *fakeStore) GetProject(ctx context.Context, name string) (*store.Project
 	}
 	return f.project, nil
 }
+func (f *fakeStore) GetProjectByIdentity(_ context.Context, identity string) (*store.Project, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	if f.project != nil && f.project.Identity == identity {
+		return f.project, nil
+	}
+	return nil, store.ErrNotFound
+}
+func (f *fakeStore) ListProjects(context.Context, int, int) ([]store.Project, error) {
+	if f.project != nil {
+		return []store.Project{*f.project}, nil
+	}
+	return nil, nil
+}
 func (f *fakeStore) SearchSimilar(ctx context.Context, projectID int, embedding []float32, dims, topK int) ([]store.SearchResult, error) {
 	f.gotTopK = topK
 	return f.simResults, nil
