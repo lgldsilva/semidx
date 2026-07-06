@@ -2,52 +2,15 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/lgldsilva/semidx/internal/gitmeta"
-	"github.com/lgldsilva/semidx/internal/projectref"
 	"github.com/lgldsilva/semidx/internal/search"
-	"github.com/lgldsilva/semidx/internal/store"
-	"github.com/lgldsilva/semidx/pkg/client"
+	"github.com/lgldsilva/semidx/internal/searchtargets"
 )
-
-// renderSearchJSON emits one project's results via the standard JSONFormatter, or
-// a {"projects":[…]} array when several projects were searched.
-func renderSearchJSON(w io.Writer, results []projSearch) error {
-	if len(results) == 1 {
-		return search.JSONFormatter{}.Format(w, results[0].resp)
-	}
-	type row struct {
-		File    string  `json:"file"`
-		Score   float64 `json:"score"`
-		Content string  `json:"content"`
-	}
-	type proj struct {
-		Project  string `json:"project"`
-		Model    string `json:"model"`
-		Fallback bool   `json:"fallback"`
-		Results  []row  `json:"results"`
-	}
-	out := struct {
-		Projects []proj `json:"projects"`
-	}{Projects: []proj{}}
-	for _, ps := range results {
-		p := proj{Project: ps.name, Model: ps.resp.Model, Fallback: ps.resp.Fallback, Results: []row{}}
-		for _, r := range ps.resp.Results {
-			p.Results = append(p.Results, row{File: r.FilePath, Score: r.Score, Content: r.Content})
-		}
-		out.Projects = append(out.Projects, p)
-	}
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(out)
-}
 
 // projSearch is one project's search outcome (used to render single- and
 // multi-project output uniformly).
@@ -68,113 +31,58 @@ type projSearch struct {
 // identity) before calling the API.
 func (d *deps) runSearchTargets(cmd *cobra.Command, projectArg, query, model string, topK int, privacy bool) ([]projSearch, error) {
 	ctx := cmd.Context()
-
-	graph, _ := cmd.Flags().GetBool("graph")
-	graphDepth, _ := cmd.Flags().GetInt("graph-depth")
-
 	if d.remote() {
-		if projectArg == "" {
-			return nil, fmt.Errorf("--project is required in remote mode")
-		}
-		api := d.apiClient()
-		projects, err := api.ListProjects(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("list projects: %w", err)
-		}
-		p, err := projectref.ResolveInList(ctx, projectArg, "", clientProjectsToStore(projects))
-		if err != nil {
-			return nil, fmt.Errorf("project not found: %s (index it, or pass a path/name that exists)", projectArg)
-		}
-		resp, err := api.Search(ctx, p.Name, query, model, topK)
-		if err != nil {
-			return nil, err
-		}
-		return []projSearch{{p.Name, remoteToResponse(resp), time.Duration(resp.TookMS) * time.Millisecond}}, nil
+		return d.runRemoteSearch(ctx, projectArg, query, model, topK)
 	}
+	return d.runLocalSearch(ctx, projectArg, query, model, topK, privacy)
+}
 
+func (d *deps) runRemoteSearch(ctx context.Context, projectArg, query, model string, topK int) ([]projSearch, error) {
+	api := d.apiClient()
+	p, err := searchtargets.ResolveRemoteProject(ctx, api, projectArg)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := api.Search(ctx, p.Name, query, model, topK)
+	if err != nil {
+		return nil, err
+	}
+	return []projSearch{{p.Name, remoteToResponse(resp), time.Duration(resp.TookMS) * time.Millisecond}}, nil
+}
+
+func (d *deps) runLocalSearch(ctx context.Context, projectArg, query, model string, topK int, privacy bool) ([]projSearch, error) {
 	d.applyPrivacy(privacy)
 	db, err := d.indexStore(ctx)
 	if err != nil {
 		return nil, err
 	}
-	targets, err := d.resolveSearchProjects(ctx, db, projectArg)
+	targets, err := searchtargets.ResolveProjects(ctx, db, projectArg, "")
 	if err != nil {
 		return nil, err
 	}
-
-	svc := search.NewService(db, d.emb)
-	// The worktree filter only makes sense for the git project the cwd is in.
 	var cwdGit gitmeta.Info
 	if gi := gitmeta.Resolve(ctx, "."); gi.IsGit {
 		cwdGit = gi
 	}
-
-	out := make([]projSearch, 0, len(targets))
-	for _, p := range targets {
-		req := search.Request{Query: query, Model: model, TopK: topK, KeywordOnly: d.keywordOnly, Graph: graph, GraphMaxDepth: graphDepth}
-		if p.Identity != "" {
-			req.Identity = p.Identity
-		} else {
-			req.Project = p.Name
-		}
-		if p.SourceType == "git" && cwdGit.IsGit && cwdGit.Identity == p.Identity {
-			req.Worktree = cwdGit.Toplevel
-		}
-		start := time.Now()
-		resp, serr := svc.Search(ctx, req)
-		if serr != nil {
-			return nil, serr
-		}
-		out = append(out, projSearch{p.Name, resp, time.Since(start)})
+	req := search.Request{Query: query, Model: model, TopK: topK, KeywordOnly: d.keywordOnly}
+	results, err := searchtargets.SearchLocal(ctx, db, d.emb, targets, req, cwdGit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]projSearch, 0, len(results))
+	for _, r := range results {
+		out = append(out, projSearch{name: r.Name, resp: r.Resp})
 	}
 	return out, nil
 }
 
-// resolveSearchProjects turns the --project argument (or its absence) into the
-// list of projects to search.
-func (d *deps) resolveSearchProjects(ctx context.Context, db store.IndexStore, projectArg string) ([]*store.Project, error) {
-	if projectArg != "" {
-		p, err := projectref.Resolve(ctx, db, projectArg)
-		if err != nil {
-			return nil, fmt.Errorf("project not found: %s (index it, or pass a path/name that exists)", projectArg)
-		}
-		return []*store.Project{p}, nil
+// renderSearchJSON delegates to searchtargets for test coverage (cmd is excluded).
+func renderSearchJSON(w io.Writer, results []projSearch) error {
+	named := make([]searchtargets.NamedResult, len(results))
+	took := make([]time.Duration, len(results))
+	for i, r := range results {
+		named[i] = searchtargets.NamedResult{Name: r.name, Resp: r.resp}
+		took[i] = r.took
 	}
-
-	// No project given: auto-detect the one enclosing the current directory.
-	cwd, _ := os.Getwd()
-	if gi := gitmeta.Resolve(ctx, cwd); gi.IsGit {
-		if p, err := db.GetProjectByIdentity(ctx, gi.Identity); err == nil {
-			return []*store.Project{p}, nil
-		}
-	}
-	projects, err := db.ListProjects(ctx, 0, 0)
-	if err != nil {
-		return nil, err
-	}
-	if p := projectref.Enclosing(cwd, projects); p != nil {
-		return []*store.Project{p}, nil
-	}
-	// Nothing encloses the cwd → search everything (one pass per identity).
-	unique := projectref.UniqueByIdentity(projects)
-	if len(unique) == 0 {
-		return nil, fmt.Errorf("no indexed projects found — run 'semidx index --project .' first")
-	}
-	all := make([]*store.Project, len(unique))
-	for i := range unique {
-		all[i] = &unique[i]
-	}
-	return all, nil
-}
-
-func clientProjectsToStore(projects []client.Project) []store.Project {
-	out := make([]store.Project, len(projects))
-	for i, p := range projects {
-		out[i] = store.Project{
-			Name: p.Name, Model: p.Model, Status: p.Status,
-			SourceType: p.SourceType, GitURL: p.GitURL, Branch: p.Branch,
-			Identity: p.Identity, Path: p.Path,
-		}
-	}
-	return out
+	return searchtargets.RenderSearchJSON(w, named, took)
 }
