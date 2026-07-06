@@ -59,7 +59,9 @@ func (c *OpenAIClient) Embed(ctx context.Context, model string, inputs ...string
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {

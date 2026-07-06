@@ -58,10 +58,10 @@ type Indexer struct {
 
 	// mem throttling for the verbose progress path: ReadMemStats triggers a
 	// stop-the-world, so we cache results and refresh at most once per 10s.
-	memMu       sync.Mutex
-	memAt       time.Time
-	lastHeapMB  uint64
-	lastSysMB   uint64
+	memMu      sync.Mutex
+	memAt      time.Time
+	lastHeapMB uint64
+	lastSysMB  uint64
 }
 
 // IndexStats summarizes an indexing run.
