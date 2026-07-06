@@ -28,6 +28,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/extract"
 	"github.com/lgldsilva/semidx/internal/gitenv"
+	si "github.com/lgldsilva/semidx/internal/imports"
 	"github.com/lgldsilva/semidx/internal/observ"
 	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -473,14 +474,12 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		chunks = chunks[:idx.maxChunksPerFile]
 	}
 
-	// Extract Go import dependencies for graph edges.
-	if strings.HasSuffix(rel, ".go") {
-		deps := chunker.AnalyzeGoImports(content, idx.modulePath)
-		if len(deps) > 0 {
-			// Best-effort: don't fail indexing if dependency recording fails.
-			if err := idx.db.InsertFileDependencies(ctx, projectID, rel, deps); err != nil {
-				idx.log.Warn("failed to record dependencies", "file", rel, "error", err)
-			}
+	// Extract import dependencies for graph edges (all supported languages).
+	deps := si.Analyze(rel, content, idx.modulePath)
+	if len(deps) > 0 {
+		// Best-effort: don't fail indexing if dependency recording fails.
+		if err := idx.db.InsertFileDependencies(ctx, projectID, rel, deps); err != nil {
+			idx.log.Warn("failed to record dependencies", "file", rel, "error", err)
 		}
 	}
 

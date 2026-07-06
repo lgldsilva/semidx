@@ -351,6 +351,9 @@ func (g *graphlessStore) FetchGraphNeighbors(context.Context, int) (map[string][
 func (g *graphlessStore) FetchChunksByPath(context.Context, int, string, int, int) ([]store.SearchResult, error) {
 	panic("FetchChunksByPath must not be called when Graph=false")
 }
+func (g *graphlessStore) FetchChunksByDirPrefix(context.Context, int, string, int, int) ([]store.SearchResult, error) {
+	panic("FetchChunksByDirPrefix must not be called when Graph=false")
+}
 
 // graphEnabledStore returns empty graph data so Search with Graph=true does not panic.
 type graphEnabledStore struct {
@@ -361,6 +364,9 @@ func (g *graphEnabledStore) FetchGraphNeighbors(ctx context.Context, projectID i
 	return nil, nil // empty graph — expansion returns nothing
 }
 func (g *graphEnabledStore) FetchChunksByPath(ctx context.Context, projectID int, filePath string, dims, limit int) ([]store.SearchResult, error) {
+	return nil, nil
+}
+func (g *graphEnabledStore) FetchChunksByDirPrefix(ctx context.Context, projectID int, dirPrefix string, dims, limit int) ([]store.SearchResult, error) {
 	return nil, nil
 }
 

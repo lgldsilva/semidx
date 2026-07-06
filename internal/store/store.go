@@ -135,6 +135,11 @@ type IndexStore interface {
 	// chunk_index. Returns empty slice if the file has no chunks.
 	FetchChunksByPath(ctx context.Context, projectID int, filePath string, dims, limit int) ([]SearchResult, error)
 
+	// FetchChunksByDirPrefix returns chunks for files whose path starts with the
+	// given directory prefix (e.g. "internal/store/" matches "internal/store/store.go").
+	// Returns empty slice if no files match.
+	FetchChunksByDirPrefix(ctx context.Context, projectID int, dirPrefix string, dims, limit int) ([]SearchResult, error)
+
 	DropAll(ctx context.Context) error
 }
 
@@ -1080,6 +1085,22 @@ func (s *PgStore) FetchChunksByPath(ctx context.Context, projectID int, filePath
 	}
 	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path = $2 ORDER BY c.chunk_index LIMIT $3`, table)
 	rows, err := s.pool.Query(ctx, query, projectID, filePath, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanSearchRows(rows)
+}
+
+// FetchChunksByDirPrefix returns chunks for files whose path starts with the
+// given directory prefix. Returns empty slice if no files match.
+func (s *PgStore) FetchChunksByDirPrefix(ctx context.Context, projectID int, dirPrefix string, dims, limit int) ([]SearchResult, error) {
+	table, err := chunksTable(dims)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path LIKE $2 || '%%' ORDER BY c.chunk_index LIMIT $3`, table)
+	rows, err := s.pool.Query(ctx, query, projectID, dirPrefix, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -312,11 +312,13 @@ func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults [
 		return nil, nil
 	}
 
-	// Fetch chunks for each expanded path.
+	// Fetch chunks for each expanded path. Graph-discovered paths from the AST
+	// analyzer are directory prefixes (e.g. "internal/store/"), so we use
+	// FetchChunksByDirPrefix which does a LIKE match.
 	limit := 3 // representative chunks per file
 	var results []store.SearchResult
 	for path, score := range expanded {
-		chunks, err := s.store.FetchChunksByPath(ctx, projectID, path, dims, limit)
+		chunks, err := s.store.FetchChunksByDirPrefix(ctx, projectID, path, dims, limit)
 		if err != nil {
 			// Best-effort: skip files we cannot read.
 			slog.Debug("expandByGraph: skip unreadable path", "path", path, "error", err)
