@@ -217,11 +217,18 @@ func (f *fakeStore) ListProjects(context.Context, int, int) ([]store.Project, er
 	return f.projects, f.listProjectsErr
 }
 
-func (f *fakeStore) GetProject(_ context.Context, _ string) (*store.Project, error) {
-	if f.searchProject == nil {
-		return nil, store.ErrNotFound
+func (f *fakeStore) GetProject(_ context.Context, name string) (*store.Project, error) {
+	for i := range f.projects {
+		if f.projects[i].Name == name {
+			return &f.projects[i], nil
+		}
 	}
-	return f.searchProject, nil
+	if f.searchProject != nil {
+		if len(f.projects) == 0 || f.searchProject.Name == name {
+			return f.searchProject, nil
+		}
+	}
+	return nil, store.ErrNotFound
 }
 
 func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]store.SearchResult, error) {

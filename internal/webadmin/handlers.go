@@ -1,10 +1,12 @@
 package webadmin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -122,13 +124,20 @@ func (a *Admin) dashboard(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	a.render(w, "dashboard.html", page{User: ac.user, CSRF: ac.csrf, Active: "projects", Data: projects})
 }
 
+type adminSearchHit struct {
+	Project string
+	store.SearchResult
+}
+
 type searchData struct {
-	Project  string
-	Query    string
-	Top      int
-	Results  []store.SearchResult
-	Fallback bool
-	Ran      bool
+	Project      string
+	AllProjects  bool
+	Query        string
+	Top          int
+	Results      []adminSearchHit
+	Fallback     bool
+	Ran          bool
+	ProjectCount int // set when AllProjects ran
 }
 
 func (a *Admin) searchPage(w http.ResponseWriter, r *http.Request, ac *authCtx) {
@@ -138,14 +147,35 @@ func (a *Admin) searchPage(w http.ResponseWriter, r *http.Request, ac *authCtx) 
 			topK = n
 		}
 	}
+	allProjects := r.URL.Query().Get("all") == "1"
+	project := strings.TrimSpace(r.URL.Query().Get("project"))
 	d := searchData{
-		Project: strings.TrimSpace(r.URL.Query().Get("project")),
-		Query:   strings.TrimSpace(r.URL.Query().Get("q")),
-		Top:     topK,
+		AllProjects: allProjects,
+		Query:       strings.TrimSpace(r.URL.Query().Get("q")),
+		Top:         topK,
+	}
+	if allProjects {
+		d.Project = ""
+	} else {
+		d.Project = project
 	}
 	p := page{User: ac.user, CSRF: ac.csrf, Active: "search", Data: &d}
-	if d.Project != "" && d.Query != "" {
-		d.Ran = true
+	if d.Query == "" {
+		a.render(w, "search.html", p)
+		return
+	}
+	if !d.AllProjects && d.Project == "" {
+		p.Err = "pick a project or enable “search all projects”"
+		a.render(w, "search.html", p)
+		return
+	}
+
+	d.Ran = true
+	if d.AllProjects {
+		if err := a.searchAllProjects(r.Context(), &d, topK); err != nil {
+			p.Err = err.Error()
+		}
+	} else {
 		resp, err := a.search.Search(r.Context(), search.Request{Project: d.Project, Query: d.Query, TopK: topK})
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
@@ -154,11 +184,51 @@ func (a *Admin) searchPage(w http.ResponseWriter, r *http.Request, ac *authCtx) 
 				p.Err = err.Error()
 			}
 		} else {
-			d.Results = resp.Results
 			d.Fallback = resp.Fallback
+			for _, hit := range resp.Results {
+				d.Results = append(d.Results, adminSearchHit{SearchResult: hit})
+			}
 		}
 	}
 	a.render(w, "search.html", p)
+}
+
+// searchAllProjects runs the query against every indexed project, merges the hits,
+// ranks by score, and keeps the top topK overall (playground-scale corpora).
+func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) error {
+	projects, err := a.store.ListProjects(ctx, 0, 0)
+	if err != nil {
+		a.log.Error("list projects for search failed", "err", err)
+		return fmt.Errorf("could not list projects")
+	}
+	if len(projects) == 0 {
+		return fmt.Errorf("no indexed projects")
+	}
+	d.ProjectCount = len(projects)
+	var merged []adminSearchHit
+	fallback := false
+	for _, proj := range projects {
+		resp, serr := a.search.Search(ctx, search.Request{Project: proj.Name, Query: d.Query, TopK: topK})
+		if serr != nil {
+			if errors.Is(serr, store.ErrNotFound) {
+				continue
+			}
+			return serr
+		}
+		if resp.Fallback {
+			fallback = true
+		}
+		for _, hit := range resp.Results {
+			merged = append(merged, adminSearchHit{Project: proj.Name, SearchResult: hit})
+		}
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Score > merged[j].Score })
+	if len(merged) > topK {
+		merged = merged[:topK]
+	}
+	d.Results = merged
+	d.Fallback = fallback
+	return nil
 }
 
 type projectItem struct {
