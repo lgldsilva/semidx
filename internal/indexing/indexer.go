@@ -223,7 +223,9 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		}
 	}
 
-	_ = idx.db.UpdateProjectStatus(ctx, projectID, "ready")
+	if err := idx.db.UpdateProjectStatus(ctx, projectID, "ready"); err != nil {
+		idx.log.Warn("update project status", "project", projectID, "err", err)
+	}
 	return stats, nil
 }
 
