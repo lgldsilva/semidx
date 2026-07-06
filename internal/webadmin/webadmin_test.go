@@ -32,8 +32,10 @@ type fakeStore struct {
 	projects          []store.Project
 
 	// search support
-	searchProject *store.Project // GetProject result (nil → ErrNotFound)
-	searchResults []store.SearchResult
+	searchProject  *store.Project // GetProject result (nil → ErrNotFound)
+	searchResults  []store.SearchResult
+	searchErr      error               // injected SearchSimilar/Keywords error
+	hideIdentities map[string]struct{} // test hook: pretend these identities are gone
 
 	// error-injection fields (all nil = success/normal path)
 	listProjectsErr error
@@ -232,6 +234,9 @@ func (f *fakeStore) GetProject(_ context.Context, name string) (*store.Project, 
 }
 
 func (f *fakeStore) GetProjectByIdentity(_ context.Context, identity string) (*store.Project, error) {
+	if _, hide := f.hideIdentities[identity]; hide {
+		return nil, store.ErrNotFound
+	}
 	for i := range f.projects {
 		if f.projects[i].Identity == identity {
 			return &f.projects[i], nil
@@ -244,10 +249,16 @@ func (f *fakeStore) GetProjectByIdentity(_ context.Context, identity string) (*s
 }
 
 func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]store.SearchResult, error) {
+	if f.searchErr != nil {
+		return nil, f.searchErr
+	}
 	return f.searchResults, nil
 }
 
 func (f *fakeStore) SearchSimilarKeywords(context.Context, int, string, int, int) ([]store.SearchResult, error) {
+	if f.searchErr != nil {
+		return nil, f.searchErr
+	}
 	return f.searchResults, nil
 }
 
