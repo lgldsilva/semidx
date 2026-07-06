@@ -199,3 +199,57 @@ either way.
 > Historical note: an earlier iteration used a Jenkins pipeline; the project
 > pivoted to Gitea Actions because the CI YAML is portable to GitHub. The old
 > `Jenkinsfile` has been removed.
+
+## Concurrency policy
+
+All workflows carry a top-level `concurrency` block to prevent redundant gate
+runs when multiple commits land on the same PR in quick succession.
+
+### Rules per workflow
+
+| Workflow | group | cancel-in-progress | Effect |
+|---|---|---|---|
+| `ci.yml` | `CI-{PR number}` (PR) / `CI-refs/heads/main` (push/dispatch) | `true` on PR, `false` otherwise | Cancels stale runs of the same PR; never cancels main or dispatch runs |
+| `release.yml` | `Release` (fixed) | `false` | Serializes all releases regardless of tag; never aborts a deploy in progress |
+| `mutation.yml` | `Mutation-refs/heads/main` | `false` | Serializes nightly runs; does not interrupt mutation in progress |
+| `autotag.yml` | `autotag-main` (string literal) | `false` (implicit) | Serializes tag computation; unchanged from original |
+
+### How the dynamic group in ci.yml works
+
+`ci.yml` triggers on three events (`pull_request`, `push: [main]`,
+`workflow_dispatch`). A single `concurrency` block covers all three:
+
+```yaml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+```
+
+- **PR**: `github.event.pull_request.number` is the PR number (truthy) → group
+  `CI-42`; `cancel-in-progress` evaluates to `true` → stale runs of the same PR
+  are cancelled.
+- **push to main / dispatch**: `github.event.pull_request.number` is null (falsy)
+  → `|| github.ref` wins → group `CI-refs/heads/main`; `cancel-in-progress`
+  evaluates to `false` → runs queue, never cancel.
+
+### Why release.yml uses a fixed group
+
+`release.yml` triggers on `push: tags: ['v*']` and `workflow_dispatch`. Using
+`${{ github.ref }}` as the group would give each tag its own group
+(`Release-refs/tags/v1.2.3` vs `Release-refs/tags/v1.2.4`), allowing two
+releases to deploy concurrently. A fixed group (`${{ github.workflow }}`)
+serializes all releases regardless of tag — the second waits for the first to
+finish.
+
+### Operational checklist — stuck queue
+
+1. Check that the runner is `Online` in **Settings → Actions → Runners**.
+2. If offline: restart the `act_runner` container on the affected node.
+3. Stale PR runs (same PR, outdated commit) are cancelled automatically by
+   `concurrency` on the next push — no manual cancellation needed.
+4. Queued `release.yml` runs wait for the previous one to finish
+   (`cancel-in-progress: false`). If the previous run is stuck, cancel it
+   manually in Gitea before re-triggering.
+5. Rollback: if a misconfigured group causes unexpected cancellations, remove
+   only the `concurrency` block from the affected workflow and re-run — other
+   workflows are unaffected.
