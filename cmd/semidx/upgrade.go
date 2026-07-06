@@ -15,7 +15,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -134,9 +137,21 @@ func updateHTTPClient(apiURL string) *http.Client {
 	return &http.Client{Timeout: 120 * time.Second, Transport: tr}
 }
 
-// fetchLatestTag reads the latest release tag from the Gitea releases API.
+// fetchLatestTag reads the newest published release tag. GitHub serves
+// /releases/latest; Gitea often returns 404 there, so we fall back to listing
+// releases and picking the highest semver tag_name.
 func fetchLatestTag(ctx context.Context, hc *http.Client, apiURL, token string) (string, error) {
-	body, err := httpGetBytes(ctx, hc, strings.TrimRight(apiURL, "/")+"/releases/latest", token)
+	base := strings.TrimRight(apiURL, "/")
+	if tag, err := fetchLatestTagFromEndpoint(ctx, hc, base+"/releases/latest", token); err == nil {
+		return tag, nil
+	} else if !isHTTPNotFound(err) {
+		return "", err
+	}
+	return fetchLatestTagFromList(ctx, hc, base+"/releases?limit=50", token)
+}
+
+func fetchLatestTagFromEndpoint(ctx context.Context, hc *http.Client, url, token string) (string, error) {
+	body, err := httpGetBytes(ctx, hc, url, token)
 	if err != nil {
 		return "", err
 	}
@@ -150,6 +165,78 @@ func fetchLatestTag(ctx context.Context, hc *http.Client, apiURL, token string) 
 		return "", fmt.Errorf("no tag_name in latest release")
 	}
 	return rel.TagName, nil
+}
+
+func fetchLatestTagFromList(ctx context.Context, hc *http.Client, url, token string) (string, error) {
+	body, err := httpGetBytes(ctx, hc, url, token)
+	if err != nil {
+		return "", err
+	}
+	var releases []struct {
+		TagName string `json:"tag_name"`
+		Draft   bool   `json:"draft"`
+	}
+	if err := json.Unmarshal(body, &releases); err != nil {
+		return "", fmt.Errorf("parse release list: %w", err)
+	}
+	var tags []string
+	for _, r := range releases {
+		if r.Draft || r.TagName == "" {
+			continue
+		}
+		tags = append(tags, r.TagName)
+	}
+	if len(tags) == 0 {
+		return "", fmt.Errorf("no published releases found")
+	}
+	sort.Slice(tags, func(i, j int) bool {
+		return compareReleaseTags(tags[i], tags[j]) < 0
+	})
+	return tags[len(tags)-1], nil
+}
+
+var releaseTagVersion = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
+
+func compareReleaseTags(a, b string) int {
+	av, aok := parseReleaseTagVersion(a)
+	bv, bok := parseReleaseTagVersion(b)
+	if aok && bok {
+		if av.less(bv) {
+			return -1
+		}
+		if bv.less(av) {
+			return 1
+		}
+		return 0
+	}
+	return strings.Compare(a, b)
+}
+
+type releaseTagVer struct{ major, minor, patch int }
+
+func (v releaseTagVer) less(o releaseTagVer) bool {
+	if v.major != o.major {
+		return v.major < o.major
+	}
+	if v.minor != o.minor {
+		return v.minor < o.minor
+	}
+	return v.patch < o.patch
+}
+
+func parseReleaseTagVersion(tag string) (releaseTagVer, bool) {
+	m := releaseTagVersion.FindStringSubmatch(tag)
+	if m == nil {
+		return releaseTagVer{}, false
+	}
+	maj, _ := strconv.Atoi(m[1])
+	min, _ := strconv.Atoi(m[2])
+	pat, _ := strconv.Atoi(m[3])
+	return releaseTagVer{major: maj, minor: min, patch: pat}, true
+}
+
+func isHTTPNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), " 404 ")
 }
 
 // downloadReleaseBinary downloads the archive for tag/os/arch, verifies its
