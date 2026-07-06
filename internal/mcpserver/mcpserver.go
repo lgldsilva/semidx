@@ -44,7 +44,7 @@ type ProjectInfo struct {
 // Backend is the data source the MCP tools call. Implemented by the remote HTTP
 // client (NewClientBackend) and the local index (NewLocalBackend).
 type Backend interface {
-	Search(ctx context.Context, project, query, model string, topK int) (*SearchOutput, error)
+	Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchOutput, error)
 	Projects(ctx context.Context) ([]ProjectInfo, error)
 	// Reindex returns a human-readable status message on success.
 	Reindex(ctx context.Context, project, jobType string) (string, error)
@@ -79,10 +79,12 @@ func Run(ctx context.Context, b Backend) error {
 }
 
 type searchInput struct {
-	Project string `json:"project" jsonschema:"the registered project name to search"`
-	Query   string `json:"query" jsonschema:"the natural-language search query"`
-	Model   string `json:"model,omitempty" jsonschema:"optional embedding model override (defaults to the project's model)"`
-	TopK    int    `json:"top_k,omitempty" jsonschema:"number of results to return (default 5)"`
+	Project    string `json:"project" jsonschema:"the registered project name to search"`
+	Query      string `json:"query" jsonschema:"the natural-language search query"`
+	Model      string `json:"model,omitempty" jsonschema:"optional embedding model override (defaults to the project's model)"`
+	TopK       int    `json:"top_k,omitempty" jsonschema:"number of results to return (default 5)"`
+	Graph      bool   `json:"graph,omitempty" jsonschema:"expand results via dependency graph (Graph-RAG)"`
+	GraphDepth int    `json:"graph_depth,omitempty" jsonschema:"max BFS depth for graph expansion (default 2)"`
 }
 
 func searchHandler(b Backend) mcp.ToolHandlerFor[searchInput, any] {
@@ -91,7 +93,11 @@ func searchHandler(b Backend) mcp.ToolHandlerFor[searchInput, any] {
 		if topK == 0 {
 			topK = 5
 		}
-		out, err := b.Search(ctx, in.Project, in.Query, in.Model, topK)
+		graphDepth := in.GraphDepth
+		if graphDepth == 0 {
+			graphDepth = 2
+		}
+		out, err := b.Search(ctx, in.Project, in.Query, in.Model, topK, in.Graph, graphDepth)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
