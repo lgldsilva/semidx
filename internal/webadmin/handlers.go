@@ -19,6 +19,7 @@ import (
 
 const (
 	tmplLogin         = "login.html"
+	tmplSearch        = "search.html"
 	msgInternalError  = "internal error"
 	headerContentType = "Content-Type"
 )
@@ -143,6 +144,23 @@ type searchData struct {
 }
 
 func (a *Admin) searchPage(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	d, topK := parseSearchData(r)
+	p := page{User: ac.user, CSRF: ac.csrf, Active: "search", Data: &d}
+	if d.Query == "" {
+		a.render(w, tmplSearch, p)
+		return
+	}
+	if !d.AllProjects && d.Project == "" {
+		p.Err = "pick a project or enable “search all projects”"
+		a.render(w, tmplSearch, p)
+		return
+	}
+	d.Ran = true
+	a.runSearchPlayground(r.Context(), &d, topK, &p)
+	a.render(w, tmplSearch, p)
+}
+
+func parseSearchData(r *http.Request) (searchData, int) {
 	topK := 10
 	if ts := strings.TrimSpace(r.URL.Query().Get("top")); ts != "" {
 		if n, err := strconv.Atoi(ts); err == nil && n > 0 && n <= 100 {
@@ -161,39 +179,30 @@ func (a *Admin) searchPage(w http.ResponseWriter, r *http.Request, ac *authCtx) 
 	} else {
 		d.Project = project
 	}
-	p := page{User: ac.user, CSRF: ac.csrf, Active: "search", Data: &d}
-	if d.Query == "" {
-		a.render(w, "search.html", p)
-		return
-	}
-	if !d.AllProjects && d.Project == "" {
-		p.Err = "pick a project or enable “search all projects”"
-		a.render(w, "search.html", p)
-		return
-	}
+	return d, topK
+}
 
-	d.Ran = true
+func (a *Admin) runSearchPlayground(ctx context.Context, d *searchData, topK int, p *page) {
 	if d.AllProjects {
-		if err := a.searchAllProjects(r.Context(), &d, topK); err != nil {
+		if err := a.searchAllProjects(ctx, d, topK); err != nil {
 			p.Err = err.Error()
 		}
-	} else {
-		resp, err := a.search.Search(r.Context(), search.Request{Project: d.Project, Query: d.Query, TopK: topK})
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				p.Err = "project not found"
-			} else {
-				p.Err = err.Error()
-			}
-		} else {
-			d.ResolvedProject = resp.Project.Name
-			d.Fallback = resp.Fallback
-			for _, hit := range resp.Results {
-				d.Results = append(d.Results, adminSearchHit{SearchResult: hit})
-			}
-		}
+		return
 	}
-	a.render(w, "search.html", p)
+	resp, err := a.search.Search(ctx, search.Request{Project: d.Project, Query: d.Query, TopK: topK})
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			p.Err = "project not found"
+		} else {
+			p.Err = err.Error()
+		}
+		return
+	}
+	d.ResolvedProject = resp.Project.Name
+	d.Fallback = resp.Fallback
+	for _, hit := range resp.Results {
+		d.Results = append(d.Results, adminSearchHit{SearchResult: hit})
+	}
 }
 
 // searchAllProjects runs the query against every indexed project, merges the hits,
@@ -209,10 +218,20 @@ func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) 
 		return fmt.Errorf("no indexed projects")
 	}
 	d.ProjectCount = len(projects)
+	merged, fallback, err := a.mergeProjectSearches(ctx, projects, d.Query, topK)
+	if err != nil {
+		return err
+	}
+	d.Results = merged
+	d.Fallback = fallback
+	return nil
+}
+
+func (a *Admin) mergeProjectSearches(ctx context.Context, projects []store.Project, query string, topK int) ([]adminSearchHit, bool, error) {
 	var merged []adminSearchHit
 	fallback := false
 	for _, proj := range projects {
-		req := search.Request{Query: d.Query, TopK: topK}
+		req := search.Request{Query: query, TopK: topK}
 		if proj.Identity != "" {
 			req.Identity = proj.Identity
 		} else {
@@ -223,7 +242,7 @@ func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) 
 			if errors.Is(serr, store.ErrNotFound) {
 				continue
 			}
-			return serr
+			return nil, false, serr
 		}
 		if resp.Fallback {
 			fallback = true
@@ -236,9 +255,7 @@ func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) 
 	if len(merged) > topK {
 		merged = merged[:topK]
 	}
-	d.Results = merged
-	d.Fallback = fallback
-	return nil
+	return merged, fallback, nil
 }
 
 type projectItem struct {

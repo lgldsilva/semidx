@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/lgldsilva/semidx/internal/xdg"
 )
 
 // Config is the on-disk client configuration.
@@ -21,15 +23,7 @@ type Config struct {
 
 // Path returns the config file location, honoring XDG_CONFIG_HOME.
 func Path() (string, error) {
-	dir := os.Getenv("XDG_CONFIG_HOME")
-	if dir == "" {
-		var err error
-		dir, err = os.UserConfigDir()
-		if err != nil {
-			return "", err
-		}
-	}
-	return filepath.Join(dir, "semidx", "config.yaml"), nil
+	return xdg.ClientConfigPath()
 }
 
 // Load reads the config file (a missing file is not an error — an empty Config is

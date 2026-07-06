@@ -147,6 +147,17 @@ func TestLoginSubmitEdgeCases(t *testing.T) {
 // --- search page --------------------------------------------------------------
 
 func TestSearchPage(t *testing.T) {
+	t.Run("query without project shows validation error", func(t *testing.T) {
+		srv, fs := newTestAdmin(t)
+		fs.addUser("admin", "supersecret", "admin")
+		c := newClient(t)
+		login(t, c, srv.URL, "admin", "supersecret")
+		code, body := getBody(t, c, srv.URL+"/admin/search?q=hello")
+		if code != 200 || !strings.Contains(body, "pick a project") {
+			t.Errorf("missing project validation = %d, body=%q", code, body)
+		}
+	})
+
 	t.Run("no query renders the empty form", func(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
@@ -234,6 +245,129 @@ func TestSearchPage(t *testing.T) {
 			t.Errorf("expected project count summary, body=%q", body)
 		}
 	})
+}
+
+func TestSearchAllProjectsMergeError(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.projects = []store.Project{{ID: 1, Name: "alpha", Model: "bge-m3"}}
+	fs.searchErr = context.Canceled
+	c := newClient(t)
+	login(t, c, srv.URL, "admin", "supersecret")
+	code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello")
+	if code != 200 || !strings.Contains(body, context.Canceled.Error()) {
+		t.Errorf("search all merge error = %d, body=%q", code, body)
+	}
+}
+
+func TestProjectsAPIPagination(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.projects = []store.Project{
+		{ID: 1, Name: "a", Model: "m1", Status: "ready"},
+		{ID: 2, Name: "b", Model: "m2", Status: "ready"},
+	}
+	c := newClient(t)
+	login(t, c, srv.URL, "admin", "supersecret")
+	code, body := getBody(t, c, srv.URL+"/admin/api/projects?limit=1&offset=1")
+	if code != 200 {
+		t.Fatalf("status = %d", code)
+	}
+	if !strings.Contains(body, `"name":"b"`) {
+		t.Errorf("paginated body = %s", body)
+	}
+}
+
+func TestProjectsAPIEmptyList(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.projects = nil
+	c := newClient(t)
+	login(t, c, srv.URL, "admin", "supersecret")
+	code, body := getBody(t, c, srv.URL+"/admin/api/projects")
+	if code != 200 || !strings.Contains(body, `"projects":[]`) {
+		t.Errorf("empty list = %d, body=%s", code, body)
+	}
+}
+
+func TestProjectsAPI(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.projects = []store.Project{{
+		ID: 1, Name: "jackui", Model: "bge-m3", Status: "ready",
+		Identity: "git:example/jackui", Path: "/data/jackui", SourceType: "git",
+	}}
+	c := newClient(t)
+	login(t, c, srv.URL, "admin", "supersecret")
+	code, body := getBody(t, c, srv.URL+"/admin/api/projects")
+	if code != 200 {
+		t.Fatalf("projects api = %d", code)
+	}
+	if !strings.Contains(body, `"name":"jackui"`) || !strings.Contains(body, `"identity":"git:example/jackui"`) {
+		t.Fatalf("unexpected api body: %s", body)
+	}
+}
+
+func TestProjectsAPIListError(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.listProjectsErr = errors.New("db down")
+	c := newClient(t)
+	login(t, c, srv.URL, "admin", "supersecret")
+	code, body := getBody(t, c, srv.URL+"/admin/api/projects")
+	if code != 500 || !strings.Contains(body, "internal error") {
+		t.Errorf("projects api error = %d, body=%q", code, body)
+	}
+}
+
+func TestSearchPageSearchServiceError(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.projects = []store.Project{{ID: 1, Name: "alpha", Model: "bge-m3"}}
+	fs.searchErr = errors.New("embed down")
+	c := newClient(t)
+	login(t, c, srv.URL, "admin", "supersecret")
+	code, body := getBody(t, c, srv.URL+"/admin/search?project=alpha&q=hello")
+	if code != 200 || !strings.Contains(body, "embed down") {
+		t.Errorf("search service error = %d, body=%q", code, body)
+	}
+}
+
+func TestSearchAllProjectsListError(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.listProjectsErr = errors.New("db down")
+	c := newClient(t)
+	login(t, c, srv.URL, "admin", "supersecret")
+	code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello")
+	if code != 200 || !strings.Contains(body, "could not list projects") {
+		t.Errorf("search all list error = %d, body=%q", code, body)
+	}
+}
+
+func TestSearchAllProjectsEmpty(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.projects = []store.Project{}
+	c := newClient(t)
+	login(t, c, srv.URL, "admin", "supersecret")
+	code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello")
+	if code != 200 || !strings.Contains(body, "no indexed projects") {
+		t.Errorf("empty index = %d, body=%q", code, body)
+	}
+}
+
+func TestSearchPageShowsResolvedProject(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.projects = []store.Project{{ID: 1, Name: "jackui", Model: "bge-m3"}}
+	fs.searchResults = []store.SearchResult{{FilePath: "a.go", Content: "hit", Score: 0.9}}
+	c := newClient(t)
+	login(t, c, srv.URL, "admin", "supersecret")
+	code, body := getBody(t, c, srv.URL+"/admin/search?project=JackUI&q=hello&top=20")
+	if code != 200 || !strings.Contains(body, "Project:") || !strings.Contains(body, "jackui") {
+		t.Errorf("resolved project label = %d, body=%q", code, body)
+	}
 }
 
 // --- account (password change) ------------------------------------------------

@@ -83,6 +83,42 @@ func TestGrepFormatterGolden(t *testing.T) {
 	}
 }
 
+func TestGrepFormatterZeroStartLine(t *testing.T) {
+	var buf bytes.Buffer
+	resp := &Response{
+		Results: []store.SearchResult{
+			{FilePath: "x.go", Content: "line", StartLine: 0},
+		},
+	}
+	if err := (GrepFormatter{ProjectPath: "/p"}).Format(&buf, resp); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); got != "/p/x.go:1:line\n" {
+		t.Fatalf("grep zero line = %q", got)
+	}
+}
+
+func TestGrepFormatterWriteError(t *testing.T) {
+	if err := (GrepFormatter{ProjectPath: "/p"}).Format(failWriter{}, sampleResponse()); err == nil {
+		t.Fatal("expected write error")
+	}
+}
+
+func TestJSONFormatterNilProject(t *testing.T) {
+	var buf bytes.Buffer
+	resp := &Response{Model: "m", Results: []store.SearchResult{{FilePath: "a.go", Score: 1}}}
+	if err := (JSONFormatter{}).Format(&buf, resp); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), `"project"`) {
+		var out map[string]any
+		_ = json.Unmarshal(buf.Bytes(), &out)
+		if p, ok := out["project"].(string); ok && p != "" {
+			t.Fatalf("expected empty project, got %q", p)
+		}
+	}
+}
+
 func TestHumanFormatterWriteError(t *testing.T) {
 	if err := (HumanFormatter{}).Format(failWriter{}, sampleResponse()); err == nil {
 		t.Fatal("expected the write error to propagate")

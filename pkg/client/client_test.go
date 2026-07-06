@@ -60,7 +60,10 @@ func TestCreateAndListProjects(t *testing.T) {
 			w.WriteHeader(201)
 			_ = json.NewEncoder(w).Encode(Project{Name: "repo", SourceType: "git", GitURL: "https://x/y.git"})
 		case r.Method == "GET" && r.URL.Path == "/api/v1/projects":
-			_ = json.NewEncoder(w).Encode(map[string]any{"projects": []Project{{Name: "repo"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"projects": []Project{{
+				Name: "repo", SourceType: "git", GitURL: "https://x/y.git",
+				Identity: "git:example/repo", Path: "/data/repo",
+			}}})
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		}
@@ -74,6 +77,9 @@ func TestCreateAndListProjects(t *testing.T) {
 	list, err := c.ListProjects(context.Background())
 	if err != nil || len(list) != 1 || list[0].Name != "repo" {
 		t.Fatalf("list = %+v, err %v", list, err)
+	}
+	if list[0].Identity != "git:example/repo" || list[0].Path != "/data/repo" {
+		t.Fatalf("list metadata = %+v", list[0])
 	}
 }
 
@@ -127,6 +133,36 @@ func TestFilesDiffAndBatch(t *testing.T) {
 		[]BatchFile{{Path: "b.go", Content: "code"}}, []string{"old.go"})
 	if err != nil || batch.Indexed != 1 || batch.Deleted != 1 {
 		t.Fatalf("batch = %+v, err %v", batch, err)
+	}
+}
+
+func TestFilesBatchAsync(t *testing.T) {
+	c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/api/v1/projects/p/files/batch" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		if sync := r.URL.Query().Get("sync"); sync == "true" {
+			t.Error("async batch must not use sync=true")
+		}
+		_ = json.NewEncoder(w).Encode(EnqueueResponse{JobID: 9, Status: "queued"})
+	})
+	defer done()
+
+	id, err := c.FilesBatchAsync(context.Background(), "p", []BatchFile{{Path: "a.go", Content: "x"}}, nil)
+	if err != nil || id != 9 {
+		t.Fatalf("FilesBatchAsync = %d, err %v", id, err)
+	}
+}
+
+func TestFilesBatchAsyncError(t *testing.T) {
+	c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "queue down"})
+	})
+	defer done()
+
+	if _, err := c.FilesBatchAsync(context.Background(), "p", []BatchFile{{Path: "a.go"}}, nil); err == nil {
+		t.Fatal("expected error")
 	}
 }
 
