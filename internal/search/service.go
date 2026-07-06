@@ -71,11 +71,14 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 
 	project, err := s.resolveProject(ctx, req)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
 		ref := req.Project
 		if req.Identity != "" {
 			ref = req.Identity
 		}
-		return nil, fmt.Errorf("project not found: %s", ref)
+		return nil, fmt.Errorf("project lookup failed for %s: %w", ref, err)
 	}
 
 	model := project.Model
@@ -96,26 +99,32 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	}
 
 	resp := &Response{Project: project, Model: model}
+	worktree := worktreeFilter(project, req.Worktree)
 
-	// The worktree filter only applies to git projects (whose files are recorded
-	// per worktree). For document/push projects it's meaningless — ignore it, so
-	// searching such a project from inside an unrelated git repo still works.
-	worktree := ""
-	if project.SourceType == "git" {
-		worktree = req.Worktree
-	}
-
-	// Keyword-only mode: skip embedding entirely and search the text bucket.
 	if req.KeywordOnly {
-		results, err := s.keywordSearch(ctx, project.ID, req.Query, store.KeywordDims, req.TopK, worktree)
-		if err != nil {
-			return nil, err
-		}
-		resp.Results = results
-		resp.Keyword = true
-		return resp, nil
+		return s.searchKeywordOnly(ctx, project.ID, req, dims, worktree, resp)
 	}
+	return s.searchSemantic(ctx, project.ID, req, model, dims, worktree, resp)
+}
 
+func worktreeFilter(project *store.Project, reqWorktree string) string {
+	if project.SourceType == "git" {
+		return reqWorktree
+	}
+	return ""
+}
+
+func (s *Service) searchKeywordOnly(ctx context.Context, projectID int, req Request, dims int, worktree string, resp *Response) (*Response, error) {
+	results, err := s.keywordSearch(ctx, projectID, req.Query, store.KeywordDims, req.TopK, worktree)
+	if err != nil {
+		return nil, err
+	}
+	resp.Results = results
+	resp.Keyword = true
+	return resp, nil
+}
+
+func (s *Service) searchSemantic(ctx context.Context, projectID int, req Request, model string, dims int, worktree string, resp *Response) (*Response, error) {
 	vec, err := s.emb.EmbedSingle(ctx, model, req.Query)
 	if err != nil {
 		// Propagate retryable errors (e.g. circuit breaker open) directly
@@ -127,7 +136,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		}
 		resp.Fallback = true
 		resp.Keyword = true
-		results, kerr := s.keywordSearch(ctx, project.ID, req.Query, dims, req.TopK, worktree)
+		results, kerr := s.keywordSearch(ctx, projectID, req.Query, dims, req.TopK, worktree)
 		if kerr != nil {
 			return nil, kerr
 		}
@@ -135,7 +144,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		return resp, nil
 	}
 
-	results, serr := s.vectorSearch(ctx, project.ID, vec, dims, req.TopK, worktree)
+	results, serr := s.vectorSearch(ctx, projectID, vec, dims, req.TopK, worktree)
 	if serr != nil {
 		return nil, serr
 	}

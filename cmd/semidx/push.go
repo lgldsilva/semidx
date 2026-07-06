@@ -16,7 +16,9 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/lgldsilva/semidx/internal/chunker"
+	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/indexing"
+	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
@@ -417,7 +419,7 @@ func (p *pusher) embedOneFile(ctx context.Context, path string) embedResult {
 	for i, ch := range chunks {
 		chunkTexts[i] = ch.Content
 	}
-	embeddings, embErr := embedChunks(ctx, p.d, p.model, chunkTexts)
+	embeddings, embErr := embedChunks(ctx, p.d, p.model, rel, chunkTexts)
 	if embErr != nil {
 		if p.verbose {
 			fmt.Fprintf(os.Stderr, "[warn] embedding failed for %s, falling back to raw push: %v\n", rel, embErr)
@@ -437,10 +439,14 @@ func (p *pusher) embedOneFile(ctx context.Context, path string) embedResult {
 	return embedResult{file: client.BatchFile{Path: rel, Content: content, Chunks: fileChunks}, include: true}
 }
 
-// embedChunks embeds a batch of texts, respecting privacy mode for sensitive
+// embedChunks embeds a batch of texts, respecting privacy routing for sensitive
 // files. It splits into sub-batches of embedBatchSize to match the indexer's
 // batching strategy.
-func embedChunks(ctx context.Context, d *deps, model string, texts []string) ([][]float32, error) {
+func embedChunks(ctx context.Context, d *deps, model, rel string, texts []string) ([][]float32, error) {
+	embedCtx := ctx
+	if privacy.IsSensitive(rel) {
+		embedCtx = embed.WithForceLocal(ctx, true)
+	}
 	var all [][]float32
 	for i := 0; i < len(texts); i += embedBatchSize {
 		end := i + embedBatchSize
@@ -449,7 +455,7 @@ func embedChunks(ctx context.Context, d *deps, model string, texts []string) ([]
 		}
 		batch := texts[i:end]
 
-		embeddings, err := d.emb.Embed(ctx, model, batch...)
+		embeddings, err := d.emb.Embed(embedCtx, model, batch...)
 		if err != nil {
 			return nil, fmt.Errorf("embed batch %d: %w", i/embedBatchSize, err)
 		}

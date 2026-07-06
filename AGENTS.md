@@ -178,7 +178,9 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
   `golang:` builder image too when bumping — the stdlib ships in the binary.
 - SQLite local store: `journal_mode=WAL`, `busy_timeout`, `MaxOpenConns(1)` —
   serialises writers, avoids "database is locked" and corruption. Never mix
-  journal modes across processes.
+  journal modes across processes. **Note:** with `IndexWorkers` > 1, parallel
+  file workers still funnel writes through a single DB connection — expect
+  diminishing returns on large local indexes; Postgres is the scale path.
 - The worktree filter applies to **git** projects only; document/push projects
   ignore it (else searching them from inside an unrelated repo returns nothing).
 - MCP stdio: keep the server's stdout for the protocol (logs go to stderr).

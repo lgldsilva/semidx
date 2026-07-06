@@ -6,6 +6,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -45,7 +46,9 @@ type Server struct {
 	admin           http.Handler    // the /admin management UI, nil unless MountAdmin was called
 	jwt             *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
 
-	apiLimiter *apiRateLimiter // per-key API rate limiter
+	apiLimiter   *apiRateLimiter
+	gitAllowFile bool   // allow file:// git URLs (SEMIDX_GIT_ALLOW_FILE)
+	metricsToken string // when set, /metrics requires Bearer match (SEMIDX_METRICS_TOKEN)
 }
 
 // EnableJWT turns on JWT control tokens using secret as the HS256 signing key.
@@ -106,12 +109,34 @@ func New(st store.Store, emb embed.Embedder, log *slog.Logger) *Server {
 	return &Server{store: st, emb: emb, search: search.NewService(st, emb), log: log, reg: reg, reqs: reqs, searchDuration: searchDuration, requestDuration: requestDuration, activeRequests: activeRequests, apiLimiter: newAPIRateLimiter()}
 }
 
+// SetGitAllowFile enables file:// git URLs for server-side git sync.
+func (s *Server) SetGitAllowFile(v bool) { s.gitAllowFile = v }
+
+// SetMetricsToken requires a matching Bearer token on GET /metrics when non-empty.
+func (s *Server) SetMetricsToken(token string) { s.metricsToken = token }
+
+func (s *Server) metricsHandler() http.Handler {
+	h := promhttp.HandlerFor(s.reg, promhttp.HandlerOpts{})
+	if s.metricsToken == "" {
+		return h
+	}
+	want := s.metricsToken
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := bearerToken(r)
+		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+			writeJSONError(w, http.StatusUnauthorized, "metrics token required")
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 // Handler returns the fully-wired HTTP handler (routing + metrics instrumentation).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
-	mux.Handle("GET /metrics", promhttp.HandlerFor(s.reg, promhttp.HandlerOpts{}))
+	mux.Handle("GET /metrics", s.metricsHandler())
 
 	mux.Handle("POST /api/v1/projects", s.limited(1<<20, s.authed("write", s.handleCreateProject)))
 	mux.Handle("GET /api/v1/projects", s.authed("read", s.handleListProjects))

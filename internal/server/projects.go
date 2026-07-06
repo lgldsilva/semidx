@@ -91,7 +91,8 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	projects, err := s.store.ListProjects(r.Context(), 0, 0)
+	limit, offset := parseListParams(r)
+	projects, err := s.store.ListProjects(r.Context(), limit, offset)
 	if err != nil {
 		s.log.Error("list projects", "err", err)
 		writeJSONError(w, http.StatusInternalServerError, "could not list projects")
@@ -101,7 +102,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	for i := range projects {
 		views = append(views, toProjectView(&projects[i]))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"projects": views})
+	writeJSON(w, http.StatusOK, map[string]any{"projects": views, "limit": limit, "offset": offset})
 }
 
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {

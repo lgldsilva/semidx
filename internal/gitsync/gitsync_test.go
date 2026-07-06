@@ -44,7 +44,7 @@ func TestSyncCloneThenPull(t *testing.T) {
 	url := "file://" + src
 	ctx := context.Background()
 
-	path, err := Sync(ctx, data, "proj", url, "")
+	path, err := Sync(ctx, data, "proj", url, "", true)
 	if err != nil {
 		t.Fatalf("clone: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestSyncCloneThenPull(t *testing.T) {
 	runGit(t, src, "add", ".")
 	runGit(t, src, "commit", "-q", "-m", "second")
 
-	path2, err := Sync(ctx, data, "proj", url, "")
+	path2, err := Sync(ctx, data, "proj", url, "", true)
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -69,7 +69,13 @@ func TestSyncCloneThenPull(t *testing.T) {
 }
 
 func TestSyncRejectsUnsupportedURL(t *testing.T) {
-	if _, err := Sync(context.Background(), t.TempDir(), "p", "ftp://evil/x", ""); err == nil {
+	if _, err := Sync(context.Background(), t.TempDir(), "p", "ftp://evil/x", "", false); err == nil {
 		t.Error("expected rejection of ftp:// url")
+	}
+}
+
+func TestSyncRejectsFileURLByDefault(t *testing.T) {
+	if _, err := Sync(context.Background(), t.TempDir(), "p", "file:///tmp/repo", "", false); err == nil {
+		t.Error("expected rejection of file:// when allowFileURL is false")
 	}
 }
