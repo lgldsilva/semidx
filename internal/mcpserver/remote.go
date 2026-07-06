@@ -13,8 +13,8 @@ type clientBackend struct{ c *client.Client }
 // NewClientBackend wraps a semidx API client as an MCP Backend (remote mode).
 func NewClientBackend(c *client.Client) Backend { return &clientBackend{c: c} }
 
-func (b *clientBackend) Search(ctx context.Context, project, query, model string, topK int) (*SearchOutput, error) {
-	resp, err := b.c.Search(ctx, project, query, model, topK)
+func (b *clientBackend) Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchOutput, error) {
+	resp, err := b.c.Search(ctx, project, query, model, topK, graph, graphDepth)
 	if err != nil {
 		return nil, err
 	}

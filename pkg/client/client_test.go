@@ -43,7 +43,7 @@ func TestSearch(t *testing.T) {
 	})
 	defer done()
 
-	resp, err := c.Search(context.Background(), "proj", "auth", "", 5)
+	resp, err := c.Search(context.Background(), "proj", "auth", "", 5, false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
