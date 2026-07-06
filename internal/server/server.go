@@ -187,9 +187,11 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
 	var body struct {
-		Query string `json:"query"`
-		TopK  int    `json:"top_k"`
-		Model string `json:"model"`
+		Query      string `json:"query"`
+		TopK       int    `json:"top_k"`
+		Model      string `json:"model"`
+		Graph      bool   `json:"graph"`
+		GraphDepth int    `json:"graph_depth"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
@@ -199,10 +201,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "query is required")
 		return
 	}
+	if body.GraphDepth <= 0 {
+		body.GraphDepth = 2
+	}
 
 	start := time.Now()
 	resp, err := s.search.Search(r.Context(), search.Request{
 		Project: project, Query: body.Query, Model: body.Model, TopK: body.TopK,
+		Graph: body.Graph, GraphMaxDepth: body.GraphDepth,
 	})
 	if err != nil {
 		s.log.Warn("search failed", "project", project, "err", err)

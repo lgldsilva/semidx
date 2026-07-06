@@ -103,7 +103,7 @@ func TestErrorPropagation(t *testing.T) {
 	defer done()
 	ctx := context.Background()
 
-	if _, err := c.Search(ctx, "p", "q", "", 5); err == nil {
+	if _, err := c.Search(ctx, "p", "q", "", 5, false, 0); err == nil {
 		t.Error("Search should propagate a 500")
 	}
 	if _, err := c.ListProjects(ctx); err == nil {
