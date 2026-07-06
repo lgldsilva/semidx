@@ -26,8 +26,12 @@ func (f HumanFormatter) Format(w io.Writer, resp *Response) error {
 		preview = 500
 	}
 	for i, r := range resp.Results {
+		label := matchLabel(resp.Keyword, r.Score)
+		if r.Content == "" && r.FilePath != "" {
+			label = "(graph match)"
+		}
 		if _, err := fmt.Fprintf(w, "--- Result %d (%s) ---\nFile: %s\n%s\n\n",
-			i+1, matchLabel(resp.Keyword, r.Score), formatLoc(r.FilePath, r.StartLine, r.EndLine),
+			i+1, label, formatLoc(r.FilePath, r.StartLine, r.EndLine),
 			truncatePreview(r.Content, preview)); err != nil {
 			return err
 		}

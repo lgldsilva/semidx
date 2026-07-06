@@ -248,6 +248,10 @@ func (f *fakeStore) GetProjectByIdentity(_ context.Context, identity string) (*s
 	return nil, store.ErrNotFound
 }
 
+func (f *fakeStore) InsertFileDependencies(context.Context, int, string, []string) error {
+	return nil
+}
+
 func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]store.SearchResult, error) {
 	if f.searchErr != nil {
 		return nil, f.searchErr

@@ -18,6 +18,9 @@ import (
 )
 
 // fakeStore records how chunks were inserted (embedded vs text-only).
+// The store.Store embed satisfies the full IndexStore interface at compile
+// time; methods exercised by tests are overridden explicitly below. Untouched
+// methods remain nil-interface stubs and must not be called by test paths.
 type fakeStore struct {
 	store.Store
 	mu       sync.Mutex // indexing runs concurrently; guards the fields below
@@ -64,6 +67,10 @@ func (f *fakeStore) UpdateProjectStatus(ctx context.Context, id int, status stri
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.status = status
+	return nil
+}
+
+func (f *fakeStore) InsertFileDependencies(context.Context, int, string, []string) error {
 	return nil
 }
 

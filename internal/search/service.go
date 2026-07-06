@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -45,6 +47,12 @@ type Request struct {
 	// Worktree, when set, restricts results to the file versions that worktree
 	// currently has checked out (git projects indexed from multiple worktrees).
 	Worktree string
+	// Graph enables graph expansion (BFS via import edges) after the initial
+	// search, adding related files discovered through the dependency graph.
+	Graph bool
+	// GraphMaxDepth is the maximum BFS depth for graph expansion. If <= 0, the
+	// default depth of 2 is used.
+	GraphMaxDepth int
 }
 
 // Response is the outcome of a search, independent of output format.
@@ -61,7 +69,9 @@ type Response struct {
 }
 
 // Search resolves the model, embeds the query and runs a vector search,
-// transparently falling back to keyword search if the embedding fails.
+// transparently falling back to keyword search if the embedding fails. When
+// Graph is set, results are expanded via BFS through the project's dependency
+// graph (Graph-RAG).
 func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	ctx, span := observ.StartSpan(ctx, "search.Service.Search")
 	defer span.End()
@@ -103,9 +113,27 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	worktree := worktreeFilter(project, req.Worktree)
 
 	if req.KeywordOnly {
-		return s.searchKeywordOnly(ctx, project.ID, req, dims, worktree, resp)
+		resp, err = s.searchKeywordOnly(ctx, project.ID, req, dims, worktree, resp)
+	} else {
+		resp, err = s.searchSemantic(ctx, project.ID, req, model, dims, worktree, resp)
 	}
-	return s.searchSemantic(ctx, project.ID, req, model, dims, worktree, resp)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.Graph {
+		expanded, gerr := s.expandByGraph(ctx, &req, resp.Results, project.ID, dims)
+		if gerr != nil {
+			slog.Warn("graph expansion failed (continuing with original results)",
+				"project", project.Name,
+				"error", gerr,
+			)
+		} else if len(expanded) > 0 {
+			resp.Results = mergeGraphResults(resp.Results, expanded)
+		}
+	}
+
+	return resp, nil
 }
 
 func worktreeFilter(project *store.Project, reqWorktree string) string {
@@ -180,4 +208,178 @@ func (s *Service) keywordSearch(ctx context.Context, projectID int, query string
 		return s.store.SearchSimilarKeywordsWorktree(ctx, projectID, query, dims, topK, worktree)
 	}
 	return s.store.SearchSimilarKeywords(ctx, projectID, query, dims, topK)
+}
+
+// expandByGraph runs BFS through the project's dependency graph from the seed
+// result file paths, collecting chunks from newly discovered files with a
+// decayed score. Returns nil (no error) when the graph is empty.
+func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults []store.SearchResult, projectID, dims int) ([]store.SearchResult, error) {
+	if len(seedResults) == 0 {
+		return nil, nil
+	}
+
+	// Fetch the full dependency graph for the project.
+	graph, err := s.store.FetchGraphNeighbors(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("fetch graph neighbors: %w", err)
+	}
+	if len(graph) == 0 {
+		return nil, nil // no graph data — nothing to expand
+	}
+
+	// Build reverse edges so BFS traverses both directions (imports and
+	// imported-by).
+	reverse := make(map[string][]string, len(graph))
+	for src, targets := range graph {
+		for _, tgt := range targets {
+			reverse[tgt] = append(reverse[tgt], src)
+		}
+	}
+
+	maxDepth := req.GraphMaxDepth
+	if maxDepth <= 0 {
+		maxDepth = 2
+	}
+
+	const decay = 0.85
+	const floor = 0.3
+	const maxGraphExpandPaths = 100 // cap chunk fetches per query (DoS guard)
+
+	// Seed paths set for dedup.
+	seedPaths := make(map[string]bool, len(seedResults))
+	for _, r := range seedResults {
+		seedPaths[r.FilePath] = true
+	}
+
+	// bfsNode holds a path, its current depth, and the accumulated score.
+	type bfsNode struct {
+		path  string
+		depth int
+		score float64
+	}
+
+	// Initialise the BFS queue with every seed result at depth 0, each with its
+	// own similarity score so closer seeds influence the graph more strongly.
+	queue := make([]bfsNode, 0, len(seedResults))
+	visited := make(map[string]float64, len(seedResults)) // path -> best score seen
+
+	for _, r := range seedResults {
+		queue = append(queue, bfsNode{path: r.FilePath, depth: 0, score: r.Score})
+		// Seed paths are tracked but not added to expanded output.
+		visited[r.FilePath] = r.Score
+	}
+
+	// expanded collects newly discovered paths -> their best score.
+	expanded := make(map[string]float64)
+
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+
+		if node.depth >= maxDepth {
+			continue
+		}
+
+		// Collect neighbours from forward and reverse edges.
+		neighbors := graph[node.path]
+		neighbors = append(neighbors, reverse[node.path]...)
+
+		for _, neighbor := range neighbors {
+			if neighbor == "" {
+				continue
+			}
+			newScore := node.score * decay
+			if newScore < floor {
+				continue
+			}
+
+			// Keep the best score for each path.
+			if best, seen := visited[neighbor]; seen && best >= newScore {
+				continue
+			}
+			visited[neighbor] = newScore
+
+			if !seedPaths[neighbor] {
+				if len(expanded) >= maxGraphExpandPaths {
+					continue
+				}
+				if curr, ok := expanded[neighbor]; !ok || newScore > curr {
+					expanded[neighbor] = newScore
+				}
+			}
+
+			queue = append(queue, bfsNode{path: neighbor, depth: node.depth + 1, score: newScore})
+		}
+	}
+
+	if len(expanded) == 0 {
+		return nil, nil
+	}
+
+	// Fetch chunks for each expanded path. Graph-discovered paths from the AST
+	// analyzer are directory prefixes (e.g. "internal/store/"), so we use
+	// FetchChunksByDirPrefix which does a LIKE match.
+	limit := 3 // representative chunks per file
+	var results []store.SearchResult
+	for path, score := range expanded {
+		chunks, err := s.store.FetchChunksByDirPrefix(ctx, projectID, path, dims, limit)
+		if err != nil {
+			// Best-effort: skip files we cannot read.
+			slog.Debug("expandByGraph: skip unreadable path", "path", path, "error", err)
+			// Still add a placeholder so the file path appears in results.
+			results = append(results, store.SearchResult{
+				FilePath: path,
+				Score:    score,
+			})
+			continue
+		}
+		if len(chunks) == 0 {
+			// Placeholder — file known but no chunks indexed.
+			results = append(results, store.SearchResult{
+				FilePath: path,
+				Score:    score,
+			})
+			continue
+		}
+		for _, chunk := range chunks {
+			chunk.Score = score
+			results = append(results, chunk)
+		}
+	}
+
+	return results, nil
+}
+
+// mergeGraphResults merges original search results with graph-expanded results,
+// deduplicating by FilePath. Original results keep their scores; expanded
+// results keep their decayed scores. The combined list is sorted by score
+// descending.
+func mergeGraphResults(original, expanded []store.SearchResult) []store.SearchResult {
+	dedup := make(map[string]bool, len(original))
+	for _, r := range original {
+		dedup[r.FilePath] = true
+	}
+
+	results := make([]store.SearchResult, len(original), len(original)+len(expanded))
+	copy(results, original)
+
+	for _, r := range expanded {
+		if !dedup[r.FilePath] {
+			results = append(results, r)
+			dedup[r.FilePath] = true
+		}
+	}
+
+	slices.SortFunc(results, func(a, b store.SearchResult) int {
+		switch {
+		case a.Score > b.Score:
+			return -1
+		case a.Score < b.Score:
+			return 1
+		default:
+			return 0
+		}
+	})
+
+	return results
 }

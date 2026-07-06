@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/gitenv"
@@ -59,11 +60,14 @@ func initRepo(t *testing.T) string {
 }
 
 // TestNewIndexerDefaultsWorkers covers the workers<1, maxFileSize<1 and
-// maxChunksPerFile<1 fallback branches.
+// maxChunksPerFile<1 fallback branches, plus the EmbedBatchSize default.
 func TestNewIndexerDefaultsWorkers(t *testing.T) {
-	idx := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, IndexerOpts{Workers: 0, EmbedBatchSize: 8, MaxFileSize: 0, MaxChunksPerFile: 0})
+	idx := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, IndexerOpts{Workers: 0, EmbedBatchSize: 0, MaxFileSize: 0, MaxChunksPerFile: 0})
 	if idx.workers != defaultIndexWorkers {
 		t.Errorf("workers = %d, want default %d", idx.workers, defaultIndexWorkers)
+	}
+	if idx.embedBatchSize != 8 {
+		t.Errorf("embedBatchSize = %d, want 8", idx.embedBatchSize)
 	}
 	if idx.maxFileSize != 1024*1024 {
 		t.Errorf("maxFileSize = %d, want %d", idx.maxFileSize, 1024*1024)
@@ -207,6 +211,7 @@ func (e *errStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID i
 	return e.insertTextErr
 }
 func (e *errStore) UpdateProjectStatus(ctx context.Context, id int, status string) error { return nil }
+func (e *errStore) InsertFileDependencies(context.Context, int, string, []string) error  { return nil }
 
 func TestIndexContentUpsertFileError(t *testing.T) {
 	es := &errStore{upsertFileErr: errors.New("upsert boom")}
@@ -243,6 +248,23 @@ func TestIndexContentSensitiveTextOnlyInsertError(t *testing.T) {
 }
 
 // --- embed retry / soft-error paths ----------------------------------------
+
+// TestEmbedWithRetryCancelDuringBackoff: the first attempt fails, the context
+// is cancelled during the second attempt's backoff (via AfterFunc), so
+// embedWithRetry returns context.Canceled from the sleepBackoff path.
+func TestEmbedWithRetryCancelDuringBackoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Cancel well before the ~500ms backoff completes.
+	time.AfterFunc(5*time.Millisecond, cancel)
+
+	emb := &alwaysFailEmbedder{}
+	idx := NewIndexer(&fakeStore{}, emb, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+
+	if _, err := idx.embedWithRetry(ctx, "m", []string{"x"}); !errors.Is(err, context.Canceled) {
+		t.Errorf("embedWithRetry = %v, want context.Canceled", err)
+	}
+}
 
 // flakyEmbedder fails its first (failCount) Embed calls, then succeeds.
 type flakyEmbedder struct {
@@ -318,7 +340,7 @@ func TestEmbedAndInsertSoftErrorOnEmbedFailure(t *testing.T) {
 	fs := &fakeStore{}
 	idx := NewIndexer(fs, &alwaysFailEmbedder{}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, Verbose: true})
 	created, softErrs := idx.embedAndInsert(context.Background(), 1, 1,
-		[]chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, "m", "a.go")
+		[]chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, "m", "a.go", nil)
 	if created != 0 {
 		t.Errorf("created = %d, want 0 on embed failure", created)
 	}
@@ -333,7 +355,7 @@ func TestEmbedAndInsertSoftErrorOnInsertFailure(t *testing.T) {
 	es := &errStore{insertErr: errors.New("insert boom")}
 	idx := NewIndexer(es, &fakeEmbedder{}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, Verbose: true})
 	created, softErrs := idx.embedAndInsert(context.Background(), 1, 1,
-		[]chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, "m", "a.go")
+		[]chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, "m", "a.go", nil)
 	if created != 0 {
 		t.Errorf("created = %d, want 0 on insert failure", created)
 	}
@@ -439,6 +461,190 @@ func TestIndexContentCapsChunksPerFile(t *testing.T) {
 	if created != 32 {
 		t.Errorf("created = %d, want capped at %d", created, 32)
 	}
+}
+
+// --- mergeOutcome unit tests -------------------------------------------------
+
+func TestMergeOutcomeIndexedDominates(t *testing.T) {
+	// If the unit is outcomeIndexed, the aggregate becomes outcomeIndexed regardless.
+	if got := mergeOutcome(outcomeSkippedEmpty, outcomeIndexed); got != outcomeIndexed {
+		t.Errorf("mergeOutcome(empty, indexed) = %v, want indexed", got)
+	}
+	if got := mergeOutcome(outcomeSkippedUnchanged, outcomeIndexed); got != outcomeIndexed {
+		t.Errorf("mergeOutcome(unchanged, indexed) = %v, want indexed", got)
+	}
+	if got := mergeOutcome(outcomeIndexed, outcomeIndexed); got != outcomeIndexed {
+		t.Errorf("mergeOutcome(indexed, indexed) = %v, want indexed", got)
+	}
+}
+
+func TestMergeOutcomeUnchangedPromotedWhenNotIndexed(t *testing.T) {
+	// From empty aggregate: unchanged unit promotes to unchanged.
+	if got := mergeOutcome(outcomeSkippedEmpty, outcomeSkippedUnchanged); got != outcomeSkippedUnchanged {
+		t.Errorf("mergeOutcome(empty, unchanged) = %v, want unchanged", got)
+	}
+	// From unchanged aggregate: empty unit stays unchanged.
+	if got := mergeOutcome(outcomeSkippedUnchanged, outcomeSkippedEmpty); got != outcomeSkippedUnchanged {
+		t.Errorf("mergeOutcome(unchanged, empty) = %v, want unchanged", got)
+	}
+}
+
+func TestMergeOutcomeIndexedPreservesIndexed(t *testing.T) {
+	// Once indexed, subsequent unchanged/empty units don't downgrade.
+	if got := mergeOutcome(outcomeIndexed, outcomeSkippedUnchanged); got != outcomeIndexed {
+		t.Errorf("mergeOutcome(indexed, unchanged) = %v, want indexed", got)
+	}
+	if got := mergeOutcome(outcomeIndexed, outcomeSkippedEmpty); got != outcomeIndexed {
+		t.Errorf("mergeOutcome(indexed, empty) = %v, want indexed", got)
+	}
+}
+
+func TestMergeOutcomeEncryptedPreservesCurrent(t *testing.T) {
+	// Encrypted falls through the switch: current is returned unchanged.
+	if got := mergeOutcome(outcomeSkippedEmpty, outcomeEncrypted); got != outcomeSkippedEmpty {
+		t.Errorf("mergeOutcome(empty, encrypted) = %v, want empty", got)
+	}
+	if got := mergeOutcome(outcomeSkippedUnchanged, outcomeEncrypted); got != outcomeSkippedUnchanged {
+		t.Errorf("mergeOutcome(unchanged, encrypted) = %v, want unchanged", got)
+	}
+}
+
+// --- IndexProject -- maxChunksPerProject cap ----------------------------------
+
+func TestIndexProjectMaxChunksPerProject(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", "package a\nfunc A() {}\n")
+	writeFile(t, dir, "b.go", "package b\nfunc B() {}\n")
+
+	fs := &fakeStore{}
+	// Cap at 1 chunk per project: the first file's chunks are counted, the
+	// second file's chunk triggers the cap warning in accumulate.
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{
+		Workers:             1,
+		EmbedBatchSize:      8,
+		MaxFileSize:         1024 * 1024,
+		MaxChunksPerFile:    32,
+		MaxChunksPerProject: 1, // only one chunk counted across all files
+	})
+
+	stats, err := idx.IndexProject(context.Background(), 1, dir, "m", 0)
+	if err != nil {
+		t.Fatalf("IndexProject: %v", err)
+	}
+	// Both files should be marked indexed.
+	if stats.FilesIndexed != 2 {
+		t.Errorf("FilesIndexed = %d, want 2", stats.FilesIndexed)
+	}
+	// But only 1 chunk should be counted (the cap).
+	if stats.ChunksCreated != 1 {
+		t.Errorf("ChunksCreated = %d, want 1 (capped)", stats.ChunksCreated)
+	}
+}
+
+// --- InsertFileDependencies error path (best-effort, not fatal) ---------------
+
+type depErrStore struct {
+	*fakeStore
+	depErr error
+}
+
+func (d *depErrStore) InsertFileDependencies(ctx context.Context, projectID int, sourceFile string, targets []string) error {
+	return d.depErr
+}
+
+func TestIndexContentDependencyInsertErrorIsNonFatal(t *testing.T) {
+	// When InsertFileDependencies fails, indexUnit logs a warning but the file
+	// is still indexed. This test proves the non-fatal path.
+	es := &depErrStore{
+		fakeStore: &fakeStore{},
+		depErr:    errors.New("dep table unavailable"),
+	}
+	idx := NewIndexer(es, &fakeEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+
+	// A Go file with a local (non-stdlib) import triggers InsertFileDependencies.
+	// With empty modulePath, "mylib/util" is treated as a local import.
+	created, err := idx.IndexContent(context.Background(), 1, "pkg/main.go", "m", []byte("package main\n\nimport \"mylib/util\"\n\nfunc main() { util.Run() }\n"))
+	if err != nil {
+		t.Fatalf("IndexContent should succeed despite dep insertion error: %v", err)
+	}
+	if created == 0 {
+		t.Error("expected chunks to be created despite dep insertion error")
+	}
+}
+
+// --- direct unit tests for accumulate branches -------------------------------
+
+func TestAccumulateCountsEncryptedOutcome(t *testing.T) {
+	idx := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+	stats := &IndexStats{}
+	manifest := map[string]string{}
+
+	idx.accumulate(stats, manifest, "secret.docx", fileResult{
+		outcome: outcomeEncrypted,
+		created: 0,
+		units:   []indexedUnit{{path: "secret.docx", hash: "h1"}},
+	})
+
+	if stats.FilesEncrypted != 1 {
+		t.Errorf("FilesEncrypted = %d, want 1", stats.FilesEncrypted)
+	}
+	if len(stats.EncryptedPaths) != 1 || stats.EncryptedPaths[0] != "secret.docx" {
+		t.Errorf("EncryptedPaths = %v, want [secret.docx]", stats.EncryptedPaths)
+	}
+	if _, ok := manifest["secret.docx"]; !ok {
+		t.Error("encrypted file should be recorded in the manifest")
+	}
+}
+
+func TestAccumulateCountsFileError(t *testing.T) {
+	idx := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+	stats := &IndexStats{}
+
+	idx.accumulate(stats, map[string]string{}, "broken.go", fileResult{
+		err:      errors.New("read error"),
+		softErrs: 2, // combine with a hard error → both count
+		outcome:  outcomeSkippedEmpty,
+	})
+
+	if stats.Errors != 3 { // 2 soft + 1 hard
+		t.Errorf("Errors = %d, want 3 (2 soft + 1 hard)", stats.Errors)
+	}
+}
+
+// --- direct unit test for recordWorktree error paths -------------------------
+
+// worktreeErrStore extends fakeStore to inject errors in the worktree methods.
+type worktreeErrStore struct {
+	fakeStore
+	setWorktreeErr       error
+	pruneUnreferencedErr error
+}
+
+func (w *worktreeErrStore) SetWorktreeFiles(ctx context.Context, projectID int, worktree string, files map[string]string) error {
+	return w.setWorktreeErr
+}
+
+func (w *worktreeErrStore) PruneUnreferencedFiles(ctx context.Context, projectID int) (int64, error) {
+	return 0, w.pruneUnreferencedErr
+}
+
+func TestRecordWorktreeSetWorktreeFilesError(t *testing.T) {
+	es := &worktreeErrStore{setWorktreeErr: errors.New("set-worktree boom")}
+	// logf is exercised by setting Verbose.
+	idx := NewIndexer(es, &fakeEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, Verbose: true})
+	idx.worktree = "/wt"
+
+	// Should not panic — the error is logged and the function returns early.
+	idx.recordWorktree(context.Background(), 1, map[string]string{"a.go": "h1"})
+}
+
+func TestRecordWorktreePruneError(t *testing.T) {
+	es := &worktreeErrStore{pruneUnreferencedErr: errors.New("prune boom")}
+	idx := NewIndexer(es, &fakeEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, Verbose: true})
+	idx.worktree = "/wt"
+
+	// SetWorktreeFiles succeeds, PruneUnreferencedFiles fails — the error is logged.
+	idx.recordWorktree(context.Background(), 1, map[string]string{"a.go": "h1"})
 }
 
 // TestVerboseProgress runs a small verbose index to cover the verbose branches

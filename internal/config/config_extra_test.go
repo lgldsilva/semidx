@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -18,7 +19,13 @@ func TestDefaultLocalIndexPath(t *testing.T) {
 	t.Run("falls back to the home cache directory", func(t *testing.T) {
 		t.Setenv("XDG_CACHE_HOME", "")
 		t.Setenv("HOME", "/home/tester")
-		want := filepath.Join("/home/tester", ".cache", "semidx", "index.db")
+		// os.UserCacheDir returns ~/.cache on Linux, ~/Library/Caches on macOS.
+		var want string
+		if runtime.GOOS == "darwin" {
+			want = filepath.Join("/home/tester", "Library", "Caches", "semidx", "index.db")
+		} else {
+			want = filepath.Join("/home/tester", ".cache", "semidx", "index.db")
+		}
 		if got := DefaultLocalIndexPath(); got != want {
 			t.Errorf("DefaultLocalIndexPath() = %q, want %q", got, want)
 		}
