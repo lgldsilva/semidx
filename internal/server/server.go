@@ -217,7 +217,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := client.SearchResponse{
-		Project:  project,
+		Project:  resp.Project.Name,
 		Model:    resp.Model,
 		Fallback: resp.Fallback,
 		TookMS:   time.Since(start).Milliseconds(),

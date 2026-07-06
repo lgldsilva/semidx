@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lgldsilva/semidx/internal/passwd"
+	"github.com/lgldsilva/semidx/internal/projectref"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -130,14 +131,15 @@ type adminSearchHit struct {
 }
 
 type searchData struct {
-	Project      string
-	AllProjects  bool
-	Query        string
-	Top          int
-	Results      []adminSearchHit
-	Fallback     bool
-	Ran          bool
-	ProjectCount int // set when AllProjects ran
+	Project         string
+	ResolvedProject string // canonical name after flexible resolve
+	AllProjects     bool
+	Query           string
+	Top             int
+	Results         []adminSearchHit
+	Fallback        bool
+	Ran             bool
+	ProjectCount    int // set when AllProjects ran
 }
 
 func (a *Admin) searchPage(w http.ResponseWriter, r *http.Request, ac *authCtx) {
@@ -184,6 +186,7 @@ func (a *Admin) searchPage(w http.ResponseWriter, r *http.Request, ac *authCtx) 
 				p.Err = err.Error()
 			}
 		} else {
+			d.ResolvedProject = resp.Project.Name
 			d.Fallback = resp.Fallback
 			for _, hit := range resp.Results {
 				d.Results = append(d.Results, adminSearchHit{SearchResult: hit})
@@ -201,6 +204,7 @@ func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) 
 		a.log.Error("list projects for search failed", "err", err)
 		return fmt.Errorf("could not list projects")
 	}
+	projects = projectref.UniqueByIdentity(projects)
 	if len(projects) == 0 {
 		return fmt.Errorf("no indexed projects")
 	}
@@ -208,7 +212,13 @@ func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) 
 	var merged []adminSearchHit
 	fallback := false
 	for _, proj := range projects {
-		resp, serr := a.search.Search(ctx, search.Request{Project: proj.Name, Query: d.Query, TopK: topK})
+		req := search.Request{Query: d.Query, TopK: topK}
+		if proj.Identity != "" {
+			req.Identity = proj.Identity
+		} else {
+			req.Project = proj.Name
+		}
+		resp, serr := a.search.Search(ctx, req)
 		if serr != nil {
 			if errors.Is(serr, store.ErrNotFound) {
 				continue
@@ -219,7 +229,7 @@ func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) 
 			fallback = true
 		}
 		for _, hit := range resp.Results {
-			merged = append(merged, adminSearchHit{Project: proj.Name, SearchResult: hit})
+			merged = append(merged, adminSearchHit{Project: resp.Project.Name, SearchResult: hit})
 		}
 	}
 	sort.Slice(merged, func(i, j int) bool { return merged[i].Score > merged[j].Score })
@@ -232,9 +242,12 @@ func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) 
 }
 
 type projectItem struct {
-	Name   string `json:"name"`
-	Model  string `json:"model"`
-	Status string `json:"status"`
+	Name       string `json:"name"`
+	Identity   string `json:"identity,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Model      string `json:"model"`
+	Status     string `json:"status"`
+	SourceType string `json:"source_type,omitempty"`
 }
 
 func (a *Admin) projectsAPI(w http.ResponseWriter, r *http.Request, ac *authCtx) {
@@ -249,7 +262,10 @@ func (a *Admin) projectsAPI(w http.ResponseWriter, r *http.Request, ac *authCtx)
 	}
 	items := make([]projectItem, 0, len(projects))
 	for _, p := range projects {
-		items = append(items, projectItem{Name: p.Name, Model: p.Model, Status: p.Status})
+		items = append(items, projectItem{
+			Name: p.Name, Identity: p.Identity, Path: p.Path,
+			Model: p.Model, Status: p.Status, SourceType: p.SourceType,
+		})
 	}
 	if items == nil {
 		items = []projectItem{}

@@ -231,6 +231,18 @@ func (f *fakeStore) GetProject(_ context.Context, name string) (*store.Project, 
 	return nil, store.ErrNotFound
 }
 
+func (f *fakeStore) GetProjectByIdentity(_ context.Context, identity string) (*store.Project, error) {
+	for i := range f.projects {
+		if f.projects[i].Identity == identity {
+			return &f.projects[i], nil
+		}
+	}
+	if f.searchProject != nil && f.searchProject.Identity == identity {
+		return f.searchProject, nil
+	}
+	return nil, store.ErrNotFound
+}
+
 func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]store.SearchResult, error) {
 	return f.searchResults, nil
 }
