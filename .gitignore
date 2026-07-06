@@ -25,3 +25,6 @@ testdata/rapid/
 
 # Deepwork progress files (Orchestrator session state)
 .slim/deepwork/
+.scannerwork/ bin/ semidx.exe
+.scannerwork/
+semidx.exe

@@ -54,6 +54,7 @@ type Indexer struct {
 	gitMode             bool
 	gitSince            string
 	keywordOnly         bool   // when true, store text-only (no embeddings) for keyword search
+	modulePath          string // Go module path from go.mod (for import-dependency extraction)
 	worktree            string // when set, record this worktree's manifest + prune after indexing
 
 	// mem throttling for the verbose progress path: ReadMemStats triggers a
@@ -156,6 +157,10 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 	defer span.End()
 
 	stats := &IndexStats{}
+
+	if idx.modulePath == "" {
+		idx.modulePath = ReadModulePath(projectPath)
+	}
 
 	files, err := ScanFiles(projectPath, maxFiles)
 	if err != nil {
@@ -466,6 +471,17 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 	}
 	if len(chunks) > idx.maxChunksPerFile {
 		chunks = chunks[:idx.maxChunksPerFile]
+	}
+
+	// Extract Go import dependencies for graph edges.
+	if strings.HasSuffix(rel, ".go") {
+		deps := chunker.AnalyzeGoImports(content, idx.modulePath)
+		if len(deps) > 0 {
+			// Best-effort: don't fail indexing if dependency recording fails.
+			if err := idx.db.InsertFileDependencies(ctx, projectID, rel, deps); err != nil {
+				idx.log.Warn("failed to record dependencies", "file", rel, "error", err)
+			}
+		}
 	}
 
 	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
