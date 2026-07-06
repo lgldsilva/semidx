@@ -128,6 +128,11 @@ type Config struct {
 	// EmbedCircuitCooldown is how long the circuit stays open before allowing a
 	// probe request (SEMIDX_EMBED_CIRCUIT_COOLDOWN, default "30s").
 	EmbedCircuitCooldown time.Duration
+
+	// GitAllowFile permits file:// git URLs for server-side sync (SEMIDX_GIT_ALLOW_FILE).
+	GitAllowFile bool
+	// MetricsToken, when set, requires Bearer auth on GET /metrics (SEMIDX_METRICS_TOKEN).
+	MetricsToken string
 }
 
 // DefaultLocalIndexPath is the standalone index location. It uses the OS-native
@@ -165,6 +170,34 @@ func (c *Config) Clone() *Config {
 		cp.OllamaURLs = append([]string(nil), c.OllamaURLs...)
 	}
 	return &cp
+}
+
+// HasConfiguredEmbeddingProvider reports whether any cloud or custom embedding
+// provider API key is set. Local Ollama at the default URL does not count — it
+// may be absent on a fresh machine.
+func (c *Config) HasConfiguredEmbeddingProvider() bool {
+	return c.Provider != "" ||
+		c.APIKey != "" ||
+		c.GeminiAPIKey != "" ||
+		c.GroqAPIKey != "" ||
+		c.OpenRouterAPIKey != "" ||
+		c.OllamaCloudAPIKey != ""
+}
+
+// ZeroConfigRecommended reports whether the CLI should enable standalone local
+// keyword-only mode because no database, remote server, or embedding provider
+// has been explicitly configured.
+func ZeroConfigRecommended(cfg *Config, remoteServer bool) bool {
+	if cfg.KeywordOnly || cfg.LocalIndexPath != "" {
+		return false
+	}
+	if remoteServer {
+		return false
+	}
+	if os.Getenv("SEMIDX_DB_DSN") != "" || os.Getenv("SEMIDX_LOCAL_INDEX") != "" {
+		return false
+	}
+	return !cfg.HasConfiguredEmbeddingProvider()
 }
 
 // Load resolves the configuration using the real OS environment. A missing
@@ -235,6 +268,8 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 			}
 			return 30 * time.Second
 		}(),
+		GitAllowFile: env.get("SEMIDX_GIT_ALLOW_FILE", "") == "true",
+		MetricsToken: env.get("SEMIDX_METRICS_TOKEN", ""),
 	}
 }
 
@@ -288,6 +323,8 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_DATA_DIR", "Where the server clones git projects (serve)", false},
 	{"SEMIDX_JWT_SECRET", "HS256 secret enabling JWT control tokens (serve)", true},
 	{"SEMIDX_CSRF_KEY", "HMAC key for web-admin CSRF tokens; persistent across restarts (serve)", true},
+	{"SEMIDX_GIT_ALLOW_FILE", "Allow file:// git URLs for server-side git sync (serve)", false},
+	{"SEMIDX_METRICS_TOKEN", "Bearer token required for GET /metrics when set (serve)", true},
 	{"SEMIDX_COOKIE_SECURE", "Secure flag on web-admin cookies; false only over HTTP (serve)", false},
 }
 

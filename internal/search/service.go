@@ -71,11 +71,14 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 
 	project, err := s.resolveProject(ctx, req)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
 		ref := req.Project
 		if req.Identity != "" {
 			ref = req.Identity
 		}
-		return nil, fmt.Errorf("project not found: %s", ref)
+		return nil, fmt.Errorf("project lookup failed for %s: %w", ref, err)
 	}
 
 	model := project.Model

@@ -110,10 +110,11 @@ func TestSearchKeywordFallback(t *testing.T) {
 }
 
 func TestSearchProjectNotFound(t *testing.T) {
-	st := &fakeStore{getErr: errors.New("no rows")}
+	st := &fakeStore{getErr: store.ErrNotFound}
 	svc := NewService(st, &fakeEmbedder{vec: []float32{1}, dims: 1})
-	if _, err := svc.Search(context.Background(), Request{Project: "ghost", Query: "q"}); err == nil {
-		t.Error("expected error for missing project")
+	_, err := svc.Search(context.Background(), Request{Project: "ghost", Query: "q"})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 
