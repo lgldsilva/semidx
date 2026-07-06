@@ -131,8 +131,11 @@ func New(path string) (*SQLiteStore, error) {
 	// busy_timeout handles concurrent reads/writes during normal operation,
 	// but FTS5 virtual-table creation and trigger setup can race when two
 	// processes (e.g. index + search) call ensureSchema simultaneously.
-	lockPath := schemaLockPath(path)
-	lockFile, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
+lockPath := schemaLockPath(path)
+// #nosec G304 -- lockPath is a fixed .lock sidecar next to the db file,
+// intentionally derived from the user-provided db path (same trust model as the
+// db file itself opened via sql.Open below).
+lockFile, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open schema lock: %w", err)
 	}
