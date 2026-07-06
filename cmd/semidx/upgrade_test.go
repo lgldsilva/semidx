@@ -98,6 +98,31 @@ func TestFetchLatestTag(t *testing.T) {
 	}
 }
 
+// Gitea returns 404 on /releases/latest; upgrade must fall back to the list.
+func TestFetchLatestTag_GiteaListFallback(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	})
+	mux.HandleFunc("/releases", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `[
+			{"tag_name":"v0.7.2","draft":false},
+			{"tag_name":"v0.9.0","draft":false},
+			{"tag_name":"v0.8.0","draft":false}
+		]`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	got, err := fetchLatestTag(context.Background(), srv.Client(), srv.URL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "v0.9.0" {
+		t.Fatalf("tag = %q, want v0.9.0", got)
+	}
+}
+
 // A private release host rejects unauthenticated reads; the token must be sent.
 func TestFetchLatestTag_WithToken(t *testing.T) {
 	mux := http.NewServeMux()
