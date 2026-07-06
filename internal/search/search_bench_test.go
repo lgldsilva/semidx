@@ -17,13 +17,13 @@ import (
 // benchFakeStore implements store.IndexStore methods that Service.Search calls.
 type benchFakeStore struct {
 	store.Store
-	project       *store.Project
-	getErr        error
-	simResults    []store.SearchResult
-	kwResults     []store.SearchResult
-	graphEdges    map[string][]string // source -> targets
-	chunksByPath  map[string][]store.SearchResult
-	insertCalled  int
+	project      *store.Project
+	getErr       error
+	simResults   []store.SearchResult
+	kwResults    []store.SearchResult
+	graphEdges   map[string][]string // source -> targets
+	chunksByPath map[string][]store.SearchResult
+	insertCalled int
 }
 
 func (f *benchFakeStore) GetProject(_ context.Context, name string) (*store.Project, error) {

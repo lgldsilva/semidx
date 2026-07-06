@@ -13,13 +13,13 @@ import (
 // fakeStore implements store.Store; only the methods Search uses are overridden.
 type fakeStore struct {
 	store.Store
-	project       *store.Project
-	getErr        error
-	simResults    []store.SearchResult
-	kwResults     []store.SearchResult
-	usedKW        bool
-	usedWorktree  bool
-	gotTopK       int
+	project      *store.Project
+	getErr       error
+	simResults   []store.SearchResult
+	kwResults    []store.SearchResult
+	usedKW       bool
+	usedWorktree bool
+	gotTopK      int
 }
 
 func (f *fakeStore) GetProject(ctx context.Context, name string) (*store.Project, error) {

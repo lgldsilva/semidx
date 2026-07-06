@@ -17,11 +17,11 @@ import (
 // Only file 0 (main.go) shares words with the query. Files 1+ use different
 // vocabularies so keyword search cannot find them — only graph expansion can.
 var vocabularies = []string{
-	"entry point handles incoming request",                                     // file 0: shares words with query
-	"dispatcher routes data packets",                                           // file 1: completely different words
-	"worker consumes queue elements",                                          // file 2
-	"backend persists database records",                                       // file 3
-	"cache stores session blobs",                                              // file 4
+	"entry point handles incoming request", // file 0: shares words with query
+	"dispatcher routes data packets",       // file 1: completely different words
+	"worker consumes queue elements",       // file 2
+	"backend persists database records",    // file 3
+	"cache stores session blobs",           // file 4
 }
 
 // buildBenchFixture creates a temp SQLite store with dep chain + pre-populated edges.
