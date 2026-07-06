@@ -122,6 +122,11 @@ type BatchResponse struct {
 	Errors  int `json:"errors"`
 }
 
+type EnqueueResponse struct {
+	JobID  int    `json:"job_id"`
+	Status string `json:"status"`
+}
+
 // ---- Methods ------------------------------------------------------------------
 
 // Healthz reports whether the server is reachable.
@@ -211,14 +216,27 @@ func (c *Client) FilesDiff(ctx context.Context, project string, hashes map[strin
 	return &out, nil
 }
 
-// FilesBatch uploads file contents to index and removes the delete list.
+// FilesBatch uploads file contents to index and removes the delete list,
+// using the synchronous mode (?sync=true) so the response includes the
+// indexing counts directly.
 func (c *Client) FilesBatch(ctx context.Context, project string, files []BatchFile, del []string) (*BatchResponse, error) {
 	var out BatchResponse
-	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/files/batch",
+	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/files/batch?sync=true",
 		map[string]any{"files": files, "delete": del}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// FilesBatchAsync enqueues a batch indexing job and returns the job id. The
+// job is processed by a background worker; call GetJob to poll for completion.
+func (c *Client) FilesBatchAsync(ctx context.Context, project string, files []BatchFile, del []string) (int, error) {
+	var out EnqueueResponse
+	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/files/batch",
+		map[string]any{"files": files, "delete": del}, &out); err != nil {
+		return 0, err
+	}
+	return out.JobID, nil
 }
 
 // esc escapes a path segment for use in REST URLs. url.PathEscape does not

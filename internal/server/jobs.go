@@ -97,6 +97,12 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 		return
 	}
 
+	// Batch jobs carry their payload inline; skip git sync / project path.
+	if job.Type == "batch" {
+		s.runBatchJob(ctx, job, proj)
+		return
+	}
+
 	path := proj.Path
 	if proj.SourceType == "git" {
 		p, err := gitsync.Sync(ctx, dataDir, proj.Name, proj.GitURL, proj.Branch)
@@ -127,11 +133,40 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 		fail("index: " + err.Error())
 		return
 	}
-	if err := s.store.CompleteJob(ctx, job.ID, stats.FilesIndexed, stats.ChunksCreated); err != nil {
+	if err := s.store.CompleteJob(ctx, job.ID, stats.FilesIndexed, stats.ChunksCreated, 0, 0); err != nil {
 		s.log.Error("mark job complete", "job", job.ID, "err", err)
 	}
 	s.log.Info("index job done", "job", job.ID, "project", proj.Name,
 		"files", stats.FilesIndexed, "chunks", stats.ChunksCreated)
+}
+
+// runBatchJob processes a batch (push) job: deserialises the JSON payload
+// embedded in the job, chunks/embeds files, and completes the job with the
+// result counts. On a fatal error (model unavailable, bad payload) it calls
+// FailJob instead.
+func (s *Server) runBatchJob(ctx context.Context, job *store.Job, proj *store.Project) {
+	var body batchRequestBody
+	if err := json.Unmarshal([]byte(job.Payload), &body); err != nil {
+		_ = s.store.FailJob(ctx, job.ID, "invalid batch payload: "+err.Error())
+		return
+	}
+
+	info, err := s.emb.ModelInfo(ctx, proj.Model)
+	if err != nil {
+		_ = s.store.FailJob(ctx, job.ID, "model info: "+err.Error())
+		return
+	}
+	if err := s.store.EnsureChunksTable(ctx, info.Dims); err != nil {
+		_ = s.store.FailJob(ctx, job.ID, "ensure chunks table: "+err.Error())
+		return
+	}
+
+	indexed, chunks, deleted, errors := s.processBatchFiles(ctx, proj, body.Files, body.Delete, info.Dims)
+	if err := s.store.CompleteJob(ctx, job.ID, indexed, chunks, deleted, errors); err != nil {
+		s.log.Error("mark job complete", "job", job.ID, "err", err)
+	}
+	s.log.Info("batch job done", "job", job.ID, "project", proj.Name,
+		"files", indexed, "chunks", chunks, "deleted", deleted, "errors", errors)
 }
 
 func (s *Server) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
@@ -174,6 +209,8 @@ type jobView struct {
 	Error         string `json:"error,omitempty"`
 	FilesIndexed  int    `json:"files_indexed"`
 	ChunksCreated int    `json:"chunks_created"`
+	DeletedFiles  int    `json:"deleted_files"`
+	ErrorCount    int    `json:"error_count"`
 }
 
 func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
@@ -194,5 +231,6 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, jobView{
 		ID: job.ID, Type: job.Type, Status: job.Status, Error: job.Error,
 		FilesIndexed: job.FilesIndexed, ChunksCreated: job.ChunksCreated,
+		DeletedFiles: job.DeletedFiles, ErrorCount: job.ErrorCount,
 	})
 }
