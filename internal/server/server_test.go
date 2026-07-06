@@ -10,6 +10,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/pkg/client"
 )
 
 // fakeStore implements just the methods the server touches.
@@ -190,7 +191,7 @@ func TestSearchOK(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("search = %d, body %s", rec.Code, rec.Body.String())
 	}
-	var out searchResponse
+	var out client.SearchResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("bad JSON: %v", err)
 	}

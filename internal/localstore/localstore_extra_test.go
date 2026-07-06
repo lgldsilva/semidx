@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/lgldsilva/semidx/internal/chunker"
@@ -146,4 +147,35 @@ func TestClosedDBErrorPaths(t *testing.T) {
 	_, err = s.SearchSimilarKeywords(ctx, 1, "word", 1, 5)
 	assertErr("SearchSimilarKeywords", err)
 	assertErr("DropAll", s.DropAll(ctx))
+}
+
+// TestConcurrentNew verifies that multiple goroutines (and, by extension,
+// processes) can call New on the same database path without errors. The
+// cross-process flock serialises schema initialisation so FTS5 virtual-table
+// creation and trigger setup never race.
+func TestConcurrentNew(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent.db")
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 10)
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := New(path)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			s.Close()
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent New failed: %v", err)
+		}
+	}
 }
