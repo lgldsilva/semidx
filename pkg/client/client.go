@@ -83,6 +83,8 @@ type Project struct {
 	SourceType string `json:"source_type"`
 	GitURL     string `json:"git_url,omitempty"`
 	Branch     string `json:"branch,omitempty"`
+	Identity   string `json:"identity,omitempty"`
+	Path       string `json:"path,omitempty"`
 }
 
 type Job struct {
