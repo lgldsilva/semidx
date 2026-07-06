@@ -130,9 +130,7 @@ func TestCircuitBreakerDefaultThreshold(t *testing.T) {
 // --- circuitEmbedder integration tests ---------------------------------------
 
 // errEmbedder always fails on every method.
-type errEmbedder struct {
-	name string
-}
+type errEmbedder struct{}
 
 func (e *errEmbedder) ModelInfo(_ context.Context, model string) (*ModelInfo, error) {
 	return nil, errors.New("always fails")
