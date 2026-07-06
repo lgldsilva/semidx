@@ -180,6 +180,28 @@ func TestSearchPage(t *testing.T) {
 			t.Errorf("search results = %d, body=%q", code, body)
 		}
 	})
+
+	t.Run("search all projects merges and labels results", func(t *testing.T) {
+		srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+		fs.addUser("admin", "supersecret", "admin")
+		fs.projects = []store.Project{
+			{ID: 1, Name: "alpha", Model: "bge-m3"},
+			{ID: 2, Name: "beta", Model: "bge-m3"},
+		}
+		fs.searchResults = []store.SearchResult{{FilePath: "main.go", Content: "hit", Score: 0.85}}
+		c := newClient(t)
+		login(t, c, srv.URL, "admin", "supersecret")
+		code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello&top=5")
+		if code != 200 {
+			t.Fatalf("status = %d", code)
+		}
+		if !strings.Contains(body, "main.go") || !strings.Contains(body, "alpha") || !strings.Contains(body, "beta") {
+			t.Errorf("expected merged labeled results, body=%q", body)
+		}
+		if !strings.Contains(body, "Searched 2 project") {
+			t.Errorf("expected project count summary, body=%q", body)
+		}
+	})
 }
 
 // --- account (password change) ------------------------------------------------

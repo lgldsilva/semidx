@@ -7,12 +7,14 @@
 
 {{template "flashes" .}}
 
-<form method="get" action="/admin/search" class="search-form">
+<form method="get" action="/admin/search" class="search-form" id="search-form">
   <div class="row">
     <div class="grow autocomplete-wrap">
       <label for="project-input">Project</label>
-      <input id="project-input" type="text" name="project" value="{{$d.Project}}" required autocomplete="off" list="project-options" placeholder="Start typing a project name…">
-      <datalist id="project-options"></datalist>
+      <input id="project-input" type="text" value="{{if $d.AllProjects}}All projects{{else}}{{$d.Project}}{{end}}" autocomplete="off" placeholder="Type to filter projects…" aria-autocomplete="list" aria-controls="project-dropdown" aria-expanded="false">
+      <input type="hidden" name="project" id="project-hidden" value="{{$d.Project}}">
+      <input type="hidden" name="all" id="all-input" value="{{if $d.AllProjects}}1{{end}}">
+      <div id="project-dropdown" class="autocomplete-dropdown" role="listbox"></div>
       <span id="project-status" class="autocomplete-status" aria-live="polite"></span>
     </div>
     <label class="grow">Query<input type="search" name="q" value="{{$d.Query}}" required placeholder="Describe what you're looking for…"></label>
@@ -22,6 +24,11 @@
     </button>
   </div>
   <div class="top-selector">
+    <label class="search-all-toggle muted">
+      <input type="checkbox" id="all-checkbox" {{if $d.AllProjects}}checked{{end}}>
+      Search all projects
+    </label>
+    <span class="top-selector-sep muted">·</span>
     <span class="muted">Top results:</span>
     <button type="button" class="pill-btn" data-value="10">10</button>
     <button type="button" class="pill-btn" data-value="5">5</button>
@@ -32,13 +39,17 @@
 </form>
 
 {{if $d.Ran}}
+  {{if $d.AllProjects}}<p class="muted">Searched {{$d.ProjectCount}} project(s) — showing top {{$d.Top}} matches overall.</p>{{end}}
   {{if $d.Fallback}}<p class="alert error">Embedding unavailable — showing keyword matches, not semantic ranking.</p>{{end}}
   {{if $d.Results}}
     <h2 class="results-heading">{{len $d.Results}} result(s)</h2>
     {{range $d.Results}}
       <div class="card result-card {{if gt .Score 0.7}}score-high{{else if ge .Score 0.4}}score-mid{{else}}score-low{{end}}">
         <div class="result-header">
-          <code class="result-path">{{.FilePath}}:{{.StartLine}}</code>
+          <div class="result-loc">
+            {{if .Project}}<span class="result-project">{{.Project}}</span>{{end}}
+            <code class="result-path">{{.FilePath}}:{{.StartLine}}</code>
+          </div>
           <span class="score-badge {{if gt .Score 0.7}}score-high{{else if ge .Score 0.4}}score-mid{{else}}score-low{{end}}">{{printf "%.2f" .Score}}</span>
         </div>
         <pre class="snippet">{{.Content}}</pre>
@@ -50,14 +61,20 @@
 {{end}}
 
 <script>
-// Native <datalist> autocomplete: the browser handles filtering, keyboard
-// navigation and selection, so this only loads the option list and drives the
-// "top results" pill selector.
 document.addEventListener('DOMContentLoaded', function () {
-  const datalist = document.getElementById('project-options');
+  const form = document.getElementById('search-form');
+  const input = document.getElementById('project-input');
+  const hiddenProject = document.getElementById('project-hidden');
+  const allInput = document.getElementById('all-input');
+  const allCheckbox = document.getElementById('all-checkbox');
+  const dropdown = document.getElementById('project-dropdown');
   const status = document.getElementById('project-status');
   const topInput = document.getElementById('top-input');
   const topButtons = document.querySelectorAll('.top-selector .pill-btn');
+
+  let projects = [];
+  let activeIndex = -1;
+  let filtered = [];
 
   function setTop(value) {
     topInput.value = value;
@@ -70,26 +87,172 @@ document.addEventListener('DOMContentLoaded', function () {
   });
   setTop(topInput.value || '10');
 
+  function setAllMode(on) {
+    allInput.value = on ? '1' : '';
+    allCheckbox.checked = on;
+    if (on) {
+      hiddenProject.value = '';
+      input.value = 'All projects';
+    } else if (input.value === 'All projects') {
+      input.value = '';
+      hiddenProject.value = '';
+    }
+  }
+
+  allCheckbox.addEventListener('change', function () {
+    setAllMode(allCheckbox.checked);
+    closeDropdown();
+  });
+
+  function closeDropdown() {
+    dropdown.classList.remove('open');
+    input.setAttribute('aria-expanded', 'false');
+    activeIndex = -1;
+  }
+
+  function openDropdown() {
+    dropdown.classList.add('open');
+    input.setAttribute('aria-expanded', 'true');
+  }
+
+  function selectAll() {
+    setAllMode(true);
+    closeDropdown();
+  }
+
+  function selectProject(p) {
+    setAllMode(false);
+    hiddenProject.value = p.name;
+    input.value = p.name;
+    closeDropdown();
+  }
+
+  function renderDropdown(items) {
+    dropdown.innerHTML = '';
+    filtered = items;
+    activeIndex = -1;
+    if (!items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'autocomplete-empty';
+      empty.textContent = 'No matching projects';
+      dropdown.appendChild(empty);
+      openDropdown();
+      return;
+    }
+    items.forEach(function (item, idx) {
+      const el = document.createElement('div');
+      el.className = 'autocomplete-item';
+      el.setAttribute('role', 'option');
+      el.dataset.index = String(idx);
+      if (item.all) {
+        el.innerHTML = '<span class="autocomplete-name">All projects</span><span class="autocomplete-meta">entire index</span>';
+      } else {
+        const meta = [item.model, item.status].filter(Boolean).join(' · ');
+        el.innerHTML = '<span class="autocomplete-name"></span><span class="autocomplete-meta"></span>';
+        el.querySelector('.autocomplete-name').textContent = item.name;
+        el.querySelector('.autocomplete-meta').textContent = meta;
+      }
+      el.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        if (item.all) { selectAll(); } else { selectProject(item); }
+      });
+      dropdown.appendChild(el);
+    });
+    openDropdown();
+  }
+
+  function filterProjects(q) {
+    const needle = (q || '').trim().toLowerCase();
+    const items = [];
+    if (!needle || needle === 'all' || 'all projects'.indexOf(needle) >= 0) {
+      items.push({ all: true });
+    }
+    projects.forEach(function (p) {
+      if (!needle || p.name.toLowerCase().indexOf(needle) >= 0) {
+        items.push(p);
+      }
+    });
+    return items;
+  }
+
+  function setActive(idx) {
+    activeIndex = idx;
+    dropdown.querySelectorAll('.autocomplete-item').forEach(function (el, i) {
+      el.classList.toggle('active', i === idx);
+    });
+  }
+
+  input.addEventListener('focus', function () {
+    if (allCheckbox.checked) { return; }
+    renderDropdown(filterProjects(input.value === 'All projects' ? '' : input.value));
+  });
+
+  input.addEventListener('input', function () {
+    if (allCheckbox.checked) { setAllMode(false); }
+    renderDropdown(filterProjects(input.value));
+  });
+
+  input.addEventListener('keydown', function (e) {
+    if (!dropdown.classList.contains('open')) {
+      if (e.key === 'ArrowDown') {
+        renderDropdown(filterProjects(input.value));
+        e.preventDefault();
+      }
+      return;
+    }
+    if (e.key === 'Escape') {
+      closeDropdown();
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActive(Math.min(activeIndex + 1, filtered.length - 1));
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive(Math.max(activeIndex - 1, 0));
+      return;
+    }
+    if (e.key === 'Enter' && activeIndex >= 0) {
+      e.preventDefault();
+      const item = filtered[activeIndex];
+      if (item.all) { selectAll(); } else { selectProject(item); }
+    }
+  });
+
+  document.addEventListener('click', function (e) {
+    if (!dropdown.contains(e.target) && e.target !== input) {
+      closeDropdown();
+    }
+  });
+
+  form.addEventListener('submit', function () {
+    if (allCheckbox.checked) {
+      allInput.value = '1';
+      hiddenProject.value = '';
+    } else {
+      allInput.value = '';
+      hiddenProject.value = input.value.trim();
+    }
+  });
+
+  dropdown.innerHTML = '<div class="autocomplete-loading">Loading projects…</div>';
   fetch('/admin/api/projects')
     .then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) { throw new Error('HTTP ' + r.status); }
       return r.json();
     })
     .then(function (data) {
-      const projects = (data.projects || []).slice().sort(function (a, b) {
+      projects = (data.projects || []).slice().sort(function (a, b) {
         return a.name.localeCompare(b.name);
       });
-      // DOM APIs escape values, so no manual HTML-escaping is needed.
-      projects.forEach(function (p) {
-        const opt = document.createElement('option');
-        opt.value = p.name;
-        if (p.model) { opt.label = p.model; }
-        datalist.appendChild(opt);
-      });
       status.textContent = projects.length + ' project' + (projects.length === 1 ? '' : 's') + ' available';
+      dropdown.innerHTML = '';
     })
     .catch(function (err) {
       status.textContent = 'Error loading projects: ' + err.message;
+      dropdown.innerHTML = '';
     });
 });
 </script>
