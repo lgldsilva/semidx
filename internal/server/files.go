@@ -123,7 +123,9 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 		indexed++
 		chunks += created
 	}
-	_ = s.store.UpdateProjectStatus(ctx, proj.ID, "ready")
+	if err := s.store.UpdateProjectStatus(ctx, proj.ID, "ready"); err != nil {
+		s.log.Warn("update project status", "project", proj.ID, "err", err)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"indexed": indexed, "chunks": chunks, "deleted": len(body.Delete), "errors": failed,

@@ -421,7 +421,7 @@ func (s *PgStore) SetWorktreeFiles(ctx context.Context, projectID int, worktree 
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful Commit
 
 	if _, err := tx.Exec(ctx, `DELETE FROM worktree_files WHERE project_id = $1 AND worktree = $2`, projectID, worktree); err != nil {
 		return err
@@ -943,11 +943,9 @@ func (s *PgStore) SetUserPassword(ctx context.Context, id int, passwordHash stri
 // SetUserDisabled disables or re-enables a user. Disabling also invalidates their
 // active sessions.
 func (s *PgStore) SetUserDisabled(ctx context.Context, id int, disabled bool) error {
-	col := "NULL"
-	if disabled {
-		col = "NOW()"
-	}
-	tag, err := s.pool.Exec(ctx, `UPDATE users SET disabled_at = `+col+` WHERE id = $1`, id)
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE users SET disabled_at = CASE WHEN $1 THEN NOW() ELSE NULL END WHERE id = $2`,
+		disabled, id)
 	if err != nil {
 		return err
 	}

@@ -211,7 +211,7 @@ func (s *SQLiteStore) SetWorktreeFiles(ctx context.Context, projectID int, workt
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM worktree_files WHERE project_id = ? AND worktree = ?`, projectID, worktree); err != nil {
 		return err
@@ -654,7 +654,7 @@ func (s *SQLiteStore) DropAll(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 
 	for _, stmt := range []string{
 		`DELETE FROM chunks`,
