@@ -88,6 +88,44 @@ func TestWorktreeDivergentContent(t *testing.T) {
 	}
 }
 
+func TestWorktreeKeywordSearch(t *testing.T) {
+	ctx := context.Background()
+	s, err := New(filepath.Join(t.TempDir(), "idx.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	pid, err := s.EnsureProjectIdentity(ctx, "remote:example.com/acme/app", "app", "/wt/A", "bge-m3", "git", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := func(worktree, hash, content string) {
+		fid, err := s.UpsertFile(ctx, pid, "auth.go", hash, len(content))
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks := []chunker.Chunk{{Content: content, StartLine: 1, EndLine: 1}}
+		if err := s.InsertChunks(ctx, pid, fid, chunks, [][]float32{{1, 0, 0}}, 3); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SetWorktreeFiles(ctx, pid, worktree, map[string]string{"auth.go": hash}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index("/wt/A", "hashA", "A-version argon2id")
+	index("/wt/B", "hashB", "B-version bcrypt")
+
+	kwA, err := s.SearchSimilarKeywordsWorktree(ctx, pid, "argon2id", 0, 10, "/wt/A")
+	if err != nil || !onlyContains(kwA, "A-version") {
+		t.Fatalf("keyword worktree A = %+v, %v", kwA, err)
+	}
+	kwB, err := s.SearchSimilarKeywordsWorktree(ctx, pid, "bcrypt", 0, 10, "/wt/B")
+	if err != nil || !onlyContains(kwB, "B-version") {
+		t.Fatalf("keyword worktree B = %+v, %v", kwB, err)
+	}
+}
+
 // TestWorktreeSharedContentDedups verifies identical content across worktrees is
 // stored once (the re-index optimization): the second worktree's identical file
 // reuses the same file row, and FileUpToDate short-circuits it.

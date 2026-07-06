@@ -22,7 +22,7 @@ func Resolve(ctx context.Context, db store.IndexStore, ref string) (*store.Proje
 	if p := lookupByPathOrIdentity(ctx, db, ref); p != nil {
 		return p, nil
 	}
-	if p, err := db.GetProject(ctx, ref); err == nil {
+	if p, err := db.GetProject(ctx, ref); err == nil && p != nil {
 		return p, nil
 	}
 	projects, err := db.ListProjects(ctx, 0, 0)
@@ -74,28 +74,14 @@ func lookupInListByPathOrIdentity(ctx context.Context, arg string, projects []st
 }
 
 func resolveInList(ref, cwd string, projects []store.Project) (*store.Project, error) {
-	for i := range projects {
-		if projects[i].Name == ref {
-			return &projects[i], nil
-		}
+	if p := findByName(ref, projects); p != nil {
+		return p, nil
 	}
-	for i := range projects {
-		if strings.EqualFold(projects[i].Name, ref) {
-			return &projects[i], nil
-		}
+	if p := findByIdentity(projects, ref); p != nil {
+		return p, nil
 	}
-	for i := range projects {
-		if projects[i].Identity != "" && projects[i].Identity == ref {
-			return &projects[i], nil
-		}
-	}
-	if abs, err := filepath.Abs(ref); err == nil {
-		for i := range projects {
-			pp, perr := filepath.Abs(projects[i].Path)
-			if perr == nil && pp == abs {
-				return &projects[i], nil
-			}
-		}
+	if p := findByIndexedPath(ref, projects); p != nil {
+		return p, nil
 	}
 	if cwd != "" {
 		if p := Enclosing(cwd, projects); p != nil {
@@ -105,7 +91,33 @@ func resolveInList(ref, cwd string, projects []store.Project) (*store.Project, e
 	return nil, store.ErrNotFound
 }
 
+func findByName(ref string, projects []store.Project) *store.Project {
+	for i := range projects {
+		if projects[i].Name == ref || strings.EqualFold(projects[i].Name, ref) {
+			return &projects[i]
+		}
+	}
+	return nil
+}
+
+func findByIndexedPath(ref string, projects []store.Project) *store.Project {
+	abs, err := filepath.Abs(ref)
+	if err != nil {
+		return nil
+	}
+	for i := range projects {
+		pp, perr := filepath.Abs(projects[i].Path)
+		if perr == nil && pp == abs {
+			return &projects[i]
+		}
+	}
+	return nil
+}
+
 func findByIdentity(projects []store.Project, identity string) *store.Project {
+	if identity == "" {
+		return nil
+	}
 	for i := range projects {
 		if projects[i].Identity == identity {
 			return &projects[i]

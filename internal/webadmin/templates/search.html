@@ -11,10 +11,10 @@
   <div class="row">
     <div class="grow autocomplete-wrap">
       <label for="project-input">Project</label>
-      <input id="project-input" type="text" value="{{if $d.AllProjects}}All projects{{else}}{{$d.Project}}{{end}}" autocomplete="off" placeholder="Type to filter projects…" aria-autocomplete="list" aria-controls="project-dropdown" aria-expanded="false">
+      <input id="project-input" type="text" value="{{if $d.AllProjects}}All projects{{else}}{{$d.Project}}{{end}}" autocomplete="off" placeholder="Type to filter projects…" aria-autocomplete="list">
       <input type="hidden" name="project" id="project-hidden" value="{{$d.Project}}">
       <input type="hidden" name="all" id="all-input" value="{{if $d.AllProjects}}1{{end}}">
-      <div id="project-dropdown" class="autocomplete-dropdown" role="listbox"></div>
+      <div id="project-dropdown" class="autocomplete-dropdown"></div>
       <span id="project-status" class="autocomplete-status" aria-live="polite"></span>
     </div>
     <label class="grow">Query<input type="search" name="q" value="{{$d.Query}}" required placeholder="Describe what you're looking for…"></label>
@@ -106,13 +106,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function closeDropdown() {
     dropdown.classList.remove('open');
-    input.setAttribute('aria-expanded', 'false');
     activeIndex = -1;
   }
 
   function openDropdown() {
     dropdown.classList.add('open');
-    input.setAttribute('aria-expanded', 'true');
   }
 
   function selectAll() {
@@ -142,7 +140,6 @@ document.addEventListener('DOMContentLoaded', function () {
     items.forEach(function (item, idx) {
       const el = document.createElement('div');
       el.className = 'autocomplete-item';
-      el.setAttribute('role', 'option');
       el.dataset.index = String(idx);
       if (item.all) {
         el.innerHTML = '<span class="autocomplete-name">All projects</span><span class="autocomplete-meta">entire index</span>';
@@ -165,12 +162,12 @@ document.addEventListener('DOMContentLoaded', function () {
   function filterProjects(q) {
     const needle = (q || '').trim().toLowerCase();
     const items = [];
-    if (!needle || needle === 'all' || 'all projects'.indexOf(needle) >= 0) {
+    if (!needle || needle === 'all' || 'all projects'.includes(needle)) {
       items.push({ all: true });
     }
     projects.forEach(function (p) {
       const hay = (p.name + ' ' + (p.identity || '') + ' ' + (p.path || '')).toLowerCase();
-      if (!needle || hay.indexOf(needle) >= 0) {
+      if (!needle || hay.includes(needle)) {
         items.push(p);
       }
     });
