@@ -140,7 +140,7 @@ func TestAnalyze_TypeScript(t *testing.T) {
 		t.Parallel()
 		src := []byte(`import { x } from './utils';`)
 		got := Analyze("src/foo/bar.ts", src, "")
-		want := []string{"src/foo/"}
+		want := []string{"src/foo/utils/"}
 		assertSlice(t, got, want)
 	})
 
@@ -148,7 +148,7 @@ func TestAnalyze_TypeScript(t *testing.T) {
 		t.Parallel()
 		src := []byte(`import { x } from '../other/helper';`)
 		got := Analyze("src/foo/bar.ts", src, "")
-		want := []string{"src/other/"}
+		want := []string{"src/other/helper/"}
 		assertSlice(t, got, want)
 	})
 
@@ -156,7 +156,7 @@ func TestAnalyze_TypeScript(t *testing.T) {
 		t.Parallel()
 		src := []byte(`const x = require('./utils');`)
 		got := Analyze("src/foo/bar.ts", src, "")
-		want := []string{"src/foo/"}
+		want := []string{"src/foo/utils/"}
 		assertSlice(t, got, want)
 	})
 
@@ -164,7 +164,31 @@ func TestAnalyze_TypeScript(t *testing.T) {
 		t.Parallel()
 		src := []byte(`const x = import('./utils');`)
 		got := Analyze("src/foo/bar.ts", src, "")
-		want := []string{"src/foo/"}
+		want := []string{"src/foo/utils/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("@ alias", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`import {x} from '@/components/Foo';`)
+		got := Analyze("src/app/page.tsx", src, "")
+		want := []string{"components/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("relative import resolves to target directory", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`import {x} from './utils';`)
+		got := Analyze("src/app/page.tsx", src, "")
+		want := []string{"src/app/utils/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("parent relative import resolves correctly", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`import {x} from '../lib';`)
+		got := Analyze("src/app/page.tsx", src, "")
+		want := []string{"src/lib/"}
 		assertSlice(t, got, want)
 	})
 
@@ -184,7 +208,53 @@ import { readFile } from 'node:fs';
 		t.Parallel()
 		src := []byte(`import { x } from './utils';`)
 		got := Analyze("src/foo/bar.jsx", src, "")
-		want := []string{"src/foo/"}
+		want := []string{"src/foo/utils/"}
+		assertSlice(t, got, want)
+	})
+}
+
+func TestAnalyze_Markdown(t *testing.T) {
+	t.Parallel()
+
+	t.Run("local link", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`[link](docs/api.md)`)
+		got := Analyze("README.md", src, "")
+		want := []string{"docs/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("external URL skipped", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`[link](https://example.com)`)
+		got := Analyze("README.md", src, "")
+		if got != nil {
+			t.Errorf("expected nil for external URL, got %v", got)
+		}
+	})
+
+	t.Run("anchor-only link skipped", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`[link](#anchor)`)
+		got := Analyze("README.md", src, "")
+		if got != nil {
+			t.Errorf("expected nil for anchor link, got %v", got)
+		}
+	})
+
+	t.Run("MDX extension", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`[link](docs/api.md)`)
+		got := Analyze("README.mdx", src, "")
+		want := []string{"docs/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("RST extension", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`[link](docs/api.md)`)
+		got := Analyze("README.rst", src, "")
+		want := []string{"docs/"}
 		assertSlice(t, got, want)
 	})
 }
@@ -235,6 +305,18 @@ func TestAnalyze_Rust(t *testing.T) {
 	t.Run("extern crate", func(t *testing.T) {
 		t.Parallel()
 		src := []byte(`extern crate my_crate;`)
+		got := Analyze("lib.rs", src, "")
+		want := []string{"my_crate/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("extern crate std skipped", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`extern crate std;
+extern crate core;
+extern crate alloc;
+extern crate my_crate;
+`)
 		got := Analyze("lib.rs", src, "")
 		want := []string{"my_crate/"}
 		assertSlice(t, got, want)

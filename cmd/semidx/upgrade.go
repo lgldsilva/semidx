@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -236,7 +237,26 @@ func parseReleaseTagVersion(tag string) (releaseTagVer, bool) {
 }
 
 func isHTTPNotFound(err error) bool {
-	return err != nil && strings.Contains(err.Error(), " 404 ")
+	if err == nil {
+		return false
+	}
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode == 404
+	}
+	s := err.Error()
+	return strings.Contains(s, " 404 ") || strings.HasSuffix(s, " 404") || strings.Contains(s, ": 404")
+}
+
+// HTTPError represents an HTTP error during the upgrade process.
+type HTTPError struct {
+	StatusCode int
+	Status     string
+	URL        string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("GET %s: %s", e.URL, e.Status)
 }
 
 // downloadReleaseBinary downloads the archive for tag/os/arch, verifies its
@@ -390,7 +410,7 @@ func httpGetBytes(ctx context.Context, hc *http.Client, url, token string) ([]by
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
+		return nil, &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status, URL: url}
 	}
 	return io.ReadAll(resp.Body)
 }

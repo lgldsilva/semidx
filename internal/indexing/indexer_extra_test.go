@@ -211,6 +211,7 @@ func (e *errStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID i
 	return e.insertTextErr
 }
 func (e *errStore) UpdateProjectStatus(ctx context.Context, id int, status string) error { return nil }
+func (e *errStore) InsertFileDependencies(context.Context, int, string, []string) error  { return nil }
 
 func TestIndexContentUpsertFileError(t *testing.T) {
 	es := &errStore{upsertFileErr: errors.New("upsert boom")}

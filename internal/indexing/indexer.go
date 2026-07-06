@@ -476,11 +476,9 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 
 	// Extract import dependencies for graph edges (all supported languages).
 	deps := si.Analyze(rel, content, idx.modulePath)
-	if len(deps) > 0 {
-		// Best-effort: don't fail indexing if dependency recording fails.
-		if err := idx.db.InsertFileDependencies(ctx, projectID, rel, deps); err != nil {
-			idx.log.Warn("failed to record dependencies", "file", rel, "error", err)
-		}
+	// Replace edges every index pass so stale imports are removed.
+	if err := idx.db.InsertFileDependencies(ctx, projectID, rel, deps); err != nil {
+		idx.log.Warn("failed to record dependencies", "file", rel, "error", err)
 	}
 
 	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {

@@ -243,6 +243,7 @@ func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults [
 
 	const decay = 0.85
 	const floor = 0.3
+	const maxGraphExpandPaths = 100 // cap chunk fetches per query (DoS guard)
 
 	// Seed paths set for dedup.
 	seedPaths := make(map[string]bool, len(seedResults))
@@ -299,6 +300,9 @@ func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults [
 			visited[neighbor] = newScore
 
 			if !seedPaths[neighbor] {
+				if len(expanded) >= maxGraphExpandPaths {
+					continue
+				}
 				if curr, ok := expanded[neighbor]; !ok || newScore > curr {
 					expanded[neighbor] = newScore
 				}

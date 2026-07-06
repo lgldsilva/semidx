@@ -121,6 +121,9 @@ func (f *fakeStore) GetJob(_ context.Context, id int) (*store.Job, error) {
 func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]store.SearchResult, error) {
 	return f.results, nil
 }
+func (f *fakeStore) InsertFileDependencies(context.Context, int, string, []string) error {
+	return nil
+}
 func (f *fakeStore) SearchSimilarKeywords(context.Context, int, string, int, int) ([]store.SearchResult, error) {
 	return f.results, nil
 }
