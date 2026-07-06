@@ -39,7 +39,7 @@
 </form>
 
 {{if $d.Ran}}
-  {{if $d.AllProjects}}<p class="muted">Searched {{$d.ProjectCount}} project(s) — showing top {{$d.Top}} matches overall.</p>{{end}}
+  {{if $d.AllProjects}}<p class="muted">Searched {{$d.ProjectCount}} project(s) — showing top {{$d.Top}} matches overall.</p>{{else if $d.ResolvedProject}}<p class="muted">Project: <strong>{{$d.ResolvedProject}}</strong>{{if ne $d.ResolvedProject $d.Project}} (resolved from “{{$d.Project}}”){{end}}</p>{{end}}
   {{if $d.Fallback}}<p class="alert error">Embedding unavailable — showing keyword matches, not semantic ranking.</p>{{end}}
   {{if $d.Results}}
     <h2 class="results-heading">{{len $d.Results}} result(s)</h2>
@@ -147,7 +147,8 @@ document.addEventListener('DOMContentLoaded', function () {
       if (item.all) {
         el.innerHTML = '<span class="autocomplete-name">All projects</span><span class="autocomplete-meta">entire index</span>';
       } else {
-        const meta = [item.model, item.status].filter(Boolean).join(' · ');
+        const metaParts = [item.model, item.status, item.identity, item.path].filter(Boolean);
+        const meta = metaParts.join(' · ');
         el.innerHTML = '<span class="autocomplete-name"></span><span class="autocomplete-meta"></span>';
         el.querySelector('.autocomplete-name').textContent = item.name;
         el.querySelector('.autocomplete-meta').textContent = meta;
@@ -168,7 +169,8 @@ document.addEventListener('DOMContentLoaded', function () {
       items.push({ all: true });
     }
     projects.forEach(function (p) {
-      if (!needle || p.name.toLowerCase().indexOf(needle) >= 0) {
+      const hay = (p.name + ' ' + (p.identity || '') + ' ' + (p.path || '')).toLowerCase();
+      if (!needle || hay.indexOf(needle) >= 0) {
         items.push(p);
       }
     });
