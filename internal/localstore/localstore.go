@@ -739,6 +739,32 @@ func (s *SQLiteStore) FetchChunksByPath(ctx context.Context, projectID int, file
 	return results, rows.Err()
 }
 
+// FetchChunksByDirPrefix returns chunks for files whose path starts with the
+// given directory prefix. Returns empty slice if no files match.
+func (s *SQLiteStore) FetchChunksByDirPrefix(ctx context.Context, projectID int, dirPrefix string, dims, limit int) ([]store.SearchResult, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path LIKE (? || '%') ORDER BY c.chunk_index LIMIT ?`, projectID, dirPrefix, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []store.SearchResult
+	for rows.Next() {
+		var (
+			r         store.SearchResult
+			startLine sql.NullInt64
+			endLine   sql.NullInt64
+		)
+		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score); err != nil {
+			return nil, err
+		}
+		r.StartLine = int(startLine.Int64)
+		r.EndLine = int(endLine.Int64)
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
 // DropAll clears all indexed data and resets the auto-increment counters
 // (mirroring PgStore's TRUNCATE ... RESTART IDENTITY).
 func (s *SQLiteStore) DropAll(ctx context.Context) error {
