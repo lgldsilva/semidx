@@ -21,6 +21,9 @@ type Config struct {
 
 // Path returns the config file location, honoring XDG_CONFIG_HOME.
 func Path() (string, error) {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "semidx", "config.yaml"), nil
+	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err

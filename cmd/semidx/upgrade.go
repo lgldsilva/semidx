@@ -236,7 +236,11 @@ func parseReleaseTagVersion(tag string) (releaseTagVer, bool) {
 }
 
 func isHTTPNotFound(err error) bool {
-	return err != nil && strings.Contains(err.Error(), " 404 ")
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, " 404 ") || strings.HasSuffix(s, " 404") || strings.Contains(s, ": 404")
 }
 
 // downloadReleaseBinary downloads the archive for tag/os/arch, verifies its
