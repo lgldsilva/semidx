@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 
+	"golang.org/x/sys/unix"
 	sqlite "modernc.org/sqlite"
 	sqlitelib "modernc.org/sqlite/lib"
 
@@ -111,6 +112,11 @@ CREATE TRIGGER IF NOT EXISTS chunks_fts_au AFTER UPDATE ON chunks BEGIN
 END;
 `
 
+// schemaLockPath returns the path to a lock file used to serialise schema
+// initialisation across processes (and goroutines). The lock file sits beside
+// the database and is never removed — it is empty and harmless.
+func schemaLockPath(dbPath string) string { return dbPath + ".lock" }
+
 // New opens (creating if absent) the SQLite database at path, creating the
 // parent directory and schema as needed. foreign_keys is enabled per connection
 // so ON DELETE CASCADE actually fires.
@@ -120,6 +126,29 @@ func New(path string) (*SQLiteStore, error) {
 			return nil, fmt.Errorf("create data dir: %w", err)
 		}
 	}
+
+	// Cross-process lock to serialise schema initialisation: SQLite's
+	// busy_timeout handles concurrent reads/writes during normal operation,
+	// but FTS5 virtual-table creation and trigger setup can race when two
+	// processes (e.g. index + search) call ensureSchema simultaneously.
+lockPath := schemaLockPath(path)
+// #nosec G304 -- lockPath is a fixed .lock sidecar next to the db file,
+// intentionally derived from the user-provided db path (same trust model as the
+// db file itself opened via sql.Open below).
+lockFile, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open schema lock: %w", err)
+	}
+	if err := unix.Flock(int(lockFile.Fd()), unix.LOCK_EX); err != nil {
+		_ = lockFile.Close()
+		return nil, fmt.Errorf("lock schema: %w", err)
+	}
+	// Keep the lock held until ensureSchema completes, then release so other
+	// waiters can also verify the schema (IF NOT EXISTS handles idempotency).
+	defer func() {
+		_ = unix.Flock(int(lockFile.Fd()), unix.LOCK_UN)
+		_ = lockFile.Close()
+	}()
 
 	// Anti-corruption for concurrent access (multiple semidx processes / the
 	// indexer's worker pool share one file): WAL is crash-resilient and allows
@@ -211,7 +240,7 @@ func (s *SQLiteStore) SetWorktreeFiles(ctx context.Context, projectID int, workt
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM worktree_files WHERE project_id = ? AND worktree = ?`, projectID, worktree); err != nil {
 		return err
@@ -654,7 +683,7 @@ func (s *SQLiteStore) DropAll(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 
 	for _, stmt := range []string{
 		`DELETE FROM chunks`,

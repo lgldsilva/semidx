@@ -4,12 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
+	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/pkg/client"
 )
 
 // fakeStore implements just the methods the server touches.
@@ -55,6 +60,8 @@ type fakeStore struct {
 	failCh      chan string // if set, FailJob sends its message (for async worker tests)
 	compFiles   int         // last CompleteJob filesIndexed
 	compChunks  int         // last CompleteJob chunksCreated
+	compDeleted int         // last CompleteJob deletedFiles
+	compErrors  int         // last CompleteJob errorCount
 	compCalled  bool
 }
 
@@ -190,7 +197,7 @@ func TestSearchOK(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("search = %d, body %s", rec.Code, rec.Body.String())
 	}
-	var out searchResponse
+	var out client.SearchResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("bad JSON: %v", err)
 	}
@@ -396,6 +403,45 @@ func TestFilesBatchValidation(t *testing.T) {
 	ro := New(&fakeStore{token: &store.Token{Scopes: []string{"read"}}}, fakeEmbedder{}, nil)
 	if rec := do(t, ro, "POST", "/api/v1/projects/p/files/diff", "tok", `{"files":{}}`); rec.Code != 403 {
 		t.Errorf("read-only diff = %d, want 403", rec.Code)
+	}
+}
+
+// retryableEmbedder returns a RetryableError from EmbedSingle, simulating a
+// circuit breaker open for testing the 503 + Retry-After response path.
+type retryableEmbedder struct {
+	embed.Embedder
+	after time.Duration
+}
+
+func (r *retryableEmbedder) EmbedSingle(_ context.Context, _, _ string) ([]float32, error) {
+	return nil, &embed.RetryableError{
+		Err:   errors.New("circuit breaker open for test"),
+		After: r.after,
+	}
+}
+
+func (r *retryableEmbedder) ModelInfo(_ context.Context, m string) (*embed.ModelInfo, error) {
+	return &embed.ModelInfo{Name: m, Dims: 3}, nil
+}
+
+func TestSearchRetryableError(t *testing.T) {
+	after := 5 * time.Second
+	emb := &retryableEmbedder{after: after}
+	srv := New(&fakeStore{
+		token:   &store.Token{Scopes: []string{"read"}},
+		project: &store.Project{ID: 1, Name: "proj", Model: "m"},
+	}, emb, nil)
+
+	rec := do(t, srv, "POST", "/api/v1/projects/proj/search", "tok", `{"query":"test"}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	want := strconv.Itoa(int(math.Ceil(after.Seconds())))
+	if ra := rec.Header().Get("Retry-After"); ra != want {
+		t.Errorf("Retry-After = %q, want %q", ra, want)
+	}
+	if !strings.Contains(rec.Body.String(), "circuit breaker open for test") {
+		t.Errorf("body should mention circuit breaker; got %s", rec.Body.String())
 	}
 }
 

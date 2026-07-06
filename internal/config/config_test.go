@@ -4,10 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
-// clearEnv blanks every variable Load reads so values leaking from the host
-// environment (or CI) cannot influence a test.
+// Deprecated: Prefer LoadWithLookup with mapLookup for hermetic tests that
+// never touch the OS environment. clearEnv only clears a subset of all env
+// vars Load reads, so values leaking from the host can still influence tests.
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
@@ -22,6 +24,30 @@ func clearEnv(t *testing.T) {
 	// Isolate the user config layer (os.UserConfigDir honors XDG_CONFIG_HOME on
 	// Linux) so the developer's real ~/.config/semidx/semidx.env can't leak in.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+}
+
+// mapLookup returns an envLookup func (matching os.LookupEnv's signature) that
+// reads from the given map. Keys absent from the map return ("", false).
+// Use this with [LoadWithLookup] for hermetic tests.
+func mapLookup(m map[string]string) func(string) (string, bool) {
+	return func(key string) (string, bool) {
+		v, ok := m[key]
+		return v, ok
+	}
+}
+
+// slicesEqual reports whether two string slices have the same length and
+// elements.
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func writeDotEnv(t *testing.T, content string) {
@@ -193,6 +219,81 @@ func TestLoadLocalIndexFromEnv(t *testing.T) {
 	t.Setenv("SEMIDX_LOCAL_INDEX", "/tmp/x.db")
 	if got := Load().LocalIndexPath; got != "/tmp/x.db" {
 		t.Errorf("LocalIndexPath = %q, want /tmp/x.db", got)
+	}
+}
+
+func TestLoadWithLookupHermetic(t *testing.T) {
+	// No real OS env interaction: all values come exclusively from the map.
+	t.Chdir(t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	env := map[string]string{
+		"SEMIDX_DB_DSN":                   "postgres://test:test@localhost:5432/test",
+		"SEMIDX_OLLAMA_URL":               "http://test-ollama:11434",
+		"GEMINI_API_KEY":                  "test-gemini-key",
+		"EMBED_PRIVACY":                   "true",
+		"SEMIDX_INDEX_WORKERS":            "8",
+		"SEMIDX_EMBED_BATCH_SIZE":         "16",
+		"SEMIDX_MAX_FILE_SIZE":            "2097152",
+		"SEMIDX_MAX_CHUNKS_PER_FILE":      "64",
+		"SEMIDX_MAX_CHUNKS_PER_PROJECT":   "1000",
+		"SEMIDX_LISTEN_ADDR":              ":9090",
+		"SEMIDX_BOOTSTRAP_TOKEN":          "bootstrap",
+		"SEMIDX_DATA_DIR":                 "/tmp/semidx",
+		"SEMIDX_BOOTSTRAP_ADMIN_USER":     "admin",
+		"SEMIDX_BOOTSTRAP_ADMIN_PASSWORD": "secret",
+		"SEMIDX_COOKIE_SECURE":            "false",
+		"SEMIDX_JWT_SECRET":               "jwt-secret",
+		"SEMIDX_CSRF_KEY":                 "csrf-key",
+		"SEMIDX_OLLAMA_URLS":              "http://ollama1:11434,http://ollama2:11434",
+		"SEMIDX_EMBED_CIRCUIT_THRESHOLD":  "5",
+		"SEMIDX_EMBED_CIRCUIT_COOLDOWN":   "60s",
+	}
+
+	cfg := LoadWithLookup(mapLookup(env))
+
+	cases := []struct {
+		name string
+		got  any
+		want any
+	}{
+		{"DatabaseURL", cfg.DatabaseURL, "postgres://test:test@localhost:5432/test"},
+		{"OllamaURL", cfg.OllamaURL, "http://test-ollama:11434"},
+		{"GeminiAPIKey", cfg.GeminiAPIKey, "test-gemini-key"},
+		{"Privacy", cfg.Privacy, true},
+		{"IndexWorkers", cfg.IndexWorkers, 8},
+		{"EmbedBatchSize", cfg.EmbedBatchSize, 16},
+		{"MaxFileSize", cfg.MaxFileSize, 2097152},
+		{"MaxChunksPerFile", cfg.MaxChunksPerFile, 64},
+		{"MaxChunksPerProject", cfg.MaxChunksPerProject, 1000},
+		{"ListenAddr", cfg.ListenAddr, ":9090"},
+		{"BootstrapToken", cfg.BootstrapToken, "bootstrap"},
+		{"DataDir", cfg.DataDir, "/tmp/semidx"},
+		{"BootstrapAdminUser", cfg.BootstrapAdminUser, "admin"},
+		{"BootstrapAdminPassword", cfg.BootstrapAdminPassword, "secret"},
+		{"CookieSecure", cfg.CookieSecure, false},
+		{"JWTSecret", cfg.JWTSecret, "jwt-secret"},
+		{"CSRFKey", cfg.CSRFKey, "csrf-key"},
+		{"KeywordOnly", cfg.KeywordOnly, false},
+		{"EmbedCircuitThreshold", cfg.EmbedCircuitThreshold, 5},
+		{"EmbedCircuitCooldown", cfg.EmbedCircuitCooldown, 60 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Errorf("got %v (%T), want %v (%T)", tc.got, tc.got, tc.want, tc.want)
+			}
+		})
+	}
+
+	// LocalIndexPath: SEMIDX_DB_DSN is set, so local index is disabled.
+	if cfg.LocalIndexPath != "" {
+		t.Errorf("LocalIndexPath = %q, want empty (DSN takes precedence)", cfg.LocalIndexPath)
+	}
+
+	// OllamaURLs from comma-separated list.
+	if want := []string{"http://ollama1:11434", "http://ollama2:11434"}; !slicesEqual(cfg.OllamaURLs, want) {
+		t.Errorf("OllamaURLs = %v, want %v", cfg.OllamaURLs, want)
 	}
 }
 

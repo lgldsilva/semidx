@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/internal/webadmin"
+	"github.com/lgldsilva/semidx/pkg/client"
 )
 
 // headerContentType is the HTTP Content-Type header name.
@@ -156,22 +159,6 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ready"))
 }
 
-type searchHit struct {
-	Path      string  `json:"path"`
-	StartLine int     `json:"start_line"`
-	EndLine   int     `json:"end_line"`
-	Score     float64 `json:"score"`
-	Content   string  `json:"content"`
-}
-
-type searchResponse struct {
-	Project  string      `json:"project"`
-	Model    string      `json:"model"`
-	Fallback bool        `json:"fallback"`
-	TookMS   int64       `json:"took_ms"`
-	Results  []searchHit `json:"results"`
-}
-
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
 	var body struct {
@@ -194,19 +181,25 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.log.Warn("search failed", "project", project, "err", err)
+		var re interface{ RetryAfter() time.Duration }
+		if errors.As(err, &re) {
+			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(re.RetryAfter().Seconds()))))
+			writeJSONError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		writeJSONError(w, http.StatusNotFound, "project not found")
 		return
 	}
 
-	out := searchResponse{
+	out := client.SearchResponse{
 		Project:  project,
 		Model:    resp.Model,
 		Fallback: resp.Fallback,
 		TookMS:   time.Since(start).Milliseconds(),
-		Results:  make([]searchHit, 0, len(resp.Results)),
+		Results:  make([]client.SearchHit, 0, len(resp.Results)),
 	}
 	for _, hit := range resp.Results {
-		out.Results = append(out.Results, searchHit{
+		out.Results = append(out.Results, client.SearchHit{
 			Path: hit.FilePath, StartLine: hit.StartLine, EndLine: hit.EndLine,
 			Score: hit.Score, Content: hit.Content,
 		})

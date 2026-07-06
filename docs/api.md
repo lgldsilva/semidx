@@ -198,12 +198,15 @@ chunks cascade). `404` if unknown.
   "type": "full",
   "status": "succeeded",
   "files_indexed": 128,
-  "chunks_created": 512
+  "chunks_created": 512,
+  "deleted_files": 1,
+  "error_count": 0
 }
 ```
 
 `status` is `queued`, `running`, `succeeded` or `failed`; `error` is present
-(and non-empty) only for a failed job. `404` if unknown.
+(and non-empty) only for a failed job. `deleted_files` and `error_count` are
+non-zero only for batch (push) jobs. `404` if unknown.
 
 ### Push files (diff + batch)
 
@@ -223,7 +226,14 @@ the client's files are stale (new/changed) or deleted:
 ```
 
 `POST /api/v1/projects/{project}/files/batch` (scope `write`) — upload contents
-to index and remove deleted paths:
+to index and remove deleted paths.
+
+By default the endpoint returns `202 Accepted` with a `job_id` and the batch
+is processed asynchronously by a background worker. The old synchronous
+behaviour (returning `200 OK` with inline counts) is available by adding
+`?sync=true` to the URL.
+
+**Async (default):**
 
 ```json
 {
@@ -231,6 +241,30 @@ to index and remove deleted paths:
   "delete": [ "old.go" ]
 }
 ```
+
+`202 Accepted`:
+
+```json
+{ "job_id": 7, "status": "queued" }
+```
+
+Use `GET /api/v1/jobs/{id}` to poll for completion. The job's `status` will be
+`queued` → `running` → `succeeded` (or `failed`). On success, `files_indexed`,
+`chunks_created`, `deleted_files` and `error_count` are populated.
+
+Async is only supported for push projects (`source_type: "push"`); other project
+types must use `?sync=true`.
+
+**Sync (`?sync=true`):**
+
+```json
+{
+  "files": [ { "path": "main.go", "content": "package main\n..." } ],
+  "delete": [ "old.go" ]
+}
+```
+
+`200 OK`:
 
 ```json
 { "indexed": 1, "chunks": 6, "deleted": 1, "errors": 0 }

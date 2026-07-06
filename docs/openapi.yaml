@@ -1,0 +1,808 @@
+openapi: "3.0.3"
+info:
+  title: semidx API
+  description: |
+    Self-hosted semantic code search. The server exposes a REST API under
+    `/api/v1`, plus unauthenticated health and metrics endpoints. All request
+    and response bodies are JSON unless noted otherwise.
+
+    Two token types are accepted for the `Authorization: Bearer <token>` header:
+
+    - **Opaque API keys** — random `semidx_<hex>` strings (SHA-256 hashed on the
+      server; plaintext shown once at creation).
+    - **JWT control tokens** — HS256 tokens minted from the `/admin` UI.
+
+    Every authenticated route requires one scope. A token with scope `admin`
+    satisfies any requirement.
+
+    | Scope   | Grants                                        |
+    |---------|-----------------------------------------------|
+    | `read`  | search, list/get projects, get job status     |
+    | `write` | create/delete projects, enqueue jobs, push    |
+    | `admin` | everything (also used by the bootstrap token) |
+
+    Non-2xx responses carry a JSON error object: `{"error": "human-readable message"}`.
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:8080
+    description: Local dev (semidx serve default port)
+
+paths:
+  # ─── Unauthenticated endpoints ──────────────────────────────────────────────
+
+  /healthz:
+    get:
+      summary: Liveness check
+      description: Always returns `200` with body `"ok"` (text/plain).
+      operationId: healthz
+      responses:
+        "200":
+          description: Server is alive.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "ok"
+
+  /readyz:
+    get:
+      summary: Readiness check
+      description: >
+        Pings the database. Returns `200` text/plain `"ready"` when the database
+        is reachable, or `503` JSON error when it is not.
+      operationId: readyz
+      responses:
+        "200":
+          description: Database is reachable.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "ready"
+        "503":
+          description: Database is not ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "database not ready"
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      description: >
+        Returns Prometheus exposition format metrics including
+        `semidx_http_requests_total{method,status}`,
+        `semidx_search_duration_seconds{project}`,
+        `semidx_http_request_duration_seconds{method,path}`,
+        `semidx_http_requests_in_flight{method}`.
+      operationId: metrics
+      responses:
+        "200":
+          description: Prometheus metrics in plain text exposition format.
+          content:
+            text/plain; version=0.0.4:
+              schema:
+                type: string
+                description: Prometheus exposition format.
+
+  # ─── Projects ───────────────────────────────────────────────────────────────
+
+  /api/v1/projects:
+    post:
+      summary: Create a project
+      description: |
+        Registers a new project. The `source.type` controls how files are
+        provided:
+
+        - `push` (default): clients upload files via `files/batch`.
+        - `git`: the server clones `source.url` and indexes it; `source.branch`
+          defaults to the repository's default branch.
+
+        Request body is limited to 1 MB.
+      operationId: createProject
+      tags:
+        - Projects
+      security:
+        - bearerAuth: ["write"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+            example:
+              name: "myapp"
+              model: "bge-m3"
+              source:
+                type: "git"
+                url: "https://github.com/acme/myapp.git"
+                branch: "main"
+      responses:
+        "201":
+          description: Project created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          description: Invalid JSON body, invalid project name, or invalid source configuration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Project with this name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    get:
+      summary: List projects
+      description: Returns all registered projects.
+      operationId: listProjects
+      tags:
+        - Projects
+      security:
+        - bearerAuth: ["read"]
+      responses:
+        "200":
+          description: A list of projects.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListProjectsResponse"
+
+  /api/v1/projects/{project}:
+    get:
+      summary: Get a project
+      description: Returns a single project by name.
+      operationId: getProject
+      tags:
+        - Projects
+      security:
+        - bearerAuth: ["read"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+          description: URL-escaped project name.
+      responses:
+        "200":
+          description: The project.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          description: Project not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    delete:
+      summary: Delete a project
+      description: >
+        Removes a project and all its files and chunks (cascade delete).
+      operationId: deleteProject
+      tags:
+        - Projects
+      security:
+        - bearerAuth: ["write"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+          description: URL-escaped project name.
+      responses:
+        "204":
+          description: Project deleted successfully. No response body.
+        "404":
+          description: Project not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ─── Search ─────────────────────────────────────────────────────────────────
+
+  /api/v1/projects/{project}/search:
+    post:
+      summary: Semantic search
+      description: |
+        Runs a semantic search over the project's indexed files. When embedding
+        is unavailable, the server falls back to keyword search (indicated by
+        `fallback: true` in the response).
+
+        Request body is limited to 1 MB.
+      operationId: search
+      tags:
+        - Search
+      security:
+        - bearerAuth: ["read"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+          description: URL-escaped project name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+            example:
+              query: "verify auth token"
+              top_k: 5
+              model: ""
+      responses:
+        "200":
+          description: Search results, ranked by relevance.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "404":
+          description: Project not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ─── Index Jobs ─────────────────────────────────────────────────────────────
+
+  /api/v1/projects/{project}/index-jobs:
+    post:
+      summary: Enqueue an index job
+      description: |
+        Enqueues a background index job for the project. An empty body defaults
+        to a full re-index.
+
+        `type` options:
+        - `full` (default): re-indexes all files.
+        - `git_history`: indexes the git history (last 30 days).
+
+        Request body is limited to ~100 KB.
+      operationId: enqueueIndexJob
+      tags:
+        - Jobs
+      security:
+        - bearerAuth: ["write"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+          description: URL-escaped project name.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnqueueJobRequest"
+            example:
+              type: "full"
+      responses:
+        "202":
+          description: Job enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnqueueJobResponse"
+        "400":
+          description: Invalid job type.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Project not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/jobs/{id}:
+    get:
+      summary: Get index job status
+      description: Returns the current status of an index job by its numeric id.
+      operationId: getJob
+      tags:
+        - Jobs
+      security:
+        - bearerAuth: ["read"]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Numeric job id.
+      responses:
+        "200":
+          description: Job status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          description: Invalid job id (non-numeric).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Job not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ─── Files (push) ───────────────────────────────────────────────────────────
+
+  /api/v1/projects/{project}/files/diff:
+    post:
+      summary: Diff client files against the index
+      description: |
+        Given a map of file path → SHA-256 content hash, returns which files
+        are new or changed (`stale`) and which files exist in the index but
+        are not in the submitted set (`deleted`). Used by clients that push
+        file contents.
+
+        Request body is limited to 10 MB.
+      operationId: filesDiff
+      tags:
+        - Files
+      security:
+        - bearerAuth: ["write"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+          description: URL-escaped project name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FilesDiffRequest"
+            example:
+              files:
+                main.go: "abc123def456..."
+                README.md: "7890abcdef..."
+      responses:
+        "200":
+          description: Diff result with stale and deleted file lists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FilesDiffResponse"
+        "404":
+          description: Project not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/projects/{project}/files/batch:
+    post:
+      summary: Upload files to index
+      description: |
+        Uploads file contents (or pre-computed chunks with embeddings) for the
+        server to index, and removes any files listed in `delete`.
+
+        Each file in `files` may carry either:
+        - `content` (raw text) — the server chunks and embeds it, or
+        - `chunks` (pre-computed `EmbeddedChunk` array) — the server stores the
+          embeddings directly.
+
+        Request body is limited to 100 MB.
+      operationId: filesBatch
+      tags:
+        - Files
+      security:
+        - bearerAuth: ["write"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+          description: URL-escaped project name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FilesBatchRequest"
+            example:
+              files:
+                - path: "main.go"
+                  content: "package main\n\nfunc main() {}\n"
+              delete:
+                - "old.go"
+      responses:
+        "200":
+          description: Batch indexing result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResponse"
+        "404":
+          description: Project not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Embedding model unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT  # also accepts opaque "semidx_<hex>" API keys
+      description: >
+        Bearer token. Accepted formats: opaque API key (`semidx_<hex>`) or
+        HS256 JWT control token. The required scope depends on the endpoint
+        (see endpoint descriptions).
+
+  schemas:
+    # ── Error ─────────────────────────────────────────────────────────────────
+    Error:
+      type: object
+      description: A JSON error object returned on non-2xx responses.
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+      required:
+        - error
+
+    # ── Project ───────────────────────────────────────────────────────────────
+    Project:
+      type: object
+      description: A registered project.
+      properties:
+        name:
+          type: string
+          description: Project name (unique, alphanumeric + `._-`).
+        model:
+          type: string
+          description: Embedding model name (e.g. `bge-m3`).
+        status:
+          type: string
+          description: Project status (`registered`, `ready`, etc.).
+        source_type:
+          type: string
+          description: Source type (`push` or `git`).
+        git_url:
+          type: string
+          description: Git repository URL (present only when `source_type` is `git`).
+        branch:
+          type: string
+          description: Git branch (present only when `source_type` is `git`).
+      required:
+        - name
+        - model
+        - status
+        - source_type
+
+    CreateProjectRequest:
+      type: object
+      description: Request body for creating a project.
+      properties:
+        name:
+          type: string
+          description: >
+            Project name. Must start with an alphanumeric character and contain
+            only letters, digits, hyphens, underscores, and dots. Max 255 characters.
+        model:
+          type: string
+          description: Embedding model name. Defaults to `bge-m3` if omitted.
+          default: bge-m3
+        source:
+          type: object
+          description: Source configuration for the project's files.
+          properties:
+            type:
+              type: string
+              enum: [push, git]
+              description: >
+                How files are provided. `push` (default) means clients upload
+                via `files/batch`; `git` means the server clones a repository.
+              default: push
+            url:
+              type: string
+              description: >
+                Git repository URL. Required when `type` is `git`. Ignored for `push`.
+            branch:
+              type: string
+              description: Git branch (optional; defaults to the repository's default branch).
+          required:
+            - type
+      required:
+        - name
+
+    ListProjectsResponse:
+      type: object
+      description: Response body for listing projects.
+      properties:
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+      required:
+        - projects
+
+    # ── Search ────────────────────────────────────────────────────────────────
+    SearchRequest:
+      type: object
+      description: Request body for semantic search.
+      properties:
+        query:
+          type: string
+          description: The natural-language search query.
+        top_k:
+          type: integer
+          description: Maximum number of results. Defaults to `5` when `<= 0`.
+          default: 5
+        model:
+          type: string
+          description: >
+            Optional model override. If empty or omitted, the project's stored
+            model is used.
+      required:
+        - query
+
+    SearchHit:
+      type: object
+      description: A single search result (matching code/document chunk).
+      properties:
+        path:
+          type: string
+          description: File path relative to the project root.
+        start_line:
+          type: integer
+          description: Start line of the matching chunk (1-indexed).
+        end_line:
+          type: integer
+          description: End line of the matching chunk (inclusive).
+        score:
+          type: number
+          format: float
+          description: Relevance score (higher is better).
+        content:
+          type: string
+          description: The chunk content (source code or text).
+      required:
+        - path
+        - start_line
+        - end_line
+        - score
+        - content
+
+    SearchResponse:
+      type: object
+      description: Response body for a search request.
+      properties:
+        project:
+          type: string
+          description: The project that was searched.
+        model:
+          type: string
+          description: The model used for embedding.
+        fallback:
+          type: boolean
+          description: >
+            `true` when embedding was unavailable and the server used keyword
+            search (results are literal, not semantically ranked).
+        took_ms:
+          type: integer
+          description: Server-side wall-clock time for the search in milliseconds.
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchHit"
+      required:
+        - project
+        - model
+        - fallback
+        - took_ms
+        - results
+
+    # ── Jobs ──────────────────────────────────────────────────────────────────
+    EnqueueJobRequest:
+      type: object
+      description: Request body for enqueuing an index job. May be empty.
+      properties:
+        type:
+          type: string
+          enum: [full, git_history]
+          description: >
+            Job type. `full` (default) re-indexes all files; `git_history`
+            indexes the git history (last 30 days).
+          default: full
+
+    EnqueueJobResponse:
+      type: object
+      description: Response body after enqueuing an index job.
+      properties:
+        job_id:
+          type: integer
+          description: Numeric identifier for the enqueued job.
+        status:
+          type: string
+          description: Initial job status (always `queued`).
+      required:
+        - job_id
+        - status
+
+    Job:
+      type: object
+      description: Index job status and statistics.
+      properties:
+        id:
+          type: integer
+          description: Numeric job identifier.
+        type:
+          type: string
+          description: Job type (`full` or `git_history`).
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed]
+          description: Current job status.
+        error:
+          type: string
+          description: Error message (present only when `status` is `failed`).
+        files_indexed:
+          type: integer
+          description: Number of files indexed.
+        chunks_created:
+          type: integer
+          description: Number of chunks created.
+      required:
+        - id
+        - type
+        - status
+        - files_indexed
+        - chunks_created
+
+    # ── Files (push) ──────────────────────────────────────────────────────────
+    FilesDiffRequest:
+      type: object
+      description: >
+        Request body for diffing client files against the index. Sends a map of
+        file path → SHA-256 content hash so the server can report which are
+        stale (new/changed) or deleted.
+      properties:
+        files:
+          type: object
+          additionalProperties:
+            type: string
+          description: >
+            Map of file paths (relative to project root) to their SHA-256
+            content hashes (hex-encoded).
+      required:
+        - files
+
+    FilesDiffResponse:
+      type: object
+      description: Response body for a files diff request.
+      properties:
+        stale:
+          type: array
+          items:
+            type: string
+          description: >
+            Files that are new or whose content hash differs from the index
+            (needs re-upload).
+        deleted:
+          type: array
+          items:
+            type: string
+          description: >
+            Files that exist in the index but are absent from the submitted set
+            (should be removed).
+      required:
+        - stale
+        - deleted
+
+    FilesBatchRequest:
+      type: object
+      description: Request body for uploading batch files to index.
+      properties:
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchFile"
+          description: Files to index, each either as raw content or pre-embedded chunks.
+        delete:
+          type: array
+          items:
+            type: string
+          description: File paths to remove from the index.
+      required:
+        - files
+
+    BatchFile:
+      type: object
+      description: A single file in a batch upload. Must carry either `content` (raw) or `chunks` (pre-embedded), but not both.
+      properties:
+        path:
+          type: string
+          description: File path relative to the project root.
+        content:
+          type: string
+          description: Raw file content (server chunks and embeds it).
+        chunks:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmbeddedChunk"
+          description: Pre-computed chunks with embeddings (server stores directly).
+      required:
+        - path
+
+    EmbeddedChunk:
+      type: object
+      description: A pre-computed chunk with its embedding vector.
+      properties:
+        start_line:
+          type: integer
+          description: Start line of the chunk (1-indexed).
+        end_line:
+          type: integer
+          description: End line of the chunk (inclusive).
+        content:
+          type: string
+          description: Chunk text content.
+        embedding:
+          type: array
+          items:
+            type: number
+            format: float
+          description: Embedding vector for this chunk.
+      required:
+        - start_line
+        - end_line
+        - content
+        - embedding
+
+    BatchResponse:
+      type: object
+      description: Response body after a batch file upload.
+      properties:
+        indexed:
+          type: integer
+          description: Number of files successfully indexed.
+        chunks:
+          type: integer
+          description: Total number of chunks created.
+        deleted:
+          type: integer
+          description: Number of files removed from the index.
+        errors:
+          type: integer
+          description: Number of files that failed to index.
+      required:
+        - indexed
+        - chunks
+        - deleted
+        - errors
