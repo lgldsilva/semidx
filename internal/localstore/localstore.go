@@ -21,7 +21,6 @@ import (
 	"sort"
 	"strings"
 
-	"golang.org/x/sys/unix"
 	sqlite "modernc.org/sqlite"
 	sqlitelib "modernc.org/sqlite/lib"
 
@@ -132,22 +131,22 @@ func New(path string) (*SQLiteStore, error) {
 	// busy_timeout handles concurrent reads/writes during normal operation,
 	// but FTS5 virtual-table creation and trigger setup can race when two
 	// processes (e.g. index + search) call ensureSchema simultaneously.
-lockPath := schemaLockPath(path)
-// #nosec G304 -- lockPath is a fixed .lock sidecar next to the db file,
-// intentionally derived from the user-provided db path (same trust model as the
-// db file itself opened via sql.Open below).
-lockFile, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
+	lockPath := schemaLockPath(path)
+	// #nosec G304 -- lockPath is a fixed .lock sidecar next to the db file,
+	// intentionally derived from the user-provided db path (same trust model as the
+	// db file itself opened via sql.Open below).
+	lockFile, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open schema lock: %w", err)
 	}
-	if err := unix.Flock(int(lockFile.Fd()), unix.LOCK_EX); err != nil {
+	if err := flockExclusive(lockFile); err != nil {
 		_ = lockFile.Close()
 		return nil, fmt.Errorf("lock schema: %w", err)
 	}
 	// Keep the lock held until ensureSchema completes, then release so other
 	// waiters can also verify the schema (IF NOT EXISTS handles idempotency).
 	defer func() {
-		_ = unix.Flock(int(lockFile.Fd()), unix.LOCK_UN)
+		_ = flockUnlock(lockFile)
 		_ = lockFile.Close()
 	}()
 
