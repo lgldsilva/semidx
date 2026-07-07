@@ -14,10 +14,13 @@ type Formatter interface {
 	Format(w io.Writer, resp *Response) error
 }
 
-// HumanFormatter renders numbered result blocks with a content preview. Preview
-// is the max preview length in bytes (<= 0 means 500).
+// HumanFormatter renders numbered result blocks with a content preview.
+// Preview is the max preview length in bytes (<= 0 means 500). LineNumbers
+// controls whether line numbers are prepended to each content line.
 type HumanFormatter struct {
-	Preview int
+	Preview     int
+	NoLineNums  bool   // suppress per-line line numbers in content output
+	LineNumPad  int    // padding width for line numbers (<= 0 means auto: 4)
 }
 
 func (f HumanFormatter) Format(w io.Writer, resp *Response) error {
@@ -25,18 +28,56 @@ func (f HumanFormatter) Format(w io.Writer, resp *Response) error {
 	if preview <= 0 {
 		preview = 500
 	}
+	pad := f.LineNumPad
+	if pad <= 0 {
+		pad = 4
+	}
 	for i, r := range resp.Results {
 		label := matchLabel(resp.Keyword, r.Score)
 		if r.Content == "" && r.FilePath != "" {
 			label = "(graph match)"
 		}
-		if _, err := fmt.Fprintf(w, "--- Result %d (%s) ---\nFile: %s\n%s\n\n",
-			i+1, label, formatLoc(r.FilePath, r.StartLine, r.EndLine),
-			truncatePreview(r.Content, preview)); err != nil {
+		if _, err := fmt.Fprintf(w, "--- Result %d (%s) ---\n", i+1, label); err != nil {
 			return err
+		}
+		loc := formatLoc(r.FilePath, r.StartLine, r.EndLine)
+		if _, err := fmt.Fprintf(w, "File: %s\n", loc); err != nil {
+			return err
+		}
+		content := truncatePreview(r.Content, preview)
+		if f.NoLineNums || r.StartLine < 1 || r.EndLine < r.StartLine {
+			if _, err := fmt.Fprintf(w, "%s\n\n", content); err != nil {
+				return err
+			}
+		} else {
+			if _, err := fmt.Fprintf(w, "%s\n\n", prefixLineNumbers(content, r.StartLine, pad)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+// prefixLineNumbers prepends padded line numbers to each line of content,
+// starting at startLine. The format is "NNNN│ " where NNNN is right-justified.
+func prefixLineNumbers(content string, startLine, padWidth int) string {
+	lines := strings.Split(content, "\n")
+	// Trim trailing empty line from split (content never ends with \n after trim)
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	maxLine := startLine + len(lines) - 1
+	// Compute padding based on the widest line number
+	width := padWidth
+	if w := len(fmt.Sprintf("%d", maxLine)); w > width {
+		width = w
+	}
+	var b strings.Builder
+	b.Grow(len(content) + len(lines)*(width+3)) // "NNNN│ " per line
+	for i, l := range lines {
+		fmt.Fprintf(&b, "%*d│ %s\n", width, startLine+i, l)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // GrepFormatter renders classic grep output: <fullpath>:<line>:<first line>.
