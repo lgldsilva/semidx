@@ -227,27 +227,28 @@ func newAlertsCheckCmd(d *deps) *cobra.Command {
 		Example: `  semidx alerts check
   semidx alerts check --project myapp`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			alerts, err := loadAlerts()
+			allAlerts, err := loadAlerts()
 			if err != nil {
 				return err
 			}
+			toCheck := allAlerts
 			if project != "" {
 				var filtered []Alert
-				for _, a := range alerts {
+				for _, a := range allAlerts {
 					if a.Project == project {
 						filtered = append(filtered, a)
 					}
 				}
-				alerts = filtered
+				toCheck = filtered
 			}
-			if len(alerts) == 0 {
+			if len(toCheck) == 0 {
 				fmt.Println("No alerts to check.")
 				return nil
 			}
 
 			ctx := cmd.Context()
 			anyNew := false
-			for i, a := range alerts {
+			for _, a := range toCheck {
 				fmt.Printf("Checking alert %q (query: %s)...\n", a.Name, a.Query)
 
 				// Run the search.
@@ -305,10 +306,10 @@ func newAlertsCheckCmd(d *deps) *cobra.Command {
 					fmt.Printf("  ✓ No new matches (%d results, unchanged).\n", len(resp.Results))
 				}
 
-				alerts[i].LastHash = newHash
+				updateAlertHash(allAlerts, a.Name, a.Project, newHash)
 			}
 
-			if err := saveAlerts(alerts); err != nil {
+			if err := saveAlerts(allAlerts); err != nil {
 				return fmt.Errorf("save alerts: %w", err)
 			}
 			if anyNew {
@@ -321,6 +322,15 @@ func newAlertsCheckCmd(d *deps) *cobra.Command {
 	}
 	c.Flags().StringVar(&project, "project", "", "Only check alerts for this project")
 	return c
+}
+
+func updateAlertHash(alerts []Alert, name, project, hash string) {
+	for i := range alerts {
+		if alerts[i].Name == name && alerts[i].Project == project {
+			alerts[i].LastHash = hash
+			return
+		}
+	}
 }
 
 // truncateContent shortens content for display, keeping the first n runes.

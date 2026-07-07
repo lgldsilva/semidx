@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/lgldsilva/semidx/internal/search"
 )
 
 const version = "0.1.0"
@@ -196,10 +198,7 @@ func searchHandler(b Backend) mcp.ToolHandlerFor[searchInput, any] {
 		if topK == 0 {
 			topK = 5
 		}
-		graphDepth := in.GraphDepth
-		if graphDepth == 0 {
-			graphDepth = 2
-		}
+		graphDepth := search.ClampGraphDepth(in.GraphDepth)
 		start := time.Now()
 		out, err := b.Search(ctx, in.Project, in.Query, in.Model, topK, in.Graph, graphDepth)
 		if err != nil {
