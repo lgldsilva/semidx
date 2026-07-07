@@ -102,7 +102,10 @@ func printExplain(ctx context.Context, db store.IndexStore, proj *store.Project,
 	if root == "" {
 		root = "."
 	}
-	absPath := filepath.Join(root, fl.File)
+	absPath := filepath.Clean(filepath.Join(root, fl.File))
+	if !strings.HasPrefix(absPath, filepath.Clean(root)+string(filepath.Separator)) && absPath != filepath.Clean(root) && root != "." {
+		return fmt.Errorf("path %q escapes project root", fl.File)
+	}
 	content, err := os.ReadFile(absPath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", fl.File, err)
@@ -215,7 +218,7 @@ func goPackageName(content []byte) string {
 
 // detectModulePath tries to read go.mod from project root to get the module path.
 func detectModulePath(root string) string {
-	gm := filepath.Join(root, "go.mod")
+	gm := filepath.Clean(filepath.Join(root, "go.mod"))
 	data, err := os.ReadFile(gm)
 	if err != nil {
 		return ""
@@ -248,7 +251,11 @@ func findTestFiles(root, filePath, symbolName string) []string {
 			continue
 		}
 		relPath := filepath.Join(filepath.Dir(filePath), name)
-		testContent, err := os.ReadFile(filepath.Join(root, relPath))
+		testAbsPath := filepath.Clean(filepath.Join(root, relPath))
+		if !strings.HasPrefix(testAbsPath, filepath.Clean(root)+string(filepath.Separator)) && testAbsPath != filepath.Clean(root) && root != "." {
+			continue
+		}
+		testContent, err := os.ReadFile(testAbsPath)
 		if err != nil {
 			continue
 		}

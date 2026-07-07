@@ -15,10 +15,10 @@ import (
 
 // Generic archive limits for zip-bomb and resource protection.
 const (
-	maxArchiveEntries   = 50              // maximum entries per archive
-	maxArchiveEntrySize = 10 << 20        // 10 MiB per entry
-	maxArchiveTotalSize = 100 << 20       // 100 MiB total extracted text
-	maxArchiveDepth     = 2               // max nesting depth (0 = top-level)
+	maxArchiveEntries   = 50        // maximum entries per archive
+	maxArchiveEntrySize = 10 << 20  // 10 MiB per entry
+	maxArchiveTotalSize = 100 << 20 // 100 MiB total extracted text
+	maxArchiveDepth     = 2         // max nesting depth (0 = top-level)
 )
 
 // genericArchiveExts maps archive type identifiers to their recognised file
@@ -200,9 +200,7 @@ func extractTarEntries(name string, data []byte, decompress io.Reader, depth int
 
 		// Only index text entries.
 		if !isTextEntry(entryExt) {
-			if _, skip := tr.Next(); skip != nil {
-				// drain — but we already consumed this entry via the earlier ReadAll
-			}
+			// entry was already consumed via ReadAll above — skip to next.
 			continue
 		}
 

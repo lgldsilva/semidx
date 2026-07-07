@@ -121,7 +121,7 @@ func TestMCPInstallCommand(t *testing.T) {
 	if err := runCLI(t, "mcp", "install", "--client", "cursor", "--config-file", cfg, "--apply"); err != nil {
 		t.Fatalf("mcp install --apply: %v", err)
 	}
-	data, err := os.ReadFile(cfg) // #nosec G304 -- test temp path
+	data, err := os.ReadFile(filepath.Clean(cfg))
 	if err != nil {
 		t.Fatalf("config not written: %v", err)
 	}

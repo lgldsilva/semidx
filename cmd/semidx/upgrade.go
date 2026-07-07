@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -127,13 +128,24 @@ func valueOr(key, def string) string {
 	return def
 }
 
-// updateHTTPClient trusts the homelab's self-signed CA when talking to it (or
-// when SEMIDX_INSECURE=1), matching install.sh's --insecure.
+// updateHTTPClient builds an HTTP client with optional custom CA support.
+// When SEMIDX_TLS_CA_CERT is set the client uses that CA certificate instead
+// of the system pool; this lets operators point at homelab servers with
+// self-signed CAs without disabling verification entirely.
 func updateHTTPClient(apiURL string) *http.Client {
-	insecure := config.EffectiveValue("SEMIDX_INSECURE") == "1" || strings.Contains(apiURL, "raspberrypi.lan")
 	tr := &http.Transport{}
-	if insecure {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 -- opt-in for the operator's self-hosted CA
+	if caPath := config.EffectiveValue("SEMIDX_TLS_CA_CERT"); caPath != "" {
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			pool = x509.NewCertPool()
+		}
+		if pem, err := os.ReadFile(filepath.Clean(caPath)); err == nil {
+			pool.AppendCertsFromPEM(pem)
+		}
+		tr.TLSClientConfig = &tls.Config{RootCAs: pool}
+	}
+	if config.EffectiveValue("SEMIDX_INSECURE") != "" {
+		fmt.Fprintf(os.Stderr, "warning: SEMIDX_INSECURE is deprecated — set SEMIDX_TLS_CA_CERT instead\n")
 	}
 	return &http.Client{Timeout: 120 * time.Second, Transport: tr}
 }
@@ -344,7 +356,9 @@ func extractFromTarGz(data []byte, want string) ([]byte, error) {
 			return nil, err
 		}
 		if filepath.Base(h.Name) == want {
-			return io.ReadAll(tr) // #nosec G110 -- release archive from a trusted, checksum-verified source
+			// Limit read to 100 MB to guard against zip bombs in case the checksum
+			// verification above was skipped (no checksums.txt).
+			return io.ReadAll(io.LimitReader(tr, 100<<20))
 		}
 	}
 	return nil, fmt.Errorf("%s not found in archive", want)
@@ -369,8 +383,13 @@ func replaceRunningBinary(bin []byte) error {
 func replaceBinaryAt(exePath string, bin []byte) error {
 	dir := filepath.Dir(exePath)
 	tmp := filepath.Join(dir, ".semidx.upgrade.tmp")
-	if err := os.WriteFile(tmp, bin, 0o755); err != nil { // #nosec G306 -- an executable must be 0755
+	if err := os.WriteFile(tmp, bin, 0o600); err != nil {
 		return fmt.Errorf("write to %s (need write access to the install dir?): %w", dir, err)
+	}
+	// Set owner r-x: the binary needs to be readable and executable, but
+	// does not need write permission after creation.
+	if err := os.Chmod(tmp, os.FileMode(0o500)); err != nil {
+		return fmt.Errorf("chmod %s: %w", tmp, err)
 	}
 	if runtime.GOOS == "windows" {
 		old := exePath + ".old"

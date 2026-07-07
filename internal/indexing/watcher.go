@@ -45,7 +45,7 @@ func (w *Watcher) Watch(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("fsnotify watcher: %w", err)
 	}
-	defer watcher.Close()
+	defer func() { _ = watcher.Close() }()
 
 	// Walk the project tree and add all directories.
 	if err := w.addDirs(watcher, w.projectPath); err != nil {

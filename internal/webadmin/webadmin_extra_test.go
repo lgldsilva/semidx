@@ -26,15 +26,16 @@ func (fakeEmbedder) EmbedSingle(context.Context, string, string) ([]float32, err
 }
 
 // newAdminWith builds an admin backed by a fresh store with the given embedder
-// and JWT issuer, wrapped in an httptest server.
+// and JWT issuer, wrapped in an httptest TLS server. All tests use TLS so
+// cookies with Secure=true are accepted by the test client.
 func newAdminWith(t *testing.T, emb embedpkg.Embedder, jwt *jwtauth.Issuer) (*httptest.Server, *fakeStore) {
 	t.Helper()
 	fs := newFakeStore()
-	a, err := New(fs, emb, nil, false, jwt, "")
+	a, err := New(fs, emb, nil, true, jwt, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(a.Handler())
+	srv := httptest.NewTLSServer(a.Handler())
 	t.Cleanup(srv.Close)
 	return srv, fs
 }
@@ -54,7 +55,7 @@ func post(t *testing.T, c *http.Client, urlStr string, form url.Values) (int, st
 func TestLoginForm(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 
 	// Not logged in: the form renders with 200, and an ?err= flashes.
 	if code, body := getBody(t, c, srv.URL+"/admin/login?err=nope"); code != 200 || !strings.Contains(body, `name="password"`) {
@@ -76,7 +77,7 @@ func TestLoginForm(t *testing.T) {
 func TestLogout(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	if len(fs.sessions) != 1 {
 		t.Fatalf("expected an active session, got %d", len(fs.sessions))
@@ -99,7 +100,7 @@ func TestLoginSubmitEdgeCases(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		u := fs.addUser("dave", "supersecret", "member")
 		u.Disabled = true
-		c := newClient(t)
+		c := newClient(t, srv)
 		code, _ := post(t, c, srv.URL+"/admin/login", url.Values{"username": {"dave"}, "password": {"supersecret"}})
 		if code != http.StatusOK { // re-renders the form, no session
 			t.Errorf("disabled login = %d, want 200", code)
@@ -112,7 +113,7 @@ func TestLoginSubmitEdgeCases(t *testing.T) {
 	t.Run("rate limit after too many attempts", func(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
-		c := newClient(t)
+		c := newClient(t, srv)
 		var lastBody string
 		for i := 0; i < loginMaxTries+1; i++ {
 			_, lastBody = post(t, c, srv.URL+"/admin/login", url.Values{"username": {"admin"}, "password": {"wrong"}})
@@ -125,7 +126,7 @@ func TestLoginSubmitEdgeCases(t *testing.T) {
 	t.Run("lookup error is a 500", func(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.getUserErr = errors.New("db down")
-		c := newClient(t)
+		c := newClient(t, srv)
 		code, _ := post(t, c, srv.URL+"/admin/login", url.Values{"username": {"x"}, "password": {"y"}})
 		if code != http.StatusInternalServerError {
 			t.Errorf("lookup error login = %d, want 500", code)
@@ -136,7 +137,7 @@ func TestLoginSubmitEdgeCases(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
 		fs.createSessErr = errors.New("insert failed")
-		c := newClient(t)
+		c := newClient(t, srv)
 		code, _ := post(t, c, srv.URL+"/admin/login", url.Values{"username": {"admin"}, "password": {"supersecret"}})
 		if code != http.StatusInternalServerError {
 			t.Errorf("session-create error = %d, want 500", code)
@@ -150,7 +151,7 @@ func TestSearchPage(t *testing.T) {
 	t.Run("query without project shows validation error", func(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
-		c := newClient(t)
+		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		code, body := getBody(t, c, srv.URL+"/admin/search?q=hello")
 		if code != 200 || !strings.Contains(body, "pick a project") {
@@ -161,7 +162,7 @@ func TestSearchPage(t *testing.T) {
 	t.Run("no query renders the empty form", func(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
-		c := newClient(t)
+		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		if code, _ := getBody(t, c, srv.URL+"/admin/search"); code != 200 {
 			t.Errorf("search page = %d, want 200", code)
@@ -171,7 +172,7 @@ func TestSearchPage(t *testing.T) {
 	t.Run("project not found surfaces an error", func(t *testing.T) {
 		srv, fs := newTestAdmin(t) // searchProject nil → GetProject returns ErrNotFound
 		fs.addUser("admin", "supersecret", "admin")
-		c := newClient(t)
+		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		code, body := getBody(t, c, srv.URL+"/admin/search?project=ghost&q=hello")
 		if code != 200 || !strings.Contains(body, "project not found") {
@@ -184,7 +185,7 @@ func TestSearchPage(t *testing.T) {
 		fs.addUser("admin", "supersecret", "admin")
 		fs.searchProject = &store.Project{ID: 1, Name: "proj", Model: "bge-m3"}
 		fs.searchResults = []store.SearchResult{{FilePath: "a.go", Content: "hit", Score: 0.9}}
-		c := newClient(t)
+		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		code, body := getBody(t, c, srv.URL+"/admin/search?project=proj&q=hello")
 		if code != 200 || !strings.Contains(body, "a.go") {
@@ -200,7 +201,7 @@ func TestSearchPage(t *testing.T) {
 			{ID: 2, Name: "jackui-b", Identity: "git:example/jackui", Model: "bge-m3"},
 		}
 		fs.searchResults = []store.SearchResult{{FilePath: "main.go", Content: "hit", Score: 0.85}}
-		c := newClient(t)
+		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello&top=5")
 		if code != 200 {
@@ -216,7 +217,7 @@ func TestSearchPage(t *testing.T) {
 		fs.addUser("admin", "supersecret", "admin")
 		fs.projects = []store.Project{{ID: 1, Name: "jackui", Model: "bge-m3"}}
 		fs.searchResults = []store.SearchResult{{FilePath: "a.go", Content: "hit", Score: 0.9}}
-		c := newClient(t)
+		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		code, body := getBody(t, c, srv.URL+"/admin/search?project=JackUI&q=hello")
 		if code != 200 || !strings.Contains(body, "a.go") {
@@ -232,7 +233,7 @@ func TestSearchPage(t *testing.T) {
 			{ID: 2, Name: "beta", Model: "bge-m3"},
 		}
 		fs.searchResults = []store.SearchResult{{FilePath: "main.go", Content: "hit", Score: 0.85}}
-		c := newClient(t)
+		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello&top=5")
 		if code != 200 {
@@ -252,7 +253,7 @@ func TestSearchAllProjectsMergeError(t *testing.T) {
 	fs.addUser("admin", "supersecret", "admin")
 	fs.projects = []store.Project{{ID: 1, Name: "alpha", Model: "bge-m3"}}
 	fs.searchErr = context.Canceled
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello")
 	if code != 200 || !strings.Contains(body, context.Canceled.Error()) {
@@ -267,7 +268,7 @@ func TestProjectsAPIPagination(t *testing.T) {
 		{ID: 1, Name: "a", Model: "m1", Status: "ready"},
 		{ID: 2, Name: "b", Model: "m2", Status: "ready"},
 	}
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	code, body := getBody(t, c, srv.URL+"/admin/api/projects?limit=1&offset=1")
 	if code != 200 {
@@ -282,7 +283,7 @@ func TestProjectsAPIEmptyList(t *testing.T) {
 	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
 	fs.addUser("admin", "supersecret", "admin")
 	fs.projects = nil
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	code, body := getBody(t, c, srv.URL+"/admin/api/projects")
 	if code != 200 || !strings.Contains(body, `"projects":[]`) {
@@ -297,7 +298,7 @@ func TestProjectsAPI(t *testing.T) {
 		ID: 1, Name: "jackui", Model: "bge-m3", Status: "ready",
 		Identity: "git:example/jackui", Path: "/data/jackui", SourceType: "git",
 	}}
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	code, body := getBody(t, c, srv.URL+"/admin/api/projects")
 	if code != 200 {
@@ -312,7 +313,7 @@ func TestProjectsAPIListError(t *testing.T) {
 	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
 	fs.addUser("admin", "supersecret", "admin")
 	fs.listProjectsErr = errors.New("db down")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	code, body := getBody(t, c, srv.URL+"/admin/api/projects")
 	if code != 500 || !strings.Contains(body, "internal error") {
@@ -325,7 +326,7 @@ func TestSearchPageSearchServiceError(t *testing.T) {
 	fs.addUser("admin", "supersecret", "admin")
 	fs.projects = []store.Project{{ID: 1, Name: "alpha", Model: "bge-m3"}}
 	fs.searchErr = errors.New("embed down")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	code, body := getBody(t, c, srv.URL+"/admin/search?project=alpha&q=hello")
 	if code != 200 || !strings.Contains(body, "embed down") {
@@ -337,7 +338,7 @@ func TestSearchAllProjectsListError(t *testing.T) {
 	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
 	fs.addUser("admin", "supersecret", "admin")
 	fs.listProjectsErr = errors.New("db down")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello")
 	if code != 200 || !strings.Contains(body, "could not list projects") {
@@ -349,7 +350,7 @@ func TestSearchAllProjectsEmpty(t *testing.T) {
 	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
 	fs.addUser("admin", "supersecret", "admin")
 	fs.projects = []store.Project{}
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello")
 	if code != 200 || !strings.Contains(body, "no indexed projects") {
@@ -362,7 +363,7 @@ func TestSearchPageShowsResolvedProject(t *testing.T) {
 	fs.addUser("admin", "supersecret", "admin")
 	fs.projects = []store.Project{{ID: 1, Name: "jackui", Model: "bge-m3"}}
 	fs.searchResults = []store.SearchResult{{FilePath: "a.go", Content: "hit", Score: 0.9}}
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	code, body := getBody(t, c, srv.URL+"/admin/search?project=JackUI&q=hello&top=20")
 	if code != 200 || !strings.Contains(body, "Project:") || !strings.Contains(body, "jackui") {
@@ -375,7 +376,7 @@ func TestSearchPageShowsResolvedProject(t *testing.T) {
 func TestAccount(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 
 	if code, _ := getBody(t, c, srv.URL+"/admin/account"); code != 200 {
@@ -410,7 +411,7 @@ func TestAccountStoreError(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
 	fs.setPwErr = errors.New("write failed")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	csrf := csrfFrom(t, c, srv.URL+"/admin/account")
 	if _, body := post(t, c, srv.URL+"/admin/account", url.Values{
@@ -425,7 +426,7 @@ func TestAccountStoreError(t *testing.T) {
 func TestKeysErrorPaths(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 
 	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
@@ -474,7 +475,7 @@ func TestUsersErrorPaths(t *testing.T) {
 	}
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 
 	csrf := csrfFrom(t, c, srv.URL+"/admin/users")
@@ -545,7 +546,7 @@ func TestUsersErrorPaths(t *testing.T) {
 func TestTokensErrorPaths(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 
 	csrf := csrfFrom(t, c, srv.URL+"/admin/tokens")
@@ -596,7 +597,7 @@ func TestTokensErrorPaths(t *testing.T) {
 func TestTokensNonAdminAdminScope(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("bob", "supersecret", "member")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "bob", "supersecret")
 	csrf := csrfFrom(t, c, srv.URL+"/admin/tokens")
 	if _, body := post(t, c, srv.URL+"/admin/tokens", url.Values{
@@ -609,7 +610,7 @@ func TestTokensNonAdminAdminScope(t *testing.T) {
 func TestKeysNonAdminAdminScope(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("bob", "supersecret", "member")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "bob", "supersecret")
 	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
 	if _, body := post(t, c, srv.URL+"/admin/keys", url.Values{
@@ -622,7 +623,7 @@ func TestKeysNonAdminAdminScope(t *testing.T) {
 func TestKeysInvalidScope(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
 	if _, body := post(t, c, srv.URL+"/admin/keys", url.Values{
@@ -636,7 +637,7 @@ func TestTokensDisabled(t *testing.T) {
 	// jwt nil → control tokens feature is off.
 	srv, fs := newAdminWith(t, nil, nil)
 	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	csrf := csrfFrom(t, c, srv.URL+"/admin/tokens")
 	if code, _ := post(t, c, srv.URL+"/admin/tokens", url.Values{"csrf_token": {csrf}, "name": {"x"}}); code != http.StatusForbidden {
@@ -650,7 +651,7 @@ func TestProtectEdgeCases(t *testing.T) {
 	t.Run("wrong CSRF token is rejected", func(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
-		c := newClient(t)
+		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		if code, _ := post(t, c, srv.URL+"/admin/keys", url.Values{"csrf_token": {"deadbeef"}, "name": {"x"}}); code != http.StatusForbidden {
 			t.Errorf("wrong CSRF = %d, want 403", code)
@@ -660,7 +661,7 @@ func TestProtectEdgeCases(t *testing.T) {
 	t.Run("session lookup error is a 500", func(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
-		c := newClient(t)
+		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		fs.sessionErr = errors.New("db down")
 		if code, _ := getBody(t, c, srv.URL+"/admin/"); code != http.StatusInternalServerError {
@@ -671,7 +672,7 @@ func TestProtectEdgeCases(t *testing.T) {
 	t.Run("stale session redirects to login and clears the cookie", func(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
-		c := newClient(t)
+		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		// Drop the session server-side; the cookie is now stale.
 		fs.sessions = map[string]int{}
@@ -689,10 +690,10 @@ func TestProtectEdgeCases(t *testing.T) {
 // --- session cookie hardening -------------------------------------------------
 
 // loginRaw performs a login and returns the *http.Cookie the server set (or nil).
-func loginCookie(t *testing.T, base string, user, pass string) *http.Cookie {
+func loginCookie(t *testing.T, srv *httptest.Server, user, pass string) *http.Cookie {
 	t.Helper()
-	c := newClient(t)
-	resp, err := c.PostForm(base+"/admin/login", url.Values{"username": {user}, "password": {pass}})
+	c := newClient(t, srv)
+	resp, err := c.PostForm(srv.URL+"/admin/login", url.Values{"username": {user}, "password": {pass}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -706,21 +707,21 @@ func loginCookie(t *testing.T, base string, user, pass string) *http.Cookie {
 }
 
 func TestSessionCookieAttributes(t *testing.T) {
-	t.Run("insecure server: HttpOnly, Lax, not Secure, scoped to /admin", func(t *testing.T) {
-		srv, fs := newTestAdmin(t) // secure=false
+	t.Run("session cookie: HttpOnly, Secure, Lax, scoped to /admin", func(t *testing.T) {
+		srv, fs := newTestAdmin(t) // TLS server with Secure=true cookies
 		fs.addUser("admin", "supersecret", "admin")
-		ck := loginCookie(t, srv.URL, "admin", "supersecret")
+		ck := loginCookie(t, srv, "admin", "supersecret")
 		if ck == nil {
 			t.Fatal("no session cookie set on login")
 		}
 		if !ck.HttpOnly {
 			t.Error("session cookie must be HttpOnly")
 		}
+		if !ck.Secure {
+			t.Error("session cookie must be Secure (admin is behind HTTPS)")
+		}
 		if ck.SameSite != http.SameSiteLaxMode {
 			t.Errorf("SameSite = %v, want Lax", ck.SameSite)
-		}
-		if ck.Secure {
-			t.Error("insecure server must NOT set Secure")
 		}
 		if ck.Path != "/admin" {
 			t.Errorf("cookie Path = %q, want /admin", ck.Path)
@@ -730,28 +731,10 @@ func TestSessionCookieAttributes(t *testing.T) {
 		}
 	})
 
-	t.Run("secure server sets the Secure flag", func(t *testing.T) {
-		fs := newFakeStore()
-		fs.addUser("admin", "supersecret", "admin")
-		a, err := New(fs, nil, nil, true /* secureCookies */, nil, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		srv := httptest.NewServer(a.Handler())
-		t.Cleanup(srv.Close)
-		ck := loginCookie(t, srv.URL, "admin", "supersecret")
-		if ck == nil {
-			t.Fatal("no session cookie set on login")
-		}
-		if !ck.Secure {
-			t.Error("secure server must set Secure on the session cookie")
-		}
-	})
-
 	t.Run("logout clears the cookie", func(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
-		c := newClient(t)
+		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		csrf := csrfFrom(t, c, srv.URL+"/admin/")
 		resp, err := c.PostForm(srv.URL+"/admin/logout", url.Values{"csrf_token": {csrf}})
@@ -777,7 +760,7 @@ func TestDashboardListError(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
 	fs.listProjectsErr = errors.New("query failed")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 	// The dashboard still renders (the error is logged, not fatal).
 	if code, _ := getBody(t, c, srv.URL+"/admin/"); code != 200 {

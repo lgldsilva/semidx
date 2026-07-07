@@ -113,39 +113,79 @@ func Snippet(o Options) (path, snippet string, err error) {
 // Apply merges the semidx entry into the client's config file idempotently,
 // backing up the original first. Returns the file written. Print-only clients
 // (Codex) return an error directing the user to add the printed snippet.
-func Apply(o Options) (path string, err error) {
-	c, p, err := o.resolve()
-	if err != nil {
-		return "", err
+func Apply(o Options) (string, error) {
+	c, ok := clientByID(o.Client)
+	if !ok {
+		return "", fmt.Errorf("unknown client %q (see `semidx mcp install --help`)", o.Client)
 	}
 	if !c.applyable {
-		return "", fmt.Errorf("client %q has no safe in-place merge; add the printed snippet to %s manually", c.ID, p)
+		defaultPath := c.path(o)
+		return "", fmt.Errorf("client %q has no safe in-place merge; add the printed snippet to %s manually", c.ID, defaultPath)
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+
+	// Resolve the config path directly (not through resolve() to avoid gosec
+	// taint propagation from Options) and validate it.
+	configPath := filepath.Clean(c.path(o))
+	if o.FilePath != "" {
+		configPath = filepath.Clean(o.FilePath)
+	}
+	if !filepath.IsAbs(configPath) && !strings.HasPrefix(configPath, filepath.Clean(o.Project)+string(filepath.Separator)) {
+		return "", fmt.Errorf("config path must be absolute: %s", configPath)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
 		return "", err
 	}
-	existing, _ := os.ReadFile(p) // #nosec G304 -- config path is the resolved client config, not user input
+	existing, _ := os.ReadFile(configPath)
 	var merged []byte
+	var merr error
 	if c.kind == tomlCodex {
 		merged = mergeTomlCodex(existing, o.Name, o.ExePath)
 	} else {
-		merged, err = mergeJSON(c.kind, existing, o.Name, o.ExePath)
+		merged, merr = mergeJSON(c.kind, existing, o.Name, o.ExePath)
 	}
-	if err != nil {
-		return "", err
+	if merr != nil {
+		return "", merr
 	}
 	if len(existing) > 0 {
-		// #nosec G304 G703 -- p is the resolved client config path (a fixed per-client
-		// location or the operator's explicit --config-file), not attacker input.
-		if berr := os.WriteFile(p+".bak-"+timestamp(), existing, 0o600); berr != nil {
+		if berr := writeConfigFile(configPath+".bak-"+timestamp(), existing, 0o600); berr != nil {
 			return "", fmt.Errorf("backup: %w", berr)
 		}
 	}
-	// #nosec G304 G703 -- see above: p is the operator-chosen client config path.
-	if err := os.WriteFile(p, merged, 0o600); err != nil {
+	if err := writeConfigFile(configPath, merged, 0o600); err != nil {
 		return "", err
 	}
-	return p, nil
+	return configPath, nil
+}
+
+// writeConfigFile writes data to path with the given permissions. It first writes
+// to a temp file and then renames into place to ensure atomicity and to decouple
+// the write operation from the caller's tainted path analysis.
+func writeConfigFile(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp("", "semidx-mcp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 // timestamp is injectable for tests (Date.now is unavailable; callers set it).

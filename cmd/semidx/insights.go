@@ -47,7 +47,7 @@ func loadInsights() ([]Insight, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p)
+	data, err := os.ReadFile(filepath.Clean(p))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

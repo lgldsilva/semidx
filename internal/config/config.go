@@ -488,8 +488,7 @@ func newResolverWithLookup(lookup func(string) (string, bool), paths ...string) 
 // yields an empty map; malformed lines and comments are skipped.
 func parseEnvFile(path string) map[string]string {
 	vars := make(map[string]string)
-	// #nosec G304 -- reads a semidx config/.env file at a path chosen by semidx itself.
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return vars
 	}

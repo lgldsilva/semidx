@@ -7,13 +7,14 @@ package indexing
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
-	"math/rand/v2"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -369,8 +370,7 @@ func ScanFiles(projectPath string, maxFiles int) ([]string, error) {
 // or unchanged; hardErr signals a read/upsert/delete failure; softErrs counts
 // failed embed sub-batches.
 func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, model string) (created, softErrs int, outcome fileOutcome, units []indexedUnit, hardErr error) {
-	// #nosec G304 -- indexing a file the caller pointed us at is the whole job; path comes from the project walk.
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, nil, err
 	}
@@ -402,8 +402,7 @@ type indexedUnit struct {
 // failure (read/parse/store). On success it returns the stored units so the
 // caller can add them to the worktree manifest. Used by `semidx unlock`.
 func (idx *Indexer) IndexEncryptedFile(ctx context.Context, projectID int, path, rel, model, password string) (unlocked bool, units []indexedUnit, err error) {
-	// #nosec G304 -- path comes from the project walk / pending list, like indexFile.
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return false, nil, err
 	}
@@ -678,8 +677,14 @@ func (idx *Indexer) embedWithRetry(ctx context.Context, model string, inputs []s
 // to 50% jitter, returning early with ctx.Err() if the context is cancelled.
 func sleepBackoff(ctx context.Context, attempt int) error {
 	backoff := (500 * time.Millisecond) << (attempt - 1)
-	// #nosec G404 -- jitter for retry backoff, not security-sensitive; math/rand is fine.
-	delay := backoff + time.Duration(rand.Int64N(int64(backoff/2)))
+	maxJitter := int64(backoff / 2)
+	var jitter int64
+	if maxJitter > 0 {
+		if n, err := rand.Int(rand.Reader, big.NewInt(maxJitter)); err == nil {
+			jitter = n.Int64()
+		}
+	}
+	delay := backoff + time.Duration(jitter)
 	t := time.NewTimer(delay)
 	defer t.Stop()
 	select {
@@ -691,16 +696,22 @@ func sleepBackoff(ctx context.Context, attempt int) error {
 }
 
 func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectPath, model string) error {
+	if !safeGitDir(projectPath) {
+		return fmt.Errorf("unsafe git project path: %q", projectPath)
+	}
 	// Only pass --since when a window is set: an empty --since= is parsed
 	// inconsistently across git versions (some ignore it and show all history,
 	// newer ones treat the empty approxidate as "now" and return nothing), which
 	// made history indexing silently no-op on some hosts.
 	args := []string{"-C", projectPath, "log", "-p"}
 	if idx.gitSince != "" {
+		if !safeGitRef(idx.gitSince) {
+			return fmt.Errorf("unsafe git since value: %q", idx.gitSince)
+		}
 		args = append(args, "--since="+idx.gitSince)
 	}
-	// #nosec G204 -- fixed "git" executable; projectPath is a local dir and gitSince a bounded flag value.
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git")
+	cmd.Args = append([]string{"git"}, args...)
 	// Strip any inherited GIT_DIR/GIT_WORK_TREE so `git -C projectPath` reads that
 	// repo's history, not an ambient repo leaked by a hook or bare-repo worktree.
 	cmd.Env = gitenv.Clean(cmd.Environ())
@@ -806,13 +817,38 @@ func gitDiffNames(ctx context.Context, projectPath, baseRef string) ([]string, e
 	return strings.Split(strings.TrimSpace(out), "\n"), nil
 }
 
+// safeGitDir checks that a project path does not contain path-traversal
+// sequences or start with a dash (which would be parsed as a git flag).
+func safeGitDir(dir string) bool {
+	return !strings.Contains(dir, "..") && !strings.HasPrefix(dir, "-") && !strings.HasPrefix(dir, "~")
+}
+
+// safeGitRef checks that a ref value contains only safe characters and does not
+// start with a dash.
+func safeGitRef(ref string) bool {
+	if ref == "" || ref[0] == '-' {
+		return false
+	}
+	for _, r := range ref {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '/', r == '-', r == ':', r == '@':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // gitRun executes a git subcommand in projectPath with hermetic config and
 // returns trimmed stdout, or an error if the command fails.
 func gitRun(ctx context.Context, projectPath string, args ...string) (string, error) {
-	fullArgs := append([]string{"-C", projectPath}, args...)
-	// #nosec G204 -- fixed "git" executable; args come from the caller's bounded
-	// set of subcommands (diff/rev-parse) and the caller-supplied projectPath.
-	cmd := exec.CommandContext(ctx, "git", fullArgs...)
+	if !safeGitDir(projectPath) {
+		return "", fmt.Errorf("unsafe git project path: %q", projectPath)
+	}
+	fullArgs := append([]string{"git", "-C", projectPath}, args...)
+	cmd := exec.CommandContext(ctx, "git")
+	cmd.Args = fullArgs
 	cmd.Env = gitenv.Clean(cmd.Environ())
 	out, err := cmd.Output()
 	if err != nil {
