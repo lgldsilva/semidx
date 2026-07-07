@@ -28,11 +28,12 @@ func NewLocalBackend(svc *search.Service, projects projectLister, keywordOnly bo
 	return &localBackend{svc: svc, projects: projects, keywordOnly: keywordOnly}
 }
 
-func (b *localBackend) Search(ctx context.Context, project, query, model string, topK int) (*SearchOutput, error) {
+func (b *localBackend) Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchOutput, error) {
 	// A standalone MCP server is not tied to a git worktree, so no worktree filter
 	// is applied — it searches the whole project index.
 	resp, err := b.svc.Search(ctx, search.Request{
 		Project: project, Query: query, Model: model, TopK: topK, KeywordOnly: b.keywordOnly,
+		Graph: graph, GraphMaxDepth: graphDepth,
 	})
 	if err != nil {
 		return nil, err

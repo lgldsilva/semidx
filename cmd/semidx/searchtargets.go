@@ -85,7 +85,7 @@ func (d *deps) runSearchTargets(cmd *cobra.Command, projectArg, query, model str
 		if err != nil {
 			return nil, fmt.Errorf("project not found: %s (index it, or pass a path/name that exists)", projectArg)
 		}
-		resp, err := api.Search(ctx, p.Name, query, model, topK)
+		resp, err := api.Search(ctx, p.Name, query, model, topK, false, 0)
 		if err != nil {
 			return nil, err
 		}
