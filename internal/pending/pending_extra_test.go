@@ -73,7 +73,7 @@ func TestRemoveErrorPath(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(pendingFile, "sub"), 0o700); err != nil {
 		t.Fatalf("create non-empty dir: %v", err)
 	}
-	defer os.RemoveAll(pendingFile)
+	defer func() { _ = os.RemoveAll(pendingFile) }()
 
 	if err := Remove(key); err == nil {
 		t.Error("Remove on non-empty directory should error")
