@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+const (
+	semidxDir = "semidx"
+	indexDB   = "index.db"
+)
+
 // ConfigDir returns the base directory for configuration files,
 // prioritizing XDG_CONFIG_HOME over the OS-default user config directory.
 func ConfigDir() (string, error) {
@@ -30,7 +35,7 @@ func UserEnvPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "semidx", "semidx.env"), nil
+	return filepath.Join(dir, semidxDir, "semidx.env"), nil
 }
 
 // ClientConfigPath returns the client-side configuration file path (~/.config/semidx/config.yaml).
@@ -39,20 +44,20 @@ func ClientConfigPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "semidx", "config.yaml"), nil
+	return filepath.Join(dir, semidxDir, "config.yaml"), nil
 }
 
 // DefaultLocalIndexPath returns the default SQLite index file location.
 func DefaultLocalIndexPath() string {
 	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
-		return filepath.Join(xdg, "semidx", "index.db")
+		return filepath.Join(xdg, semidxDir, indexDB)
 	}
 	if home := os.Getenv("HOME"); home != "" && (strings.HasPrefix(home, "/home") || strings.Contains(home, "test")) {
-		return filepath.Join(home, ".cache", "semidx", "index.db")
+		return filepath.Join(home, ".cache", semidxDir, indexDB)
 	}
 	dir, err := os.UserCacheDir()
 	if err != nil {
-		return "semidx-index.db"
+		return semidxDir + "-" + indexDB
 	}
-	return filepath.Join(dir, "semidx", "index.db")
+	return filepath.Join(dir, semidxDir, indexDB)
 }
