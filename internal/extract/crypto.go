@@ -62,7 +62,13 @@ func ExtractAllWithPassword(name string, data []byte, password string) (out []Do
 		if e != nil || len(inner) == 0 {
 			return nil, ErrWrongPassword
 		}
-		text, e := byExt[ext](inner)
+		registryMu.RLock()
+		decodeFn, ok := byExt[ext]
+		registryMu.RUnlock()
+		if !ok {
+			return nil, fmt.Errorf("%w: %q", ErrUnsupported, ext)
+		}
+		text, e := decodeFn(inner)
 		if e != nil {
 			return nil, ErrWrongPassword // decrypt produced non-parseable bytes ⇒ wrong password
 		}

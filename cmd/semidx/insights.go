@@ -47,6 +47,7 @@ func loadInsights() ([]Insight, error) {
 	if err != nil {
 		return nil, err
 	}
+	// #nosec G304 -- p points to a safe location inside config directory
 	data, err := os.ReadFile(filepath.Clean(p))
 	if err != nil {
 		if os.IsNotExist(err) {
