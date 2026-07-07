@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lgldsilva/semidx/internal/config"
+	"github.com/lgldsilva/semidx/internal/xdg"
 )
 
 // newConfigCmd manages the persistent user config file (~/.config/semidx/semidx.env):
@@ -101,6 +102,9 @@ func newConfigListCmd(d *deps) *cobra.Command {
 		Example: `  semidx config list
   semidx config list --show-secrets`,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if p := xdg.Profile(); p != "" {
+				fmt.Printf("Profile: %s\n", p)
+			}
 			fmt.Printf("Active backend: %s\n\n", activeBackend(d))
 			fmt.Println("Settings (effective; env > .env > user config):")
 			for _, k := range config.KnownKeys {
@@ -141,13 +145,17 @@ func newConfigPathCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "path",
 		Short:   "Print the user config file location",
-		Example: "  semidx config path",
+		Long:    "Print the user config file location. When a profile is active, shows the profile name and the profile-specific config file.",
+		Example: "  semidx config path\n  semidx --profile test config path",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			p, err := config.UserEnvPath()
+			if p := xdg.Profile(); p != "" {
+				fmt.Printf("Profile: %s\n", p)
+			}
+			path, err := config.UserEnvPath()
 			if err != nil {
 				return err
 			}
-			fmt.Println(p)
+			fmt.Println(path)
 			return nil
 		},
 	}

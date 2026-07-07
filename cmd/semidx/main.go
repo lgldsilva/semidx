@@ -18,6 +18,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/localstore"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/xdg"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
@@ -115,6 +116,7 @@ func newRootCmd() *cobra.Command {
 
 	d := &deps{}
 	var forceLocal, keywordOnly bool
+	var profile string
 	root := &cobra.Command{
 		Use:   "semidx",
 		Short: "Self-hosted semantic code search",
@@ -148,6 +150,9 @@ Run "semidx <command> --help" for details on any command.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if err := xdg.SetProfile(effectiveConfigProfile(profile)); err != nil {
+				return err
+			}
 			return d.setup(cmd, forceLocal, keywordOnly)
 		},
 		PersistentPostRun: func(_ *cobra.Command, _ []string) {
@@ -163,6 +168,8 @@ Run "semidx <command> --help" for details on any command.`,
 		"Use a standalone local index (no server/Postgres); path from SEMIDX_LOCAL_INDEX or the default data dir")
 	root.PersistentFlags().BoolVar(&keywordOnly, "keyword", false,
 		"Index and search by keyword only, with no embedding model (SEMIDX_EMBED_MODE=none)")
+	root.PersistentFlags().StringVar(&profile, "profile", "",
+		"Use a named config profile (reads semidx-<name>.env and config-<name>.yaml); overridden by SEMIDX_PROFILE if flag is omitted")
 	root.AddGroup(
 		&cobra.Group{ID: "primary", Title: "Primary workflow:"},
 		&cobra.Group{ID: "setup", Title: "Setup:"},
@@ -217,4 +224,13 @@ func projectNameFromPath(path string) string {
 		return path[idx+1:]
 	}
 	return path
+}
+
+// effectiveConfigProfile resolves the config profile: --profile flag wins,
+// falling back to SEMIDX_PROFILE environment variable.
+func effectiveConfigProfile(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return os.Getenv("SEMIDX_PROFILE")
 }
