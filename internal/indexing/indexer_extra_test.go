@@ -340,7 +340,7 @@ func TestEmbedAndInsertSoftErrorOnEmbedFailure(t *testing.T) {
 	fs := &fakeStore{}
 	idx := NewIndexer(fs, &alwaysFailEmbedder{}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, Verbose: true})
 	created, softErrs := idx.embedAndInsert(context.Background(), 1, 1,
-		[]chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, "m", "a.go")
+		[]chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, "m", "a.go", nil)
 	if created != 0 {
 		t.Errorf("created = %d, want 0 on embed failure", created)
 	}
@@ -355,7 +355,7 @@ func TestEmbedAndInsertSoftErrorOnInsertFailure(t *testing.T) {
 	es := &errStore{insertErr: errors.New("insert boom")}
 	idx := NewIndexer(es, &fakeEmbedder{}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, Verbose: true})
 	created, softErrs := idx.embedAndInsert(context.Background(), 1, 1,
-		[]chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, "m", "a.go")
+		[]chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, "m", "a.go", nil)
 	if created != 0 {
 		t.Errorf("created = %d, want 0 on insert failure", created)
 	}

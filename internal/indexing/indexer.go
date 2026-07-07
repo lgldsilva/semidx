@@ -24,6 +24,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	sym "github.com/lgldsilva/semidx/internal/analyzer"
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/extract"
@@ -55,6 +56,7 @@ type Indexer struct {
 	gitMode             bool
 	gitSince            string
 	keywordOnly         bool   // when true, store text-only (no embeddings) for keyword search
+	noSymbols           bool   // when true, skip symbol enrichment (even when embedding)
 	modulePath          string // Go module path from go.mod (for import-dependency extraction)
 	worktree            string // when set, record this worktree's manifest + prune after indexing
 
@@ -485,7 +487,11 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		return 0, 0, outcomeSkippedEmpty, "", err
 	}
 
-	created, softErrs, err = idx.storeChunks(ctx, projectID, fileID, rel, model, chunks)
+	var syms []sym.Symbol
+	if !idx.keywordOnly && !idx.noSymbols {
+		syms = sym.Symbols(rel, content)
+	}
+	created, softErrs, err = idx.storeChunks(ctx, projectID, fileID, rel, model, chunks, syms)
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, "", err
 	}
@@ -496,7 +502,7 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 // and privacy routing. It stores the chunks text-only in keyword-only mode, or
 // when a sensitive file cannot be embedded by a local provider; otherwise it
 // embeds them (forcing a local provider for sensitive files).
-func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel, model string, chunks []chunker.Chunk) (created, softErrs int, hardErr error) {
+func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel, model string, chunks []chunker.Chunk, syms []sym.Symbol) (created, softErrs int, hardErr error) {
 	// Keyword-only mode: no embedding provider at all — store the chunks as text
 	// so they stay searchable by keyword (FTS/ILIKE) without any model.
 	if idx.keywordOnly {
@@ -523,12 +529,14 @@ func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel,
 		embedCtx = localCtx
 	}
 
-	created, softErrs = idx.embedAndInsert(embedCtx, projectID, fileID, chunks, model, rel)
+	created, softErrs = idx.embedAndInsert(embedCtx, projectID, fileID, chunks, model, rel, syms)
 	return created, softErrs, nil
 }
 
 // embedAndInsert embeds chunks in sub-batches and inserts each successful batch.
-func (idx *Indexer) embedAndInsert(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, model, rel string) (created, softErrs int) {
+// Only symbols whose line range overlaps a chunk are included in that chunk's
+// prefix, so per-chunk symbol lists stay relevant and bounded.
+func (idx *Indexer) embedAndInsert(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, model, rel string, syms []sym.Symbol) (created, softErrs int) {
 	for start := 0; start < len(chunks); start += idx.embedBatchSize {
 		end := start + idx.embedBatchSize
 		if end > len(chunks) {
@@ -537,7 +545,22 @@ func (idx *Indexer) embedAndInsert(ctx context.Context, projectID, fileID int, c
 		sub := chunks[start:end]
 		inputs := make([]string, len(sub))
 		for j, c := range sub {
-			inputs[j] = c.Content
+			var chunkSyms []string
+			for _, s := range syms {
+				// Symbol declaration overlaps with this chunk's line range.
+				if s.StartLine <= c.EndLine && s.EndLine >= c.StartLine {
+					chunkSyms = append(chunkSyms, s.Kind+" "+s.Name)
+				}
+			}
+			// Cap at 20 symbols to avoid prefix dominating chunk text.
+			if len(chunkSyms) > 20 {
+				chunkSyms = append(chunkSyms[:20], "...")
+			}
+			if len(chunkSyms) > 0 {
+				inputs[j] = "Symbols: " + strings.Join(chunkSyms, ", ") + "\n" + c.Content
+			} else {
+				inputs[j] = c.Content
+			}
 		}
 
 		embeddings, err := idx.embedWithRetry(ctx, model, inputs)
