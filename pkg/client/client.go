@@ -137,8 +137,8 @@ func (c *Client) Healthz(ctx context.Context) error {
 }
 
 // Search runs a semantic search over a project.
-func (c *Client) Search(ctx context.Context, project, query, model string, topK int) (*SearchResponse, error) {
-	body := map[string]any{"query": query, "top_k": topK, "model": model}
+func (c *Client) Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchResponse, error) {
+	body := map[string]any{"query": query, "top_k": topK, "model": model, "graph": graph, "graph_depth": graphDepth}
 	var out SearchResponse
 	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/search", body, &out); err != nil {
 		return nil, err

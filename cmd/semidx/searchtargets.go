@@ -43,7 +43,7 @@ func (d *deps) runRemoteSearch(ctx context.Context, projectArg, query, model str
 	if err != nil {
 		return nil, err
 	}
-	resp, err := api.Search(ctx, p.Name, query, model, topK)
+	resp, err := api.Search(ctx, p.Name, query, model, topK, false, 0)
 	if err != nil {
 		return nil, err
 	}
