@@ -431,15 +431,16 @@ func TestIndexGitHistoryContinuesOnEmbedSingleError(t *testing.T) {
 }
 
 // TestIndexContentTruncatesOversizedContent covers the maxFileSize truncation
-// branch in indexContent.
+// branch in indexContent. Uses plain text (not Go) content to avoid tree-sitter
+// parser issues with very large files (gotreesitter v0.21.0 known bug).
 func TestIndexContentTruncatesOversizedContent(t *testing.T) {
 	fs := &fakeStore{}
 	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
-	oversized := []byte("package x\n" + strings.Repeat("var _ = 1\n", 200000)) // >1MB
+	oversized := []byte(strings.Repeat("plain text line not go code\n", 80000)) // >1MB, non-Go
 	if len(oversized) <= 1024*1024 {
 		t.Fatalf("test content is only %d bytes, want > 1MB", len(oversized))
 	}
-	if _, err := idx.IndexContent(context.Background(), 1, "big.go", "bge-m3", oversized); err != nil {
+	if _, err := idx.IndexContent(context.Background(), 1, "big.txt", "bge-m3", oversized); err != nil {
 		t.Fatalf("IndexContent: %v", err)
 	}
 }

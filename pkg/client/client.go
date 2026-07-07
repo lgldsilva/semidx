@@ -94,7 +94,17 @@ type Job struct {
 	Error         string `json:"error,omitempty"`
 	FilesIndexed  int    `json:"files_indexed"`
 	ChunksCreated int    `json:"chunks_created"`
+	DeletedFiles  int    `json:"deleted_files"`
+	ErrorCount    int    `json:"error_count"`
 }
+
+// Job status values returned by the server.
+const (
+	JobStatusSucceeded = "succeeded"
+	JobStatusFailed    = "failed"
+	JobStatusRunning   = "running"
+	JobStatusQueued    = "queued"
+)
 
 type DiffResponse struct {
 	Stale   []string `json:"stale"`
@@ -127,6 +137,15 @@ type BatchResponse struct {
 type EnqueueResponse struct {
 	JobID  int    `json:"job_id"`
 	Status string `json:"status"`
+}
+
+type StatusResponse struct {
+	Name       string `json:"name"`
+	Identity   string `json:"identity,omitempty"`
+	SourceType string `json:"source_type"`
+	Status     string `json:"status"`
+	Model      string `json:"model"`
+	TotalFiles int    `json:"total_files"`
 }
 
 // ---- Methods ------------------------------------------------------------------
@@ -182,6 +201,15 @@ func (c *Client) CreateProject(ctx context.Context, name, model, sourceType, git
 	return &out, nil
 }
 
+// Status returns the indexing status and file count for a project.
+func (c *Client) Status(ctx context.Context, project string) (*StatusResponse, error) {
+	var out StatusResponse
+	if err := c.do(ctx, http.MethodGet, projectsPath+esc(project)+"/status", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // DeleteProject removes a project.
 func (c *Client) DeleteProject(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, projectsPath+esc(name), nil, nil)
@@ -231,14 +259,56 @@ func (c *Client) FilesBatch(ctx context.Context, project string, files []BatchFi
 }
 
 // FilesBatchAsync enqueues a batch indexing job and returns the job id. The
-// job is processed by a background worker; call GetJob to poll for completion.
+// job is processed by a background worker; call WaitForJob to poll for completion.
+// Requires server support for async batches (status 202 Accepted).
 func (c *Client) FilesBatchAsync(ctx context.Context, project string, files []BatchFile, del []string) (int, error) {
-	var out EnqueueResponse
-	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/files/batch",
-		map[string]any{"files": files, "delete": del}, &out); err != nil {
+	body := map[string]any{"files": files, "delete": del}
+	resp, err := c.doResponse(ctx, http.MethodPost, projectsPath+esc(project)+"/files/batch", body)
+	if err != nil {
 		return 0, err
 	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusOK {
+		// Server returned sync response (old server or --sync equivalent) —
+		// this is not an async batch. Don't silently return job_id=0.
+		return 0, fmt.Errorf("server does not support async batch (status %d) — use --sync", resp.StatusCode)
+	}
+
+	if resp.StatusCode != http.StatusAccepted {
+		return 0, &APIError{Status: resp.StatusCode, Message: "unexpected status for async batch"}
+	}
+
+	var out EnqueueResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, err
+	}
+	if out.JobID == 0 {
+		return 0, fmt.Errorf("server returned empty job_id")
+	}
 	return out.JobID, nil
+}
+
+// WaitForJob polls a job until it completes, fails, or ctx is cancelled.
+// interval controls the polling frequency. Returns the final job state.
+func (c *Client) WaitForJob(ctx context.Context, jobID int, interval time.Duration) (*Job, error) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		job, err := c.GetJob(ctx, jobID)
+		if err != nil {
+			return nil, err
+		}
+		if job.Status == JobStatusSucceeded || job.Status == JobStatusFailed {
+			return job, nil
+		}
+		select {
+		case <-ctx.Done():
+			return job, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // esc escapes a path segment for use in REST URLs. url.PathEscape does not
@@ -283,4 +353,29 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
 	return nil
+}
+
+// doResponse is like do but returns the raw *http.Response so callers can
+// inspect the status code before decoding the body. The caller must close
+// resp.Body.
+func (c *Client) doResponse(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	var rdr io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		rdr = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, rdr)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	return c.http.Do(req)
 }

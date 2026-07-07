@@ -435,6 +435,13 @@ func (s *SQLiteStore) FileUpToDate(ctx context.Context, projectID int, path, has
 	return exists, nil
 }
 
+// CountProjectFiles returns the total number of indexed files for a project.
+func (s *SQLiteStore) CountProjectFiles(ctx context.Context, projectID int) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files WHERE project_id = ?`, projectID).Scan(&n)
+	return n, err
+}
+
 // ListFileHashes returns path→hash for every indexed file of a project.
 func (s *SQLiteStore) ListFileHashes(ctx context.Context, projectID int) (map[string]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT path, hash FROM files WHERE project_id = ?`, projectID)

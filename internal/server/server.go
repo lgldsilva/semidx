@@ -142,6 +142,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/projects", s.authed("read", s.handleListProjects))
 	mux.Handle("GET /api/v1/projects/{project}", s.authed("read", s.handleGetProject))
 	mux.Handle("DELETE /api/v1/projects/{project}", s.authed("write", s.handleDeleteProject))
+	mux.Handle("GET /api/v1/projects/{project}/status", s.authed("read", s.handleProjectStatus))
 	mux.Handle("POST /api/v1/projects/{project}/search", s.limited(1<<20, s.authed("read", s.handleSearch)))
 	mux.Handle("POST /api/v1/projects/{project}/index-jobs", s.limited(100<<10, s.authed("write", s.handleEnqueueJob)))
 	mux.Handle("POST /api/v1/projects/{project}/files/diff", s.limited(10<<20, s.authed("write", s.handleFilesDiff)))
