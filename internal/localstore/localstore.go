@@ -76,6 +76,12 @@ CREATE TABLE IF NOT EXISTS worktree_files (
     PRIMARY KEY (project_id, worktree, path)
 );
 CREATE INDEX IF NOT EXISTS idx_worktree_files ON worktree_files(project_id, worktree);
+CREATE TABLE IF NOT EXISTS file_dependencies (
+    project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    source_file TEXT    NOT NULL,
+    target_file TEXT    NOT NULL,
+    PRIMARY KEY (project_id, source_file, target_file)
+);
 CREATE TABLE IF NOT EXISTS chunks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -278,6 +284,16 @@ func (s *SQLiteStore) PruneUnreferencedFiles(ctx context.Context, projectID int)
 	if err != nil {
 		return 0, err
 	}
+	if _, err := s.db.ExecContext(ctx, `
+		DELETE FROM file_dependencies
+		WHERE project_id = ?
+		  AND NOT EXISTS (
+		    SELECT 1 FROM files f
+		    WHERE f.project_id = file_dependencies.project_id AND f.path = file_dependencies.source_file
+		  )
+	`, projectID); err != nil {
+		return 0, err
+	}
 	return res.RowsAffected()
 }
 
@@ -440,6 +456,12 @@ func (s *SQLiteStore) ListFileHashes(ctx context.Context, projectID int) (map[st
 
 // DeleteFileByPath removes a file and its chunks (cascade) by path.
 func (s *SQLiteStore) DeleteFileByPath(ctx context.Context, projectID int, path string) error {
+	if _, err := s.db.ExecContext(ctx, `
+		DELETE FROM file_dependencies
+		WHERE project_id = ? AND (source_file = ? OR target_file = ?)
+	`, projectID, path, path); err != nil {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE project_id = ? AND path = ?`, projectID, path)
 	return err
 }
@@ -653,6 +675,116 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 	return results, rows.Err()
 }
 
+// InsertFileDependencies replaces import/dependency edges for a source file.
+func (s *SQLiteStore) InsertFileDependencies(ctx context.Context, projectID int, sourceFile string, targets []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM file_dependencies WHERE project_id = ? AND source_file = ?
+	`, projectID, sourceFile); err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		return tx.Commit()
+	}
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO file_dependencies (project_id, source_file, target_file)
+		VALUES (?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for _, target := range targets {
+		if _, err := stmt.ExecContext(ctx, projectID, sourceFile, target); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// FetchGraphNeighbors returns the full dependency graph for a project as
+// source_file -> [target_file, ...] pairs. Returns an empty map if no
+// edges exist.
+func (s *SQLiteStore) FetchGraphNeighbors(ctx context.Context, projectID int) (map[string][]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT source_file, target_file FROM file_dependencies WHERE project_id = ?`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string][]string)
+	for rows.Next() {
+		var source, target string
+		if err := rows.Scan(&source, &target); err != nil {
+			return nil, err
+		}
+		result[source] = append(result[source], target)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// FetchChunksByPath returns chunks for a specific file path, ordered by
+// chunk_index. Returns an empty slice if the file has no chunks.
+func (s *SQLiteStore) FetchChunksByPath(ctx context.Context, projectID int, filePath string, dims, limit int) ([]store.SearchResult, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path = ? ORDER BY c.chunk_index LIMIT ?`, projectID, filePath, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []store.SearchResult
+	for rows.Next() {
+		var (
+			r         store.SearchResult
+			startLine sql.NullInt64
+			endLine   sql.NullInt64
+		)
+		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score); err != nil {
+			return nil, err
+		}
+		r.StartLine = int(startLine.Int64)
+		r.EndLine = int(endLine.Int64)
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+// FetchChunksByDirPrefix returns chunks for files whose path starts with the
+// given directory prefix. Returns empty slice if no files match.
+func (s *SQLiteStore) FetchChunksByDirPrefix(ctx context.Context, projectID int, dirPrefix string, dims, limit int) ([]store.SearchResult, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path LIKE (? || '%') ORDER BY c.chunk_index LIMIT ?`, projectID, dirPrefix, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []store.SearchResult
+	for rows.Next() {
+		var (
+			r         store.SearchResult
+			startLine sql.NullInt64
+			endLine   sql.NullInt64
+		)
+		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score); err != nil {
+			return nil, err
+		}
+		r.StartLine = int(startLine.Int64)
+		r.EndLine = int(endLine.Int64)
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
 // DropAll clears all indexed data and resets the auto-increment counters
 // (mirroring PgStore's TRUNCATE ... RESTART IDENTITY).
 func (s *SQLiteStore) DropAll(ctx context.Context) error {
@@ -665,6 +797,7 @@ func (s *SQLiteStore) DropAll(ctx context.Context) error {
 	for _, stmt := range []string{
 		`DELETE FROM chunks`,
 		`DELETE FROM chunks_fts`,
+		`DELETE FROM file_dependencies`,
 		`DELETE FROM files`,
 		`DELETE FROM projects`,
 		`DELETE FROM sqlite_sequence WHERE name IN ('chunks', 'files', 'projects')`,

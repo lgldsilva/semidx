@@ -330,6 +330,8 @@ func addSearchFlags(c *cobra.Command, project, query, model *string, topK *int, 
 	c.Flags().StringVar(model, "model", "", "Override embedding model (default: project model)")
 	c.Flags().BoolVar(privacy, "privacy", false, "Force local-only providers (Ollama)")
 	c.Flags().BoolVar(asJSON, "json", false, "Output results as JSON")
+	c.Flags().Bool("graph", false, "Expand results via dependency graph (Graph-RAG)")
+	c.Flags().Int("graph-depth", 2, "Max BFS depth for graph expansion")
 	_ = c.MarkFlagRequired("query")
 }
 

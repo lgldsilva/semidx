@@ -25,3 +25,7 @@ testdata/rapid/
 
 # Deepwork progress files (Orchestrator session state)
 .slim/deepwork/
+.scannerwork/ bin/ semidx.exe
+.scannerwork/
+semidx.exe
+docs/auditoria-2026-07-06.md
