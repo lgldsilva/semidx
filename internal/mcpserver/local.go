@@ -9,9 +9,13 @@ import (
 )
 
 // projectLister is the subset of the local store the MCP backend needs to list
-// projects (satisfied by store.IndexStore).
+// projects and query their file status (satisfied by store.IndexStore).
 type projectLister interface {
 	ListProjects(ctx context.Context, limit, offset int) ([]store.Project, error)
+	GetProject(ctx context.Context, name string) (*store.Project, error)
+	GetProjectByIdentity(ctx context.Context, identity string) (*store.Project, error)
+	CountProjectFiles(ctx context.Context, projectID int) (int, error)
+	ListFileHashes(ctx context.Context, projectID int) (map[string]string, error)
 }
 
 // localBackend adapts the standalone index (search service + local store) to the
@@ -57,6 +61,30 @@ func (b *localBackend) Projects(ctx context.Context) ([]ProjectInfo, error) {
 		})
 	}
 	return out, nil
+}
+
+func (b *localBackend) Status(ctx context.Context, project string) (*StatusInfo, error) {
+	// Try to resolve the project by name first, then by identity.
+	proj, err := b.projects.GetProject(ctx, project)
+	if err != nil {
+		// Fallback: try identity lookup (the project may be a git identity).
+		proj, err = b.projects.GetProjectByIdentity(ctx, project)
+		if err != nil {
+			return nil, fmt.Errorf("project %q not found", project)
+		}
+	}
+	count, err := b.projects.CountProjectFiles(ctx, proj.ID)
+	if err != nil {
+		return nil, fmt.Errorf("count files: %w", err)
+	}
+	return &StatusInfo{
+		Name:       proj.Name,
+		SourceType: proj.SourceType,
+		Identity:   proj.Identity,
+		Status:     proj.Status,
+		Model:      proj.Model,
+		TotalFiles: count,
+	}, nil
 }
 
 func (b *localBackend) Reindex(_ context.Context, project, _ string) (string, error) {

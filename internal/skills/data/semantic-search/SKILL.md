@@ -71,13 +71,21 @@ Every command supports `--help` (e.g. `semidx search --help`).
 
 ## MCP tools (for AI agents)
 
-When semidx is wired in as an MCP server, three tools are available:
+When semidx is wired in as an MCP server, four tools are available:
 
-- `semantic_search` — args `project`, `query`, optional `model`, `top_k`.
+- `semantic_search` — args `project`, `query`, optional `model`, `top_k`, `graph`, `graph_depth`.
   Returns ranked `file:line` matches with previews.
+- `semantic_status` — arg `project`. Reports whether the project is indexed, how many
+  files are indexed, and its status (ready, indexing, etc). Use this before searching to
+  decide whether to index first.
 - `semantic_projects` — lists registered projects and their indexing status.
 - `semantic_reindex` — args `project`, optional `type` (`full` | `git_history`).
   Queues a re-index of an already-registered project.
+
+**New since v0.x**: `semidx status` CLI command and `semantic_status` MCP tool. Use
+`semidx status --project .` to check indexing health before searching. Use
+`semidx index --branch <name>` to index another branch as a separate project
+(e.g., `myrepo@develop`).
 
 Tools accept **project names only**, never filesystem paths — an agent cannot
 index an arbitrary directory. Business problems (unknown project, server error)

@@ -39,6 +39,21 @@ func (b *clientBackend) Projects(ctx context.Context) ([]ProjectInfo, error) {
 	return out, nil
 }
 
+func (b *clientBackend) Status(ctx context.Context, project string) (*StatusInfo, error) {
+	resp, err := b.c.Status(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	return &StatusInfo{
+		Name:       resp.Name,
+		SourceType: resp.SourceType,
+		Identity:   resp.Identity,
+		Status:     resp.Status,
+		Model:      resp.Model,
+		TotalFiles: resp.TotalFiles,
+	}, nil
+}
+
 func (b *clientBackend) Reindex(ctx context.Context, project, jobType string) (string, error) {
 	id, err := b.c.EnqueueJob(ctx, project, jobType)
 	if err != nil {

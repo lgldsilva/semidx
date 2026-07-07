@@ -18,6 +18,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/mcpserver"
 	"github.com/lgldsilva/semidx/internal/pending"
 	"github.com/lgldsilva/semidx/internal/search"
+	"github.com/lgldsilva/semidx/internal/searchtargets"
 	"github.com/lgldsilva/semidx/internal/server"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -72,6 +73,17 @@ func resolveTarget(ctx context.Context, projectPath string, docs bool) indexTarg
 	return indexTarget{projectPath, "", "path:" + abs, "docs", projectNameFromPath(projectPath)}
 }
 
+// applyBranchSuffix suffixes the identity with #<branch> and the display name
+// with @<branch> so a git project indexed with --branch gets its own project
+// row. For non-git (docs) projects the branch flag is silently ignored.
+func applyBranchSuffix(tgt indexTarget, branch string) indexTarget {
+	if branch != "" && tgt.sourceType == "git" {
+		tgt.identity = tgt.identity + "#" + branch
+		tgt.name = tgt.name + "@" + branch
+	}
+	return tgt
+}
+
 // docsFlagHint echoes " --docs" when the docs flag was used, so a printed
 // unlock hint reproduces the same invocation.
 func docsFlagHint(docs bool) string {
@@ -111,10 +123,10 @@ func recordEncryptedPending(tgt indexTarget, model, projectPath string, docs boo
 
 func newIndexCmd(d *deps) *cobra.Command {
 	var (
-		projectPath, model, gitSince string
-		maxFiles                     int
-		gitMode, verbose, privacy    bool
-		docs                         bool
+		projectPath, model, gitSince, branch string
+		maxFiles                             int
+		gitMode, verbose, privacy            bool
+		docs                                 bool
 	)
 	c := &cobra.Command{
 		Use:   "index",
@@ -124,11 +136,18 @@ keyed by its identity (shared across worktrees/clones); any other folder — or
 one passed with --docs — is keyed by its absolute path. Oversized and
 password-protected files are skipped; run "semidx unlock" for the latter.
 
+With --branch <name>, the project is registered as a separate index entry with
+"name@branch" as the display name and "#branch" appended to the identity, so
+each branch lives in its own project row. This works with any checkout — no
+git checkout is performed; the currently checked-out content is indexed under
+the branch label.
+
 With no embedding provider configured, add --keyword to index text-only.`,
 		Example: `  semidx index --project .                 # index the current repo
   semidx index --project ./docs --docs     # a plain document folder
   semidx index --project . --git           # also index recent git history
-  semidx index --project . --keyword       # no embeddings, keyword-only`,
+  semidx index --project . --keyword       # no embeddings, keyword-only
+  semidx index --project . --branch develop  # index as "repo@develop"`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			d.applyPrivacy(privacy)
 			if systemDirs[filepath.Clean(projectPath)] {
@@ -144,6 +163,10 @@ With no embedding provider configured, add --keyword to index text-only.`,
 			// A git project is one logical index keyed by repo identity; a non-git
 			// dir (or --docs) is a document folder keyed by its absolute path.
 			tgt := resolveTarget(ctx, projectPath, docs)
+
+			// When --branch is set, suffix both the identity and display name so the
+			// branch gets its own project row (separate from the main branch).
+			tgt = applyBranchSuffix(tgt, branch)
 
 			// Keyword-only mode needs no model: dims come from the fixed text bucket.
 			dims, err := d.modelDims(ctx, model)
@@ -192,6 +215,7 @@ With no embedding provider configured, add --keyword to index text-only.`,
 	c.Flags().BoolVar(&docs, "docs", false, "Treat the path as a document folder (absolute-path identity), even inside a git repo")
 	c.Flags().BoolVar(&gitMode, "git", false, "Also index git history (git log -p)")
 	c.Flags().StringVar(&gitSince, "git-since", "30.days", "git log --since duration (e.g. 7.days)")
+	c.Flags().StringVar(&branch, "branch", "", "Index as a separate project for this branch (suffixes identity and display name; no git checkout performed)")
 	c.Flags().BoolVar(&verbose, "verbose", false, "Show detailed progress and errors")
 	c.Flags().BoolVar(&privacy, "privacy", false, "Force local-only providers (Ollama)")
 	return c
@@ -389,6 +413,84 @@ store. This is destructive and cannot be undone. You must confirm: either type
 		},
 	}
 	c.Flags().BoolVar(&confirm, "confirm", false, "Skip the interactive prompt and drop immediately (for scripts)")
+	return c
+}
+
+func newStatusCmd(d *deps) *cobra.Command {
+	var projectPath string
+	c := &cobra.Command{
+		Use:   "status",
+		Short: "Show indexing status of a project",
+		Long: `Show the indexing status of a project: whether it is ready, how many files
+are indexed, and what embedding model is in use.`,
+		Example: `  semidx status                          # show status for the current project
+  semidx status --project ./my-repo      # show status for a specific project`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+			if d.remote() {
+				// Remote mode: resolve project ref via server listing, then get status.
+				api := d.apiClient()
+				p, err := searchtargets.ResolveRemoteProject(ctx, api, projectPath)
+				if err != nil {
+					return err
+				}
+				resp, err := api.Status(ctx, p.Name)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Project: %s\n", resp.Name)
+				if resp.Identity != "" {
+					fmt.Printf("Identity: %s\n", resp.Identity)
+				}
+				fmt.Printf("Source: %s\n", resp.SourceType)
+				fmt.Printf("Backend: remote (%s)\n", d.client.ServerURL)
+				fmt.Printf("Status: %s\n", resp.Status)
+				if resp.Model != "" {
+					fmt.Printf("Model: %s\n", resp.Model)
+				}
+				fmt.Printf("Total indexed: %d files\n", resp.TotalFiles)
+				fmt.Println("Run `semidx push` to check for stale files.")
+				return nil
+			}
+
+			// Local mode: resolve via identity, query the local store.
+			tgt := resolveTarget(ctx, projectPath, false)
+			db, err := d.indexStore(ctx)
+			if err != nil {
+				return err
+			}
+
+			// Try identity first (git or path:), then name fallback.
+			proj, err := db.GetProjectByIdentity(ctx, tgt.identity)
+			if err != nil {
+				// Fallback: try by name (basename).
+				proj, err = db.GetProject(ctx, tgt.name)
+				if err != nil {
+					return fmt.Errorf("project not found — index it first with `semidx index --project %s`", projectPath)
+				}
+			}
+
+			hashes, err := db.ListFileHashes(ctx, proj.ID)
+			if err != nil {
+				return fmt.Errorf("list files: %w", err)
+			}
+
+			fmt.Printf("Project: %s\n", proj.Name)
+			if proj.Identity != "" {
+				fmt.Printf("Identity: %s\n", proj.Identity)
+			}
+			fmt.Printf("Source: %s\n", proj.SourceType)
+			fmt.Printf("Backend: local\n")
+			fmt.Printf("Status: %s\n", proj.Status)
+			if proj.Model != "" {
+				fmt.Printf("Model: %s\n", proj.Model)
+			}
+			fmt.Printf("Total indexed: %d files\n", len(hashes))
+			fmt.Println("Run `semidx index` to reindex.")
+			return nil
+		},
+	}
+	c.Flags().StringVar(&projectPath, "project", ".", "Path to the project directory (default: current directory)")
 	return c
 }
 
