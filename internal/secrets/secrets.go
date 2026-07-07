@@ -55,6 +55,7 @@ func NewDetector(projectRoot string) (*Detector, error) {
 
 	// Load project-level ignore file.
 	ignorePath := filepath.Clean(filepath.Join(projectRoot, ignoreFile))
+	// #nosec G304 -- ignorePath is safely restricted within the projectRoot
 	if data, err := os.ReadFile(ignorePath); err == nil {
 		scanner := bufio.NewScanner(strings.NewReader(string(data)))
 		for scanner.Scan() {

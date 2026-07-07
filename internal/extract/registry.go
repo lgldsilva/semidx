@@ -26,6 +26,8 @@ var byName = map[string]extractor{}
 // RegisterName adds a custom extractor for the given base filename (e.g.
 // "Makefile", "Dockerfile"). Panics if name is already registered.
 func RegisterName(names []string, fn extractor) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	for _, n := range names {
 		if _, ok := byName[n]; ok {
 			panic("extract: duplicate name registration for " + n)
@@ -66,12 +68,17 @@ func ExtractAll(name string, data []byte) ([]Doc, error) {
 // generic extension handler (e.g. ".json").
 func byExtFunc(name string) (func(string, []byte) (string, error), bool) {
 	base := filepath.Base(name)
-	if fn, ok := byName[base]; ok {
-		return adaptExtractor(fn), true
-	}
+	registryMu.RLock()
+	fnName, okName := byName[base]
 	ext := strings.ToLower(filepath.Ext(name))
-	if fn, ok := byExt[ext]; ok {
-		return adaptExtractor(fn), true
+	fnExt, okExt := byExt[ext]
+	registryMu.RUnlock()
+
+	if okName {
+		return adaptExtractor(fnName), true
+	}
+	if okExt {
+		return adaptExtractor(fnExt), true
 	}
 	return nil, false
 }

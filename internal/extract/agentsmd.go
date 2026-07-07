@@ -39,6 +39,7 @@ func extractAgentsMD(data []byte) (string, error) {
 			if level > 6 {
 				level = 6
 			}
+			// #nosec G115 -- level is bounded to 6, safe conversion
 			b.WriteByte('0' + byte(level))
 			b.WriteString(": ")
 			b.WriteString(title)
