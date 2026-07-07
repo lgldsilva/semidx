@@ -85,17 +85,6 @@ func resolveExplainProject(ctx context.Context, db store.IndexStore, projectArg 
 }
 
 // explainInfo is the structured information about one symbol.
-type explainInfo struct {
-	SymbolName string
-	Kind       string
-	File       string
-	StartLine  int
-	EndLine    int
-	Imports    []string // external packages this file imports
-	Importers  []string // files that import this file's directory
-	TestFiles  []string // test files in the same package referencing this symbol
-}
-
 // printExplain gathers and displays detailed info about a symbol.
 func printExplain(ctx context.Context, db store.IndexStore, proj *store.Project, fl fileLineArg) error {
 	root := proj.Path

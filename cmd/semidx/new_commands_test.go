@@ -108,13 +108,13 @@ func TestFindTestFiles(t *testing.T) {
 	}
 
 	// Create a source file.
-	writeFile(srcDir+"/token.go", []byte("package auth\nfunc ValidateToken() {}"), 0o644)
+	_ = writeFile(srcDir+"/token.go", []byte("package auth\nfunc ValidateToken() {}"), 0o644)
 
 	// Create a test file that references the symbol.
-	writeFile(srcDir+"/token_test.go", []byte("package auth\nimport \"testing\"\nfunc TestValidateToken(t *testing.T) {\n\tValidateToken()\n}"), 0o644)
+	_ = writeFile(srcDir+"/token_test.go", []byte("package auth\nimport \"testing\"\nfunc TestValidateToken(t *testing.T) {\n\tValidateToken()\n}"), 0o644)
 
 	// Create a test file that does NOT reference the symbol.
-	writeFile(srcDir+"/other_test.go", []byte("package auth\nimport \"testing\"\nfunc TestOther(t *testing.T) {}"), 0o644)
+	_ = writeFile(srcDir+"/other_test.go", []byte("package auth\nimport \"testing\"\nfunc TestOther(t *testing.T) {}"), 0o644)
 
 	results := findTestFiles(tmpDir, "internal/auth/token.go", "ValidateToken")
 	if len(results) != 1 {

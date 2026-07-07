@@ -136,24 +136,6 @@ func promptString(scanner *bufio.Scanner, question, defaultVal string) string {
 }
 
 // promptSelect asks the user to choose one of several options.
-func promptSelect(scanner *bufio.Scanner, question string, options []string) string {
-	fmt.Println(question)
-	for i, opt := range options {
-		fmt.Printf("  %d. %s\n", i+1, opt)
-	}
-	fmt.Printf("Choose [1-%d]: ", len(options))
-	if !scanner.Scan() {
-		return options[0]
-	}
-	answer := strings.TrimSpace(scanner.Text())
-	for i := range options {
-		if answer == fmt.Sprintf("%d", i+1) {
-			return options[i]
-		}
-	}
-	return options[0]
-}
-
 type initOpts struct {
 	yes     bool
 	keyword bool
