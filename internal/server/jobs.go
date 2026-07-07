@@ -25,6 +25,26 @@ func (s *Server) StartWorkers(ctx context.Context, n int, dataDir string) {
 	s.log.Info("job workers started", "count", n)
 }
 
+// waitForJob blocks until a job notification arrives, the poll ticker fires,
+// or the context is cancelled.
+func (s *Server) waitForJob(ctx context.Context, notifyCh <-chan string) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	if notifyCh != nil {
+		select {
+		case <-notifyCh:
+		case <-ticker.C:
+		case <-ctx.Done():
+		}
+	} else {
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+		}
+	}
+}
+
 func (s *Server) worker(ctx context.Context, dataDir string) {
 	// Try LISTEN/NOTIFY for immediate job dispatch.
 	var notifyCh <-chan string
@@ -36,9 +56,6 @@ func (s *Server) worker(ctx context.Context, dataDir string) {
 			notifyCh = nil
 		}
 	}
-
-	ticker := time.NewTicker(2 * time.Second) // fallback polling
-	defer ticker.Stop()
 
 	for {
 		// Drain all currently-queued jobs before sleeping again.
@@ -52,20 +69,7 @@ func (s *Server) worker(ctx context.Context, dataDir string) {
 		}
 
 		// No job available — wait for notification or ticker.
-		if notifyCh != nil {
-			select {
-			case <-notifyCh:
-			case <-ticker.C:
-			case <-ctx.Done():
-				return
-			}
-		} else {
-			select {
-			case <-ticker.C:
-			case <-ctx.Done():
-				return
-			}
-		}
+		s.waitForJob(ctx, notifyCh)
 	}
 }
 

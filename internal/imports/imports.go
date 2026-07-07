@@ -216,20 +216,19 @@ func Analyze(path string, content []byte, modulePath string) []string {
 // resolveImportDir resolves an import path to a local directory path.
 // When modulePath is non-empty, only imports rooted in that module are kept.
 func resolveImportDir(path, modulePath string) string {
-	if modulePath != "" {
-		if !strings.HasPrefix(path, modulePath) {
-			return ""
-		}
-		// Skip a self-reference to the module root package itself.
-		rest := strings.TrimPrefix(path, modulePath)
-		rest = strings.TrimPrefix(rest, "/")
-		if rest == "" {
-			return ""
-		}
-		return rest + "/"
+	if modulePath == "" {
+		return path + "/"
 	}
-	// Empty modulePath: keep the full path.
-	return path + "/"
+	if !strings.HasPrefix(path, modulePath) {
+		return ""
+	}
+	// Skip a self-reference to the module root package itself.
+	rest := strings.TrimPrefix(path, modulePath)
+	rest = strings.TrimPrefix(rest, "/")
+	if rest == "" {
+		return ""
+	}
+	return rest + "/"
 }
 
 // analyzeGo parses Go source and returns the directory paths of imported
@@ -245,7 +244,6 @@ func analyzeGo(content []byte, modulePath string) []string {
 	result := make([]string, 0, len(f.Imports))
 
 	for _, imp := range f.Imports {
-		// Skip dot imports (e.g., `. "fmt"`).
 		if imp.Name != nil && imp.Name.Name == "." {
 			continue
 		}
@@ -255,12 +253,7 @@ func analyzeGo(content []byte, modulePath string) []string {
 			continue
 		}
 
-		// Determine the first path segment and skip stdlib.
-		firstSeg := path
-		if idx := strings.IndexByte(path, '/'); idx >= 0 {
-			firstSeg = path[:idx]
-		}
-		if goStdlibPrefixes[firstSeg] {
+		if isStdlibImport(path) {
 			continue
 		}
 
@@ -279,6 +272,16 @@ func analyzeGo(content []byte, modulePath string) []string {
 		return nil
 	}
 	return result
+}
+
+// isStdlibImport reports whether path is a Go standard library import.
+// Extracted from analyzeGo to keep its cognitive complexity in check.
+func isStdlibImport(path string) bool {
+	firstSeg := path
+	if idx := strings.IndexByte(path, '/'); idx >= 0 {
+		firstSeg = path[:idx]
+	}
+	return goStdlibPrefixes[firstSeg]
 }
 
 // ---------------------------------------------------------------------------
