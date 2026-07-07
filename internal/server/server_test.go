@@ -284,17 +284,27 @@ func TestCreateProject(t *testing.T) {
 func TestListAndGetProject(t *testing.T) {
 	readTok := &store.Token{Scopes: []string{"read"}}
 	srv := New(&fakeStore{
-		token:   readTok,
-		listed:  []store.Project{{Name: "a", Model: "m", Status: "ready", SourceType: "push"}},
-		project: &store.Project{Name: "a", Model: "m", Status: "ready", SourceType: "push"},
+		token: readTok,
+		listed: []store.Project{{
+			Name: "a", Model: "m", Status: "ready", SourceType: "git",
+			Identity: "git:example/a", Path: "/data/a", GitURL: "https://x/a.git", Branch: "main",
+		}},
+		project: &store.Project{
+			Name: "a", Model: "m", Status: "ready", SourceType: "git",
+			Identity: "git:example/a", Path: "/data/a", GitURL: "https://x/a.git", Branch: "main",
+		},
 	}, fakeEmbedder{}, nil)
 
 	rec := do(t, srv, "GET", "/api/v1/projects", "tok", "")
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"name":"a"`) {
-		t.Errorf("list = %d %s", rec.Code, rec.Body.String())
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, `"name":"a"`) || !strings.Contains(body, `"identity":"git:example/a"`) || !strings.Contains(body, `"path":"/data/a"`) {
+		t.Errorf("list = %d %s", rec.Code, body)
 	}
 	if rec := do(t, srv, "GET", "/api/v1/projects/a", "tok", ""); rec.Code != 200 {
 		t.Errorf("get = %d, want 200", rec.Code)
+	}
+	if gbody := rec.Body.String(); !strings.Contains(gbody, `"identity":"git:example/a"`) {
+		t.Errorf("get body missing identity: %s", gbody)
 	}
 	// unknown project → 404.
 	nf := New(&fakeStore{token: readTok, project: nil}, fakeEmbedder{}, nil)
