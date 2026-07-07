@@ -23,7 +23,11 @@ func TestSupported(t *testing.T) {
 		"report.pdf":      true,
 		"letter.docx":     true,
 		"sheet.xlsx":      true,
-		"archive.zip":     false,
+		"message.eml":     true,
+		"archive.zip":     true, // generic archive
+		"archive.tar":     true,
+		"archive.tar.gz":  true,
+		"archive.tar.bz2": true,
 		"image.png":       false,
 		"main.go":         false,
 		"no_extension":    false,
@@ -37,7 +41,7 @@ func TestSupported(t *testing.T) {
 }
 
 func TestExtractUnsupported(t *testing.T) {
-	for _, name := range []string{"archive.zip", "image.png", "binary.bin", "noext"} {
+	for _, name := range []string{"image.png", "binary.bin", "noext"} {
 		_, err := Extract(name, []byte("whatever"))
 		if !errors.Is(err, ErrUnsupported) {
 			t.Errorf("Extract(%q) error = %v, want ErrUnsupported", name, err)
@@ -520,4 +524,39 @@ func buildPDF(pages []string) []byte {
 	}
 	fmt.Fprintf(&buf, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", total, xrefStart)
 	return buf.Bytes()
+}
+
+// --- legacy office (conditional) ---------------------------------------------
+
+// hasLibreOffice reports whether libreoffice is available in $PATH.
+func hasLibreOffice() bool {
+	return libreOfficeAvailable
+}
+
+// TestExtractLegacyOfficeRegistration verifies that .doc/.xls/.ppt are
+// registered in byExt only when libreoffice is available.
+func TestExtractLegacyOfficeRegistration(t *testing.T) {
+	for _, ext := range []string{".doc", ".xls", ".ppt"} {
+		_, inByExt := byExt[ext]
+		if hasLibreOffice() && !inByExt {
+			t.Errorf("ext %s should be registered when libreoffice is available", ext)
+		}
+		if !hasLibreOffice() && inByExt {
+			t.Errorf("ext %s should NOT be registered when libreoffice is missing", ext)
+		}
+	}
+}
+
+// TestExtractLegacyOfficeUnsupported verifies that without libreoffice, .doc
+// files return ErrUnsupported (or the format error from extractLegacyOffice).
+func TestExtractLegacyOfficeUnsupported(t *testing.T) {
+	if hasLibreOffice() {
+		t.Skip("libreoffice is available — testing registration path instead")
+	}
+	for _, name := range []string{"doc.doc", "sheet.xls", "deck.ppt"} {
+		_, err := Extract(name, []byte("dummy"))
+		if err == nil {
+			t.Errorf("Extract(%q) should error without libreoffice", name)
+		}
+	}
 }

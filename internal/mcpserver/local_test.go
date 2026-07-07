@@ -95,7 +95,7 @@ func writeFile(t *testing.T, dir, name, content string) {
 func TestLocalBackendSearchOverRealIndex(t *testing.T) {
 	sess := connectLocal(t)
 
-	text, isErr := callText(t, sess, "semantic_search", map[string]any{"project": "proj", "query": "alpha"})
+	text, isErr := callText(t, sess, "semantic_search", map[string]any{"project": "proj", "query": "alpha", "format": "text"})
 	if isErr {
 		t.Fatalf("unexpected isError; text=%q", text)
 	}
@@ -125,7 +125,7 @@ func TestLocalBackendReindexDegradesGracefully(t *testing.T) {
 	}
 }
 
-func TestLocalBackendListToolsExposesThree(t *testing.T) {
+func TestLocalBackendListToolsExposesAll(t *testing.T) {
 	sess := connectLocal(t)
 	res, err := sess.ListTools(context.Background(), nil)
 	if err != nil {
@@ -135,7 +135,7 @@ func TestLocalBackendListToolsExposesThree(t *testing.T) {
 	for _, tool := range res.Tools {
 		got[tool.Name] = true
 	}
-	for _, want := range []string{"semantic_search", "semantic_projects", "semantic_reindex"} {
+	for _, want := range []string{"semantic_search", "semantic_projects", "semantic_reindex", "semantic_status"} {
 		if !got[want] {
 			t.Errorf("missing tool %q (have %v)", want, got)
 		}

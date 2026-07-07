@@ -135,6 +135,15 @@ type Config struct {
 	GitAllowFile bool
 	// MetricsToken, when set, requires Bearer auth on GET /metrics (SEMIDX_METRICS_TOKEN).
 	MetricsToken string
+
+	// SecretScan enables gitleaks secret scanning during indexing
+	// (SEMIDX_SECRET_SCAN). When true, each file is scanned and findings are
+	// logged. When SECRET_BLOCK_EMBEDDING is also true, files with detected
+	// secrets are stored text-only (no embedding).
+	SecretScan bool
+	// SecretBlockEmbedding prevents embedding files with detected secrets
+	// (SEMIDX_SECRET_BLOCK_EMBEDDING). Implies SEMIDX_SECRET_SCAN=true.
+	SecretBlockEmbedding bool
 }
 
 // DefaultLocalIndexPath is the standalone index location. It uses the OS-native
@@ -268,6 +277,9 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 		}(),
 		GitAllowFile: env.get("SEMIDX_GIT_ALLOW_FILE", "") == "true",
 		MetricsToken: env.get("SEMIDX_METRICS_TOKEN", ""),
+
+		SecretScan:           env.get("SEMIDX_SECRET_SCAN", "") == "true",
+		SecretBlockEmbedding: env.get("SEMIDX_SECRET_BLOCK_EMBEDDING", "") == "true",
 	}
 }
 
@@ -323,6 +335,9 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_CSRF_KEY", "HMAC key for web-admin CSRF tokens; persistent across restarts (serve)", true},
 	{"SEMIDX_GIT_ALLOW_FILE", "Allow file:// git URLs for server-side git sync (serve)", false},
 	{"SEMIDX_METRICS_TOKEN", "Bearer token required for GET /metrics when set (serve)", true},
+	// Secret scanning.
+	{"SEMIDX_SECRET_SCAN", "Enable gitleaks secret scanning during indexing (true)", false},
+	{"SEMIDX_SECRET_BLOCK_EMBEDDING", "Prevent embedding files with detected secrets (true)", false},
 	{"SEMIDX_COOKIE_SECURE", "Secure flag on web-admin cookies; false only over HTTP (serve)", false},
 }
 
