@@ -32,6 +32,7 @@ const (
 	defaultAsyncBatchSize = 0    // 0 = single batch (no splitting)
 	asyncPollInterval     = 2 * time.Second
 	asyncPollTimeout      = 30 * time.Minute
+	doneFmt               = "Done in %v — indexed: %d, chunks: %d, deleted: %d, errors: %d\n"
 )
 
 // pushOptions holds the flag values bound by newPushCmd.
@@ -261,7 +262,7 @@ func (p *pusher) pushSyncSingle(ctx context.Context, batch []client.BatchFile, d
 	if err != nil {
 		return fmt.Errorf("push files: %w", err)
 	}
-	fmt.Printf("Done in %v — indexed: %d, chunks: %d, deleted: %d, errors: %d\n",
+	fmt.Printf(doneFmt,
 		time.Since(start).Round(time.Millisecond),
 		resp.Indexed, resp.Chunks, resp.Deleted, resp.Errors)
 	return nil
@@ -290,7 +291,7 @@ func (p *pusher) pushSyncBatched(ctx context.Context, batch []client.BatchFile, 
 		totalErrors += resp.Errors
 	}
 
-	fmt.Printf("Done in %v — indexed: %d, chunks: %d, deleted: %d, errors: %d\n",
+	fmt.Printf(doneFmt,
 		time.Since(start).Round(time.Millisecond),
 		totalIndexed, totalChunks, totalDeleted, totalErrors)
 	return nil
@@ -328,7 +329,7 @@ func (p *pusher) pushAsyncSingle(ctx context.Context, batch []client.BatchFile, 
 	if job.Status == client.JobStatusFailed {
 		return fmt.Errorf("job %d failed: %s", jobID, job.Error)
 	}
-	fmt.Printf("Done in %v — indexed: %d, chunks: %d, deleted: %d, errors: %d\n",
+	fmt.Printf(doneFmt,
 		time.Since(start).Round(time.Millisecond),
 		job.FilesIndexed, job.ChunksCreated, job.DeletedFiles, job.ErrorCount)
 	return nil
@@ -382,7 +383,7 @@ func (p *pusher) pushAsyncBatched(ctx context.Context, batch []client.BatchFile,
 		}
 	}
 
-	fmt.Printf("Done in %v — indexed: %d, chunks: %d, deleted: %d, errors: %d\n",
+	fmt.Printf(doneFmt,
 		time.Since(start).Round(time.Millisecond),
 		totalIndexed, totalChunks, totalDeleted, totalErrors)
 	return nil
