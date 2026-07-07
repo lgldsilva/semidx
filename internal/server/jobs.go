@@ -217,12 +217,43 @@ type jobView struct {
 	ErrorCount    int    `json:"error_count"`
 }
 
+func jobViewFromStore(job *store.Job) jobView {
+	v := jobView{
+		ID: job.ID, Type: job.Type, Status: job.Status,
+		FilesIndexed: job.FilesIndexed, ChunksCreated: job.ChunksCreated,
+		DeletedFiles: job.DeletedFiles, ErrorCount: job.ErrorCount,
+	}
+	if job.Status == "failed" && job.Error != "" {
+		v.Error = "index job failed"
+	}
+	return v
+}
+
 func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	if project == "" {
+		writeJSONError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid job id")
 		return
 	}
+	s.writeJobForProject(w, r, project, id)
+}
+
+func (s *Server) handleGetProjectJob(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid job id")
+		return
+	}
+	s.writeJobForProject(w, r, project, id)
+}
+
+func (s *Server) writeJobForProject(w http.ResponseWriter, r *http.Request, project string, id int) {
 	job, err := s.store.GetJob(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		writeJSONError(w, http.StatusNotFound, "job not found")
@@ -232,9 +263,18 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "could not load job")
 		return
 	}
-	writeJSON(w, http.StatusOK, jobView{
-		ID: job.ID, Type: job.Type, Status: job.Status, Error: job.Error,
-		FilesIndexed: job.FilesIndexed, ChunksCreated: job.ChunksCreated,
-		DeletedFiles: job.DeletedFiles, ErrorCount: job.ErrorCount,
-	})
+	proj, err := s.store.GetProjectByID(r.Context(), job.ProjectID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSONError(w, http.StatusNotFound, "job not found")
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "could not load job")
+		return
+	}
+	if proj.Name != project {
+		writeJSONError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, jobViewFromStore(job))
 }

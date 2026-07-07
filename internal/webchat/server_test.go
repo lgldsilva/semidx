@@ -177,6 +177,9 @@ func TestChatEndpoint_InvalidJSON(t *testing.T) {
 	if !strings.Contains(errResp.Error, "invalid JSON") {
 		t.Errorf("expected error to contain 'invalid JSON', got %q", errResp.Error)
 	}
+	if strings.Contains(errResp.Error, "Syntax") {
+		t.Error("error should not leak decoder details")
+	}
 }
 
 func TestChatEndpoint_EmptyQuestion(t *testing.T) {
@@ -239,6 +242,24 @@ func TestChatEndpoint_PipelineGenericError(t *testing.T) {
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500 for generic error, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestChatEndpoint_ProjectOverrideRejected(t *testing.T) {
+	pipeline := &mockPipeline{answer: &rag.Answer{Content: "ok", Model: "m"}}
+	srv, err := New(pipeline, "my-project", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"question":"hi","project":"other-project"}`
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	srv.handleChat(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", rr.Code)
 	}
 }
 
@@ -515,8 +536,8 @@ func TestChatStreamEndpoint_Error(t *testing.T) {
 		}
 		if typ, _ := event["type"].(string); typ == "error" {
 			gotError = true
-			if msg, _ := event["error"].(string); !strings.Contains(msg, "LLM unavailable") {
-				t.Errorf("error message = %q, want to contain 'LLM unavailable'", msg)
+			if msg, _ := event["error"].(string); msg != "chat request failed" {
+				t.Errorf("error message = %q, want generic chat request failed", msg)
 			}
 		}
 	}

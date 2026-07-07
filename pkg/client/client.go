@@ -227,10 +227,11 @@ func (c *Client) EnqueueJob(ctx context.Context, project, jobType string) (int, 
 	return out.JobID, nil
 }
 
-// GetJob fetches a job's status.
-func (c *Client) GetJob(ctx context.Context, id int) (*Job, error) {
+// GetJob fetches a job's status scoped to a project (prevents cross-project IDOR).
+func (c *Client) GetJob(ctx context.Context, project string, id int) (*Job, error) {
 	var out Job
-	if err := c.do(ctx, http.MethodGet, "/api/v1/jobs/"+strconv.Itoa(id), nil, &out); err != nil {
+	path := projectsPath + esc(project) + "/jobs/" + strconv.Itoa(id)
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -291,12 +292,12 @@ func (c *Client) FilesBatchAsync(ctx context.Context, project string, files []Ba
 
 // WaitForJob polls a job until it completes, fails, or ctx is cancelled.
 // interval controls the polling frequency. Returns the final job state.
-func (c *Client) WaitForJob(ctx context.Context, jobID int, interval time.Duration) (*Job, error) {
+func (c *Client) WaitForJob(ctx context.Context, project string, jobID int, interval time.Duration) (*Job, error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
-		job, err := c.GetJob(ctx, jobID)
+		job, err := c.GetJob(ctx, project, jobID)
 		if err != nil {
 			return nil, err
 		}
