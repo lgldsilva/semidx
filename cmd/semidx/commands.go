@@ -223,11 +223,11 @@ With no embedding provider configured, add --keyword to index text-only.`,
 
 func newSearchCmd(d *deps) *cobra.Command {
 	var (
-		project, query, model  string
-		topK                   int
-		privacy, asJSON        bool
-		noLineNums             bool
-		lineNumPad             int
+		project, query, model string
+		topK                  int
+		privacy, asJSON       bool
+		noLineNums            bool
+		lineNumPad            int
 	)
 	c := &cobra.Command{
 		Use:   "search",
