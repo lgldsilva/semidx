@@ -274,24 +274,24 @@ func newTestAdmin(t *testing.T) (*httptest.Server, *fakeStore) {
 	t.Helper()
 	fs := newFakeStore()
 	iss, _ := jwtauth.New("test-secret")
-	a, err := New(fs, nil, nil, false, iss, "")
+	a, err := New(fs, nil, nil, true, iss, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(a.Handler())
+	srv := httptest.NewTLSServer(a.Handler())
 	t.Cleanup(srv.Close)
 	return srv, fs
 }
 
-func newClient(t *testing.T) *http.Client {
+func newClient(t *testing.T, srv *httptest.Server) *http.Client {
 	t.Helper()
 	jar, _ := cookiejar.New(nil)
-	return &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse // don't follow redirects, so we can assert them
-		},
+	c := srv.Client()
+	c.Jar = jar
+	c.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse // don't follow redirects, so we can assert them
 	}
+	return c
 }
 
 func login(t *testing.T, c *http.Client, base, user, pass string) {
@@ -332,7 +332,7 @@ func csrfFrom(t *testing.T, c *http.Client, urlStr string) string {
 func TestLoginFlowAndSession(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 
 	// Unauthenticated dashboard redirects to login.
 	if code, _ := getBody(t, c, srv.URL+"/admin/"); code != http.StatusSeeOther {
@@ -354,7 +354,7 @@ func TestLoginFlowAndSession(t *testing.T) {
 func TestCSRFRequiredForMutations(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 
 	// POST without a CSRF token is rejected.
@@ -368,7 +368,7 @@ func TestCSRFRequiredForMutations(t *testing.T) {
 func TestAPIKeyLifecycle(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 
 	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
@@ -398,7 +398,7 @@ func TestAPIKeyLifecycle(t *testing.T) {
 func TestMemberCannotAccessUsers(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("bob", "supersecret", "member")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "bob", "supersecret")
 
 	if code, _ := getBody(t, c, srv.URL+"/admin/users"); code != http.StatusForbidden {
@@ -409,7 +409,7 @@ func TestMemberCannotAccessUsers(t *testing.T) {
 func TestAdminCreatesMemberAndDisable(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	admin := fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 
 	csrf := csrfFrom(t, c, srv.URL+"/admin/users")
@@ -435,7 +435,7 @@ func TestAdminCreatesMemberAndDisable(t *testing.T) {
 func TestControlTokenLifecycle(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t)
+	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 
 	// Issue a non-expiring control token and confirm the JWT is shown once.

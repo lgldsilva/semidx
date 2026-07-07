@@ -232,7 +232,7 @@ func TestReplaceBinaryAt(t *testing.T) {
 	if err := replaceBinaryAt(exe, []byte("NEW BINARY")); err != nil {
 		t.Fatalf("replaceBinaryAt: %v", err)
 	}
-	got, err := os.ReadFile(exe) // #nosec G304 -- test-controlled temp path
+	got, err := os.ReadFile(filepath.Clean(exe))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,11 +250,16 @@ func TestReplaceBinaryAt_UnwritableDir(t *testing.T) {
 	}
 }
 
-func TestUpdateHTTPClient_InsecureForHomelab(t *testing.T) {
+func TestUpdateHTTPClient_UsesSystemCAsByDefault(t *testing.T) {
 	c := updateHTTPClient("https://gitea.raspberrypi.lan/api/v1/repos/x/y")
 	tr, ok := c.Transport.(*http.Transport)
-	if !ok || tr.TLSClientConfig == nil || !tr.TLSClientConfig.InsecureSkipVerify {
-		t.Fatal("expected an insecure transport for a *.raspberrypi.lan host")
+	if !ok {
+		t.Fatal("expected *http.Transport")
+	}
+	// The client should use system CA certs by default; TLSClientConfig is
+	// nil unless SEMIDX_TLS_CA_CERT is set.
+	if tr.TLSClientConfig != nil {
+		t.Fatal("expected nil TLSClientConfig (system CAs) by default")
 	}
 }
 

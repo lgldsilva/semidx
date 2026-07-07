@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
@@ -68,7 +69,10 @@ func Verify(password, encoded string) (bool, error) {
 	if err != nil {
 		return false, ErrMalformedHash
 	}
-	// #nosec G115 -- len(want) is a decoded hash length (a small positive int), never overflows uint32.
-	got := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(len(want)))
+	wantLen := len(want)
+	if wantLen > math.MaxUint32 {
+		return false, fmt.Errorf("passwd: decoded hash too long (%d bytes)", wantLen)
+	}
+	got := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(wantLen))
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }

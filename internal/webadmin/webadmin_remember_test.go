@@ -27,7 +27,7 @@ func TestLoginRememberMe(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, fs := newTestAdmin(t)
 			fs.addUser("admin", "supersecret", "admin")
-			c := newClient(t)
+			c := newClient(t, srv)
 
 			before := time.Now()
 			resp, err := c.PostForm(srv.URL+"/admin/login", tc.form)

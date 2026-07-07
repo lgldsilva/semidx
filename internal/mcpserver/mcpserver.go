@@ -92,6 +92,14 @@ func New(b Backend) *mcp.Server {
 		Description: "Get the indexing status of a registered project. Reports file count, status, and model.",
 	}, statusHandler(b))
 
+	// Register the semantic_ask tool only when the backend also implements AskBackend.
+	if askBackend, ok := b.(AskBackend); ok {
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        "semantic_ask",
+			Description: "Ask a question about a registered project — RAG-augmented chat over indexed code. Returns an answer with cited source chunks.",
+		}, askHandler(askBackend))
+	}
+
 	// ---- Resources ----
 	s.AddResource(&mcp.Resource{
 		URI:         "semidx://projects",
@@ -112,7 +120,7 @@ func New(b Backend) *mcp.Server {
 		}
 		rows := make([]projectRow, len(projects))
 		for i, p := range projects {
-			rows[i] = projectRow{Name: p.Name, SourceType: p.SourceType, GitURL: p.GitURL, Status: p.Status, Model: p.Model}
+			rows[i] = projectRow(p)
 		}
 		data, _ := json.MarshalIndent(rows, "", "  ")
 		return &mcp.ReadResourceResult{
@@ -281,7 +289,7 @@ func formatSearchText(out *SearchOutput) string {
 		b.WriteString("[warning] embedding was unavailable — results come from keyword search, not semantic ranking.\n\n")
 	}
 	for i, r := range out.Results {
-		loc := r.Path
+		var loc string
 		if r.EndLine > r.StartLine {
 			loc = fmt.Sprintf("%s:%d-%d", r.Path, r.StartLine, r.EndLine)
 		} else {

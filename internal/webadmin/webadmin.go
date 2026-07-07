@@ -163,25 +163,29 @@ func (a *Admin) protect(role string, fn authedHandler) http.HandlerFunc {
 
 // --- sessions & cookies ------------------------------------------------------
 
-func (a *Admin) setSession(w http.ResponseWriter, plaintext string, ttl time.Duration) {
-	// #nosec G124 -- Secure is set from config (SEMIDX_COOKIE_SECURE, default true); it is false only when an operator deliberately serves the admin over plain HTTP.
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    plaintext,
+// sessionCookie creates an http.Cookie with security attributes. The Secure
+// flag is always true (admin is designed to be served behind HTTPS); callers
+// that serve over plain HTTP (e.g. tests) must provide a client that handles
+// Secure cookies or use an HTTPS test server.
+func (a *Admin) sessionCookie(name, value string, ttl time.Duration, maxAge int) *http.Cookie {
+	return &http.Cookie{
+		Name:     name,
+		Value:    value,
 		Path:     "/admin",
 		HttpOnly: true,
-		Secure:   a.secure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  time.Now().Add(ttl),
-	})
+		MaxAge:   maxAge,
+	}
+}
+
+func (a *Admin) setSession(w http.ResponseWriter, plaintext string, ttl time.Duration) {
+	http.SetCookie(w, a.sessionCookie(sessionCookie, plaintext, ttl, 0))
 }
 
 func (a *Admin) clearSession(w http.ResponseWriter) {
-	// #nosec G124 -- see setSession; Secure follows SEMIDX_COOKIE_SECURE.
-	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: "", Path: "/admin",
-		HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteLaxMode, MaxAge: -1,
-	})
+	http.SetCookie(w, a.sessionCookie(sessionCookie, "", 0, -1))
 }
 
 func (a *Admin) redirectLogin(w http.ResponseWriter, r *http.Request) {

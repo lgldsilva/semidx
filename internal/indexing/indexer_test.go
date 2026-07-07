@@ -297,9 +297,9 @@ func TestConcurrentIndexingIsComplete(t *testing.T) {
 	if stats.Errors != 0 {
 		t.Errorf("Errors = %d, want 0", stats.Errors)
 	}
-	// AST-aware chunking: each .go file produces header + symbol (2 chunks each).
-	if want := n * 2; len(fs.embedded) != want {
-		t.Errorf("embedded %d chunks, want %d (2 per file: header + symbol)", len(fs.embedded), want)
+	// Blank-line-aware chunking: no blank line between package and func → 1 chunk per .go file.
+	if want := n * 1; len(fs.embedded) != want {
+		t.Errorf("embedded %d chunks, want %d (1 chunk per file)", len(fs.embedded), want)
 	}
 }
 
@@ -340,12 +340,12 @@ func TestIndexContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IndexContent: %v", err)
 	}
-	// AST-aware chunking: header ("package x") + symbol ("[func] F\nfunc F() {}") = 2 chunks.
-	if created != 2 {
-		t.Errorf("created = %d, want 2 chunks (header + symbol)", created)
+	// Blank-line-aware chunking: no blank line between package and func → 1 chunk.
+	if created != 1 {
+		t.Errorf("created = %d, want 1 chunk (blank-line split, no blank line between decls)", created)
 	}
-	if len(fs.embedded) != 2 || !strings.Contains(fs.embedded[0], "package x") || !strings.Contains(fs.embedded[1], "func F") {
-		t.Errorf("embedded = %v, want [package x header, [func] F chunk]", fs.embedded)
+	if len(fs.embedded) != 1 || !strings.Contains(fs.embedded[0], "package x") || !strings.Contains(fs.embedded[0], "func F") {
+		t.Errorf("embedded = %v, want single chunk containing both package and func", fs.embedded)
 	}
 
 	// Empty content is a no-op.

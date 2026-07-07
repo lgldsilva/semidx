@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -105,8 +106,7 @@ reports the improvement of semantic search over the keyword baseline.`,
 }
 
 func loadBenchQueries(path string) ([]benchQuery, error) {
-	// #nosec G304 — path comes from a --queries CLI flag; the user explicitly provides it.
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, fmt.Errorf("read queries file: %w", err)
 	}

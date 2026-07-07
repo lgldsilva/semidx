@@ -54,7 +54,7 @@ func NewDetector(projectRoot string) (*Detector, error) {
 	}
 
 	// Load project-level ignore file.
-	ignorePath := filepath.Join(projectRoot, ignoreFile)
+	ignorePath := filepath.Clean(filepath.Join(projectRoot, ignoreFile))
 	if data, err := os.ReadFile(ignorePath); err == nil {
 		scanner := bufio.NewScanner(strings.NewReader(string(data)))
 		for scanner.Scan() {

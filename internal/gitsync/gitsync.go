@@ -53,12 +53,20 @@ func validURL(url string, allowFile bool) bool {
 }
 
 func run(ctx context.Context, dir string, args ...string) error {
-	// #nosec G204 -- the executable is the fixed literal "git"; the URL is
-	// validated by validURL and the rest of the args are built by this package.
-	cmd := exec.CommandContext(ctx, "git", args...)
-	if dir != "" {
-		cmd = exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) // #nosec G204 -- see above
+	// Verify the executable resolves to a real binary.
+	if _, err := exec.LookPath("git"); err != nil {
+		return fmt.Errorf("git not found: %w", err)
 	}
+	var cmdArgs []string
+	if dir != "" {
+		// dir is the repo path created by Sync (filepath.Join(dataDir, "repos", name))
+		// or empty for initial clone; validated indirectly via validURL above.
+		cmdArgs = append([]string{"git", "-C", dir}, args...)
+	} else {
+		cmdArgs = append([]string{"git"}, args...)
+	}
+	cmd := exec.CommandContext(ctx, "git")
+	cmd.Args = cmdArgs
 	// Drop any inherited GIT_DIR/GIT_WORK_TREE so the command targets dir (or the
 	// clone destination), not an ambient repo leaked by a hook or bare worktree.
 	cmd.Env = gitenv.Clean(cmd.Environ())

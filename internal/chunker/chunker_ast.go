@@ -30,18 +30,7 @@ func ChunkFileAST(path string, content []byte, maxChars int) []Chunk {
 	return astChunkFromSyms(content, maxChars, syms)
 }
 
-// chunkCodeASTPrior is the internal implementation for ChunkFilePriorAST:
-// chunks content on the given pre-parsed symbol boundaries. When symbols are
-// empty it returns nil, signalling the caller to fall back.
-func chunkCodeASTPrior(content []byte, maxChars int, syms []analyzer.Symbol) []Chunk {
-	if len(syms) == 0 {
-		return nil
-	}
-	return astChunkFromSyms(content, maxChars, syms)
-}
-
-// astChunkFromSyms is the shared implementation used by both ChunkFileAST and
-// chunkCodeASTPrior: it splits content on symbol boundaries with metadata.
+// astChunkFromSyms splits content on symbol boundaries with metadata.
 func astChunkFromSyms(content []byte, maxChars int, syms []analyzer.Symbol) []Chunk {
 	// Sort symbols by start line.
 	sorted := make([]analyzer.Symbol, len(syms))
@@ -136,9 +125,8 @@ func splitSymbolChunks(content, prefix string, startLine int, maxChars int) []Ch
 				piece = piece[:nl]
 			}
 			// Avoid cutting a multi-byte rune at the end.
-			for len(piece) > 0 && !strings.HasPrefix(remaining[len(piece):], "\n") &&
-				len(piece) > 0 && piece[len(piece)-1] != '\n' &&
-				len(piece) > 0 && (piece[len(piece)-1]&0x80 != 0) {
+			for len(piece) > 0 && piece[len(piece)-1] != '\n' &&
+				(piece[len(piece)-1]&0x80 != 0) {
 				piece = piece[:len(piece)-1]
 			}
 		}

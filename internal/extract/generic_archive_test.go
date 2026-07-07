@@ -167,10 +167,10 @@ func TestExtractGenericArchiveEmptyZip(t *testing.T) {
 func TestExtractGenericArchiveSkipsBinary(t *testing.T) {
 	// Entries with binary extensions should not be indexed.
 	data := buildZip(t, map[string]string{
-		"readme.txt":   "hello",
-		"photo.png":    string([]byte{0x89, 0x50, 0x4E, 0x47}),
-		"binary.bin":   string([]byte{0x00, 0x01, 0x02}),
-		"archive.zip":  "not-a-zip",     // binary content with .zip ext
+		"readme.txt":  "hello",
+		"photo.png":   string([]byte{0x89, 0x50, 0x4E, 0x47}),
+		"binary.bin":  string([]byte{0x00, 0x01, 0x02}),
+		"archive.zip": "not-a-zip", // binary content with .zip ext
 	})
 	docs, err := ExtractAll("archive.zip", data)
 	if err != nil {
