@@ -53,8 +53,8 @@ func TestLoadCorruptedJSON(t *testing.T) {
 }
 
 // TestRemoveErrorPath verifies Remove returns an error when os.Remove fails.
-// We simulate this by replacing the pending file with a non-empty directory,
-// which causes os.Remove to fail with ENOTEMPTY — works regardless of uid.
+// We replace the saved file with a non-empty directory so os.Remove fails
+// with ENOTEMPTY regardless of OS/uid.
 func TestRemoveErrorPath(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", base)
@@ -64,16 +64,19 @@ func TestRemoveErrorPath(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Replace pending.json with a non-empty directory. os.Remove will fail
-	// because Remove only deletes empty directories and files.
-	pendingFile := filepath.Join(base, "semidx", "pending.json")
-	if err := os.Remove(pendingFile); err != nil {
-		t.Fatalf("remove pending file: %v", err)
+	// Get the ACTUAL file path used by Save/Remove (uses hashed filename).
+	p, err := fileFor(key)
+	if err != nil {
+		t.Fatalf("fileFor: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(pendingFile, "sub"), 0o700); err != nil {
-		t.Fatalf("create non-empty dir: %v", err)
+	// Replace the saved file with a non-empty directory.
+	if err := os.Remove(p); err != nil {
+		t.Fatalf("remove: %v", err)
 	}
-	defer func() { _ = os.RemoveAll(pendingFile) }()
+	if err := os.MkdirAll(filepath.Join(p, "sub"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(p) }()
 
 	if err := Remove(key); err == nil {
 		t.Error("Remove on non-empty directory should error")
