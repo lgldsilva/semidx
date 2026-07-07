@@ -212,6 +212,9 @@ func (e *errStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID i
 }
 func (e *errStore) UpdateProjectStatus(ctx context.Context, id int, status string) error { return nil }
 func (e *errStore) InsertFileDependencies(context.Context, int, string, []string) error  { return nil }
+func (e *errStore) GetProjectCommit(ctx context.Context, projectID int) (string, error)  { return "", nil }
+func (e *errStore) UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error { return nil }
+func (e *errStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) { return nil, nil }
 
 func TestIndexContentUpsertFileError(t *testing.T) {
 	es := &errStore{upsertFileErr: errors.New("upsert boom")}

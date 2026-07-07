@@ -83,6 +83,17 @@ func (f *fakeStore) SearchSimilarKeywordsWorktree(ctx context.Context, projectID
 	return f.kwResults, nil
 }
 
+// Stub implementations for new interface methods.
+func (f *fakeStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) {
+	return nil, nil
+}
+func (f *fakeStore) GetProjectCommit(ctx context.Context, projectID int) (string, error) {
+	return "", nil
+}
+func (f *fakeStore) UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error {
+	return nil
+}
+
 // fakeEmbedder implements embed.Embedder; Search uses ModelInfo + EmbedSingle.
 type fakeEmbedder struct {
 	embed.Embedder
@@ -109,7 +120,7 @@ func TestSearchVectorPath(t *testing.T) {
 	emb := &fakeEmbedder{vec: []float32{1, 2, 3}, dims: 3}
 	svc := NewService(st, emb)
 
-	resp, err := svc.Search(context.Background(), Request{Project: "p", Query: "q", TopK: 7})
+	resp, err := svc.Search(context.Background(), Request{Project: "p", Query: "handle request", TopK: 7})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -209,7 +220,7 @@ func TestSearchPropagatesRetryableError(t *testing.T) {
 	emb := &fakeEmbedder{embedErr: &embed.RetryableError{Err: errors.New("circuit open"), After: time.Second}, dims: 3}
 	svc := NewService(st, emb)
 
-	_, err := svc.Search(context.Background(), Request{Project: "p", Query: "q"})
+	_, err := svc.Search(context.Background(), Request{Project: "p", Query: "handle request"})
 	if err == nil {
 		t.Fatal("expected retryable error")
 	}

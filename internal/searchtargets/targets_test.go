@@ -86,6 +86,22 @@ func (m *memDB) SearchSimilarWorktree(context.Context, int, []float32, int, int,
 	return []store.SearchResult{{FilePath: "wt.go", Content: "hit", Score: 0.9}}, nil
 }
 
+func (m *memDB) SearchSimilarKeywordsWorktree(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]store.SearchResult, error) {
+	return m.SearchSimilarKeywords(ctx, projectID, queryText, dims, topK)
+}
+
+func (m *memDB) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) {
+	return nil, nil
+}
+
+func (m *memDB) GetProjectCommit(ctx context.Context, projectID int) (string, error) {
+	return "", nil
+}
+
+func (m *memDB) UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error {
+	return nil
+}
+
 func TestResolveProjectsByName(t *testing.T) {
 	db := &memDB{projects: []store.Project{{Name: "jackui", Identity: "git:x"}}}
 	got, err := ResolveProjects(context.Background(), db, "jackui", "/tmp")

@@ -74,6 +74,16 @@ func (f *fakeStore) InsertFileDependencies(context.Context, int, string, []strin
 	return nil
 }
 
+func (f *fakeStore) GetProjectCommit(ctx context.Context, projectID int) (string, error) {
+	return "", nil
+}
+func (f *fakeStore) UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error {
+	return nil
+}
+func (f *fakeStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) {
+	return nil, nil
+}
+
 // fakeEmbedder returns fixed vectors; localAvailable controls whether a
 // force-local ModelInfo succeeds (simulating a local provider being present).
 type fakeEmbedder struct {
