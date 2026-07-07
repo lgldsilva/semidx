@@ -226,6 +226,8 @@ func newSearchCmd(d *deps) *cobra.Command {
 		project, query, model string
 		topK                  int
 		privacy, asJSON       bool
+		noLineNums            bool
+		lineNumPad            int
 	)
 	c := &cobra.Command{
 		Use:   "search",
@@ -246,22 +248,24 @@ When embeddings are unavailable it transparently falls back to keyword search.`,
 			if asJSON {
 				return renderSearchJSON(os.Stdout, results)
 			}
-			return renderSearchResults(query, results)
+			return renderSearchResults(query, results, noLineNums, lineNumPad)
 		},
 	}
 	addSearchFlags(c, &project, &query, &model, &topK, &privacy, &asJSON)
+	c.Flags().BoolVar(&noLineNums, "no-line-numbers", false, "Omit per-line numbers in content previews")
+	c.Flags().IntVar(&lineNumPad, "line-number-pad", 4, "Padding width for line numbers")
 	return c
 }
 
 // renderSearchResults prints human-readable search results, tagging each block
 // with its project name when more than one project was searched.
-func renderSearchResults(query string, results []projSearch) error {
+func renderSearchResults(query string, results []projSearch, noLineNums bool, lineNumPad int) error {
 	multi := len(results) > 1
 	if multi {
 		fmt.Printf("Query: %s (searching %d projects)\n\n", query, len(results))
 	}
 	for _, ps := range results {
-		if err := renderProjectSearch(query, ps, multi); err != nil {
+		if err := renderProjectSearch(query, ps, multi, noLineNums, lineNumPad); err != nil {
 			return err
 		}
 	}
@@ -269,7 +273,7 @@ func renderSearchResults(query string, results []projSearch) error {
 }
 
 // renderProjectSearch prints one project's header and its formatted matches.
-func renderProjectSearch(query string, ps projSearch, multi bool) error {
+func renderProjectSearch(query string, ps projSearch, multi bool, noLineNums bool, lineNumPad int) error {
 	if multi {
 		fmt.Printf("=== project: %s ===\n", ps.name)
 	} else {
@@ -279,7 +283,8 @@ func renderProjectSearch(query string, ps projSearch, multi bool) error {
 		fmt.Fprint(os.Stderr, "[warn] embedding unavailable — used keyword search\n\n")
 	}
 	fmt.Printf("Found %d results in %v\n\n", len(ps.resp.Results), ps.took)
-	return (search.HumanFormatter{}).Format(os.Stdout, ps.resp)
+	fmtr := search.HumanFormatter{NoLineNums: noLineNums, LineNumPad: lineNumPad}
+	return fmtr.Format(os.Stdout, ps.resp)
 }
 
 func newSgrepCmd(d *deps) *cobra.Command {
