@@ -88,6 +88,28 @@ func (d *deps) apiClient() *client.Client {
 	return client.New(d.client.ServerURL, d.client.Token)
 }
 
+// withProfile returns a PersistentPreRunE that resolves the config profile
+// before calling setup. Extracted to keep newRootCmd cognitive complexity in check.
+func (d *deps) withProfile(flagProfile string, forceLocal, keywordOnly bool) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, _ []string) error {
+		if err := xdg.SetProfile(effectiveConfigProfile(flagProfile)); err != nil {
+			return err
+		}
+		return d.setup(cmd, forceLocal, keywordOnly)
+	}
+}
+
+// teardown closes any opened database connections. Extracted as a named method
+// so the PersistentPostRun closure does not inflate newRootCmd complexity.
+func (d *deps) teardown(_ *cobra.Command, _ []string) {
+	if d.db != nil {
+		d.db.Close()
+	}
+	if d.local != nil {
+		d.local.Close()
+	}
+}
+
 func main() {
 	// Cancel the context on Ctrl-C / SIGTERM so a long index/search stops cleanly.
 	// Memory is bounded via GOMEMLIMIT (a soft limit the runtime respects) — set
@@ -146,23 +168,11 @@ Run "semidx <command> --help" for details on any command.`,
 
   # No provider configured? Run fully local, keyword-only
   semidx search --query "auth" --keyword --local`,
-		Version:       fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			if err := xdg.SetProfile(effectiveConfigProfile(profile)); err != nil {
-				return err
-			}
-			return d.setup(cmd, forceLocal, keywordOnly)
-		},
-		PersistentPostRun: func(_ *cobra.Command, _ []string) {
-			if d.db != nil {
-				d.db.Close()
-			}
-			if d.local != nil {
-				d.local.Close()
-			}
-		},
+		Version:           fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
+		SilenceUsage:      true,
+		SilenceErrors:     true,
+		PersistentPreRunE: d.withProfile(profile, forceLocal, keywordOnly),
+		PersistentPostRun: d.teardown,
 	}
 	root.PersistentFlags().BoolVar(&forceLocal, "local", false,
 		"Use a standalone local index (no server/Postgres); path from SEMIDX_LOCAL_INDEX or the default data dir")
@@ -170,6 +180,22 @@ Run "semidx <command> --help" for details on any command.`,
 		"Index and search by keyword only, with no embedding model (SEMIDX_EMBED_MODE=none)")
 	root.PersistentFlags().StringVar(&profile, "profile", "",
 		"Use a named config profile (reads semidx-<name>.env and config-<name>.yaml); overridden by SEMIDX_PROFILE if flag is omitted")
+	registerCommandGroups(root, d)
+	return root
+}
+
+func projectNameFromPath(path string) string {
+	path = strings.TrimRight(path, "/")
+	if idx := strings.LastIndex(path, "/"); idx >= 0 {
+		return path[idx+1:]
+	}
+	return path
+}
+
+// registerCommandGroups wires all subcommands into the root cobra command under
+// their workflow groups. Extracted from newRootCmd to keep its cognitive
+// complexity within SonarQube's threshold.
+func registerCommandGroups(root *cobra.Command, d *deps) {
 	root.AddGroup(
 		&cobra.Group{ID: "primary", Title: "Primary workflow:"},
 		&cobra.Group{ID: "setup", Title: "Setup:"},
@@ -215,15 +241,6 @@ Run "semidx <command> --help" for details on any command.`,
 		newUpgradeCmd(d),
 		newDropCmd(d),
 	)
-	return root
-}
-
-func projectNameFromPath(path string) string {
-	path = strings.TrimRight(path, "/")
-	if idx := strings.LastIndex(path, "/"); idx >= 0 {
-		return path[idx+1:]
-	}
-	return path
 }
 
 // effectiveConfigProfile resolves the config profile: --profile flag wins,
