@@ -86,6 +86,7 @@ func extractLegacyOffice(data []byte) (string, error) {
 
 	// LibreOffice writes a .txt file with the same base name as the input.
 	outPath := filepath.Join(tmpDir, "document.txt")
+	// #nosec G304 -- outPath is a safe dynamically generated temporary file
 	result, err := os.ReadFile(filepath.Clean(outPath))
 	if err != nil {
 		return "", fmt.Errorf("extract: legacy office: read output: %w", err)

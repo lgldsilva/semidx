@@ -14,6 +14,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/ledongthuc/pdf"
@@ -50,6 +51,9 @@ func isOLECompound(data []byte) bool {
 // extractor decodes one family of file types into text.
 type extractor func(data []byte) (string, error)
 
+// registryMu protects concurrent access to registry maps (byExt and byName).
+var registryMu sync.RWMutex
+
 // byExt maps a lowercase extension (including the leading dot) to its decoder.
 // It is the single source of truth for both Extract and Supported.
 var byExt = map[string]extractor{
@@ -82,6 +86,8 @@ var byExt = map[string]extractor{
 // e.g. ".proto"). Panics if ext is already registered (to catch duplicate
 // registrations at init time).
 func Register(ext string, fn extractor) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	if _, ok := byExt[ext]; ok {
 		panic("extract: duplicate registration for " + ext)
 	}
@@ -95,7 +101,9 @@ func Register(ext string, fn extractor) {
 // document can never crash the indexer.
 func Extract(name string, data []byte) (out string, err error) {
 	ext := strings.ToLower(filepath.Ext(name))
+	registryMu.RLock()
 	decode, ok := byExt[ext]
+	registryMu.RUnlock()
 	if !ok {
 		return "", fmt.Errorf("%w: %q", ErrUnsupported, ext)
 	}
@@ -119,15 +127,18 @@ func Supported(name string) bool {
 		return true
 	}
 	ext := strings.ToLower(filepath.Ext(name))
-	if _, ok := byExt[ext]; ok {
+	registryMu.RLock()
+	_, okExt := byExt[ext]
+	_, okName := byName[filepath.Base(name)]
+	registryMu.RUnlock()
+
+	if okExt {
 		return true
 	}
 	if archiveExts[ext] {
 		return true
 	}
-	base := filepath.Base(name)
-	_, ok := byName[base]
-	return ok
+	return okName
 }
 
 // passthrough returns already-textual formats (.txt, .md, .markdown) as-is,
