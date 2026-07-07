@@ -41,6 +41,16 @@ type ProjectInfo struct {
 	Model      string
 }
 
+// StatusInfo is a backend-neutral project status summary.
+type StatusInfo struct {
+	Name       string
+	SourceType string
+	Identity   string
+	Status     string
+	Model      string
+	TotalFiles int
+}
+
 // Backend is the data source the MCP tools call. Implemented by the remote HTTP
 // client (NewClientBackend) and the local index (NewLocalBackend).
 type Backend interface {
@@ -48,6 +58,8 @@ type Backend interface {
 	Projects(ctx context.Context) ([]ProjectInfo, error)
 	// Reindex returns a human-readable status message on success.
 	Reindex(ctx context.Context, project, jobType string) (string, error)
+	// Status returns the indexing status of a registered project.
+	Status(ctx context.Context, project string) (*StatusInfo, error)
 }
 
 // New builds an MCP server whose tools call the given backend.
@@ -68,6 +80,11 @@ func New(b Backend) *mcp.Server {
 		Name:        "semantic_reindex",
 		Description: "Queue a re-index job for a project already registered on the server. Only registered projects can be re-indexed; arbitrary paths are not accepted. In standalone (local) mode, reindex via the `semidx index` CLI instead.",
 	}, reindexHandler(b))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "semantic_status",
+		Description: "Get the indexing status of a registered project. Reports file count, status, and model.",
+	}, statusHandler(b))
 
 	return s
 }
@@ -134,6 +151,37 @@ func reindexHandler(b Backend) mcp.ToolHandlerFor[reindexInput, any] {
 		}
 		return textResult(msg), nil, nil
 	}
+}
+
+type statusInput struct {
+	Project string `json:"project" jsonschema:"the registered project name to check status for"`
+}
+
+func statusHandler(b Backend) mcp.ToolHandlerFor[statusInput, any] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in statusInput) (*mcp.CallToolResult, any, error) {
+		info, err := b.Status(ctx, in.Project)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		return textResult(formatStatus(info)), nil, nil
+	}
+}
+
+func formatStatus(info *StatusInfo) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Project: %s\n", info.Name)
+	if info.Identity != "" {
+		fmt.Fprintf(&b, "Identity: %s\n", info.Identity)
+	}
+	fmt.Fprintf(&b, "Source: %s\n", info.SourceType)
+	fmt.Fprintf(&b, "Status: %s\n", info.Status)
+	if info.Model != "" {
+		fmt.Fprintf(&b, "Model: %s\n", info.Model)
+	}
+	fmt.Fprintf(&b, "Total indexed: %d files\n", info.TotalFiles)
+	fmt.Fprintln(&b)
+	fmt.Fprint(&b, "Tip: projects may have unindexed changes. Use semantic_reindex (server mode) or `semidx index` (standalone) to refresh.")
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func formatSearch(out *SearchOutput) string {

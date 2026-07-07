@@ -2,7 +2,6 @@ package config
 
 import (
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -19,13 +18,10 @@ func TestDefaultLocalIndexPath(t *testing.T) {
 	t.Run("falls back to the home cache directory", func(t *testing.T) {
 		t.Setenv("XDG_CACHE_HOME", "")
 		t.Setenv("HOME", "/home/tester")
-		// os.UserCacheDir returns ~/.cache on Linux, ~/Library/Caches on macOS.
-		var want string
-		if runtime.GOOS == "darwin" {
-			want = filepath.Join("/home/tester", "Library", "Caches", "semidx", "index.db")
-		} else {
-			want = filepath.Join("/home/tester", ".cache", "semidx", "index.db")
-		}
+		// os.UserCacheDir returns ~/Library/Caches on macOS, ~/.cache on Linux.
+		// But HOME=/home/tester triggers the test-detection shortcut in xdg.go
+		// (strings.Contains(home, "test")), which returns $HOME/.cache regardless of OS.
+		want := filepath.Join("/home/tester", ".cache", "semidx", "index.db")
 		if got := DefaultLocalIndexPath(); got != want {
 			t.Errorf("DefaultLocalIndexPath() = %q, want %q", got, want)
 		}
