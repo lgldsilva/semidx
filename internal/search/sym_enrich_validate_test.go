@@ -23,6 +23,12 @@ import (
 // It indexes the semidx codebase with and without symbol enrichment,
 // then runs gold-standard queries and compares nDCG@5.
 func TestSymbolEnrichValidation(t *testing.T) {
+	// This test indexes the entire semidx codebase with tree-sitter symbol
+	// enrichment + embedding, which is expensive. Skip in short mode.
+	if testing.Short() {
+		t.Skip("skipping integration/validation test in short mode")
+	}
+
 	ollamaURL := os.Getenv("OLLAMA_URL")
 	if ollamaURL == "" {
 		ollamaURL = "http://localhost:11434"

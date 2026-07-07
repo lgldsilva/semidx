@@ -111,6 +111,7 @@ type IndexStore interface {
 	UpdateProjectStatus(ctx context.Context, id int, status string) error
 	UpsertFile(ctx context.Context, projectID int, path, hash string, size int) (int, error)
 	FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error)
+	CountProjectFiles(ctx context.Context, projectID int) (int, error)
 	ListFileHashes(ctx context.Context, projectID int) (map[string]string, error)
 	DeleteFileByPath(ctx context.Context, projectID int, path string) error
 	DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error
@@ -621,6 +622,13 @@ func (s *PgStore) FileUpToDate(ctx context.Context, projectID int, path, hash st
 		return false, nil // e.g. table not created yet → treat as needs indexing
 	}
 	return exists, nil
+}
+
+// CountProjectFiles returns the total number of indexed files for a project.
+func (s *PgStore) CountProjectFiles(ctx context.Context, projectID int) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM files WHERE project_id = $1`, projectID).Scan(&n)
+	return n, err
 }
 
 // ListFileHashes returns path→hash for every indexed file of a project (used by
