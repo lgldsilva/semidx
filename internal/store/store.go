@@ -33,16 +33,17 @@ const hnswVectorLimit = 2000
 
 // Project is an indexed repository's metadata row.
 type Project struct {
-	ID         int
-	Name       string
-	Path       string
-	Model      string
-	Status     string
-	SourceType string // "push" | "git" | "path" | "docs"
-	GitURL     string // set when SourceType == "git"
-	Branch     string // optional git branch
-	Identity   string // stable dedup key (git remote/common-dir, or absolute path)
-	Dims       int    // embedding dimension used for this project (0 = unknown/probe)
+	ID            int
+	Name          string
+	Path          string
+	Model         string
+	Status        string
+	SourceType    string // "push" | "git" | "path" | "docs"
+	GitURL        string // set when SourceType == "git"
+	Branch        string // optional git branch
+	Identity      string // stable dedup key (git remote/common-dir, or absolute path)
+	Dims          int    // embedding dimension used for this project (0 = unknown/probe)
+	LicenseSPDXID string // SPDX identifier detected from project files (e.g. "MIT")
 }
 
 // Sentinel errors so callers (e.g. the HTTP layer) can map to status codes
@@ -426,11 +427,11 @@ func (s *PgStore) UpsertProject(ctx context.Context, name, path, model string, d
 	return id, err
 }
 
-const projectColumns = `id, name, path, model, status, source_type, COALESCE(git_url, ''), COALESCE(branch, ''), COALESCE(identity, ''), COALESCE(dims, 0)`
+const projectColumns = `id, name, path, model, status, source_type, COALESCE(git_url, ''), COALESCE(branch, ''), COALESCE(identity, ''), COALESCE(dims, 0), COALESCE(license_spdx_id, '')`
 
 func scanProject(row pgx.Row) (*Project, error) {
 	var p Project
-	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity, &p.Dims); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity, &p.Dims, &p.LicenseSPDXID); err != nil {
 		return nil, err
 	}
 	return &p, nil

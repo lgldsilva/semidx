@@ -70,9 +70,11 @@ func TestPipelineIndexThenSearchLocalStore(t *testing.T) {
 
 	src := t.TempDir()
 	// One chunk per file (no blank lines) with a distinct keyword each.
-	writeFile(t, src, "alpha.go", "package a\nfunc Alpha() {} // token alpha here\n")
-	writeFile(t, src, "beta.go", "package b\nfunc Beta() {} // token beta here\n")
-	writeFile(t, src, "gamma.go", "package g\nfunc Gamma() {} // token gamma here\n")
+	// Using .txt extension avoids AST chunking, keeping the test focused on the
+	// indexer pipeline rather than the chunker.
+	writeFile(t, src, "alpha.txt", "alpha function token alpha here\n")
+	writeFile(t, src, "beta.txt", "beta function token beta here\n")
+	writeFile(t, src, "gamma.txt", "gamma function token gamma here\n")
 
 	pid, err := st.UpsertProject(ctx, "proj", src, "m", 0)
 	if err != nil {
@@ -93,7 +95,7 @@ func TestPipelineIndexThenSearchLocalStore(t *testing.T) {
 		t.Fatalf("ChunksCreated = %d, want 3", stats.ChunksCreated)
 	}
 
-	// Vector search aligned with alpha's basis must rank alpha.go first.
+	// Vector search aligned with alpha's basis must rank alpha.txt first.
 	res, err := st.SearchSimilar(ctx, pid, []float32{1, 0, 0}, 3, 3)
 	if err != nil {
 		t.Fatalf("SearchSimilar: %v", err)
@@ -101,8 +103,8 @@ func TestPipelineIndexThenSearchLocalStore(t *testing.T) {
 	if len(res) != 3 {
 		t.Fatalf("SearchSimilar returned %d, want 3", len(res))
 	}
-	if res[0].FilePath != "alpha.go" {
-		t.Errorf("top hit = %q, want alpha.go", res[0].FilePath)
+	if res[0].FilePath != "alpha.txt" {
+		t.Errorf("top hit = %q, want alpha.txt", res[0].FilePath)
 	}
 	if res[0].Score < 0.99 {
 		t.Errorf("aligned score = %v, want ~1", res[0].Score)
@@ -111,13 +113,13 @@ func TestPipelineIndexThenSearchLocalStore(t *testing.T) {
 		t.Errorf("results not sorted by score: %v", []float64{res[0].Score, res[1].Score, res[2].Score})
 	}
 
-	// Keyword search recovers a specific function by name, with its line number.
-	kw, err := st.SearchSimilarKeywords(ctx, pid, "Gamma", 3, 5)
+	// Keyword search recovers specific content by name, with its line number.
+	kw, err := st.SearchSimilarKeywords(ctx, pid, "gamma", 3, 5)
 	if err != nil {
 		t.Fatalf("SearchSimilarKeywords: %v", err)
 	}
-	if len(kw) != 1 || kw[0].FilePath != "gamma.go" {
-		t.Fatalf("keyword search = %+v, want the gamma.go chunk", kw)
+	if len(kw) != 1 || kw[0].FilePath != "gamma.txt" {
+		t.Fatalf("keyword search = %+v, want the gamma.txt chunk", kw)
 	}
 	if kw[0].StartLine != 1 {
 		t.Errorf("keyword hit StartLine = %d, want 1", kw[0].StartLine)
@@ -137,8 +139,10 @@ func TestPipelineIncrementalIdempotent(t *testing.T) {
 	t.Cleanup(st.Close)
 
 	src := t.TempDir()
-	writeFile(t, src, "alpha.go", "package a\nfunc Alpha() {} // alpha\n")
-	writeFile(t, src, "beta.go", "package b\nfunc Beta() {} // beta\n")
+	// Using .txt to avoid AST chunking (integration tests exercise the pipeline,
+	// not the chunker).
+	writeFile(t, src, "alpha.txt", "alpha function alpha here\n")
+	writeFile(t, src, "beta.txt", "beta function beta here\n")
 
 	pid, _ := st.UpsertProject(ctx, "proj", src, "m", 0)
 	emb := &semanticEmbedder{}

@@ -32,6 +32,7 @@ import (
 	si "github.com/lgldsilva/semidx/internal/imports"
 	"github.com/lgldsilva/semidx/internal/observ"
 	"github.com/lgldsilva/semidx/internal/privacy"
+	"github.com/lgldsilva/semidx/internal/secrets"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -59,6 +60,14 @@ type Indexer struct {
 	noSymbols           bool   // when true, skip symbol enrichment (even when embedding)
 	modulePath          string // Go module path from go.mod (for import-dependency extraction)
 	worktree            string // when set, record this worktree's manifest + prune after indexing
+
+	// Secret scan: when enabled, every file's content is scanned with gitleaks
+	// before chunking. Files with detected secrets are stored text-only (no
+	// embedding) when SecretBlockEmbedding is true. env: SEMIDX_SECRET_SCAN,
+	// SEMIDX_SECRET_BLOCK_EMBEDDING.
+	secretDetector       *secrets.Detector
+	secretScanEnabled    bool
+	secretBlockEmbedding bool
 
 	// mem throttling for the verbose progress path: ReadMemStats triggers a
 	// stop-the-world, so we cache results and refresh at most once per 10s.
@@ -141,6 +150,25 @@ func NewIndexer(db store.IndexStore, emb embed.Embedder, dims int, opts IndexerO
 // for chaining.
 func (idx *Indexer) SetKeywordOnly(v bool) *Indexer {
 	idx.keywordOnly = v
+	return idx
+}
+
+// SetSecretScan configures the indexer for gitleaks-based secret scanning. When
+// enabled, each file is scanned before chunking; files with detected secrets are
+// stored text-only (no embedding) when blockEmbedding is true. The detector is
+// created once and reused across all files of the project.
+func (idx *Indexer) SetSecretScan(root string, enabled, blockEmbedding bool) *Indexer {
+	idx.secretScanEnabled = enabled
+	idx.secretBlockEmbedding = blockEmbedding
+	if enabled {
+		d, err := secrets.NewDetector(root)
+		if err != nil {
+			idx.log.Warn("secret detector init (disabled)", "root", root, "err", err)
+			idx.secretScanEnabled = false
+		} else {
+			idx.secretDetector = d
+		}
+	}
 	return idx
 }
 
@@ -516,18 +544,31 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 	if !idx.keywordOnly && !idx.noSymbols {
 		syms = sym.Symbols(rel, content)
 	}
-	created, softErrs, err = idx.storeChunks(ctx, projectID, fileID, rel, model, chunks, syms)
+
+	// Secret scan: run before embedding. When secrets are detected and
+	// blockEmbedding is on, the file is stored text-only (no embedding).
+	hasSecrets := false
+	if idx.secretScanEnabled && idx.secretDetector != nil {
+		findings := idx.secretDetector.Scan(rel, content)
+		if len(findings) > 0 {
+			hasSecrets = true
+			idx.logf("[secrets] %s: %d finding(s) — stored text-only", rel, len(findings))
+		}
+	}
+
+	created, softErrs, err = idx.storeChunks(ctx, projectID, fileID, rel, model, chunks, syms, hasSecrets)
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, "", err
 	}
 	return created, softErrs, outcomeIndexed, hash, nil
 }
 
-// storeChunks turns a unit's chunks into stored rows, honoring keyword-only mode
-// and privacy routing. It stores the chunks text-only in keyword-only mode, or
-// when a sensitive file cannot be embedded by a local provider; otherwise it
+// storeChunks turns a unit's chunks into stored rows, honoring keyword-only mode,
+// privacy routing and secret-scan tagging. It stores the chunks text-only in
+// keyword-only mode, when a sensitive file cannot be embedded by a local provider,
+// or when secrets were detected and SECRET_BLOCK_EMBEDDING is true; otherwise it
 // embeds them (forcing a local provider for sensitive files).
-func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel, model string, chunks []chunker.Chunk, syms []sym.Symbol) (created, softErrs int, hardErr error) {
+func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel, model string, chunks []chunker.Chunk, syms []sym.Symbol, hasSecrets bool) (created, softErrs int, hardErr error) {
 	// Keyword-only mode: no embedding provider at all — store the chunks as text
 	// so they stay searchable by keyword (FTS/ILIKE) without any model.
 	if idx.keywordOnly {
@@ -537,12 +578,14 @@ func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel,
 		return len(chunks), 0, nil
 	}
 
-	// Privacy routing: a sensitive file must never be embedded by a cloud
-	// provider. If a local provider can serve the model, embed locally; if not,
-	// store the content as text-only (embedding NULL) so it stays findable via
-	// keyword search without ever leaving the machine.
+	// Privacy routing + secret scan: a sensitive file or one with detected
+	// secrets must never be embedded by a cloud provider. If a local provider
+	// can serve the model, embed locally; if not, store the content as text-only
+	// (embedding NULL) so it stays findable via keyword search without ever
+	// leaving the machine.
 	embedCtx := ctx
-	if privacy.IsSensitive(rel) {
+	isSensitive := privacy.IsSensitive(rel) || (hasSecrets && idx.secretBlockEmbedding)
+	if isSensitive {
 		localCtx := embed.WithForceLocal(ctx, true)
 		if _, err := idx.embedder.ModelInfo(localCtx, model); err != nil {
 			if err := idx.db.InsertChunksTextOnly(ctx, projectID, fileID, chunks, idx.dims); err != nil {
