@@ -244,7 +244,6 @@ func analyzeGo(content []byte, modulePath string) []string {
 	result := make([]string, 0, len(f.Imports))
 
 	for _, imp := range f.Imports {
-		// Skip dot imports (e.g., `. "fmt"`).
 		if imp.Name != nil && imp.Name.Name == "." {
 			continue
 		}
@@ -254,12 +253,7 @@ func analyzeGo(content []byte, modulePath string) []string {
 			continue
 		}
 
-		// Determine the first path segment and skip stdlib.
-		firstSeg := path
-		if idx := strings.IndexByte(path, '/'); idx >= 0 {
-			firstSeg = path[:idx]
-		}
-		if goStdlibPrefixes[firstSeg] {
+		if isStdlibImport(path) {
 			continue
 		}
 
@@ -278,6 +272,16 @@ func analyzeGo(content []byte, modulePath string) []string {
 		return nil
 	}
 	return result
+}
+
+// isStdlibImport reports whether path is a Go standard library import.
+// Extracted from analyzeGo to keep its cognitive complexity in check.
+func isStdlibImport(path string) bool {
+	firstSeg := path
+	if idx := strings.IndexByte(path, '/'); idx >= 0 {
+		firstSeg = path[:idx]
+	}
+	return goStdlibPrefixes[firstSeg]
 }
 
 // ---------------------------------------------------------------------------
