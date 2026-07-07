@@ -11,15 +11,28 @@ import (
 func TestInstallErrorPaths(t *testing.T) {
 	t.Parallel()
 
-	// Install into a read-only directory should fail on the first write.
+	// Create a file where Install expects to write a directory. Install will
+	// try to create a subdirectory and fail because a file exists there.
+	// This works regardless of uid/permissions.
+	filedir := t.TempDir()
+	fpath := filepath.Join(filedir, "semidx") // Install creates subdirs under this
+	if err := os.WriteFile(fpath, []byte("block"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, err := Install(fpath); err == nil {
+		t.Error("Install where target is a file should error")
+	}
+
+	// Also test with a read-only parent directory (best-effort, may not work as root).
 	readonly := t.TempDir()
 	if err := os.Chmod(readonly, 0o500); err != nil {
-		t.Fatalf("Chmod: %v", err)
+		t.Skipf("cannot chmod: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(readonly, 0o700) })
+	defer os.Chmod(readonly, 0o700)
 
 	if _, err := Install(readonly); err == nil {
-		t.Error("Install into read-only dir should error")
+		t.Skip("Install into read-only dir did not error (running as root?)")
 	}
 }
 
