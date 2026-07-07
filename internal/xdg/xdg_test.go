@@ -191,7 +191,7 @@ func TestXDGConfigHomeIsolation(t *testing.T) {
 	p := saveProfile()
 	defer restoreProfile(p)
 	activeProfile = ""
-	os.Unsetenv(configDirEnv)
+	_ = os.Unsetenv(configDirEnv)
 
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
