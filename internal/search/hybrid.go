@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"slices"
 
@@ -12,7 +13,8 @@ const (
 	// rrfK is the constant used in the RRF formula: score = 1/(k + rank).
 	rrfK = 60.0
 	// rrfBonus is added to a result's score when it appears in both lists.
-	rrfBonus = 0.1
+	// Kept small (~1/k) so a rank-1 single-list hit beats a rank-60 overlap.
+	rrfBonus = 0.02
 )
 
 // HybridSearch runs vector search and keyword search concurrently,
@@ -58,8 +60,9 @@ func (s *Service) HybridSearch(ctx context.Context, projectID int, query string,
 }
 
 // rerankRRF merges two ranked result lists using Reciprocal Rank Fusion.
-// Results appearing in both lists get a bonus. The returned list is sorted by
-// RRF score descending, capped at topK.
+// Results are keyed by FilePath+StartLine (chunk-level dedup) rather than
+// FilePath alone, so multi-chunk files get proper per-chunk ranking.
+// RRF scores are normalised to [0,1] for compatible UX labels.
 func rerankRRF(vector, keyword []store.SearchResult, topK int) []store.SearchResult {
 	if len(vector) == 0 {
 		return keyword
@@ -68,17 +71,17 @@ func rerankRRF(vector, keyword []store.SearchResult, topK int) []store.SearchRes
 		return vector
 	}
 
-	// Build position maps: path -> rank (1-based).
+	// Build position maps: chunkKey -> rank (1-based).
 	vecRanks := make(map[string]int, len(vector))
 	for i, r := range vector {
-		vecRanks[r.FilePath] = i + 1
+		vecRanks[chunkKey(r)] = i + 1
 	}
 	kwRanks := make(map[string]int, len(keyword))
 	for i, r := range keyword {
-		kwRanks[r.FilePath] = i + 1
+		kwRanks[chunkKey(r)] = i + 1
 	}
 
-	// Collect all unique file paths.
+	// Collect all unique chunks.
 	seen := make(map[string]bool)
 	type scored struct {
 		result store.SearchResult
@@ -88,26 +91,27 @@ func rerankRRF(vector, keyword []store.SearchResult, topK int) []store.SearchRes
 	var scoredList []scored
 
 	for _, r := range vector {
-		seen[r.FilePath] = true
-		vr := vecRanks[r.FilePath]
-		kr, inKW := kwRanks[r.FilePath]
-		score := 1.0/(rrfK+float64(vr)) + 1.0/(rrfK+float64(kr))
+		ck := chunkKey(r)
+		seen[ck] = true
+		vr := vecRanks[ck]
+		score := 1.0 / (rrfK + float64(vr))
+		kr, inKW := kwRanks[ck]
 		if inKW {
-			score += rrfBonus
+			score += 1.0/(rrfK+float64(kr)) + rrfBonus
 		}
 		scoredList = append(scoredList, scored{result: r, score: score})
 	}
 
 	for _, r := range keyword {
-		if seen[r.FilePath] {
+		ck := chunkKey(r)
+		if seen[ck] {
 			continue
 		}
-		kr := kwRanks[r.FilePath]
+		kr := kwRanks[ck]
 		score := 1.0 / (rrfK + float64(kr))
 		scoredList = append(scoredList, scored{result: r, score: score})
 	}
 
-	// Sort by RRF score descending.
 	slices.SortFunc(scoredList, func(a, b scored) int {
 		switch {
 		case math.Abs(a.score-b.score) < 1e-9:
@@ -122,10 +126,20 @@ func rerankRRF(vector, keyword []store.SearchResult, topK int) []store.SearchRes
 	if topK <= 0 || topK >= len(scoredList) {
 		topK = len(scoredList)
 	}
+
+	// Normalise scores to [0,1] so UX labels ("92%") are meaningful.
+	maxScore := scoredList[0].score
 	out := make([]store.SearchResult, topK)
 	for i := 0; i < topK; i++ {
 		out[i] = scoredList[i].result
-		out[i].Score = scoredList[i].score
+		if maxScore > 0 {
+			out[i].Score = scoredList[i].score / maxScore
+		}
 	}
 	return out
+}
+
+// chunkKey returns a stable key for a chunk: file path + start line.
+func chunkKey(r store.SearchResult) string {
+	return fmt.Sprintf("%s|%d", r.FilePath, r.StartLine)
 }
