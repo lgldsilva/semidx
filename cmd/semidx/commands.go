@@ -125,7 +125,7 @@ func newIndexCmd(d *deps) *cobra.Command {
 	var (
 		projectPath, model, gitSince, branch string
 		maxFiles                             int
-		gitMode, verbose, privacy            bool
+		gitMode, verbose, privacy, watch     bool
 		docs                                 bool
 	)
 	c := &cobra.Command{
@@ -207,6 +207,14 @@ With no embedding provider configured, add --keyword to index text-only.`,
 			// Record password-protected files so `semidx unlock` can find them, and
 			// point the user at it.
 			recordEncryptedPending(tgt, model, projectPath, docs, stats)
+
+			// --watch mode: start the filesystem watcher after initial indexing.
+			if watch {
+				watcher := indexing.NewWatcher(projectID, tgt.indexPath, model, indexer)
+				if err := watcher.Watch(ctx); err != nil && err != context.Canceled {
+					return fmt.Errorf("watcher: %w", err)
+				}
+			}
 			return nil
 		},
 	}
@@ -219,6 +227,7 @@ With no embedding provider configured, add --keyword to index text-only.`,
 	c.Flags().StringVar(&branch, "branch", "", "Index as a separate project for this branch (suffixes identity and display name; no git checkout performed)")
 	c.Flags().BoolVar(&verbose, "verbose", false, "Show detailed progress and errors")
 	c.Flags().BoolVar(&privacy, "privacy", false, "Force local-only providers (Ollama)")
+	c.Flags().BoolVar(&watch, "watch", false, "Watch for file changes and re-index automatically")
 	return c
 }
 
