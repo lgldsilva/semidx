@@ -437,70 +437,70 @@ are indexed, and what embedding model is in use.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			if d.remote() {
-				// Remote mode: resolve project ref via server listing, then get status.
-				api := d.apiClient()
-				p, err := searchtargets.ResolveRemoteProject(ctx, api, projectPath)
-				if err != nil {
-					return err
-				}
-				resp, err := api.Status(ctx, p.Name)
-				if err != nil {
-					return err
-				}
-				fmt.Printf("Project: %s\n", resp.Name)
-				if resp.Identity != "" {
-					fmt.Printf("Identity: %s\n", resp.Identity)
-				}
-				fmt.Printf("Source: %s\n", resp.SourceType)
-				fmt.Printf("Backend: remote (%s)\n", d.client.ServerURL)
-				fmt.Printf("Status: %s\n", resp.Status)
-				if resp.Model != "" {
-					fmt.Printf("Model: %s\n", resp.Model)
-				}
-				fmt.Printf("Total indexed: %d files\n", resp.TotalFiles)
-				fmt.Println("Run `semidx push` to check for stale files.")
-				return nil
+				return runStatusRemote(ctx, d, projectPath)
 			}
-
-			// Local mode: resolve via identity, query the local store.
-			tgt := resolveTarget(ctx, projectPath, false)
-			db, err := d.indexStore(ctx)
-			if err != nil {
-				return err
-			}
-
-			// Try identity first (git or path:), then name fallback.
-			proj, err := db.GetProjectByIdentity(ctx, tgt.identity)
-			if err != nil {
-				// Fallback: try by name (basename).
-				proj, err = db.GetProject(ctx, tgt.name)
-				if err != nil {
-					return fmt.Errorf("project not found — index it first with `semidx index --project %s`", projectPath)
-				}
-			}
-
-			hashes, err := db.ListFileHashes(ctx, proj.ID)
-			if err != nil {
-				return fmt.Errorf("list files: %w", err)
-			}
-
-			fmt.Printf("Project: %s\n", proj.Name)
-			if proj.Identity != "" {
-				fmt.Printf("Identity: %s\n", proj.Identity)
-			}
-			fmt.Printf("Source: %s\n", proj.SourceType)
-			fmt.Printf("Backend: local\n")
-			fmt.Printf("Status: %s\n", proj.Status)
-			if proj.Model != "" {
-				fmt.Printf("Model: %s\n", proj.Model)
-			}
-			fmt.Printf("Total indexed: %d files\n", len(hashes))
-			fmt.Println("Run `semidx index` to reindex.")
-			return nil
+			return runStatusLocal(ctx, d, projectPath)
 		},
 	}
 	c.Flags().StringVar(&projectPath, "project", ".", "Path to the project directory (default: current directory)")
 	return c
+}
+
+func runStatusRemote(ctx context.Context, d *deps, projectPath string) error {
+	api := d.apiClient()
+	p, err := searchtargets.ResolveRemoteProject(ctx, api, projectPath)
+	if err != nil {
+		return err
+	}
+	resp, err := api.Status(ctx, p.Name)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Project: %s\n", resp.Name)
+	if resp.Identity != "" {
+		fmt.Printf("Identity: %s\n", resp.Identity)
+	}
+	fmt.Printf("Source: %s\n", resp.SourceType)
+	fmt.Printf("Backend: remote (%s)\n", d.client.ServerURL)
+	fmt.Printf("Status: %s\n", resp.Status)
+	if resp.Model != "" {
+		fmt.Printf("Model: %s\n", resp.Model)
+	}
+	fmt.Printf("Total indexed: %d files\n", resp.TotalFiles)
+	fmt.Println("Run `semidx push` to check for stale files.")
+	return nil
+}
+
+func runStatusLocal(ctx context.Context, d *deps, projectPath string) error {
+	tgt := resolveTarget(ctx, projectPath, false)
+	db, err := d.indexStore(ctx)
+	if err != nil {
+		return err
+	}
+	proj, err := db.GetProjectByIdentity(ctx, tgt.identity)
+	if err != nil {
+		proj, err = db.GetProject(ctx, tgt.name)
+		if err != nil {
+			return fmt.Errorf("project not found — index it first with `semidx index --project %s`", projectPath)
+		}
+	}
+	hashes, err := db.ListFileHashes(ctx, proj.ID)
+	if err != nil {
+		return fmt.Errorf("list files: %w", err)
+	}
+	fmt.Printf("Project: %s\n", proj.Name)
+	if proj.Identity != "" {
+		fmt.Printf("Identity: %s\n", proj.Identity)
+	}
+	fmt.Printf("Source: %s\n", proj.SourceType)
+	fmt.Printf("Backend: local\n")
+	fmt.Printf("Status: %s\n", proj.Status)
+	if proj.Model != "" {
+		fmt.Printf("Model: %s\n", proj.Model)
+	}
+	fmt.Printf("Total indexed: %d files\n", len(hashes))
+	fmt.Println("Run `semidx index` to reindex.")
+	return nil
 }
 
 func newServeCmd(d *deps) *cobra.Command {
