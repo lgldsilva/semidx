@@ -137,6 +137,18 @@ type fakeEmbedder struct{}
 func (fakeEmbedder) EmbedSingle(_ context.Context, _, _ string) ([]float32, error) {
 	return []float32{0.1, 0.2, 0.3}, nil
 }
+
+func (f *fakeIndexStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) {
+	return nil, nil
+}
+
+func (f *fakeIndexStore) GetProjectCommit(ctx context.Context, projectID int) (string, error) {
+	return "", nil
+}
+
+func (f *fakeIndexStore) UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error {
+	return nil
+}
 func (fakeEmbedder) Embed(_ context.Context, _ string, _ ...string) ([][]float32, error) {
 	return [][]float32{{0.1, 0.2, 0.3}}, nil
 }
