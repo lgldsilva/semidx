@@ -90,10 +90,10 @@ func newSbomGenerateCmd(d *deps) *cobra.Command {
 				if err := os.WriteFile(filepath.Clean(outputPath), output, 0o600); err != nil {
 					return fmt.Errorf("write %s: %w", outputPath, err)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "SBOM written to %s (%s)\n", outputPath, format)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "SBOM written to %s (%s)\n", outputPath, format)
 			} else {
 				_, _ = cmd.OutOrStdout().Write(output)
-				fmt.Fprintln(cmd.OutOrStdout())
+				_, _ = fmt.Fprintln(cmd.OutOrStdout())
 			}
 			return nil
 		},
