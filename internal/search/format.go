@@ -18,9 +18,9 @@ type Formatter interface {
 // Preview is the max preview length in bytes (<= 0 means 500). LineNumbers
 // controls whether line numbers are prepended to each content line.
 type HumanFormatter struct {
-	Preview     int
-	NoLineNums  bool   // suppress per-line line numbers in content output
-	LineNumPad  int    // padding width for line numbers (<= 0 means auto: 4)
+	Preview    int
+	NoLineNums bool // suppress per-line line numbers in content output
+	LineNumPad int  // padding width for line numbers (<= 0 means auto: 4)
 }
 
 func (f HumanFormatter) Format(w io.Writer, resp *Response) error {
