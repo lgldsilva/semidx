@@ -175,10 +175,11 @@ Run "semidx <command> --help" for details on any command.`,
 			root.AddCommand(c)
 		}
 	}
+	addGroup("primary", newIndexCmd(d), newPushCmd(d), newSearchCmd(d), newSgrepCmd(d), newUnlockCmd(d), newStatusCmd(d), newDeadCodeCmd(d), newCallersCmd(d), newExplainCmd(d))
+	addGroup("setup", newConfigCmd(d), newLoginCmd(d), newModelsCmd(d))
 	addGroup("primary", newIndexCmd(d), newPushCmd(d), newSearchCmd(d), newSgrepCmd(d), newUnlockCmd(d), newBenchCmd(d), newStatusCmd(d))
 	addGroup("setup", newConfigCmd(d), newLoginCmd(d), newModelsCmd(d), newInitCmd(d))
 	addGroup("advanced", newServeCmd(d), newMCPCmd(d), newRepoCmd(d), newSkillsCmd(d))
-	addGroup("setup", newConfigCmd(d), newLoginCmd(d), newModelsCmd(d))
 	addGroup("advanced", newServeCmd(d), newMCPCmd(d), newRepoCmd(d), newSkillsCmd(d), newSbomCmd(d))
 	addGroup("maintenance", newMigrateCmd(d), newUpgradeCmd(d), newDropCmd(d))
 	return root
