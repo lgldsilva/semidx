@@ -28,10 +28,35 @@ var (
 		".swift": true, ".kt": true, ".scala": true, ".sh": true, ".bash": true,
 		".yaml": true, ".yml": true, ".json": true, ".toml": true, ".mod": true,
 		".sum": true, ".dockerfile": true, ".sql": true,
+		// Pillar 1 — schema/config languages.
+		".proto": true, ".graphql": true, ".gql": true, ".prisma": true,
+		".vue": true, ".jinja": true, ".jinja2": true, ".hbs": true, ".handlebars": true,
 	}
 
 	textExts = map[string]bool{
 		".md": true, ".txt": true, ".adoc": true, ".rst": true,
+		// Pillar 1 — additional text/document formats.
+		".xml": true, ".csv": true, ".tsv": true, ".log": true,
+		".ini": true, ".cfg": true, ".conf": true,
+	}
+
+	// knownBaseNames are files without a traditional extension that should be
+	// indexed as code or text (Makefile, Dockerfile, LICENSE, etc.).
+	knownBaseNames = map[string]bool{
+		"Makefile": true, "makefile": true, "GNUmakefile": true,
+		"Dockerfile": true, "Containerfile": true,
+		"LICENSE": true, "LICENSE.txt": true, "LICENSE.md": true,
+		"NOTICE": true, "CHANGELOG": true, "CHANGELOG.md": true, "CHANGELOG.txt": true,
+		"CONTRIBUTING": true, "CONTRIBUTING.md": true,
+		"CODE_OF_CONDUCT": true, "CODE_OF_CONDUCT.md": true,
+		"SECURITY": true, "SECURITY.md": true,
+		"AGENTS.md": true, "CLAUDE.md": true,
+	}
+
+	// nameBasedCode are name-based files that should use code chunking.
+	nameBasedCode = map[string]bool{
+		"Makefile": true, "makefile": true, "GNUmakefile": true,
+		"Dockerfile": true, "Containerfile": true,
 	}
 
 	ignoredDirs = map[string]bool{
@@ -59,7 +84,8 @@ func IsIgnoredDir(name string) bool {
 
 // ShouldIndex reports whether the file at the given (relative) path is a source
 // or text file worth indexing, skipping ignored directories and binary/asset
-// extensions.
+// extensions. Name-based files (Makefile, Dockerfile, LICENSE, etc.) are also
+// recognised.
 func ShouldIndex(path string) bool {
 	parts := strings.Split(path, string(filepath.Separator))
 	for _, part := range parts {
@@ -73,14 +99,29 @@ func ShouldIndex(path string) bool {
 		return false
 	}
 
-	return codeExts[ext] || textExts[ext]
+	if ext != "" {
+		return codeExts[ext] || textExts[ext]
+	}
+	// No extension: check known base names.
+	base := filepath.Base(path)
+	return knownBaseNames[base]
+}
+
+// isCodeFile reports whether the file should use the code-chunking strategy
+// (blank-line-aware) versus prose-chunking (sliding window). It checks extension
+// first, then name-based files.
+func isCodeFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext != "" {
+		return codeExts[ext]
+	}
+	return nameBasedCode[filepath.Base(path)]
 }
 
 // ChunkFile splits a file's content into chunks no larger than maxChars,
 // choosing a code- or prose-oriented strategy from the file extension.
 func ChunkFile(path string, content []byte, maxChars int) []Chunk {
-	ext := strings.ToLower(filepath.Ext(path))
-	if codeExts[ext] {
+	if isCodeFile(path) {
 		return chunkCode(content, maxChars)
 	}
 	return chunkText(content, maxChars)
