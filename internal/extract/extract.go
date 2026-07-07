@@ -115,6 +115,9 @@ func Extract(name string, data []byte) (out string, err error) {
 // base filename — either a single document or an archive that fans out to many
 // Docs.
 func Supported(name string) bool {
+	if archiveType(name) != "" {
+		return true
+	}
 	ext := strings.ToLower(filepath.Ext(name))
 	if _, ok := byExt[ext]; ok {
 		return true
