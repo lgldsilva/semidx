@@ -44,7 +44,7 @@ func (b *localBackend) Search(ctx context.Context, project, query, model string,
 	}
 	out := &SearchOutput{Project: resp.Project.Name, Fallback: resp.Fallback}
 	for _, r := range resp.Results {
-		out.Results = append(out.Results, Hit{Path: r.FilePath, StartLine: r.StartLine, Score: r.Score, Content: r.Content})
+		out.Results = append(out.Results, Hit{Path: r.FilePath, StartLine: r.StartLine, EndLine: r.EndLine, Score: r.Score, Content: r.Content})
 	}
 	return out, nil
 }
