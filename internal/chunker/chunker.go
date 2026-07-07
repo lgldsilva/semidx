@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/lgldsilva/semidx/internal/analyzer"
 )
 
 // Chunk is one indexable slice of a file's content, with the 1-based line range
@@ -78,10 +80,33 @@ func ShouldIndex(path string) bool {
 
 // ChunkFile splits a file's content into chunks no larger than maxChars,
 // choosing a code- or prose-oriented strategy from the file extension.
+//
+// For languages with a tree-sitter grammar, it uses AST-aware chunking:
+// chunks are aligned to function/class/method boundaries with symbol metadata
+// prefixes. Falls back to blank-line-based chunking when tree-sitter is not
+// available or parsing fails.
 func ChunkFile(path string, content []byte, maxChars int) []Chunk {
 	ext := strings.ToLower(filepath.Ext(path))
 	if codeExts[ext] {
+		// Try AST-aware chunking first (tree-sitter symbol boundaries).
+		if ast := ChunkFileAST(path, content, maxChars); ast != nil {
+			return ast
+		}
 		return chunkCode(content, maxChars)
+	}
+	return chunkText(content, maxChars)
+}
+
+// ChunkFilePriorAST is like ChunkFile but allows callers that already have
+// parsed symbols to pass them directly, avoiding a redundant parse. When syms
+// is nil or empty it falls back to the default strategy.
+func ChunkFilePriorAST(path string, content []byte, maxChars int, syms []analyzer.Symbol) []Chunk {
+	if len(syms) == 0 {
+		return ChunkFile(path, content, maxChars)
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	if codeExts[ext] {
+		return chunkCodeASTPrior(content, maxChars, syms)
 	}
 	return chunkText(content, maxChars)
 }
