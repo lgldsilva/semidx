@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,20 +16,22 @@ type fakeStore struct {
 	store.Store
 	project      *store.Project
 	getErr       error
+	listErr      error
 	simResults   []store.SearchResult
+	simErr       error
 	kwResults    []store.SearchResult
+	kwErr        error
 	usedKW       bool
 	usedWorktree bool
 	gotTopK      int
 }
 
-func (f *fakeStore) InsertFileDependencies(context.Context, int, string, []string) error {
-	return nil
-}
-
 func (f *fakeStore) GetProject(ctx context.Context, name string) (*store.Project, error) {
 	if f.getErr != nil {
 		return nil, f.getErr
+	}
+	if f.project == nil || f.project.Name != name {
+		return nil, store.ErrNotFound
 	}
 	return f.project, nil
 }
@@ -42,6 +45,9 @@ func (f *fakeStore) GetProjectByIdentity(_ context.Context, identity string) (*s
 	return nil, store.ErrNotFound
 }
 func (f *fakeStore) ListProjects(context.Context, int, int) ([]store.Project, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	if f.project != nil {
 		return []store.Project{*f.project}, nil
 	}
@@ -49,6 +55,9 @@ func (f *fakeStore) ListProjects(context.Context, int, int) ([]store.Project, er
 }
 func (f *fakeStore) SearchSimilar(ctx context.Context, projectID int, embedding []float32, dims, topK int) ([]store.SearchResult, error) {
 	f.gotTopK = topK
+	if f.simErr != nil {
+		return nil, f.simErr
+	}
 	return f.simResults, nil
 }
 func (f *fakeStore) SearchSimilarWorktree(ctx context.Context, projectID int, embedding []float32, dims, topK int, worktree string) ([]store.SearchResult, error) {
@@ -59,6 +68,18 @@ func (f *fakeStore) SearchSimilarWorktree(ctx context.Context, projectID int, em
 func (f *fakeStore) SearchSimilarKeywords(ctx context.Context, projectID int, queryText string, dims, topK int) ([]store.SearchResult, error) {
 	f.usedKW = true
 	f.gotTopK = topK
+	if f.kwErr != nil {
+		return nil, f.kwErr
+	}
+	return f.kwResults, nil
+}
+func (f *fakeStore) SearchSimilarKeywordsWorktree(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]store.SearchResult, error) {
+	f.usedWorktree = true
+	f.usedKW = true
+	f.gotTopK = topK
+	if f.kwErr != nil {
+		return nil, f.kwErr
+	}
 	return f.kwResults, nil
 }
 
@@ -215,5 +236,105 @@ func TestSearchIgnoresWorktreeForNonGitProject(t *testing.T) {
 	}
 	if st.usedWorktree {
 		t.Error("worktree filter must be ignored for non-git projects")
+	}
+}
+
+func TestSearchByIdentity(t *testing.T) {
+	st := &fakeStore{
+		project:    &store.Project{ID: 1, Name: "app", Identity: "git:example/app", Model: "bge-m3"},
+		simResults: []store.SearchResult{{FilePath: "main.go", Content: "x", Score: 0.9}},
+	}
+	svc := NewService(st, &fakeEmbedder{vec: []float32{1, 2, 3}, dims: 3})
+
+	resp, err := svc.Search(context.Background(), Request{Identity: "git:example/app", Query: "q"})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if resp.Project.Name != "app" || len(resp.Results) != 1 {
+		t.Fatalf("resp = %+v", resp)
+	}
+}
+
+func TestSearchGitWorktreeScoped(t *testing.T) {
+	st := &fakeStore{
+		project:    &store.Project{ID: 1, Name: "app", Model: "bge-m3", SourceType: "git"},
+		simResults: []store.SearchResult{{FilePath: "wt.go", Content: "x", Score: 0.9}},
+	}
+	svc := NewService(st, &fakeEmbedder{vec: []float32{1, 2, 3}, dims: 3})
+
+	if _, err := svc.Search(context.Background(), Request{Project: "app", Query: "q", Worktree: "/wt"}); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if !st.usedWorktree {
+		t.Fatal("expected worktree-scoped vector search for git project")
+	}
+}
+
+func TestSearchKeywordFallbackUsesWorktree(t *testing.T) {
+	st := &fakeStore{
+		project:   &store.Project{ID: 1, Name: "app", Model: "bge-m3", SourceType: "git"},
+		kwResults: []store.SearchResult{{FilePath: "b.go", Content: "y", Score: 0.5}},
+	}
+	svc := NewService(st, &fakeEmbedder{embedErr: errors.New("offline"), dims: 3})
+
+	resp, err := svc.Search(context.Background(), Request{Project: "app", Query: "q", Worktree: "/wt"})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if !resp.Fallback || !st.usedWorktree {
+		t.Fatalf("fallback worktree = fallback %v usedWorktree %v", resp.Fallback, st.usedWorktree)
+	}
+}
+
+func TestSearchProjectLookupErrorWraps(t *testing.T) {
+	st := &fakeStore{listErr: errors.New("db down")}
+	svc := NewService(st, &fakeEmbedder{vec: []float32{1}, dims: 1})
+	_, err := svc.Search(context.Background(), Request{Project: "ghost", Query: "q"})
+	if err == nil || !strings.Contains(err.Error(), "project lookup failed") {
+		t.Fatalf("expected wrapped lookup error, got %v", err)
+	}
+}
+
+func TestSearchRequiresProjectRef(t *testing.T) {
+	svc := NewService(&fakeStore{}, &fakeEmbedder{vec: []float32{1}, dims: 1})
+	_, err := svc.Search(context.Background(), Request{Query: "q"})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestSearchKeywordOnlyStoreError(t *testing.T) {
+	st := &fakeStore{
+		project: &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		kwErr:   errors.New("kw down"),
+	}
+	svc := NewService(st, &fakeEmbedder{embedErr: errors.New("must not embed")})
+	_, err := svc.Search(context.Background(), Request{Project: "p", Query: "q", KeywordOnly: true})
+	if err == nil || err.Error() != "kw down" {
+		t.Fatalf("expected kw error, got %v", err)
+	}
+}
+
+func TestSearchKeywordFallbackKeywordError(t *testing.T) {
+	st := &fakeStore{
+		project: &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		kwErr:   errors.New("kw down"),
+	}
+	svc := NewService(st, &fakeEmbedder{embedErr: errors.New("offline"), dims: 3})
+	_, err := svc.Search(context.Background(), Request{Project: "p", Query: "q"})
+	if err == nil || err.Error() != "kw down" {
+		t.Fatalf("expected kw error, got %v", err)
+	}
+}
+
+func TestSearchVectorStoreError(t *testing.T) {
+	st := &fakeStore{
+		project: &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		simErr:  errors.New("vector down"),
+	}
+	svc := NewService(st, &fakeEmbedder{vec: []float32{1}, dims: 1})
+	_, err := svc.Search(context.Background(), Request{Project: "p", Query: "q"})
+	if err == nil || err.Error() != "vector down" {
+		t.Fatalf("expected vector error, got %v", err)
 	}
 }
