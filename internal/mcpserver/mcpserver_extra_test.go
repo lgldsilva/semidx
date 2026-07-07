@@ -67,9 +67,9 @@ func TestFormatSearch(t *testing.T) {
 	t.Parallel()
 
 	// Empty results.
-	empty := formatSearch(&SearchOutput{Project: "empty-proj", Results: nil})
+	empty := formatSearchText(&SearchOutput{Project: "empty-proj", Results: nil})
 	if !strings.Contains(empty, "No results in project \"empty-proj\"") {
-		t.Errorf("empty formatSearch = %q", empty)
+		t.Errorf("empty formatSearchText = %q", empty)
 	}
 
 	// With results, no fallback.
@@ -80,18 +80,18 @@ func TestFormatSearch(t *testing.T) {
 			{Path: "main.go", StartLine: 10, Score: 0.95, Content: "func main() {}"},
 		},
 	}
-	got := formatSearch(out)
+	got := formatSearchText(out)
 	if !strings.Contains(got, "1. main.go:10") {
-		t.Errorf("formatSearch missing result line: %q", got)
+		t.Errorf("formatSearchText missing result line: %q", got)
 	}
 	if !strings.Contains(got, "0.950") {
-		t.Errorf("formatSearch missing score: %q", got)
+		t.Errorf("formatSearchText missing score: %q", got)
 	}
 	if !strings.Contains(got, "func main() {}") {
-		t.Errorf("formatSearch missing content: %q", got)
+		t.Errorf("formatSearchText missing content: %q", got)
 	}
 	if strings.Contains(got, "warning") {
-		t.Errorf("formatSearch should not contain warning without fallback: %q", got)
+		t.Errorf("formatSearchText should not contain warning without fallback: %q", got)
 	}
 
 	// With fallback warning.
@@ -102,9 +102,9 @@ func TestFormatSearch(t *testing.T) {
 			{Path: "a.go", StartLine: 1, Score: 0.5, Content: "package a"},
 		},
 	}
-	fbGot := formatSearch(fallbackOut)
+	fbGot := formatSearchText(fallbackOut)
 	if !strings.Contains(fbGot, "warning") || !strings.Contains(fbGot, "keyword") {
-		t.Errorf("formatSearch fallback missing warning: %q", fbGot)
+		t.Errorf("formatSearchText fallback missing warning: %q", fbGot)
 	}
 }
 
