@@ -64,16 +64,16 @@ func TestSearchHandlerError(t *testing.T) {
 	}
 }
 
-func TestFormatSearch(t *testing.T) {
+func TestFormatSearchText(t *testing.T) {
 	t.Run("no results", func(t *testing.T) {
-		got := formatSearch(&SearchOutput{Project: "proj", Results: nil})
+		got := formatSearchText(&SearchOutput{Project: "proj", Results: nil})
 		if got != `No results in project "proj" for that query.` {
-			t.Errorf("empty formatSearch = %q", got)
+			t.Errorf("empty formatSearchText = %q", got)
 		}
 	})
 
 	t.Run("fallback warning is prepended", func(t *testing.T) {
-		got := formatSearch(&SearchOutput{
+		got := formatSearchText(&SearchOutput{
 			Project:  "proj",
 			Fallback: true,
 			Results:  []Hit{{Path: "a.go", StartLine: 1, Score: 0.5, Content: "x"}},
@@ -87,7 +87,7 @@ func TestFormatSearch(t *testing.T) {
 	})
 
 	t.Run("ranked results are numbered with scores", func(t *testing.T) {
-		got := formatSearch(&SearchOutput{
+		got := formatSearchText(&SearchOutput{
 			Project: "proj",
 			Results: []Hit{
 				{Path: "a.go", StartLine: 10, Score: 0.912, Content: "alpha"},
@@ -99,6 +99,106 @@ func TestFormatSearch(t *testing.T) {
 		}
 		if !strings.Contains(got, "2. b.go:20  (score 0.500)") {
 			t.Errorf("second hit misformatted; got %q", got)
+		}
+	})
+
+	t.Run("multi-line chunk shows end line", func(t *testing.T) {
+		got := formatSearchText(&SearchOutput{
+			Project: "proj",
+			Results: []Hit{
+				{Path: "main.go", StartLine: 10, EndLine: 14, Score: 0.9, Content: "func main() {}"},
+			},
+		})
+		if !strings.Contains(got, "1. main.go:10-14  (score 0.900)") {
+			t.Errorf("multi-line result misformatted; got %q", got)
+		}
+	})
+}
+
+func TestFormatSearchStructured(t *testing.T) {
+	t.Run("no results", func(t *testing.T) {
+		got := formatSearchStructured(&SearchOutput{Project: "proj", TookMS: 5})
+		if !strings.Contains(got, `"total_results":0`) || !strings.Contains(got, `"query_time_ms":5`) {
+			t.Errorf("empty structured output missing fields; got %q", got)
+		}
+	})
+
+	t.Run("populated results include all fields", func(t *testing.T) {
+		got := formatSearchStructured(&SearchOutput{
+			Project:  "proj",
+			Fallback: true,
+			TookMS:   12,
+			Results: []Hit{
+				{Path: "auth/token.go", StartLine: 42, EndLine: 48, Score: 0.912, Content: "func Validate()"},
+			},
+		})
+		if !strings.Contains(got, `"file":"auth/token.go"`) {
+			t.Errorf("missing file field; got %q", got)
+		}
+		if !strings.Contains(got, `"start_line":42`) {
+			t.Errorf("missing start_line; got %q", got)
+		}
+		if !strings.Contains(got, `"end_line":48`) {
+			t.Errorf("missing end_line; got %q", got)
+		}
+		if !strings.Contains(got, `"language":"go"`) {
+			t.Errorf("missing language; got %q", got)
+		}
+		if !strings.Contains(got, `"fallback":true`) {
+			t.Errorf("missing fallback; got %q", got)
+		}
+		if !strings.Contains(got, `"total_results":1`) {
+			t.Errorf("missing total_results; got %q", got)
+		}
+		if !strings.Contains(got, `"query_time_ms":12`) {
+			t.Errorf("missing query_time_ms; got %q", got)
+		}
+	})
+}
+
+func TestFormatSearchMinimal(t *testing.T) {
+	t.Run("no results", func(t *testing.T) {
+		got := formatSearchMinimal(&SearchOutput{Project: "proj", TookMS: 3})
+		if !strings.Contains(got, `"t":0`) || !strings.Contains(got, `"ms":3`) {
+			t.Errorf("empty minimal output missing fields; got %q", got)
+		}
+	})
+
+	t.Run("populated results use abbreviated keys", func(t *testing.T) {
+		got := formatSearchMinimal(&SearchOutput{
+			Project:  "proj",
+			Fallback: false,
+			TookMS:   42,
+			Results: []Hit{
+				{Path: "auth/token.go", StartLine: 42, EndLine: 48, Score: 0.912, Content: "func Validate() {}"},
+			},
+		})
+		if !strings.Contains(got, `"f":"auth/token.go"`) {
+			t.Errorf("missing abbreviated file key; got %q", got)
+		}
+		if !strings.Contains(got, `"l":"42-48"`) {
+			t.Errorf("missing line range; got %q", got)
+		}
+		if !strings.Contains(got, `"s":0.912`) {
+			t.Errorf("missing score; got %q", got)
+		}
+		if !strings.Contains(got, `"fb":false`) {
+			t.Errorf("missing fallback; got %q", got)
+		}
+		if !strings.Contains(got, `"ms":42`) {
+			t.Errorf("missing query_time_ms; got %q", got)
+		}
+	})
+
+	t.Run("single-line chunk uses single line", func(t *testing.T) {
+		got := formatSearchMinimal(&SearchOutput{
+			Project: "proj",
+			Results: []Hit{
+				{Path: "main.go", StartLine: 5, EndLine: 5, Score: 0.5, Content: "single"},
+			},
+		})
+		if !strings.Contains(got, `"l":"5"`) {
+			t.Errorf("single line should not have range; got %q", got)
 		}
 	})
 }

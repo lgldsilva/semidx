@@ -14,7 +14,9 @@ type Doc struct {
 	Text string
 }
 
-// archiveExts are container formats expanded into many Docs.
+// archiveExts are container formats expanded into many Docs via the JAR extractor
+// (archive/zip with .class processing). Generic archives (.zip, .tar, …) are
+// handled by a separate registry — see genericArchiveExts.
 var archiveExts = map[string]bool{".jar": true, ".war": true, ".aar": true}
 
 // ExtractAll turns a file into one or more searchable Docs. Documents map to a
@@ -24,6 +26,10 @@ var archiveExts = map[string]bool{".jar": true, ".war": true, ".aar": true}
 // the indexer.
 func ExtractAll(name string, data []byte) ([]Doc, error) {
 	ext := strings.ToLower(filepath.Ext(name))
+	// Check compound archive extensions first (.tar.gz, .tar.bz2).
+	if archType := archiveType(name); archType != "" {
+		return extractGenericArchive(name, data)
+	}
 	if archiveExts[ext] {
 		return extractArchive(name, data)
 	}

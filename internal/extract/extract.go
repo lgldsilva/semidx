@@ -114,6 +114,9 @@ func Extract(name string, data []byte) (out string, err error) {
 // Supported reports whether ExtractAll can handle a file by its extension —
 // either a single document or an archive that fans out to many Docs.
 func Supported(name string) bool {
+	if archiveType(name) != "" {
+		return true
+	}
 	ext := strings.ToLower(filepath.Ext(name))
 	_, ok := byExt[ext]
 	return ok || archiveExts[ext]
