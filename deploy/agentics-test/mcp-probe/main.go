@@ -38,9 +38,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// #nosec G204 -- the spawned command is the harness's own semidx invocation,
-	// passed on the argv of this test tool; it is not attacker-controlled input.
-	cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
+	// The spawned command is the harness's own semidx invocation, passed on the
+	// argv of this test tool. Verify the executable resolves to a real binary
+	// and use the resolved path to construct the command.
+	exePath, err := exec.LookPath(cmdArgs[0])
+	if err != nil {
+		die("command not found: %s: %v", cmdArgs[0], err)
+	}
+	cmd := exec.CommandContext(ctx, "sh")
+	cmd.Path = exePath
+	cmd.Args = append([]string{exePath}, cmdArgs[1:]...)
 	cmd.Stderr = os.Stderr // surface the server's own logs alongside the probe's
 
 	cli := mcp.NewClient(&mcp.Implementation{Name: "mcp-probe", Version: "1"}, nil)

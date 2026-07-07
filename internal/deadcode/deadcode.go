@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"unicode"
 
 	"github.com/lgldsilva/semidx/internal/analyzer"
@@ -53,7 +54,10 @@ func Analyze(ctx context.Context, projectID int, db store.IndexStore, projectPat
 
 	var findings []Finding
 	for filePath := range files {
-		absPath := filepath.Join(projectPath, filePath)
+		absPath := filepath.Clean(filepath.Join(projectPath, filePath))
+		if !strings.HasPrefix(absPath, filepath.Clean(projectPath)+string(filepath.Separator)) && filepath.Clean(projectPath) != "." {
+			continue
+		}
 		content, err := os.ReadFile(absPath)
 		if err != nil {
 			// File may have been deleted or moved since last index — skip.

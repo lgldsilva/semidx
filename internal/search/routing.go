@@ -19,10 +19,6 @@ const (
 	QueryNaturalLanguage
 )
 
-// identifierRE matches a valid identifier: starts with a letter or underscore,
-// followed by zero or more word characters, dots, or colons.
-var identifierPattern = `^[a-zA-Z_][a-zA-Z0-9_.]*$`
-
 // ClassifyQuery heuristically classifies a query string into a QueryType.
 func ClassifyQuery(query string) QueryType {
 	if query == "" {

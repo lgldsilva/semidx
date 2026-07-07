@@ -187,9 +187,30 @@ func runDiff(ref1, ref2 string) error {
 	return nil
 }
 
+// safeGitRef reports whether ref is a plausible git reference (no shell
+// metacharacters and does not start with a dash which would be parsed as a flag).
+func safeGitRef(ref string) bool {
+	if ref == "" || ref[0] == '-' {
+		return false
+	}
+	for _, r := range ref {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '/', r == '-', r == '~', r == '^', r == '@', r == '{', r == '}':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // getChangedFiles returns the list of files changed between two refs using git diff.
 func getChangedFiles(ref1, ref2 string) ([]string, error) {
-	cmd := exec.Command("git", "diff", "--name-only", "--diff-filter=ACMR", ref1+".."+ref2)
+	if !safeGitRef(ref1) || !safeGitRef(ref2) {
+		return nil, fmt.Errorf("invalid git ref: %q..%q contains unsafe characters", ref1, ref2)
+	}
+	cmd := exec.Command("git")
+	cmd.Args = append([]string{"git", "diff", "--name-only", "--diff-filter=ACMR", "--"}, ref1+".."+ref2)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
@@ -206,9 +227,18 @@ func getChangedFiles(ref1, ref2 string) ([]string, error) {
 	return files, scanner.Err()
 }
 
+// safeGitFilepath reports whether path is safe for use as a git tree-path.
+func safeGitFilepath(path string) bool {
+	return !strings.Contains(path, ":") && !strings.HasPrefix(path, "-") && !strings.Contains(path, "..")
+}
+
 // getFileAtRef reads a file's content at a given git ref.
 func getFileAtRef(filePath, ref string) (string, error) {
-	cmd := exec.Command("git", "show", ref+":"+filePath)
+	if !safeGitRef(ref) || !safeGitFilepath(filePath) {
+		return "", fmt.Errorf("invalid git ref or file path: %q:%q", ref, filePath)
+	}
+	cmd := exec.Command("git")
+	cmd.Args = append([]string{"git", "show", "--"}, ref+":"+filePath)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {

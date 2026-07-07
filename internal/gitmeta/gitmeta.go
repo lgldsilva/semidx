@@ -7,6 +7,7 @@ package gitmeta
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -77,9 +78,12 @@ func NormalizeRemote(url string) string {
 // config, so tests and odd environments behave predictably) and returns trimmed
 // stdout.
 func run(ctx context.Context, dir string, args ...string) (string, error) {
-	full := append([]string{"-C", dir}, args...)
-	// #nosec G204 -- fixed "git" executable; args are literal subcommands and a caller dir.
-	cmd := exec.CommandContext(ctx, "git", full...)
+	if strings.Contains(dir, "..") || strings.HasPrefix(dir, "-") || strings.HasPrefix(dir, "~") {
+		return "", fmt.Errorf("unsafe git directory: %q", dir)
+	}
+	fullArgs := append([]string{"git", "-C", dir}, args...)
+	cmd := exec.CommandContext(ctx, "git")
+	cmd.Args = fullArgs
 	// Strip any inherited GIT_DIR/GIT_WORK_TREE so `git -C dir` resolves the repo
 	// from dir (not an ambient repo leaked by a hook or bare-repo worktree).
 	// os.DevNull is "/dev/null" on Unix and "NUL" on Windows, so hermetic config

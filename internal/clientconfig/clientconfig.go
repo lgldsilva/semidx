@@ -35,8 +35,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	// #nosec G304 -- reads the CLI's own config file at a well-known per-user path.
-	if data, err := os.ReadFile(p); err == nil {
+	if data, err := os.ReadFile(filepath.Clean(p)); err == nil {
 		if err := yaml.Unmarshal(data, c); err != nil {
 			return nil, err
 		}

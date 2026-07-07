@@ -281,8 +281,8 @@ func TestSearchHandlerEdgeCases(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = sess.Close() })
 
-	// Graph=true with default depth.
-	text, isErr := callText(t, sess, "semantic_search", map[string]any{"project": "app", "query": "test", "graph": true})
+	// Graph=true with default depth (text format to match assertion).
+	text, isErr := callText(t, sess, "semantic_search", map[string]any{"project": "app", "query": "test", "graph": true, "format": "text"})
 	if isErr {
 		t.Fatalf("unexpected isError; text=%q", text)
 	}

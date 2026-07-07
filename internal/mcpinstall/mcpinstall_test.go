@@ -17,7 +17,7 @@ func init() {
 // decodeJSON reads a written config file as a generic map.
 func decodeJSON(t *testing.T, path string) map[string]any {
 	t.Helper()
-	b, err := os.ReadFile(path) // #nosec G304 -- test-controlled temp path
+	b, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}

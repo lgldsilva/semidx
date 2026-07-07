@@ -13,6 +13,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -138,10 +139,7 @@ func New(path string) (*SQLiteStore, error) {
 	// busy_timeout handles concurrent reads/writes during normal operation,
 	// but FTS5 virtual-table creation and trigger setup can race when two
 	// processes (e.g. index + search) call ensureSchema simultaneously.
-	lockPath := schemaLockPath(path)
-	// #nosec G304 -- lockPath is a fixed .lock sidecar next to the db file,
-	// intentionally derived from the user-provided db path (same trust model as the
-	// db file itself opened via sql.Open below).
+	lockPath := filepath.Clean(schemaLockPath(path))
 	lockFile, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open schema lock: %w", err)
@@ -556,7 +554,6 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 		join = "JOIN files f ON f.id = c.file_id JOIN worktree_files w ON w.project_id = c.project_id AND w.path = f.path AND w.hash = f.hash AND w.worktree = ?"
 		args = []any{worktree, projectID}
 	}
-	// #nosec G201 -- join is one of two constant literals; all values are bound as ? params.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT f.path, c.content, c.start_line, c.end_line, c.embedding
 		FROM chunks c `+join+`
@@ -647,7 +644,6 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 		topK = -1 // SQLite treats LIMIT -1 as "no limit"
 	}
 
-	// #nosec G201 -- join is one of two constant literals; all values are bound as ? params.
 	// Note: FTS5 MATCH requires the table name, not an alias.
 	query := fmt.Sprintf(`
 		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score
@@ -958,55 +954,39 @@ func (s *SQLiteStore) FetchGraphPathsBFS(ctx context.Context, projectID int, see
 	// SQLite's ? placeholders are positional across UNION branches, so we must
 	// repeat values. We build a flat arg list: seeds, projectID, seeds, projectID,
 	// projectID, maxDepth, projectID, maxDepth.
-	inClause := strings.Repeat("?,", len(seedPaths))
-	inClause = inClause[:len(inClause)-1] // trailing comma
+	// Use json_each to avoid dynamic IN clause construction (G202/G201).
+	seedJSON, _ := json.Marshal(seedPaths)
 
-	var args []any
-	// Anchor forward: source IN (seeds) AND project_id = ?
-	for _, p := range seedPaths {
-		args = append(args, p)
-	}
-	args = append(args, projectID)
-	// Anchor backward: target IN (seeds) AND project_id = ?
-	for _, p := range seedPaths {
-		args = append(args, p)
-	}
-	args = append(args, projectID)
-	// Recursive forward: project_id = ? AND depth < ?
-	args = append(args, projectID, maxDepth)
-	// Recursive backward: project_id = ? AND depth < ?
-	args = append(args, projectID, maxDepth)
+	var args = []any{string(seedJSON), projectID, string(seedJSON), projectID, projectID, maxDepth, projectID, maxDepth}
 
-	query := fmt.Sprintf(`
-		WITH RECURSIVE graph_bfs(file_path, depth) AS (
-			SELECT fd.target_file, 1
-			FROM file_dependencies fd
-			WHERE fd.source_file IN (%s) AND fd.project_id = ?
+	query := `WITH RECURSIVE graph_bfs(file_path, depth) AS (
+		SELECT fd.target_file, 1
+		FROM file_dependencies fd
+		WHERE fd.source_file IN (SELECT value FROM json_each(?)) AND fd.project_id = ?
 
-			UNION
+		UNION
 
-			SELECT fd.source_file, 1
-			FROM file_dependencies fd
-			WHERE fd.target_file IN (%s) AND fd.project_id = ?
+		SELECT fd.source_file, 1
+		FROM file_dependencies fd
+		WHERE fd.target_file IN (SELECT value FROM json_each(?)) AND fd.project_id = ?
 
-			UNION
+		UNION
 
-			SELECT fd.target_file, g.depth + 1
-			FROM file_dependencies fd
-			JOIN graph_bfs g ON fd.source_file = g.file_path
-			WHERE fd.project_id = ? AND g.depth < ?
+		SELECT fd.target_file, g.depth + 1
+		FROM file_dependencies fd
+		JOIN graph_bfs g ON fd.source_file = g.file_path
+		WHERE fd.project_id = ? AND g.depth < ?
 
-			UNION
+		UNION
 
-			SELECT fd.source_file, g.depth + 1
-			FROM file_dependencies fd
-			JOIN graph_bfs g ON fd.target_file = g.file_path
-			WHERE fd.project_id = ? AND g.depth < ?
-		)
-		SELECT file_path, MIN(depth) AS depth
-		FROM graph_bfs
-		GROUP BY file_path
-	`, inClause, inClause)
+		SELECT fd.source_file, g.depth + 1
+		FROM file_dependencies fd
+		JOIN graph_bfs g ON fd.target_file = g.file_path
+		WHERE fd.project_id = ? AND g.depth < ?
+	)
+	SELECT file_path, MIN(depth) AS depth
+	FROM graph_bfs
+	GROUP BY file_path`
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
