@@ -537,7 +537,9 @@ func hasLibreOffice() bool {
 // registered in byExt only when libreoffice is available.
 func TestExtractLegacyOfficeRegistration(t *testing.T) {
 	for _, ext := range []string{".doc", ".xls", ".ppt"} {
+		registryMu.RLock()
 		_, inByExt := byExt[ext]
+		registryMu.RUnlock()
 		if hasLibreOffice() && !inByExt {
 			t.Errorf("ext %s should be registered when libreoffice is available", ext)
 		}

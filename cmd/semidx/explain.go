@@ -95,6 +95,7 @@ func printExplain(ctx context.Context, db store.IndexStore, proj *store.Project,
 	if !strings.HasPrefix(absPath, filepath.Clean(root)+string(filepath.Separator)) && absPath != filepath.Clean(root) && root != "." {
 		return fmt.Errorf("path %q escapes project root", fl.File)
 	}
+	// #nosec G304 -- absPath is safely restricted within the project root
 	content, err := os.ReadFile(absPath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", fl.File, err)
@@ -208,6 +209,7 @@ func goPackageName(content []byte) string {
 // detectModulePath tries to read go.mod from project root to get the module path.
 func detectModulePath(root string) string {
 	gm := filepath.Clean(filepath.Join(root, "go.mod"))
+	// #nosec G304 -- gm points to the project go.mod file, which is safe
 	data, err := os.ReadFile(gm)
 	if err != nil {
 		return ""
@@ -244,6 +246,7 @@ func findTestFiles(root, filePath, symbolName string) []string {
 		if !strings.HasPrefix(testAbsPath, filepath.Clean(root)+string(filepath.Separator)) && testAbsPath != filepath.Clean(root) && root != "." {
 			continue
 		}
+		// #nosec G304 -- reading related test files inside the user's project is safe
 		testContent, err := os.ReadFile(testAbsPath)
 		if err != nil {
 			continue

@@ -58,6 +58,7 @@ func Analyze(ctx context.Context, projectID int, db store.IndexStore, projectPat
 		if !strings.HasPrefix(absPath, filepath.Clean(projectPath)+string(filepath.Separator)) && filepath.Clean(projectPath) != "." {
 			continue
 		}
+		// #nosec G304 -- absPath is safely restricted within the projectRoot
 		content, err := os.ReadFile(absPath)
 		if err != nil {
 			// File may have been deleted or moved since last index — skip.

@@ -23,7 +23,11 @@ func TestRegisterAndDuplicate(t *testing.T) {
 		return "unit-test-result", nil
 	})
 	// Clean up after test so other tests aren't affected.
-	t.Cleanup(func() { delete(byExt, ".unittest") })
+	t.Cleanup(func() {
+		registryMu.Lock()
+		delete(byExt, ".unittest")
+		registryMu.Unlock()
+	})
 
 	got, err := Extract("test.unittest", []byte("x"))
 	if err != nil {

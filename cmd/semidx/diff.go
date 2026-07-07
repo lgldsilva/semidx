@@ -209,6 +209,7 @@ func getChangedFiles(ref1, ref2 string) ([]string, error) {
 	if !safeGitRef(ref1) || !safeGitRef(ref2) {
 		return nil, fmt.Errorf("invalid git ref: %q..%q contains unsafe characters", ref1, ref2)
 	}
+	// #nosec G204 -- git arguments are validated via safeGitRef and '--' boundary separator
 	cmd := exec.Command("git")
 	cmd.Args = append([]string{"git", "diff", "--name-only", "--diff-filter=ACMR", "--"}, ref1+".."+ref2)
 	cmd.Stderr = os.Stderr
@@ -237,6 +238,7 @@ func getFileAtRef(filePath, ref string) (string, error) {
 	if !safeGitRef(ref) || !safeGitFilepath(filePath) {
 		return "", fmt.Errorf("invalid git ref or file path: %q:%q", ref, filePath)
 	}
+	// #nosec G204 -- git show arguments are validated via safeGitRef and safeGitFilepath
 	cmd := exec.Command("git")
 	cmd.Args = append([]string{"git", "show", "--"}, ref+":"+filePath)
 	cmd.Stderr = os.Stderr

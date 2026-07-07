@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -23,6 +24,7 @@ type Watcher struct {
 	idx         *Indexer
 	log         *slog.Logger
 	model       string
+	mu          sync.Mutex
 }
 
 // NewWatcher creates a Watcher bound to one project.
@@ -62,9 +64,11 @@ func (w *Watcher) Watch(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			// Cancel all pending debounce timers.
+			w.mu.Lock()
 			for _, t := range debounceTimers {
 				t.Stop()
 			}
+			w.mu.Unlock()
 			return ctx.Err()
 
 		case event, ok := <-watcher.Events:
@@ -131,11 +135,15 @@ func isIgnored(path string) bool {
 // debounce queues a re-index for path after the debounce window, cancelling
 // any previously queued timer for the same path.
 func (w *Watcher) debounce(ctx context.Context, timers map[string]*time.Timer, path string, window time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if t, ok := timers[path]; ok {
 		t.Stop()
 	}
 	timers[path] = time.AfterFunc(window, func() {
+		w.mu.Lock()
 		delete(timers, path)
+		w.mu.Unlock()
 		w.handleCreate(ctx, path)
 	})
 }

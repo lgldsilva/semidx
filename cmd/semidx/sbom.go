@@ -177,6 +177,7 @@ type goModInfo struct {
 
 // readGoMod parses a go.mod for module path and dependency versions.
 func readGoMod(projectPath string) *goModInfo {
+	// #nosec G304 -- projectPath is safe as it is bounded by the project configuration
 	data, err := os.ReadFile(filepath.Clean(filepath.Join(projectPath, "go.mod")))
 	if err != nil {
 		return nil
