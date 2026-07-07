@@ -20,20 +20,20 @@ import (
 // fakeStore implements just the methods the server touches.
 type fakeStore struct {
 	store.Store
-	pingErr    error
-	token      *store.Token         // TokenByHash result (nil = no active token)
-	project    *store.Project       // GetProject result (nil → ErrNotFound)
-	results    []store.SearchResult // search results
-	createErr  error                // CreateProject error
-	listed     []store.Project      // ListProjects result
-	deleteErr  error                // DeleteProject error
-	enqueuedID int                  // EnqueueJob result
-	job        *store.Job           // GetJob result (nil → ErrNotFound)
-	fileHashes   map[string]string // ListFileHashes result
-	fileCount    int               // CountProjectFiles result
-	fileCountErr error             // CountProjectFiles error
-	userCount    int               // CountUsers result
-	created    *store.User          // last CreateUser call
+	pingErr      error
+	token        *store.Token         // TokenByHash result (nil = no active token)
+	project      *store.Project       // GetProject result (nil → ErrNotFound)
+	results      []store.SearchResult // search results
+	createErr    error                // CreateProject error
+	listed       []store.Project      // ListProjects result
+	deleteErr    error                // DeleteProject error
+	enqueuedID   int                  // EnqueueJob result
+	job          *store.Job           // GetJob result (nil → ErrNotFound)
+	fileHashes   map[string]string    // ListFileHashes result
+	fileCount    int                  // CountProjectFiles result
+	fileCountErr error                // CountProjectFiles error
+	userCount    int                  // CountUsers result
+	created      *store.User          // last CreateUser call
 
 	// error-injection fields (all nil/zero = success path)
 	listErr     error // ListProjects error
