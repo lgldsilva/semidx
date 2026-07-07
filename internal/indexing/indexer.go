@@ -32,6 +32,7 @@ import (
 	si "github.com/lgldsilva/semidx/internal/imports"
 	"github.com/lgldsilva/semidx/internal/observ"
 	"github.com/lgldsilva/semidx/internal/privacy"
+	"github.com/lgldsilva/semidx/internal/secrets"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -59,6 +60,14 @@ type Indexer struct {
 	noSymbols           bool   // when true, skip symbol enrichment (even when embedding)
 	modulePath          string // Go module path from go.mod (for import-dependency extraction)
 	worktree            string // when set, record this worktree's manifest + prune after indexing
+
+	// Secret scan: when enabled, every file's content is scanned with gitleaks
+	// before chunking. Files with detected secrets are stored text-only (no
+	// embedding) when SecretBlockEmbedding is true. env: SEMIDX_SECRET_SCAN,
+	// SEMIDX_SECRET_BLOCK_EMBEDDING.
+	secretDetector       *secrets.Detector
+	secretScanEnabled    bool
+	secretBlockEmbedding bool
 
 	// mem throttling for the verbose progress path: ReadMemStats triggers a
 	// stop-the-world, so we cache results and refresh at most once per 10s.
@@ -144,6 +153,25 @@ func (idx *Indexer) SetKeywordOnly(v bool) *Indexer {
 	return idx
 }
 
+// SetSecretScan configures the indexer for gitleaks-based secret scanning. When
+// enabled, each file is scanned before chunking; files with detected secrets are
+// stored text-only (no embedding) when blockEmbedding is true. The detector is
+// created once and reused across all files of the project.
+func (idx *Indexer) SetSecretScan(root string, enabled, blockEmbedding bool) *Indexer {
+	idx.secretScanEnabled = enabled
+	idx.secretBlockEmbedding = blockEmbedding
+	if enabled {
+		d, err := secrets.NewDetector(root)
+		if err != nil {
+			idx.log.Warn("secret detector init (disabled)", "root", root, "err", err)
+			idx.secretScanEnabled = false
+		} else {
+			idx.secretDetector = d
+		}
+	}
+	return idx
+}
+
 // SetWorktree marks the indexed tree as a specific git worktree. After indexing,
 // the indexer records that worktree's (path -> hash) manifest and prunes file
 // versions no worktree references. Empty (the default) disables worktree tracking
@@ -154,7 +182,9 @@ func (idx *Indexer) SetWorktree(worktree string) *Indexer {
 }
 
 // IndexProject scans projectPath, indexes each eligible file, optionally indexes
-// git history, and marks the project ready.
+// git history, and marks the project ready. When the project is a git repo and a
+// previous index stored a commit SHA, only files changed since that commit are
+// processed (git-diff incremental layer).
 func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath, model string, maxFiles int) (*IndexStats, error) {
 	ctx, span := observ.StartSpan(ctx, "indexing.Indexer.IndexProject")
 	defer span.End()
@@ -165,9 +195,25 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		idx.modulePath = ReadModulePath(projectPath)
 	}
 
-	files, err := ScanFiles(projectPath, maxFiles)
-	if err != nil {
-		return nil, err
+	// Git-diff incremental: if we have a stored commit, only index changed files.
+	var err error
+	changedFiles, diffErr := idx.gitDiffChanged(ctx, projectID, projectPath)
+	if diffErr != nil {
+		// Git command failed — fall back to full walk.
+		idx.logf("[warn] git diff incremental failed, falling back to full walk: %s", truncateErr(diffErr, 200))
+	}
+
+	var files []string
+	if len(changedFiles) > 0 {
+		// Only index the files that changed. Resolve relative paths to absolute.
+		for _, rel := range changedFiles {
+			files = append(files, filepath.Join(projectPath, rel))
+		}
+	} else {
+		files, err = ScanFiles(projectPath, maxFiles)
+		if err != nil {
+			return nil, err
+		}
 	}
 	stats.FilesScanned = len(files)
 
@@ -228,6 +274,13 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		if err := idx.indexGitHistory(ctx, projectID, projectPath, model); err != nil {
 			stats.Errors++
 			idx.logf("[err] git history: %s", truncateErr(err, 200))
+		}
+	}
+
+	// Store the current commit SHA for git-diff incremental on next index.
+	if commitSHA := idx.gitHeadCommit(ctx, projectPath); commitSHA != "" {
+		if err := idx.db.UpdateProjectCommit(ctx, projectID, commitSHA); err != nil {
+			idx.logf("[warn] store indexed commit: %s", truncateErr(err, 200))
 		}
 	}
 
@@ -491,18 +544,31 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 	if !idx.keywordOnly && !idx.noSymbols {
 		syms = sym.Symbols(rel, content)
 	}
-	created, softErrs, err = idx.storeChunks(ctx, projectID, fileID, rel, model, chunks, syms)
+
+	// Secret scan: run before embedding. When secrets are detected and
+	// blockEmbedding is on, the file is stored text-only (no embedding).
+	hasSecrets := false
+	if idx.secretScanEnabled && idx.secretDetector != nil {
+		findings := idx.secretDetector.Scan(rel, content)
+		if len(findings) > 0 {
+			hasSecrets = true
+			idx.logf("[secrets] %s: %d finding(s) — stored text-only", rel, len(findings))
+		}
+	}
+
+	created, softErrs, err = idx.storeChunks(ctx, projectID, fileID, rel, model, chunks, syms, hasSecrets)
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, "", err
 	}
 	return created, softErrs, outcomeIndexed, hash, nil
 }
 
-// storeChunks turns a unit's chunks into stored rows, honoring keyword-only mode
-// and privacy routing. It stores the chunks text-only in keyword-only mode, or
-// when a sensitive file cannot be embedded by a local provider; otherwise it
+// storeChunks turns a unit's chunks into stored rows, honoring keyword-only mode,
+// privacy routing and secret-scan tagging. It stores the chunks text-only in
+// keyword-only mode, when a sensitive file cannot be embedded by a local provider,
+// or when secrets were detected and SECRET_BLOCK_EMBEDDING is true; otherwise it
 // embeds them (forcing a local provider for sensitive files).
-func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel, model string, chunks []chunker.Chunk, syms []sym.Symbol) (created, softErrs int, hardErr error) {
+func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel, model string, chunks []chunker.Chunk, syms []sym.Symbol, hasSecrets bool) (created, softErrs int, hardErr error) {
 	// Keyword-only mode: no embedding provider at all — store the chunks as text
 	// so they stay searchable by keyword (FTS/ILIKE) without any model.
 	if idx.keywordOnly {
@@ -512,12 +578,14 @@ func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel,
 		return len(chunks), 0, nil
 	}
 
-	// Privacy routing: a sensitive file must never be embedded by a cloud
-	// provider. If a local provider can serve the model, embed locally; if not,
-	// store the content as text-only (embedding NULL) so it stays findable via
-	// keyword search without ever leaving the machine.
+	// Privacy routing + secret scan: a sensitive file or one with detected
+	// secrets must never be embedded by a cloud provider. If a local provider
+	// can serve the model, embed locally; if not, store the content as text-only
+	// (embedding NULL) so it stays findable via keyword search without ever
+	// leaving the machine.
 	embedCtx := ctx
-	if privacy.IsSensitive(rel) {
+	isSensitive := privacy.IsSensitive(rel) || (hasSecrets && idx.secretBlockEmbedding)
+	if isSensitive {
 		localCtx := embed.WithForceLocal(ctx, true)
 		if _, err := idx.embedder.ModelInfo(localCtx, model); err != nil {
 			if err := idx.db.InsertChunksTextOnly(ctx, projectID, fileID, chunks, idx.dims); err != nil {
@@ -533,6 +601,29 @@ func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel,
 	return created, softErrs, nil
 }
 
+// buildChunkInputs builds input text strings for each chunk, prefixing symbols
+// whose line range overlaps each chunk (capped at 20 symbols).
+func buildChunkInputs(chunks []chunker.Chunk, syms []sym.Symbol) []string {
+	inputs := make([]string, len(chunks))
+	for j, c := range chunks {
+		var chunkSyms []string
+		for _, s := range syms {
+			if s.StartLine <= c.EndLine && s.EndLine >= c.StartLine {
+				chunkSyms = append(chunkSyms, s.Kind+" "+s.Name)
+			}
+		}
+		if len(chunkSyms) > 20 {
+			chunkSyms = append(chunkSyms[:20], "...")
+		}
+		if len(chunkSyms) > 0 {
+			inputs[j] = "Symbols: " + strings.Join(chunkSyms, ", ") + "\n" + c.Content
+		} else {
+			inputs[j] = c.Content
+		}
+	}
+	return inputs
+}
+
 // embedAndInsert embeds chunks in sub-batches and inserts each successful batch.
 // Only symbols whose line range overlaps a chunk are included in that chunk's
 // prefix, so per-chunk symbol lists stay relevant and bounded.
@@ -543,25 +634,7 @@ func (idx *Indexer) embedAndInsert(ctx context.Context, projectID, fileID int, c
 			end = len(chunks)
 		}
 		sub := chunks[start:end]
-		inputs := make([]string, len(sub))
-		for j, c := range sub {
-			var chunkSyms []string
-			for _, s := range syms {
-				// Symbol declaration overlaps with this chunk's line range.
-				if s.StartLine <= c.EndLine && s.EndLine >= c.StartLine {
-					chunkSyms = append(chunkSyms, s.Kind+" "+s.Name)
-				}
-			}
-			// Cap at 20 symbols to avoid prefix dominating chunk text.
-			if len(chunkSyms) > 20 {
-				chunkSyms = append(chunkSyms[:20], "...")
-			}
-			if len(chunkSyms) > 0 {
-				inputs[j] = "Symbols: " + strings.Join(chunkSyms, ", ") + "\n" + c.Content
-			} else {
-				inputs[j] = c.Content
-			}
-		}
+		inputs := buildChunkInputs(sub, syms)
 
 		embeddings, err := idx.embedWithRetry(ctx, model, inputs)
 		if err != nil {
@@ -681,6 +754,71 @@ func (idx *Indexer) indexCommit(ctx context.Context, projectID int, model string
 	}
 	chunk := chunker.Chunk{Content: string(commit), StartLine: 1, EndLine: 1}
 	return idx.db.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{chunk}, [][]float32{embedding}, idx.dims) == nil
+}
+
+// gitDiffChanged returns the list of files changed since the last stored
+// commit, or nil on any failure. The returned paths are relative to the repo
+// root. If no commit is stored (first index), it returns nil to trigger a full
+// walk. The method supports a force flag via the context (not yet wired).
+func (idx *Indexer) gitDiffChanged(ctx context.Context, projectID int, projectPath string) ([]string, error) {
+	// Only applies to git projects.
+	if !isGitDir(projectPath) {
+		return nil, nil
+	}
+
+	storedSHA, err := idx.db.GetProjectCommit(ctx, projectID)
+	if err != nil || storedSHA == "" {
+		return nil, nil // first index or store error — full walk
+	}
+
+	// Run `git diff --name-only <storedSHA>..HEAD`.
+	return gitDiffNames(ctx, projectPath, storedSHA)
+}
+
+// gitHeadCommit returns the current HEAD commit SHA, or "" on failure.
+func (idx *Indexer) gitHeadCommit(ctx context.Context, projectPath string) string {
+	if !isGitDir(projectPath) {
+		return ""
+	}
+	sha, err := gitRun(ctx, projectPath, "rev-parse", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return sha
+}
+
+// isGitDir checks whether projectPath is inside a git repo.
+func isGitDir(projectPath string) bool {
+	_, err := gitRun(context.Background(), projectPath, "rev-parse", "--is-inside-work-tree")
+	return err == nil
+}
+
+// gitDiffNames returns the list of files (relative to repo root) that differ
+// between baseRef and HEAD.
+func gitDiffNames(ctx context.Context, projectPath, baseRef string) ([]string, error) {
+	out, err := gitRun(ctx, projectPath, "diff", "--name-only", baseRef+"..HEAD")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(strings.TrimSpace(out), "\n"), nil
+}
+
+// gitRun executes a git subcommand in projectPath with hermetic config and
+// returns trimmed stdout, or an error if the command fails.
+func gitRun(ctx context.Context, projectPath string, args ...string) (string, error) {
+	fullArgs := append([]string{"-C", projectPath}, args...)
+	// #nosec G204 -- fixed "git" executable; args come from the caller's bounded
+	// set of subcommands (diff/rev-parse) and the caller-supplied projectPath.
+	cmd := exec.CommandContext(ctx, "git", fullArgs...)
+	cmd.Env = gitenv.Clean(cmd.Environ())
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (idx *Indexer) logf(format string, args ...any) {

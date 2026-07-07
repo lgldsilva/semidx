@@ -213,6 +213,24 @@ func Analyze(path string, content []byte, modulePath string) []string {
 // Go extractor (copied from internal/chunker/ast_analyzer.go with attribution)
 // ---------------------------------------------------------------------------
 
+// resolveImportDir resolves an import path to a local directory path.
+// When modulePath is non-empty, only imports rooted in that module are kept.
+func resolveImportDir(path, modulePath string) string {
+	if modulePath == "" {
+		return path + "/"
+	}
+	if !strings.HasPrefix(path, modulePath) {
+		return ""
+	}
+	// Skip a self-reference to the module root package itself.
+	rest := strings.TrimPrefix(path, modulePath)
+	rest = strings.TrimPrefix(rest, "/")
+	if rest == "" {
+		return ""
+	}
+	return rest + "/"
+}
+
 // analyzeGo parses Go source and returns the directory paths of imported
 // local packages.  Logic copied from chunker.AnalyzeGoImports.
 func analyzeGo(content []byte, modulePath string) []string {
@@ -226,7 +244,6 @@ func analyzeGo(content []byte, modulePath string) []string {
 	result := make([]string, 0, len(f.Imports))
 
 	for _, imp := range f.Imports {
-		// Skip dot imports (e.g., `. "fmt"`).
 		if imp.Name != nil && imp.Name.Name == "." {
 			continue
 		}
@@ -236,35 +253,13 @@ func analyzeGo(content []byte, modulePath string) []string {
 			continue
 		}
 
-		// Determine the first path segment and skip stdlib.
-		firstSeg := path
-		if idx := strings.IndexByte(path, '/'); idx >= 0 {
-			firstSeg = path[:idx]
-		}
-		if goStdlibPrefixes[firstSeg] {
+		if isStdlibImport(path) {
 			continue
 		}
 
-		var dir string
-
-		if modulePath != "" {
-			// With a non-empty modulePath we require the import to be rooted in
-			// the module; third-party imports (including those with a domain-
-			// like first segment) are excluded.
-			if !strings.HasPrefix(path, modulePath) {
-				continue
-			}
-			// Skip a self-reference to the module root package itself.
-			rest := strings.TrimPrefix(path, modulePath)
-			rest = strings.TrimPrefix(rest, "/")
-			if rest == "" {
-				continue
-			}
-			dir = rest + "/"
-		} else {
-			// Empty modulePath: keep the full path (minus the
-			// stdlib check already applied) as the local directory.
-			dir = path + "/"
+		dir := resolveImportDir(path, modulePath)
+		if dir == "" {
+			continue
 		}
 
 		if !seen[dir] {
@@ -277,6 +272,16 @@ func analyzeGo(content []byte, modulePath string) []string {
 		return nil
 	}
 	return result
+}
+
+// isStdlibImport reports whether path is a Go standard library import.
+// Extracted from analyzeGo to keep its cognitive complexity in check.
+func isStdlibImport(path string) bool {
+	firstSeg := path
+	if idx := strings.IndexByte(path, '/'); idx >= 0 {
+		firstSeg = path[:idx]
+	}
+	return goStdlibPrefixes[firstSeg]
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +327,42 @@ func analyzeJava(content []byte) []string {
 // TypeScript / JavaScript extractor
 // ---------------------------------------------------------------------------
 
+// resolveTSImportPath resolves a TypeScript/JavaScript import path to a local
+// directory. Returns empty string for non-local imports (npm packages, built-ins,
+// scoped packages).
+func resolveTSImportPath(p, srcDir string) string {
+	// Handle @/ path alias (Vue/React/Next.js tsconfig paths).
+	if strings.HasPrefix(p, "@/") {
+		dir := strings.TrimPrefix(p, "@/")
+		dir = filepath.Dir(dir)
+		if dir == "." {
+			return ""
+		}
+		return dir + "/"
+	}
+
+	// Skip scoped npm packages (@scope/package).
+	if strings.HasPrefix(p, "@") {
+		return ""
+	}
+	// Skip Node.js built-in modules (node:fs, node:path, …).
+	if strings.HasPrefix(p, "node:") {
+		return ""
+	}
+	// Skip bare names / external packages (not starting with ./ or ../).
+	if !strings.HasPrefix(p, "./") && !strings.HasPrefix(p, "../") {
+		return ""
+	}
+
+	// Resolve relative path to a directory.
+	resolved := filepath.Join(srcDir, p)
+	resolved = filepath.Clean(resolved) + "/"
+	if resolved == "/" {
+		return ""
+	}
+	return resolved
+}
+
 // analyzeTS extracts local import paths from TypeScript/JavaScript files.
 // It handles `import ... from`, `require(...)`, and `import(...)` patterns.
 // Only relative paths (./ or ../) are kept; npm packages and built-ins are
@@ -350,45 +391,13 @@ func analyzeTS(path string, content []byte) []string {
 
 	result := make([]string, 0, len(candidates))
 	for _, c := range candidates {
-		p := string(c.raw)
-
-		// Handle @/ path alias (Vue/React/Next.js tsconfig paths).
-		if strings.HasPrefix(p, "@/") {
-			dir := strings.TrimPrefix(p, "@/")
-			dir = filepath.Dir(dir)
-			if dir == "." {
-				continue
-			}
-			dir += "/"
-			if !seen[dir] {
-				seen[dir] = true
-				result = append(result, dir)
-			}
+		dir := resolveTSImportPath(string(c.raw), srcDir)
+		if dir == "" {
 			continue
 		}
-
-		// Skip scoped npm packages (@scope/package).
-		if strings.HasPrefix(p, "@") {
-			continue
-		}
-		// Skip Node.js built-in modules (node:fs, node:path, …).
-		if strings.HasPrefix(p, "node:") {
-			continue
-		}
-		// Skip bare names / external packages (not starting with ./ or ../).
-		if !strings.HasPrefix(p, "./") && !strings.HasPrefix(p, "../") {
-			continue
-		}
-
-		// Resolve relative path to a directory.
-		resolved := filepath.Join(srcDir, p)
-		resolved = filepath.Clean(resolved) + "/"
-		if resolved == "/" {
-			continue
-		}
-		if !seen[resolved] {
-			seen[resolved] = true
-			result = append(result, resolved)
+		if !seen[dir] {
+			seen[dir] = true
+			result = append(result, dir)
 		}
 	}
 
