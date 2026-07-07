@@ -122,6 +122,14 @@ type IndexStore interface {
 	SearchSimilarWorktree(ctx context.Context, projectID int, embedding []float32, dims, topK int, worktree string) ([]SearchResult, error)
 	SearchSimilarKeywordsWorktree(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]SearchResult, error)
 
+	// UpdateProjectCommit stores the last indexed commit SHA for a git project.
+	// Used by the git-diff incremental layer to compute changed files on re-index.
+	UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error
+
+	// GetProjectCommit returns the last indexed commit SHA, or "" when none is
+	// stored (first index or fallback to full walk).
+	GetProjectCommit(ctx context.Context, projectID int) (string, error)
+
 	// InsertFileDependencies replaces import/dependency edges for a source file.
 	// Existing edges for sourceFile are removed first, then targets are inserted.
 	InsertFileDependencies(ctx context.Context, projectID int, sourceFile string, targets []string) error
@@ -130,6 +138,13 @@ type IndexStore interface {
 	// source_file -> [target_file, ...] pairs. Returns an empty map if no
 	// edges exist.
 	FetchGraphNeighbors(ctx context.Context, projectID int) (map[string][]string, error)
+
+	// FetchGraphPathsBFS returns file paths discovered via recursive BFS through
+	// the dependency graph, starting from seedPaths, traversing both forward
+	// (imports) and backward (imported-by) edges, to maxDepth. Returns a map of
+	// file_path -> depth at which it was first discovered. Unlike FetchGraphNeighbors
+	// which loads ALL edges into memory, this uses a WITH RECURSIVE CTE.
+	FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error)
 
 	// FetchChunksByPath returns chunks for a specific file path, ordered by
 	// chunk_index. Returns empty slice if the file has no chunks.
@@ -631,6 +646,22 @@ func (s *PgStore) CountProjectFiles(ctx context.Context, projectID int) (int, er
 	return n, err
 }
 
+// UpdateProjectCommit stores the last indexed commit SHA for a git project.
+func (s *PgStore) UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE projects SET last_indexed_commit = $1 WHERE id = $2`, commitSHA, projectID)
+	return err
+}
+
+// GetProjectCommit returns the last indexed commit SHA, or "" when none stored.
+func (s *PgStore) GetProjectCommit(ctx context.Context, projectID int) (string, error) {
+	var sha string
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(last_indexed_commit, '') FROM projects WHERE id = $1`, projectID).Scan(&sha)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return sha, err
+}
+
 // ListFileHashes returns path→hash for every indexed file of a project (used by
 // the push files/diff endpoint to decide what changed).
 func (s *PgStore) ListFileHashes(ctx context.Context, projectID int) (map[string]string, error) {
@@ -1106,6 +1137,68 @@ func (s *PgStore) FetchGraphNeighbors(ctx context.Context, projectID int) (map[s
 		return nil, err
 	}
 	return out, nil
+}
+
+// FetchGraphPathsBFS returns file paths discovered via recursive CTE BFS
+// through the dependency graph, starting from seedPaths in both forward
+// (imports) and backward (imported-by) directions, up to maxDepth.
+func (s *PgStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) {
+	if len(seedPaths) == 0 || maxDepth <= 0 {
+		return nil, nil
+	}
+
+	query := `
+		WITH RECURSIVE graph_bfs AS (
+			-- Forward: files imported by seeds
+			SELECT fd.target_file AS file_path, 1 AS depth
+			FROM file_dependencies fd
+			WHERE fd.source_file = ANY($1) AND fd.project_id = $2
+
+			UNION
+
+			-- Backward: files that import seeds
+			SELECT fd.source_file, 1
+			FROM file_dependencies fd
+			WHERE fd.target_file = ANY($1) AND fd.project_id = $2
+
+			UNION
+
+			-- Forward recursion: follow imports
+			SELECT fd.target_file, g.depth + 1
+			FROM file_dependencies fd
+			JOIN graph_bfs g ON fd.source_file = g.file_path
+			WHERE fd.project_id = $2 AND g.depth < $3
+
+			UNION
+
+			-- Backward recursion: follow imported-by
+			SELECT fd.source_file, g.depth + 1
+			FROM file_dependencies fd
+			JOIN graph_bfs g ON fd.target_file = g.file_path
+			WHERE fd.project_id = $2 AND g.depth < $3
+		)
+		SELECT file_path, MIN(depth) AS depth
+		FROM graph_bfs
+		WHERE file_path != ALL($1)
+		GROUP BY file_path
+	`
+
+	rows, err := s.pool.Query(ctx, query, seedPaths, projectID, maxDepth)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]int)
+	for rows.Next() {
+		var path string
+		var depth int
+		if err := rows.Scan(&path, &depth); err != nil {
+			return nil, err
+		}
+		result[path] = depth
+	}
+	return result, rows.Err()
 }
 
 // FetchChunksByPath returns chunks for a specific file path, ordered by

@@ -154,7 +154,9 @@ func (idx *Indexer) SetWorktree(worktree string) *Indexer {
 }
 
 // IndexProject scans projectPath, indexes each eligible file, optionally indexes
-// git history, and marks the project ready.
+// git history, and marks the project ready. When the project is a git repo and a
+// previous index stored a commit SHA, only files changed since that commit are
+// processed (git-diff incremental layer).
 func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath, model string, maxFiles int) (*IndexStats, error) {
 	ctx, span := observ.StartSpan(ctx, "indexing.Indexer.IndexProject")
 	defer span.End()
@@ -165,9 +167,25 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		idx.modulePath = ReadModulePath(projectPath)
 	}
 
-	files, err := ScanFiles(projectPath, maxFiles)
-	if err != nil {
-		return nil, err
+	// Git-diff incremental: if we have a stored commit, only index changed files.
+	var err error
+	changedFiles, diffErr := idx.gitDiffChanged(ctx, projectID, projectPath)
+	if diffErr != nil {
+		// Git command failed — fall back to full walk.
+		idx.logf("[warn] git diff incremental failed, falling back to full walk: %s", truncateErr(diffErr, 200))
+	}
+
+	var files []string
+	if len(changedFiles) > 0 {
+		// Only index the files that changed. Resolve relative paths to absolute.
+		for _, rel := range changedFiles {
+			files = append(files, filepath.Join(projectPath, rel))
+		}
+	} else {
+		files, err = ScanFiles(projectPath, maxFiles)
+		if err != nil {
+			return nil, err
+		}
 	}
 	stats.FilesScanned = len(files)
 
@@ -228,6 +246,13 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		if err := idx.indexGitHistory(ctx, projectID, projectPath, model); err != nil {
 			stats.Errors++
 			idx.logf("[err] git history: %s", truncateErr(err, 200))
+		}
+	}
+
+	// Store the current commit SHA for git-diff incremental on next index.
+	if commitSHA := idx.gitHeadCommit(ctx, projectPath); commitSHA != "" {
+		if err := idx.db.UpdateProjectCommit(ctx, projectID, commitSHA); err != nil {
+			idx.logf("[warn] store indexed commit: %s", truncateErr(err, 200))
 		}
 	}
 
@@ -681,6 +706,71 @@ func (idx *Indexer) indexCommit(ctx context.Context, projectID int, model string
 	}
 	chunk := chunker.Chunk{Content: string(commit), StartLine: 1, EndLine: 1}
 	return idx.db.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{chunk}, [][]float32{embedding}, idx.dims) == nil
+}
+
+// gitDiffChanged returns the list of files changed since the last stored
+// commit, or nil on any failure. The returned paths are relative to the repo
+// root. If no commit is stored (first index), it returns nil to trigger a full
+// walk. The method supports a force flag via the context (not yet wired).
+func (idx *Indexer) gitDiffChanged(ctx context.Context, projectID int, projectPath string) ([]string, error) {
+	// Only applies to git projects.
+	if !isGitDir(projectPath) {
+		return nil, nil
+	}
+
+	storedSHA, err := idx.db.GetProjectCommit(ctx, projectID)
+	if err != nil || storedSHA == "" {
+		return nil, nil // first index or store error — full walk
+	}
+
+	// Run `git diff --name-only <storedSHA>..HEAD`.
+	return gitDiffNames(ctx, projectPath, storedSHA)
+}
+
+// gitHeadCommit returns the current HEAD commit SHA, or "" on failure.
+func (idx *Indexer) gitHeadCommit(ctx context.Context, projectPath string) string {
+	if !isGitDir(projectPath) {
+		return ""
+	}
+	sha, err := gitRun(ctx, projectPath, "rev-parse", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return sha
+}
+
+// isGitDir checks whether projectPath is inside a git repo.
+func isGitDir(projectPath string) bool {
+	_, err := gitRun(context.Background(), projectPath, "rev-parse", "--is-inside-work-tree")
+	return err == nil
+}
+
+// gitDiffNames returns the list of files (relative to repo root) that differ
+// between baseRef and HEAD.
+func gitDiffNames(ctx context.Context, projectPath, baseRef string) ([]string, error) {
+	out, err := gitRun(ctx, projectPath, "diff", "--name-only", baseRef+"..HEAD")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(strings.TrimSpace(out), "\n"), nil
+}
+
+// gitRun executes a git subcommand in projectPath with hermetic config and
+// returns trimmed stdout, or an error if the command fails.
+func gitRun(ctx context.Context, projectPath string, args ...string) (string, error) {
+	fullArgs := append([]string{"-C", projectPath}, args...)
+	// #nosec G204 -- fixed "git" executable; args come from the caller's bounded
+	// set of subcommands (diff/rev-parse) and the caller-supplied projectPath.
+	cmd := exec.CommandContext(ctx, "git", fullArgs...)
+	cmd.Env = gitenv.Clean(cmd.Environ())
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (idx *Indexer) logf(format string, args ...any) {

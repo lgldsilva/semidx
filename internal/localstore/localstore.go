@@ -47,16 +47,17 @@ const projectColumns = `id, name, path, model, status, source_type, git_url, bra
 // table holds vectors of any dimension).
 const schema = `
 CREATE TABLE IF NOT EXISTS projects (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL,
-    path        TEXT NOT NULL DEFAULT '',
-    model       TEXT NOT NULL DEFAULT '',
-    status      TEXT NOT NULL DEFAULT '',
-    source_type TEXT NOT NULL DEFAULT 'path',
-    git_url     TEXT NOT NULL DEFAULT '',
-    branch      TEXT NOT NULL DEFAULT '',
-    identity    TEXT,
-    dims        INTEGER NOT NULL DEFAULT 0
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                TEXT NOT NULL,
+    path                TEXT NOT NULL DEFAULT '',
+    model               TEXT NOT NULL DEFAULT '',
+    status              TEXT NOT NULL DEFAULT '',
+    source_type         TEXT NOT NULL DEFAULT 'path',
+    git_url             TEXT NOT NULL DEFAULT '',
+    branch              TEXT NOT NULL DEFAULT '',
+    identity            TEXT,
+    dims                INTEGER NOT NULL DEFAULT 0,
+    last_indexed_commit TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_identity ON projects(identity);
 CREATE TABLE IF NOT EXISTS files (
@@ -201,8 +202,12 @@ func ensureSchema(db *sql.DB) error {
 			}
 		}
 	}
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	// Add last_indexed_commit column on existing databases (graceful upgrade).
+	_, _ = db.Exec(`ALTER TABLE projects ADD COLUMN last_indexed_commit TEXT NOT NULL DEFAULT ''`)
+	return nil
 }
 
 func (s *SQLiteStore) Close() { _ = s.db.Close() }
@@ -433,6 +438,22 @@ func (s *SQLiteStore) FileUpToDate(ctx context.Context, projectID int, path, has
 		return false, err
 	}
 	return exists, nil
+}
+
+// UpdateProjectCommit stores the last indexed commit SHA.
+func (s *SQLiteStore) UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE projects SET last_indexed_commit = ? WHERE id = ?`, commitSHA, projectID)
+	return err
+}
+
+// GetProjectCommit returns the last indexed commit SHA, or "" when none stored.
+func (s *SQLiteStore) GetProjectCommit(ctx context.Context, projectID int) (string, error) {
+	var sha string
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(last_indexed_commit, '') FROM projects WHERE id = ?`, projectID).Scan(&sha)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return sha, err
 }
 
 // CountProjectFiles returns the total number of indexed files for a project.
@@ -764,6 +785,93 @@ func (s *SQLiteStore) FetchChunksByPath(ctx context.Context, projectID int, file
 		results = append(results, r)
 	}
 	return results, rows.Err()
+}
+
+// FetchGraphPathsBFS returns file paths discovered via recursive CTE BFS
+// through the dependency graph. SQLite supports WITH RECURSIVE since 3.8.3.
+func (s *SQLiteStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) {
+	if len(seedPaths) == 0 || maxDepth <= 0 {
+		return nil, nil
+	}
+
+	// Build a set of seed paths for post-query filtering.
+	seedSet := make(map[string]struct{}, len(seedPaths))
+	for _, p := range seedPaths {
+		seedSet[p] = struct{}{}
+	}
+
+	// SQLite's ? placeholders are positional across UNION branches, so we must
+	// repeat values. We build a flat arg list: seeds, projectID, seeds, projectID,
+	// projectID, maxDepth, projectID, maxDepth.
+	inClause := strings.Repeat("?,", len(seedPaths))
+	inClause = inClause[:len(inClause)-1] // trailing comma
+
+	var args []any
+	// Anchor forward: source IN (seeds) AND project_id = ?
+	for _, p := range seedPaths {
+		args = append(args, p)
+	}
+	args = append(args, projectID)
+	// Anchor backward: target IN (seeds) AND project_id = ?
+	for _, p := range seedPaths {
+		args = append(args, p)
+	}
+	args = append(args, projectID)
+	// Recursive forward: project_id = ? AND depth < ?
+	args = append(args, projectID, maxDepth)
+	// Recursive backward: project_id = ? AND depth < ?
+	args = append(args, projectID, maxDepth)
+
+	query := fmt.Sprintf(`
+		WITH RECURSIVE graph_bfs(file_path, depth) AS (
+			SELECT fd.target_file, 1
+			FROM file_dependencies fd
+			WHERE fd.source_file IN (%s) AND fd.project_id = ?
+
+			UNION
+
+			SELECT fd.source_file, 1
+			FROM file_dependencies fd
+			WHERE fd.target_file IN (%s) AND fd.project_id = ?
+
+			UNION
+
+			SELECT fd.target_file, g.depth + 1
+			FROM file_dependencies fd
+			JOIN graph_bfs g ON fd.source_file = g.file_path
+			WHERE fd.project_id = ? AND g.depth < ?
+
+			UNION
+
+			SELECT fd.source_file, g.depth + 1
+			FROM file_dependencies fd
+			JOIN graph_bfs g ON fd.target_file = g.file_path
+			WHERE fd.project_id = ? AND g.depth < ?
+		)
+		SELECT file_path, MIN(depth) AS depth
+		FROM graph_bfs
+		GROUP BY file_path
+	`, inClause, inClause)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string]int)
+	for rows.Next() {
+		var path string
+		var depth int
+		if err := rows.Scan(&path, &depth); err != nil {
+			return nil, err
+		}
+		// Filter out seed paths so the caller gets only newly discovered files.
+		if _, isSeed := seedSet[path]; !isSeed {
+			result[path] = depth
+		}
+	}
+	return result, rows.Err()
 }
 
 // FetchChunksByDirPrefix returns chunks for files whose path starts with the

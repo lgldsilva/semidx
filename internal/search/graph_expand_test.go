@@ -354,6 +354,15 @@ func (g *graphlessStore) FetchChunksByPath(context.Context, int, string, int, in
 func (g *graphlessStore) FetchChunksByDirPrefix(context.Context, int, string, int, int) ([]store.SearchResult, error) {
 	panic("FetchChunksByDirPrefix must not be called when Graph=false")
 }
+func (g *graphlessStore) FetchGraphPathsBFS(context.Context, int, []string, int) (map[string]int, error) {
+	panic("FetchGraphPathsBFS must not be called when Graph=false")
+}
+func (g *graphlessStore) GetProjectCommit(context.Context, int) (string, error) {
+	return "", nil
+}
+func (g *graphlessStore) UpdateProjectCommit(context.Context, int, string) error {
+	return nil
+}
 
 // graphEnabledStore returns empty graph data so Search with Graph=true does not panic.
 type graphEnabledStore struct {
@@ -368,6 +377,15 @@ func (g *graphEnabledStore) FetchChunksByPath(ctx context.Context, projectID int
 }
 func (g *graphEnabledStore) FetchChunksByDirPrefix(ctx context.Context, projectID int, dirPrefix string, dims, limit int) ([]store.SearchResult, error) {
 	return nil, nil
+}
+func (g *graphEnabledStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) {
+	return nil, nil
+}
+func (g *graphEnabledStore) GetProjectCommit(ctx context.Context, projectID int) (string, error) {
+	return "", nil
+}
+func (g *graphEnabledStore) UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error {
+	return nil
 }
 
 func TestSearchGraphDisabledDoesNotCallGraphMethods(t *testing.T) {

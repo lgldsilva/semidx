@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"time"
 
@@ -25,11 +26,16 @@ import (
 type Service struct {
 	store store.IndexStore
 	emb   embed.Embedder
+	cache *QueryCache
 }
 
 // NewService wires a search Service.
 func NewService(s store.IndexStore, e embed.Embedder) *Service {
-	return &Service{store: s, emb: e}
+	return &Service{
+		store: s,
+		emb:   e,
+		cache: NewQueryCache(5*time.Minute, 1000),
+	}
 }
 
 // Request describes one search.
@@ -53,6 +59,13 @@ type Request struct {
 	// GraphMaxDepth is the maximum BFS depth for graph expansion. If <= 0, the
 	// default depth of 2 is used.
 	GraphMaxDepth int
+	// ForceMode overrides the automatic query routing. When set, the search
+	// uses the specified mode regardless of classifier output.
+	ForceMode QueryType
+	// HybridSearch enables parallel vector + keyword search merged via RRF.
+	// When true, the vector and keyword results are fused instead of using
+	// pure vector search with keyword fallback.
+	HybridSearch bool
 }
 
 // Response is the outcome of a search, independent of output format.
@@ -68,10 +81,11 @@ type Response struct {
 	Keyword bool
 }
 
-// Search resolves the model, embeds the query and runs a vector search,
-// transparently falling back to keyword search if the embedding fails. When
-// Graph is set, results are expanded via BFS through the project's dependency
-// graph (Graph-RAG).
+// Search resolves the model, classifies the query, and runs the appropriate
+// search strategy: keyword-only, hybrid (RRF), or semantic vector search with
+// automatic fallback. The result cache is checked before search and populated
+// after search. When Graph is set, results are expanded via BFS through the
+// project's dependency graph (Graph-RAG).
 func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	ctx, span := observ.StartSpan(ctx, "search.Service.Search")
 	defer span.End()
@@ -112,8 +126,25 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	resp := &Response{Project: project, Model: model}
 	worktree := worktreeFilter(project, req.Worktree)
 
+	// --- Query result cache check ---
+	cKey := cacheKey(req.Query, project.ID, req.TopK, model)
+	if cached, ok := s.cache.Get(cKey); ok {
+		slog.Debug("search cache hit", "query", req.Query, "project", project.Name)
+		resp.Results = cached
+		resp.Keyword = false
+		if req.Graph {
+			resp.Results = s.tryGraphExpand(ctx, &req, resp.Results, project.ID, dims)
+		}
+		return resp, nil
+	}
+
 	if req.KeywordOnly {
 		resp, err = s.searchKeywordOnly(ctx, project.ID, req, dims, worktree, resp)
+	} else if req.HybridSearch {
+		resp, err = s.searchHybrid(ctx, project.ID, req, model, dims, worktree, resp)
+	} else if s.useKeywordFastPath(req.Query, req.ForceMode) {
+		// Smart routing: identifier/path/exact queries run keyword first.
+		resp, err = s.searchRouted(ctx, project.ID, req, model, dims, worktree, resp)
 	} else {
 		resp, err = s.searchSemantic(ctx, project.ID, req, model, dims, worktree, resp)
 	}
@@ -121,19 +152,69 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		return nil, err
 	}
 
+	// --- Populate cache ---
+	if !resp.Keyword || len(resp.Results) > 0 {
+		s.cache.Set(cKey, resp.Results)
+	}
+
 	if req.Graph {
-		expanded, gerr := s.expandByGraph(ctx, &req, resp.Results, project.ID, dims)
-		if gerr != nil {
-			slog.Warn("graph expansion failed (continuing with original results)",
-				"project", project.Name,
-				"error", gerr,
-			)
-		} else if len(expanded) > 0 {
-			resp.Results = mergeGraphResults(resp.Results, expanded)
-		}
+		resp.Results = s.tryGraphExpand(ctx, &req, resp.Results, project.ID, dims)
 	}
 
 	return resp, nil
+}
+
+// useKeywordFastPath determines whether a query should be routed to the
+// keyword-first fast path based on its type. When ForceMode is set it
+// overrides the classifier.
+func (s *Service) useKeywordFastPath(query string, force QueryType) bool {
+	qtype := force
+	if qtype == QueryUnknown {
+		qtype = ClassifyQuery(query)
+	}
+	return qtype == QueryIdentifier || qtype == QueryPath || qtype == QueryExact
+}
+
+// searchRouted runs keyword search first and falls back to vector search only
+// when keyword returns too few results.
+func (s *Service) searchRouted(ctx context.Context, projectID int, req Request, model string, dims int, worktree string, resp *Response) (*Response, error) {
+	// Fast path: try keyword search first.
+	kw, err := s.keywordSearch(ctx, projectID, req.Query, dims, req.TopK, worktree)
+	if err == nil && len(kw) >= req.TopK {
+		resp.Results = kw
+		resp.Keyword = true
+		return resp, nil
+	}
+
+	// Keyword returned too few results or failed — fall back to vector search.
+	return s.searchSemantic(ctx, projectID, req, model, dims, worktree, resp)
+}
+
+// searchHybrid runs parallel vector + keyword search merged by RRF.
+func (s *Service) searchHybrid(ctx context.Context, projectID int, req Request, model string, dims int, worktree string, resp *Response) (*Response, error) {
+	results, err := s.HybridSearch(ctx, projectID, req.Query, model, dims, req.TopK, worktree)
+	if err != nil {
+		return nil, err
+	}
+	resp.Results = results
+	return resp, nil
+}
+
+// tryGraphExpand runs graph expansion if Graph is set, returning the (possibly
+// expanded) results list.
+func (s *Service) tryGraphExpand(ctx context.Context, req *Request, results []store.SearchResult, projectID, dims int) []store.SearchResult {
+	expanded, gerr := s.expandByGraph(ctx, req, results, projectID, dims)
+	if gerr != nil {
+		slog.Warn("graph expansion failed (continuing with original results)",
+			"project", req.Project,
+			"error", gerr,
+		)
+		return results
+	}
+	if len(expanded) > 0 {
+		return mergeGraphResults(results, expanded)
+	}
+	return results
 }
 
 func worktreeFilter(project *store.Project, reqWorktree string) string {
@@ -212,28 +293,11 @@ func (s *Service) keywordSearch(ctx context.Context, projectID int, query string
 
 // expandByGraph runs BFS through the project's dependency graph from the seed
 // result file paths, collecting chunks from newly discovered files with a
-// decayed score. Returns nil (no error) when the graph is empty.
+// decayed score. Uses an efficient recursive CTE query instead of loading all
+// edges into Go memory. Returns nil (no error) when the graph is empty.
 func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults []store.SearchResult, projectID, dims int) ([]store.SearchResult, error) {
 	if len(seedResults) == 0 {
 		return nil, nil
-	}
-
-	// Fetch the full dependency graph for the project.
-	graph, err := s.store.FetchGraphNeighbors(ctx, projectID)
-	if err != nil {
-		return nil, fmt.Errorf("fetch graph neighbors: %w", err)
-	}
-	if len(graph) == 0 {
-		return nil, nil // no graph data — nothing to expand
-	}
-
-	// Build reverse edges so BFS traverses both directions (imports and
-	// imported-by).
-	reverse := make(map[string][]string, len(graph))
-	for src, targets := range graph {
-		for _, tgt := range targets {
-			reverse[tgt] = append(reverse[tgt], src)
-		}
 	}
 
 	maxDepth := req.GraphMaxDepth
@@ -245,71 +309,44 @@ func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults [
 	const floor = 0.3
 	const maxGraphExpandPaths = 100 // cap chunk fetches per query (DoS guard)
 
-	// Seed paths set for dedup.
-	seedPaths := make(map[string]bool, len(seedResults))
+	// Build seed path list.
+	seedPaths := make([]string, 0, len(seedResults))
+	seedPathSet := make(map[string]float64, len(seedResults))
 	for _, r := range seedResults {
-		seedPaths[r.FilePath] = true
+		seedPaths = append(seedPaths, r.FilePath)
+		seedPathSet[r.FilePath] = r.Score
 	}
 
-	// bfsNode holds a path, its current depth, and the accumulated score.
-	type bfsNode struct {
-		path  string
-		depth int
-		score float64
+	// Run BFS in-database via recursive CTE.
+	discovered, err := s.store.FetchGraphPathsBFS(ctx, projectID, seedPaths, maxDepth)
+	if err != nil {
+		return nil, fmt.Errorf("fetch graph bfs: %w", err)
+	}
+	if len(discovered) == 0 {
+		return nil, nil
 	}
 
-	// Initialise the BFS queue with every seed result at depth 0, each with its
-	// own similarity score so closer seeds influence the graph more strongly.
-	queue := make([]bfsNode, 0, len(seedResults))
-	visited := make(map[string]float64, len(seedResults)) // path -> best score seen
-
-	for _, r := range seedResults {
-		queue = append(queue, bfsNode{path: r.FilePath, depth: 0, score: r.Score})
-		// Seed paths are tracked but not added to expanded output.
-		visited[r.FilePath] = r.Score
-	}
-
-	// expanded collects newly discovered paths -> their best score.
-	expanded := make(map[string]float64)
-
-	for len(queue) > 0 {
-		node := queue[0]
-		queue = queue[1:]
-
-		if node.depth >= maxDepth {
+	// Compute decayed scores from BFS depth and seed result scores.
+	expanded := make(map[string]float64, len(discovered))
+	for path, depth := range discovered {
+		if depth > maxDepth {
 			continue
 		}
-
-		// Collect neighbours from forward and reverse edges.
-		neighbors := graph[node.path]
-		neighbors = append(neighbors, reverse[node.path]...)
-
-		for _, neighbor := range neighbors {
-			if neighbor == "" {
-				continue
+		// Use the best seed score, decayed by depth.
+		var bestScore float64
+		for _, seedScore := range seedPathSet {
+			candidate := seedScore * floatPow(decay, depth)
+			if candidate > bestScore {
+				bestScore = candidate
 			}
-			newScore := node.score * decay
-			if newScore < floor {
-				continue
-			}
-
-			// Keep the best score for each path.
-			if best, seen := visited[neighbor]; seen && best >= newScore {
-				continue
-			}
-			visited[neighbor] = newScore
-
-			if !seedPaths[neighbor] {
-				if len(expanded) >= maxGraphExpandPaths {
-					continue
-				}
-				if curr, ok := expanded[neighbor]; !ok || newScore > curr {
-					expanded[neighbor] = newScore
-				}
-			}
-
-			queue = append(queue, bfsNode{path: neighbor, depth: node.depth + 1, score: newScore})
 		}
+		if bestScore < floor {
+			continue
+		}
+		if len(expanded) >= maxGraphExpandPaths {
+			break
+		}
+		expanded[path] = bestScore
 	}
 
 	if len(expanded) == 0 {
@@ -382,4 +419,10 @@ func mergeGraphResults(original, expanded []store.SearchResult) []store.SearchRe
 	})
 
 	return results
+}
+
+// floatPow returns base**exp for float64 values using math.Pow.
+// Named to avoid confusion with the stdlib's float64-based Pow.
+func floatPow(base float64, exp int) float64 {
+	return math.Pow(base, float64(exp))
 }
