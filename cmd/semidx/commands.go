@@ -194,7 +194,8 @@ With no embedding provider configured, add --keyword to index text-only.`,
 				GitSince:            gitSince,
 			}).
 				SetKeywordOnly(d.keywordOnly).
-				SetWorktree(tgt.worktree)
+				SetWorktree(tgt.worktree).
+				SetSecretScan(tgt.indexPath, d.cfg.SecretScan || d.cfg.SecretBlockEmbedding, d.cfg.SecretBlockEmbedding)
 			start := time.Now()
 			stats, err := indexer.IndexProject(ctx, projectID, tgt.indexPath, model, maxFiles)
 			if err != nil {
