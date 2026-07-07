@@ -216,20 +216,19 @@ func Analyze(path string, content []byte, modulePath string) []string {
 // resolveImportDir resolves an import path to a local directory path.
 // When modulePath is non-empty, only imports rooted in that module are kept.
 func resolveImportDir(path, modulePath string) string {
-	if modulePath != "" {
-		if !strings.HasPrefix(path, modulePath) {
-			return ""
-		}
-		// Skip a self-reference to the module root package itself.
-		rest := strings.TrimPrefix(path, modulePath)
-		rest = strings.TrimPrefix(rest, "/")
-		if rest == "" {
-			return ""
-		}
-		return rest + "/"
+	if modulePath == "" {
+		return path + "/"
 	}
-	// Empty modulePath: keep the full path.
-	return path + "/"
+	if !strings.HasPrefix(path, modulePath) {
+		return ""
+	}
+	// Skip a self-reference to the module root package itself.
+	rest := strings.TrimPrefix(path, modulePath)
+	rest = strings.TrimPrefix(rest, "/")
+	if rest == "" {
+		return ""
+	}
+	return rest + "/"
 }
 
 // analyzeGo parses Go source and returns the directory paths of imported
