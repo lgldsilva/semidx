@@ -86,6 +86,14 @@ func New(b Backend) *mcp.Server {
 		Description: "Get the indexing status of a registered project. Reports file count, status, and model.",
 	}, statusHandler(b))
 
+	// Conditionally register semantic_ask if the backend supports RAG.
+	if ab, ok := b.(AskBackend); ok {
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        "semantic_ask",
+			Description: "Ask a question about a registered project using RAG (Retrieval-Augmented Generation). Searches the index for relevant chunks, then uses an LLM to compose an answer citing file:line sources. Stateless — each call is independent.",
+		}, askHandler(ab))
+	}
+
 	return s
 }
 
