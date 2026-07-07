@@ -533,6 +533,29 @@ func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel,
 	return created, softErrs, nil
 }
 
+// buildChunkInputs builds input text strings for each chunk, prefixing symbols
+// whose line range overlaps each chunk (capped at 20 symbols).
+func buildChunkInputs(chunks []chunker.Chunk, syms []sym.Symbol) []string {
+	inputs := make([]string, len(chunks))
+	for j, c := range chunks {
+		var chunkSyms []string
+		for _, s := range syms {
+			if s.StartLine <= c.EndLine && s.EndLine >= c.StartLine {
+				chunkSyms = append(chunkSyms, s.Kind+" "+s.Name)
+			}
+		}
+		if len(chunkSyms) > 20 {
+			chunkSyms = append(chunkSyms[:20], "...")
+		}
+		if len(chunkSyms) > 0 {
+			inputs[j] = "Symbols: " + strings.Join(chunkSyms, ", ") + "\n" + c.Content
+		} else {
+			inputs[j] = c.Content
+		}
+	}
+	return inputs
+}
+
 // embedAndInsert embeds chunks in sub-batches and inserts each successful batch.
 // Only symbols whose line range overlaps a chunk are included in that chunk's
 // prefix, so per-chunk symbol lists stay relevant and bounded.
@@ -543,25 +566,7 @@ func (idx *Indexer) embedAndInsert(ctx context.Context, projectID, fileID int, c
 			end = len(chunks)
 		}
 		sub := chunks[start:end]
-		inputs := make([]string, len(sub))
-		for j, c := range sub {
-			var chunkSyms []string
-			for _, s := range syms {
-				// Symbol declaration overlaps with this chunk's line range.
-				if s.StartLine <= c.EndLine && s.EndLine >= c.StartLine {
-					chunkSyms = append(chunkSyms, s.Kind+" "+s.Name)
-				}
-			}
-			// Cap at 20 symbols to avoid prefix dominating chunk text.
-			if len(chunkSyms) > 20 {
-				chunkSyms = append(chunkSyms[:20], "...")
-			}
-			if len(chunkSyms) > 0 {
-				inputs[j] = "Symbols: " + strings.Join(chunkSyms, ", ") + "\n" + c.Content
-			} else {
-				inputs[j] = c.Content
-			}
-		}
+		inputs := buildChunkInputs(sub, syms)
 
 		embeddings, err := idx.embedWithRetry(ctx, model, inputs)
 		if err != nil {
