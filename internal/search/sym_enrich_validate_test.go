@@ -69,12 +69,12 @@ func TestSymbolEnrichValidation(t *testing.T) {
 
 	// ----- Index baseline (no symbols) -------------------------------------
 	baseStore := newSymStore(t)
-	indexSymFiles(t, ctx, baseStore, emb, model, root, files, false, "sym-base")
+	indexSymFiles(indexSymParams{t: t, ctx: ctx, st: baseStore, emb: emb, model: model, root: root, files: files, enrich: false, label: "sym-base"})
 	baseSvc := NewService(baseStore, emb)
 
 	// ----- Index enriched (with symbols) -----------------------------------
 	enrStore := newSymStore(t)
-	indexSymFiles(t, ctx, enrStore, emb, model, root, files, true, "sym-enrich")
+	indexSymFiles(indexSymParams{t: t, ctx: ctx, st: enrStore, emb: emb, model: model, root: root, files: files, enrich: true, label: "sym-enrich"})
 	enrSvc := NewService(enrStore, emb)
 
 	// ----- Run queries and compare -----------------------------------------
@@ -161,9 +161,30 @@ func newSymStore(t *testing.T) *localstore.SQLiteStore {
 	return s
 }
 
+// indexSymParams holds parameters for indexSymFiles.
+type indexSymParams struct {
+	t      *testing.T
+	ctx    context.Context
+	st     *localstore.SQLiteStore
+	emb    embed.Embedder
+	model  string
+	root   string
+	files  []string
+	enrich bool
+	label  string
+}
+
 // indexSymFiles indexes Go files into a store, optionally enriching chunks with symbols.
-func indexSymFiles(t *testing.T, ctx context.Context, st *localstore.SQLiteStore,
-	emb embed.Embedder, model, root string, files []string, enrich bool, label string) {
+func indexSymFiles(p indexSymParams) {
+	t := p.t
+	ctx := p.ctx
+	st := p.st
+	emb := p.emb
+	model := p.model
+	root := p.root
+	files := p.files
+	enrich := p.enrich
+	label := p.label
 	t.Helper()
 
 	pid, err := st.UpsertProject(ctx, label, root, model, 768)

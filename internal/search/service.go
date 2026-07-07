@@ -387,6 +387,73 @@ func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults [
 	return results, nil
 }
 
+// runGraphBFS runs the BFS traversal through the dependency graph from seed
+// paths, returning newly discovered paths with decayed scores.  maxPaths caps
+// the total number of expanded paths (DoS guard).
+func runGraphBFS(graph, reverse map[string][]string, seedPaths map[string]bool, seeds []store.SearchResult, maxDepth int, decay, floor float64, maxPaths int) map[string]float64 {
+	type bfsNode struct {
+		path  string
+		depth int
+		score float64
+	}
+
+	// Initialise the BFS queue with every seed result at depth 0, each with its
+	// own similarity score so closer seeds influence the graph more strongly.
+	queue := make([]bfsNode, 0, len(seeds))
+	visited := make(map[string]float64, len(seeds)) // path -> best score seen
+
+	for _, r := range seeds {
+		queue = append(queue, bfsNode{path: r.FilePath, depth: 0, score: r.Score})
+		// Seed paths are tracked but not added to expanded output.
+		visited[r.FilePath] = r.Score
+	}
+
+	// expanded collects newly discovered paths -> their best score.
+	expanded := make(map[string]float64)
+
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+
+		if node.depth >= maxDepth {
+			continue
+		}
+
+		// Collect neighbours from forward and reverse edges.
+		neighbors := graph[node.path]
+		neighbors = append(neighbors, reverse[node.path]...)
+
+		for _, neighbor := range neighbors {
+			if neighbor == "" {
+				continue
+			}
+			newScore := node.score * decay
+			if newScore < floor {
+				continue
+			}
+
+			// Keep the best score for each path.
+			if best, seen := visited[neighbor]; seen && best >= newScore {
+				continue
+			}
+			visited[neighbor] = newScore
+
+			if !seedPaths[neighbor] {
+				if len(expanded) >= maxPaths {
+					continue
+				}
+				if curr, ok := expanded[neighbor]; !ok || newScore > curr {
+					expanded[neighbor] = newScore
+				}
+			}
+
+			queue = append(queue, bfsNode{path: neighbor, depth: node.depth + 1, score: newScore})
+		}
+	}
+
+	return expanded
+}
+
 // mergeGraphResults merges original search results with graph-expanded results,
 // deduplicating by FilePath. Original results keep their scores; expanded
 // results keep their decayed scores. The combined list is sorted by score
