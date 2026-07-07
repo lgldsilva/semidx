@@ -20,7 +20,7 @@ func (b *clientBackend) Search(ctx context.Context, project, query, model string
 	}
 	out := &SearchOutput{Project: resp.Project, Fallback: resp.Fallback}
 	for _, r := range resp.Results {
-		out.Results = append(out.Results, Hit{Path: r.Path, StartLine: r.StartLine, Score: r.Score, Content: r.Content})
+		out.Results = append(out.Results, Hit{Path: r.Path, StartLine: r.StartLine, EndLine: r.EndLine, Score: r.Score, Content: r.Content})
 	}
 	return out, nil
 }
