@@ -245,3 +245,4 @@ See [docs/self-hosting.md](docs/self-hosting.md) to run the server and
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
