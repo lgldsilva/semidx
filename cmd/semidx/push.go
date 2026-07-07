@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,19 +24,25 @@ import (
 )
 
 const (
-	pushMaxFileSize    = 1024 * 1024 // 1 MB, matching indexer's maxFileSize
-	pushMaxChunkChars  = 4000
-	pushMaxChunks      = 32
-	embedBatchSize     = 8
-	defaultPushWorkers = 4
+	pushMaxFileSize       = 1024 * 1024 // 1 MB, matching indexer's maxFileSize
+	pushMaxChunkChars     = 4000
+	pushMaxChunks         = 32
+	embedBatchSize        = 8
+	defaultPushWorkers    = 4
+	defaultAsyncBatchSize = 0    // 0 = single batch (no splitting)
+	asyncPollInterval     = 2 * time.Second
+	asyncPollTimeout      = 30 * time.Minute
+	doneFmt               = "Done in %v — indexed: %d, chunks: %d, deleted: %d, errors: %d\n"
 )
 
 // pushOptions holds the flag values bound by newPushCmd.
 type pushOptions struct {
 	projectPath, name, model string
 	maxFiles                 int
+	batchSize                int
 	docs, verbose            bool
 	embedLocally, priv       bool
+	sync                     bool
 	workers                  int
 }
 
@@ -75,7 +82,9 @@ Use "semidx repo add" to index a full git repository server-side instead.`,
 	c.Flags().StringVar(&o.name, "name", "", "Project name on the server (default: directory basename)")
 	c.Flags().StringVar(&o.model, "model", "bge-m3", "Embedding model name")
 	c.Flags().IntVar(&o.maxFiles, "max-files", 0, "Limit number of files (0 = all)")
+	c.Flags().IntVar(&o.batchSize, "batch-size", defaultAsyncBatchSize, "Split push into batches of N files (0 = single batch)")
 	c.Flags().IntVar(&o.workers, "workers", defaultPushWorkers, "How many files to process concurrently when --embed-locally is active")
+	c.Flags().BoolVar(&o.sync, "sync", false, "Use synchronous push (old behavior; for small pushes only)")
 	c.Flags().BoolVar(&o.docs, "docs", false, "Treat the path as a document folder, even inside a git repo")
 	c.Flags().BoolVar(&o.verbose, "verbose", false, "Show detailed progress")
 	c.Flags().BoolVar(&o.embedLocally, "embed-locally", false, "Chunk and embed files locally (client-side) instead of sending raw content")
@@ -116,7 +125,7 @@ func runPush(cmd *cobra.Command, d *deps, o *pushOptions) error {
 	if workers < 1 {
 		workers = defaultPushWorkers
 	}
-	p := &pusher{d: d, cli: cli, tgt: tgt, projectName: projectName, model: o.model, verbose: o.verbose, workers: workers}
+	p := &pusher{d: d, cli: cli, tgt: tgt, projectName: projectName, model: o.model, verbose: o.verbose, workers: workers, batchSize: o.batchSize, sync: o.sync}
 	if o.embedLocally {
 		return p.embedded(ctx, files)
 	}
@@ -182,6 +191,8 @@ type pusher struct {
 	model       string
 	verbose     bool
 	workers     int
+	batchSize   int
+	sync        bool
 }
 
 // rel returns path relative to the push target, falling back to the absolute
@@ -194,8 +205,10 @@ func (p *pusher) rel(path string) string {
 	return rel
 }
 
-// raw sends raw file content to the server (current/default behavior). Only
-// text files that are stale (different from server) are pushed.
+// raw sends raw file content to the server. By default it uses the async batch
+// path (202 Accepted + job polling) to avoid timeouts on large pushes. Use
+// --sync for the old synchronous behaviour on small pushes; use --batch-size
+// to split the push into multiple smaller batches to stay under body limits.
 func (p *pusher) raw(ctx context.Context, files []string) error {
 	// 1. Hash all files, collect text content.
 	hashes, contents, skippedBin := p.hashFiles(files)
@@ -225,17 +238,171 @@ func (p *pusher) raw(ctx context.Context, files []string) error {
 		return nil
 	}
 
-	// 4. Push.
+	// 4. Push — async (default) or sync.
 	start := time.Now()
-	fmt.Printf("Pushing %d files, deleting %d ...\n", len(batch), len(diff.Deleted))
-	resp, err := p.cli.FilesBatch(ctx, p.projectName, batch, diff.Deleted)
+	if p.sync {
+		return p.pushSync(ctx, batch, diff.Deleted, start)
+	}
+	return p.pushAsync(ctx, batch, diff.Deleted, start)
+}
+
+// pushSync sends files in one synchronous call (the old behaviour). If batchSize
+// is set, it splits into multiple synchronous calls.
+func (p *pusher) pushSync(ctx context.Context, batch []client.BatchFile, deletions []string, start time.Time) error {
+	if p.batchSize > 0 && p.batchSize < len(batch) {
+		return p.pushSyncBatched(ctx, batch, deletions, start)
+	}
+	return p.pushSyncSingle(ctx, batch, deletions, start)
+}
+
+// pushSyncSingle sends one synchronous batch.
+func (p *pusher) pushSyncSingle(ctx context.Context, batch []client.BatchFile, deletions []string, start time.Time) error {
+	fmt.Printf("Pushing %d files (sync), deleting %d ...\n", len(batch), len(deletions))
+	resp, err := p.cli.FilesBatch(ctx, p.projectName, batch, deletions)
 	if err != nil {
 		return fmt.Errorf("push files: %w", err)
 	}
-	fmt.Printf("Done in %v — indexed: %d, chunks: %d, deleted: %d, errors: %d\n",
+	fmt.Printf(doneFmt,
 		time.Since(start).Round(time.Millisecond),
 		resp.Indexed, resp.Chunks, resp.Deleted, resp.Errors)
 	return nil
+}
+
+// pushSyncBatched splits the batch into multiple synchronous calls. Deletions
+// go in the first batch.
+func (p *pusher) pushSyncBatched(ctx context.Context, batch []client.BatchFile, deletions []string, start time.Time) error {
+	batches := splitBatch(batch, p.batchSize)
+	totalBatches := len(batches)
+	var totalIndexed, totalChunks, totalDeleted, totalErrors int
+
+	for i, b := range batches {
+		del := []string(nil)
+		if i == 0 {
+			del = deletions
+		}
+		fmt.Printf("Pushing batch %d/%d (%d files, sync) ...\n", i+1, totalBatches, len(b))
+		resp, err := p.cli.FilesBatch(ctx, p.projectName, b, del)
+		if err != nil {
+			return fmt.Errorf("push batch %d/%d: %w", i+1, totalBatches, err)
+		}
+		totalIndexed += resp.Indexed
+		totalChunks += resp.Chunks
+		totalDeleted += resp.Deleted
+		totalErrors += resp.Errors
+	}
+
+	fmt.Printf(doneFmt,
+		time.Since(start).Round(time.Millisecond),
+		totalIndexed, totalChunks, totalDeleted, totalErrors)
+	return nil
+}
+
+// pushAsync sends files using the async batch path. By default it sends one
+// batch; with --batch-size it splits into multiple batches, each as a separate
+// async job. Deletions go in the first batch.
+func (p *pusher) pushAsync(ctx context.Context, batch []client.BatchFile, deletions []string, start time.Time) error {
+	if p.batchSize > 0 && p.batchSize < len(batch) {
+		return p.pushAsyncBatched(ctx, batch, deletions, start)
+	}
+	return p.pushAsyncSingle(ctx, batch, deletions, start)
+}
+
+// pushAsyncSingle enqueues one async batch job and polls for completion.
+func (p *pusher) pushAsyncSingle(ctx context.Context, batch []client.BatchFile, deletions []string, start time.Time) error {
+	fmt.Printf("Enqueuing %d files (async), deleting %d ...\n", len(batch), len(deletions))
+	jobID, err := p.cli.FilesBatchAsync(ctx, p.projectName, batch, deletions)
+	if err != nil {
+		return fmt.Errorf("enqueue batch: %w", err)
+	}
+	fmt.Printf("Job %d queued — waiting for completion ...\n", jobID)
+
+	pollCtx, cancel := context.WithTimeout(ctx, asyncPollTimeout)
+	defer cancel()
+
+	job, err := p.cli.WaitForJob(pollCtx, jobID, asyncPollInterval)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("timed out after %v waiting for job %d (job is still running on the server — re-run push to check status)", asyncPollTimeout, jobID)
+		}
+		return fmt.Errorf("wait for job %d: %w", jobID, err)
+	}
+	if job.Status == client.JobStatusFailed {
+		return fmt.Errorf("job %d failed: %s", jobID, job.Error)
+	}
+	fmt.Printf(doneFmt,
+		time.Since(start).Round(time.Millisecond),
+		job.FilesIndexed, job.ChunksCreated, job.DeletedFiles, job.ErrorCount)
+	return nil
+}
+
+// pushAsyncBatched splits the batch into multiple async calls. Each batch is a
+// separate job; deletions go in the first batch (so partial failure doesn't
+// re-index deleted files — the diff on next push will pick up remaining stale
+// files). All jobs are queued, then polled with per-job timeouts.
+func (p *pusher) pushAsyncBatched(ctx context.Context, batch []client.BatchFile, deletions []string, start time.Time) error {
+	batches := splitBatch(batch, p.batchSize)
+	totalBatches := len(batches)
+	jobIDs := make([]int, totalBatches)
+
+	// Enqueue all batches.
+	for i, b := range batches {
+		del := []string(nil)
+		if i == 0 {
+			del = deletions
+		}
+		fmt.Printf("Enqueuing batch %d/%d (%d files) ...\n", i+1, totalBatches, len(b))
+		jobID, err := p.cli.FilesBatchAsync(ctx, p.projectName, b, del)
+		if err != nil {
+			return fmt.Errorf("enqueue batch %d/%d: %w (note: %d earlier batch(es) may already be processing on the server)", i+1, totalBatches, err, i)
+		}
+		jobIDs[i] = jobID
+	}
+
+	// Poll all jobs with per-job timeouts (consistent with single-batch semantics).
+	fmt.Printf("All %d batch(es) queued — waiting for completion ...\n", totalBatches)
+	var totalIndexed, totalChunks, totalDeleted, totalErrors int
+	for i, jid := range jobIDs {
+		pollCtx, cancel := context.WithTimeout(ctx, asyncPollTimeout)
+		job, err := p.cli.WaitForJob(pollCtx, jid, asyncPollInterval)
+		cancel()
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return fmt.Errorf("timed out after %v waiting for batch %d/%d (job %d — still running on server; re-run push to check status)", asyncPollTimeout, i+1, totalBatches, jid)
+			}
+			return fmt.Errorf("wait for batch %d/%d (job %d): %w", i+1, totalBatches, jid, err)
+		}
+		if job.Status == client.JobStatusFailed {
+			return fmt.Errorf("batch %d/%d (job %d) failed: %s", i+1, totalBatches, jid, job.Error)
+		}
+		totalIndexed += job.FilesIndexed
+		totalChunks += job.ChunksCreated
+		totalDeleted += job.DeletedFiles
+		totalErrors += job.ErrorCount
+		if p.verbose {
+			fmt.Printf("  batch %d/%d done — indexed: %d, chunks: %d\n", i+1, totalBatches, job.FilesIndexed, job.ChunksCreated)
+		}
+	}
+
+	fmt.Printf(doneFmt,
+		time.Since(start).Round(time.Millisecond),
+		totalIndexed, totalChunks, totalDeleted, totalErrors)
+	return nil
+}
+
+// splitBatch divides a batch of files into chunks of up to chunkSize elements.
+func splitBatch(batch []client.BatchFile, chunkSize int) [][]client.BatchFile {
+	if chunkSize <= 0 || chunkSize >= len(batch) {
+		return [][]client.BatchFile{batch}
+	}
+	var chunks [][]client.BatchFile
+	for i := 0; i < len(batch); i += chunkSize {
+		end := i + chunkSize
+		if end > len(batch) {
+			end = len(batch)
+		}
+		chunks = append(chunks, batch[i:end])
+	}
+	return chunks
 }
 
 // hashFiles hashes every file and, for text files, collects their content.
@@ -336,7 +503,6 @@ func (p *pusher) embedded(ctx context.Context, files []string) error {
 	fmt.Printf("Embedding locally with model %s (workers: %d, skipping diff)\n", p.model, p.workers)
 
 	// 2. Read files, chunk, embed concurrently — same pattern as the indexer.
-	start := time.Now()
 	batch, stats := p.embedAll(ctx, files)
 	if stats.skippedBin > 0 {
 		fmt.Printf("Skipped %d binary files (JARs, images, etc.)\n", stats.skippedBin)
@@ -350,15 +516,10 @@ func (p *pusher) embedded(ctx context.Context, files []string) error {
 	}
 
 	// 3. Push all files (no diff — we embed everything to ensure embeddings are present).
-	fmt.Printf("Pushing %d files (pre-embedded) ...\n", len(batch))
-	resp, err := p.cli.FilesBatch(ctx, p.projectName, batch, nil)
-	if err != nil {
-		return fmt.Errorf("push files: %w", err)
+	if p.sync {
+		return p.pushSync(ctx, batch, nil, time.Now())
 	}
-	fmt.Printf("Done in %v — indexed: %d, chunks: %d, errors: %d\n",
-		time.Since(start).Round(time.Millisecond),
-		resp.Indexed, resp.Chunks, resp.Errors)
-	return nil
+	return p.pushAsync(ctx, batch, nil, time.Now())
 }
 
 // embedAll runs the concurrent read/chunk/embed pipeline over files and returns

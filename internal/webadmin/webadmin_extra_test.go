@@ -469,6 +469,9 @@ func TestKeysErrorPaths(t *testing.T) {
 // --- users error paths --------------------------------------------------------
 
 func TestUsersErrorPaths(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test with argon2 hashing in short mode")
+	}
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
 	c := newClient(t)

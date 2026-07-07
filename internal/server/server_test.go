@@ -29,8 +29,10 @@ type fakeStore struct {
 	deleteErr  error                // DeleteProject error
 	enqueuedID int                  // EnqueueJob result
 	job        *store.Job           // GetJob result (nil → ErrNotFound)
-	fileHashes map[string]string    // ListFileHashes result
-	userCount  int                  // CountUsers result
+	fileHashes   map[string]string // ListFileHashes result
+	fileCount    int               // CountProjectFiles result
+	fileCountErr error             // CountProjectFiles error
+	userCount    int               // CountUsers result
 	created    *store.User          // last CreateUser call
 
 	// error-injection fields (all nil/zero = success path)
@@ -73,6 +75,9 @@ func (f *fakeStore) CreateUser(_ context.Context, username, hash, role string) (
 
 func (f *fakeStore) ListFileHashes(context.Context, int) (map[string]string, error) {
 	return f.fileHashes, f.fileHashErr
+}
+func (f *fakeStore) CountProjectFiles(context.Context, int) (int, error) {
+	return f.fileCount, f.fileCountErr
 }
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
 func (f *fakeStore) TokenByHash(context.Context, string) (*store.Token, error) {

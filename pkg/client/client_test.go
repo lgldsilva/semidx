@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // newTestServer spins an httptest server and returns a Client pointed at it. The
@@ -144,6 +146,7 @@ func TestFilesBatchAsync(t *testing.T) {
 		if sync := r.URL.Query().Get("sync"); sync == "true" {
 			t.Error("async batch must not use sync=true")
 		}
+		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(EnqueueResponse{JobID: 9, Status: "queued"})
 	})
 	defer done()
@@ -164,6 +167,108 @@ func TestFilesBatchAsyncError(t *testing.T) {
 	if _, err := c.FilesBatchAsync(context.Background(), "p", []BatchFile{{Path: "a.go"}}, nil); err == nil {
 		t.Fatal("expected error")
 	}
+}
+
+func TestFilesBatchAsyncOldServer(t *testing.T) {
+	// Simulate an old server that returns 200 (sync path) without async support.
+	c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(BatchResponse{Indexed: 5, Chunks: 10})
+	})
+	defer done()
+
+	_, err := c.FilesBatchAsync(context.Background(), "p", []BatchFile{{Path: "a.go", Content: "x"}}, nil)
+	if err == nil {
+		t.Fatal("expected error for old server without async support")
+	}
+	if !strings.Contains(err.Error(), "--sync") {
+		t.Errorf("error should mention --sync: %v", err)
+	}
+}
+
+func TestWaitForJob(t *testing.T) {
+	t.Run("succeeds on first poll", func(t *testing.T) {
+		c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			// GET /api/v1/jobs/42 → already done.
+			_ = json.NewEncoder(w).Encode(Job{
+				ID: 42, Status: JobStatusSucceeded,
+				FilesIndexed: 7, ChunksCreated: 42,
+				DeletedFiles: 2, ErrorCount: 0,
+			})
+		})
+		defer done()
+
+		job, err := c.WaitForJob(context.Background(), 42, time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.FilesIndexed != 7 || job.DeletedFiles != 2 {
+			t.Errorf("FilesIndexed=%d DeletedFiles=%d", job.FilesIndexed, job.DeletedFiles)
+		}
+	})
+
+	t.Run("fails immediately", func(t *testing.T) {
+		c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(Job{
+				ID: 7, Status: JobStatusFailed,
+				Error: "model unavailable",
+			})
+		})
+		defer done()
+
+		job, err := c.WaitForJob(context.Background(), 7, time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Status != JobStatusFailed {
+			t.Errorf("expected failed, got %s", job.Status)
+		}
+	})
+
+	t.Run("progresses queued→running→succeeded", func(t *testing.T) {
+		var mu sync.Mutex
+		calls := 0
+		c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			calls++
+			n := calls
+			mu.Unlock()
+			var job Job
+			switch n {
+			case 1:
+				job = Job{ID: 99, Status: JobStatusQueued}
+			case 2:
+				job = Job{ID: 99, Status: JobStatusRunning}
+			default:
+				job = Job{ID: 99, Status: JobStatusSucceeded, FilesIndexed: 3, ChunksCreated: 12}
+			}
+			_ = json.NewEncoder(w).Encode(job)
+		})
+		defer done()
+
+		job, err := c.WaitForJob(context.Background(), 99, time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.FilesIndexed != 3 {
+			t.Errorf("FilesIndexed=%d", job.FilesIndexed)
+		}
+	})
+
+	t.Run("context cancelled", func(t *testing.T) {
+		c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(Job{ID: 1, Status: JobStatusQueued})
+		})
+		defer done()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+		time.Sleep(15 * time.Millisecond) // ensure ctx is already expired
+
+		_, err := c.WaitForJob(ctx, 1, time.Second)
+		if err == nil {
+			t.Fatal("expected error from cancelled context")
+		}
+	})
 }
 
 func TestAPIErrorMapping(t *testing.T) {
