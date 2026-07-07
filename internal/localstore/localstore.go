@@ -39,7 +39,7 @@ var _ store.IndexStore = (*SQLiteStore)(nil)
 
 // projectColumns is the canonical projection order shared by the project
 // getters so scanProject can read any of them.
-const projectColumns = `id, name, path, model, status, source_type, git_url, branch, COALESCE(identity, ''), COALESCE(dims, 0)`
+const projectColumns = `id, name, path, model, status, source_type, git_url, branch, COALESCE(identity, ''), COALESCE(dims, 0), COALESCE(license_spdx_id, '')`
 
 // schema mirrors the pgvector layout conceptually as plain tables: an embedding
 // BLOB replaces the vector column and there is one chunks table instead of the
@@ -47,16 +47,17 @@ const projectColumns = `id, name, path, model, status, source_type, git_url, bra
 // table holds vectors of any dimension).
 const schema = `
 CREATE TABLE IF NOT EXISTS projects (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL,
-    path        TEXT NOT NULL DEFAULT '',
-    model       TEXT NOT NULL DEFAULT '',
-    status      TEXT NOT NULL DEFAULT '',
-    source_type TEXT NOT NULL DEFAULT 'path',
-    git_url     TEXT NOT NULL DEFAULT '',
-    branch      TEXT NOT NULL DEFAULT '',
-    identity    TEXT,
-    dims        INTEGER NOT NULL DEFAULT 0
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,
+    path            TEXT NOT NULL DEFAULT '',
+    model           TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT '',
+    source_type     TEXT NOT NULL DEFAULT 'path',
+    git_url         TEXT NOT NULL DEFAULT '',
+    branch          TEXT NOT NULL DEFAULT '',
+    identity        TEXT,
+    dims            INTEGER NOT NULL DEFAULT 0,
+    license_spdx_id TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_identity ON projects(identity);
 CREATE TABLE IF NOT EXISTS files (
@@ -319,7 +320,7 @@ func (s *SQLiteStore) CreateProject(ctx context.Context, name, model, sourceType
 
 func scanProject(row interface{ Scan(...any) error }) (*store.Project, error) {
 	var p store.Project
-	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity, &p.Dims); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity, &p.Dims, &p.LicenseSPDXID); err != nil {
 		return nil, err
 	}
 	return &p, nil

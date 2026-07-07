@@ -39,6 +39,17 @@ func stubServer(t *testing.T) *httptest.Server {
 		w.WriteHeader(202)
 		_ = json.NewEncoder(w).Encode(map[string]any{"job_id": 5, "status": "queued"})
 	})
+	mux.HandleFunc("GET /api/v1/projects/{project}/status", func(w http.ResponseWriter, r *http.Request) {
+		project := r.PathValue("project")
+		if project == "nonexistent" {
+			w.WriteHeader(404)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "project not found"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"name": project, "source_type": "git", "status": "ready", "model": "bge-m3", "total_files": 42,
+		})
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -79,7 +90,7 @@ func callText(t *testing.T, sess *mcp.ClientSession, name string, args map[strin
 	return b.String(), res.IsError
 }
 
-func TestListToolsExposesThreeTools(t *testing.T) {
+func TestListToolsExposesAllTools(t *testing.T) {
 	sess := connect(t)
 	res, err := sess.ListTools(context.Background(), nil)
 	if err != nil {
@@ -89,7 +100,7 @@ func TestListToolsExposesThreeTools(t *testing.T) {
 	for _, tool := range res.Tools {
 		got[tool.Name] = true
 	}
-	for _, want := range []string{"semantic_search", "semantic_projects", "semantic_reindex"} {
+	for _, want := range []string{"semantic_search", "semantic_projects", "semantic_reindex", "semantic_status"} {
 		if !got[want] {
 			t.Errorf("missing tool %q (have %v)", want, got)
 		}
@@ -101,12 +112,54 @@ func TestListToolsExposesThreeTools(t *testing.T) {
 
 func TestSemanticSearch(t *testing.T) {
 	sess := connect(t)
-	text, isErr := callText(t, sess, "semantic_search", map[string]any{"project": "app", "query": "verify token"})
+	text, isErr := callText(t, sess, "semantic_search", map[string]any{"project": "app", "query": "verify token", "format": "text"})
 	if isErr {
 		t.Fatalf("unexpected isError; text=%q", text)
 	}
 	if !strings.Contains(text, "internal/auth/token.go:42") || !strings.Contains(text, "0.910") {
 		t.Errorf("search text missing file:line/score: %q", text)
+	}
+}
+
+func TestSemanticSearchStructuredFormat(t *testing.T) {
+	sess := connect(t)
+	text, isErr := callText(t, sess, "semantic_search", map[string]any{
+		"project": "app", "query": "verify token", "format": "structured",
+	})
+	if isErr {
+		t.Fatalf("unexpected isError; text=%q", text)
+	}
+	if !strings.Contains(text, `"file":"internal/auth/token.go"`) {
+		t.Errorf("structured search missing file field; text=%q", text)
+	}
+	if !strings.Contains(text, `"start_line":42`) {
+		t.Errorf("structured search missing start_line; text=%q", text)
+	}
+}
+
+func TestSemanticSearchMinimalFormat(t *testing.T) {
+	sess := connect(t)
+	text, isErr := callText(t, sess, "semantic_search", map[string]any{
+		"project": "app", "query": "verify token", "format": "minimal",
+	})
+	if isErr {
+		t.Fatalf("unexpected isError; text=%q", text)
+	}
+	if !strings.Contains(text, `"f":`) {
+		t.Errorf("minimal search missing abbreviated file key; text=%q", text)
+	}
+}
+
+func TestSemanticSearchTextFormat(t *testing.T) {
+	sess := connect(t)
+	text, isErr := callText(t, sess, "semantic_search", map[string]any{
+		"project": "app", "query": "verify token", "format": "text",
+	})
+	if isErr {
+		t.Fatalf("unexpected isError; text=%q", text)
+	}
+	if !strings.Contains(text, "internal/auth/token.go:42") {
+		t.Errorf("text search missing file:line; text=%q", text)
 	}
 }
 
@@ -126,6 +179,78 @@ func TestSemanticProjects(t *testing.T) {
 	text, isErr := callText(t, sess, "semantic_projects", map[string]any{})
 	if isErr || !strings.Contains(text, "app") || !strings.Contains(text, "status=ready") {
 		t.Errorf("projects text = %q (isErr=%v)", text, isErr)
+	}
+}
+
+func TestListResources(t *testing.T) {
+	sess := connect(t)
+	res, err := sess.ListResources(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range res.Resources {
+		if r.URI == "semidx://projects" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("semidx://projects resource not listed; got %v", res.Resources)
+	}
+}
+
+func TestListResourceTemplates(t *testing.T) {
+	sess := connect(t)
+	res, err := sess.ListResourceTemplates(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range res.ResourceTemplates {
+		if r.URITemplate == "semidx://project/{name}/stats" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("semidx://project/{name}/stats template not listed; got %v", res.ResourceTemplates)
+	}
+}
+
+func TestReadResourceProjects(t *testing.T) {
+	sess := connect(t)
+	res, err := sess.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: "semidx://projects"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Contents) == 0 {
+		t.Fatal("empty resource contents")
+	}
+	if !strings.Contains(res.Contents[0].Text, "app") {
+		t.Errorf("projects resource missing project info; got %q", res.Contents[0].Text)
+	}
+}
+
+func TestReadResourceProjectStats(t *testing.T) {
+	sess := connect(t)
+	res, err := sess.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: "semidx://project/app/stats"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Contents) == 0 {
+		t.Fatal("empty resource contents")
+	}
+	if !strings.Contains(res.Contents[0].Text, "app") {
+		t.Errorf("project stats resource missing name; got %q", res.Contents[0].Text)
+	}
+}
+
+func TestReadResourceProjectStatsNotFound(t *testing.T) {
+	sess := connect(t)
+	_, err := sess.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: "semidx://project/nonexistent/stats"})
+	if err == nil {
+		t.Error("expected error for nonexistent project stats resource")
 	}
 }
 
