@@ -36,6 +36,9 @@ func extractAgentsMD(data []byte) (string, error) {
 		if !seen[key] {
 			seen[key] = true
 			b.WriteString("header h")
+			if level > 6 {
+				level = 6
+			}
 			b.WriteByte('0' + byte(level))
 			b.WriteString(": ")
 			b.WriteString(title)

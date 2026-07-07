@@ -17,11 +17,11 @@ type cacheEntry struct {
 // QueryCache is an LRU-ish cache for search results with TTL expiry.
 // It is safe for concurrent use.
 type QueryCache struct {
-	mu       sync.RWMutex
-	entries  map[string]*cacheEntry
-	ttl      time.Duration
-	maxSize  int
-	keys     []string // FIFO eviction order
+	mu      sync.RWMutex
+	entries map[string]*cacheEntry
+	ttl     time.Duration
+	maxSize int
+	keys    []string // FIFO eviction order
 }
 
 // NewQueryCache creates a QueryCache with the given TTL and max entry count.
@@ -37,12 +37,6 @@ func NewQueryCache(ttl time.Duration, maxSize int) *QueryCache {
 		ttl:     ttl,
 		maxSize: maxSize,
 	}
-}
-
-// cacheKey builds a deterministic key from all query parameters that affect
-// the result set. Missing fields would cause cross-mode cache pollution.
-func cacheKey(query string, projectID, topK int, model, worktree string, keywordOnly, hybridSearch bool, forceMode string) string {
-	return fmt.Sprintf("%s|%d|%d|%s|%s|%t|%t|%s", query, projectID, topK, model, worktree, keywordOnly, hybridSearch, forceMode)
 }
 
 // Get returns cached results if a fresh entry exists.

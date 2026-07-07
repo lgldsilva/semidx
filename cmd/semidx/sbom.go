@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -86,7 +87,7 @@ func newSbomGenerateCmd(d *deps) *cobra.Command {
 			}
 
 			if outputPath != "" {
-				if err := os.WriteFile(outputPath, output, 0o644); err != nil {
+				if err := os.WriteFile(filepath.Clean(outputPath), output, 0o600); err != nil {
 					return fmt.Errorf("write %s: %w", outputPath, err)
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "SBOM written to %s (%s)\n", outputPath, format)
@@ -176,7 +177,7 @@ type goModInfo struct {
 
 // readGoMod parses a go.mod for module path and dependency versions.
 func readGoMod(projectPath string) *goModInfo {
-	data, err := os.ReadFile(projectPath + "/go.mod")
+	data, err := os.ReadFile(filepath.Clean(filepath.Join(projectPath, "go.mod")))
 	if err != nil {
 		return nil
 	}

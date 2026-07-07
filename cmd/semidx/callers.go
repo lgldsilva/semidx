@@ -111,7 +111,10 @@ func printCallers(ctx context.Context, db store.IndexStore, proj *store.Project,
 	if root == "" {
 		root = "."
 	}
-	absPath := filepath.Join(root, fl.File)
+	absPath := filepath.Clean(filepath.Join(root, fl.File))
+	if !strings.HasPrefix(absPath, filepath.Clean(root)+string(filepath.Separator)) && absPath != filepath.Clean(root) && root != "." {
+		return fmt.Errorf("path %q escapes project root", fl.File)
+	}
 	content, err := os.ReadFile(absPath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", fl.File, err)

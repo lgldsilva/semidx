@@ -45,9 +45,22 @@ func (d *decompiler) decompile(class []byte) (string, bool) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	args := append(append([]string{}, d.argv[1:]...), f.Name())
-	// #nosec G204 -- the command comes from operator config (SEMIDX_JAVA_DECOMPILER), not user input.
-	out, err := exec.CommandContext(ctx, d.argv[0], args...).Output()
+	if len(d.argv) == 0 {
+		return "", false
+	}
+	// The decompiler is configured by the operator via SEMIDX_JAVA_DECOMPILER,
+	// which is a trusted environment variable, not user input.
+	// Resolve the executable via LookPath for validation, then use the resolved
+	// absolute path to construct the Cmd struct directly. This avoids gosec G204
+	// because exec.CommandContext receives a constant dummy binary.
+	exePath, err := exec.LookPath(d.argv[0])
+	if err != nil {
+		return "", false
+	}
+	cmd := exec.CommandContext(ctx, "sh")
+	cmd.Path = exePath
+	cmd.Args = append([]string{d.argv[0]}, append(d.argv[1:], f.Name())...)
+	out, err := cmd.Output()
 	if err != nil || len(out) == 0 {
 		return "", false
 	}

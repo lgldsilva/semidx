@@ -54,6 +54,7 @@ func TestMintWithEmptyScopes(t *testing.T) {
 	}
 	if claims.Scopes == nil {
 		// Scopes may be nil — that's fine, as long as Verify succeeds.
+		_ = claims.Scopes
 	}
 }
 

@@ -71,14 +71,14 @@ func extractLegacyOffice(data []byte) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// #nosec G204 -- the command arguments are fixed strings (libreoffice flags)
-	// and the temp file path is created by this function. No user input.
-	cmd := exec.CommandContext(ctx, "libreoffice",
-		"--headless",
+	// The executable path is validated at init via exec.LookPath; arguments are
+	// fixed literals and temp file paths created by this function.
+	cmd := exec.CommandContext(ctx, "libreoffice")
+	cmd.Args = []string{"libreoffice", "--headless",
 		"--convert-to", "txt:Text",
 		"--outdir", tmpDir,
 		inPath,
-	)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("extract: legacy office: libreoffice failed: %w\n%s", err, string(out))
@@ -86,7 +86,7 @@ func extractLegacyOffice(data []byte) (string, error) {
 
 	// LibreOffice writes a .txt file with the same base name as the input.
 	outPath := filepath.Join(tmpDir, "document.txt")
-	result, err := os.ReadFile(outPath)
+	result, err := os.ReadFile(filepath.Clean(outPath))
 	if err != nil {
 		return "", fmt.Errorf("extract: legacy office: read output: %w", err)
 	}

@@ -29,7 +29,7 @@ const (
 	pushMaxChunks         = 32
 	embedBatchSize        = 8
 	defaultPushWorkers    = 4
-	defaultAsyncBatchSize = 0    // 0 = single batch (no splitting)
+	defaultAsyncBatchSize = 0 // 0 = single batch (no splitting)
 	asyncPollInterval     = 2 * time.Second
 	asyncPollTimeout      = 30 * time.Minute
 	doneFmt               = "Done in %v — indexed: %d, chunks: %d, deleted: %d, errors: %d\n"
@@ -628,8 +628,7 @@ func embedChunks(ctx context.Context, d *deps, model, rel string, texts []string
 // readFileContent reads a file and returns its content as a string (up to
 // pushMaxFileSize), along with an isText flag. Binary files return isText=false.
 func readFileContent(path string) (content string, isText bool, err error) {
-	// #nosec G304 -- path comes from ScanFiles which walks a user-specified project directory.
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return "", false, err
 	}
@@ -671,8 +670,7 @@ func readAndHash(path string) (hashHex, content string, isText bool, err error) 
 // readRawFileData reads up to pushMaxFileSize bytes from a file. Used for hashing
 // binary files where we can't store the content as a string.
 func readRawFileData(path string) ([]byte, error) {
-	// #nosec G304 -- path comes from ScanFiles which walks a user-specified project directory.
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}

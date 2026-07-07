@@ -46,7 +46,7 @@ func Load(key string) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p) // #nosec G304 -- semidx's own registry path (hashed key)
+	data, err := os.ReadFile(filepath.Clean(p))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
