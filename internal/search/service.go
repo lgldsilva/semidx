@@ -313,16 +313,45 @@ func fetchGraphChunks(ctx context.Context, s *Service, projectID, dims int, expa
 	return results
 }
 
+// bfsNode represents a single node in the BFS traversal of the dependency graph.
+type bfsNode struct {
+	path  string
+	depth int
+	score float64
+}
+
+// processBFSNode examines one neighbor from a BFS node. It updates the
+// expanded map when the neighbor is newly discovered or reaches a higher
+// score, and returns the next BFS node to enqueue (or nil when skipped).
+func processBFSNode(neighbor string, node bfsNode, p bfsParams, visited map[string]float64, expanded map[string]float64) *bfsNode {
+	if neighbor == "" {
+		return nil
+	}
+	newScore := node.score * p.decay
+	if newScore < p.floor {
+		return nil
+	}
+	if best, seen := visited[neighbor]; seen && best >= newScore {
+		return nil
+	}
+	visited[neighbor] = newScore
+
+	if !p.seedPaths[neighbor] {
+		if len(expanded) >= p.maxPaths {
+			return nil
+		}
+		if curr, ok := expanded[neighbor]; !ok || newScore > curr {
+			expanded[neighbor] = newScore
+		}
+	}
+
+	return &bfsNode{path: neighbor, depth: node.depth + 1, score: newScore}
+}
+
 // runGraphBFS runs the BFS traversal through the dependency graph from seed
 // paths, returning newly discovered paths with decayed scores.  maxPaths caps
 // the total number of expanded paths (DoS guard).
 func runGraphBFS(p bfsParams) map[string]float64 {
-	type bfsNode struct {
-		path  string
-		depth int
-		score float64
-	}
-
 	// Initialise the BFS queue with every seed result at depth 0, each with its
 	// own similarity score so closer seeds influence the graph more strongly.
 	queue := make([]bfsNode, 0, len(p.seeds))
@@ -347,28 +376,9 @@ func runGraphBFS(p bfsParams) map[string]float64 {
 		neighbors = append(neighbors, p.reverse[node.path]...)
 
 		for _, neighbor := range neighbors {
-			if neighbor == "" {
-				continue
+			if next := processBFSNode(neighbor, node, p, visited, expanded); next != nil {
+				queue = append(queue, *next)
 			}
-			newScore := node.score * p.decay
-			if newScore < p.floor {
-				continue
-			}
-			if best, seen := visited[neighbor]; seen && best >= newScore {
-				continue
-			}
-			visited[neighbor] = newScore
-
-			if !p.seedPaths[neighbor] {
-				if len(expanded) >= p.maxPaths {
-					continue
-				}
-				if curr, ok := expanded[neighbor]; !ok || newScore > curr {
-					expanded[neighbor] = newScore
-				}
-			}
-
-			queue = append(queue, bfsNode{path: neighbor, depth: node.depth + 1, score: newScore})
 		}
 	}
 
