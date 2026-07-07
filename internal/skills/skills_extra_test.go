@@ -29,7 +29,7 @@ func TestInstallErrorPaths(t *testing.T) {
 	if err := os.Chmod(readonly, 0o500); err != nil {
 		t.Skipf("cannot chmod: %v", err)
 	}
-	defer os.Chmod(readonly, 0o700)
+	defer func() { _ = os.Chmod(readonly, 0o700) }()
 
 	if _, err := Install(readonly); err == nil {
 		t.Skip("Install into read-only dir did not error (running as root?)")
