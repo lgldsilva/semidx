@@ -33,10 +33,13 @@ func TestHumanFormatterGolden(t *testing.T) {
 	}
 	const want = "--- Result 1 (91%) ---\n" +
 		"File: src/auth.go:12-14\n" +
-		"func Login() {\n  // jwt\n}\n\n" +
+		"  12│ func Login() {\n" +
+		"  13│   // jwt\n" +
+		"  14│ }\n\n" +
 		"--- Result 2 (50%) ---\n" +
 		"File: README.md:3-5\n" +
-		"# Title\nbody\n\n"
+		"   3│ # Title\n" +
+		"   4│ body\n\n"
 	if got := buf.String(); got != want {
 		t.Errorf("human output mismatch:\n--- got ---\n%q\n--- want ---\n%q", got, want)
 	}
@@ -60,7 +63,7 @@ func TestHumanFormatterKeywordGolden(t *testing.T) {
 	}
 	const want = "--- Result 1 (keyword match) ---\n" +
 		"File: src/auth.go:7\n" +
-		"func Login() {}\n\n" +
+		"   7│ func Login() {}\n\n" +
 		"--- Result 2 (keyword match) ---\n" +
 		"File: notes.txt:1\n" +
 		"todo\n\n"
@@ -122,6 +125,40 @@ func TestJSONFormatterNilProject(t *testing.T) {
 func TestHumanFormatterWriteError(t *testing.T) {
 	if err := (HumanFormatter{}).Format(failWriter{}, sampleResponse()); err == nil {
 		t.Fatal("expected the write error to propagate")
+	}
+}
+
+func TestHumanFormatterNoLineNumbers(t *testing.T) {
+	var buf bytes.Buffer
+	fmtr := HumanFormatter{NoLineNums: true}
+	if err := fmtr.Format(&buf, sampleResponse()); err != nil {
+		t.Fatal(err)
+	}
+	// Should match old golden output without line numbers.
+	const want = "--- Result 1 (91%) ---\n" +
+		"File: src/auth.go:12-14\n" +
+		"func Login() {\n  // jwt\n}\n\n" +
+		"--- Result 2 (50%) ---\n" +
+		"File: README.md:3-5\n" +
+		"# Title\nbody\n\n"
+	if got := buf.String(); got != want {
+		t.Errorf("no-line-numbers output mismatch:\n--- got ---\n%q\n--- want ---\n%q", got, want)
+	}
+}
+
+func TestPrefixLineNumbers(t *testing.T) {
+	got := prefixLineNumbers("func Foo() {\n\tbar()\n\tbaz()\n}", 15, 4)
+	const want = "  15│ func Foo() {\n  16│ \tbar()\n  17│ \tbaz()\n  18│ }"
+	if got != want {
+		t.Errorf("prefixLineNumbers mismatch:\n--- got ---\n%q\n--- want ---\n%q", got, want)
+	}
+}
+
+func TestPrefixLineNumbersWideAutoPad(t *testing.T) {
+	// When line numbers exceed the default padding, auto-expand.
+	got := prefixLineNumbers("a\nb\nc", 9998, 4)
+	if !strings.Contains(got, "9999│") && !strings.Contains(got, "10000│") {
+		t.Errorf("expected auto-width padding for large line numbers, got:\n%s", got)
 	}
 }
 
