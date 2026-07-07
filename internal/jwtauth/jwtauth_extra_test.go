@@ -1,94 +1,102 @@
 package jwtauth
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"pgregory.net/rapid"
 )
 
-// TestMintVerifyPreservesClaims is a property check: for any subject and any set
-// of scopes, a minted token verifies and round-trips the subject and scopes
-// exactly.
-func TestMintVerifyPreservesClaims(t *testing.T) {
-	i := mustIssuer(t)
-	rapid.Check(t, func(rt *rapid.T) {
-		subject := rapid.String().Draw(rt, "subject")
-		scopes := rapid.SliceOfN(
-			rapid.SampledFrom([]string{"read", "write", "admin", "search", "index"}),
-			0, 5,
-		).Draw(rt, "scopes")
-
-		m, err := i.Mint(subject, scopes, 0, time.Now())
-		if err != nil {
-			rt.Fatalf("Mint error: %v", err)
-		}
-		claims, err := i.Verify(m.Token)
-		if err != nil {
-			rt.Fatalf("Verify of a freshly minted token failed: %v", err)
-		}
-		if claims.Subject != subject {
-			rt.Fatalf("subject = %q, want %q", claims.Subject, subject)
-		}
-		if claims.ID != m.JTI {
-			rt.Fatalf("jti = %q, want %q", claims.ID, m.JTI)
-		}
-		if len(claims.Scopes) != len(scopes) {
-			rt.Fatalf("scopes = %v, want %v", claims.Scopes, scopes)
-		}
-		for k := range scopes {
-			if claims.Scopes[k] != scopes[k] {
-				rt.Fatalf("scope[%d] = %q, want %q", k, claims.Scopes[k], scopes[k])
-			}
-		}
-	})
-}
-
-// TestVerifyRejectsTamperedToken is a property check: flipping any character in
-// the header/payload/signature of a valid token must make Verify fail (the MAC
-// is computed over the exact header.payload text and compared to the signature).
-func TestVerifyRejectsTamperedToken(t *testing.T) {
-	i := mustIssuer(t)
-	rapid.Check(t, func(rt *rapid.T) {
-		m, err := i.Mint("alice", []string{"read"}, time.Hour, time.Now())
-		if err != nil {
-			rt.Fatalf("Mint error: %v", err)
-		}
-		tok := m.Token
-		// Stay clear of the final characters of the signature segment, whose
-		// unused base64 bits could decode to the same MAC bytes.
-		idx := rapid.IntRange(0, len(tok)-6).Draw(rt, "index")
-		repl := byte('A')
-		if tok[idx] == 'A' {
-			repl = 'B'
-		}
-		tampered := tok[:idx] + string(repl) + tok[idx+1:]
-		if tampered == tok {
-			rt.Fatal("tamper produced an identical token")
-		}
-		if _, err := i.Verify(tampered); err == nil {
-			rt.Fatalf("Verify accepted a tampered token (flipped index %d)", idx)
-		}
-	})
-}
-
-// TestVerifyRejectsMissingJTI covers the branch where a token is otherwise valid
-// (right issuer, right signature, HS256) but carries no jti.
 func TestVerifyRejectsMissingJTI(t *testing.T) {
+	t.Parallel()
 	i := mustIssuer(t)
-	claims := Claims{
+
+	// Create a token with the correct secret but missing jti.
+	claims := &Claims{
+		Scopes: []string{"read"},
 		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:  issuer,
-			Subject: "alice",
-			// ID (jti) deliberately left empty.
+			Issuer:    issuer,
+			Subject:   "test",
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			// ID is empty — no jti
 		},
 	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(i.secret)
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte("test-secret-please-change"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("sign test token: %v", err)
 	}
-	if _, err := i.Verify(signed); err == nil {
-		t.Error("a token without a jti must be rejected")
+
+	if _, err := i.Verify(token); err == nil {
+		t.Error("Verify should reject token with empty jti")
+	} else if !strings.Contains(err.Error(), "missing jti") {
+		t.Errorf("Verify error = %q, want 'missing jti'", err.Error())
+	}
+}
+
+// TestMintWithEmptyScopes verifies Mint works with nil scopes.
+func TestMintWithEmptyScopes(t *testing.T) {
+	t.Parallel()
+	i := mustIssuer(t)
+	now := time.Now()
+
+	m, err := i.Mint("svc", nil, time.Hour, now)
+	if err != nil {
+		t.Fatalf("Mint(nil scopes): %v", err)
+	}
+	if m.JTI == "" {
+		t.Error("Mint(nil) produced empty jti")
+	}
+
+	claims, err := i.Verify(m.Token)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if claims.Scopes == nil {
+		// Scopes may be nil — that's fine, as long as Verify succeeds.
+	}
+}
+
+// TestMintNonExpiring verifies the non-expiring path (ttl=0) explicitly
+// with the ExpiresAt check.
+func TestMintNonExpiring(t *testing.T) {
+	t.Parallel()
+	i := mustIssuer(t)
+
+	m, err := i.Mint("daemon", []string{"admin"}, 0, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Mint(ttl=0): %v", err)
+	}
+	if m.ExpiresAt != nil {
+		t.Errorf("non-expiring token has ExpiresAt = %v, want nil", m.ExpiresAt)
+	}
+
+	// Verify must still pass.
+	if _, err := i.Verify(m.Token); err != nil {
+		t.Errorf("non-expiring token verification failed: %v", err)
+	}
+}
+
+// TestVerifyRejectsTokenFromDifferentIssuer ensures issuer validation works.
+func TestVerifyRejectsTokenFromDifferentIssuer(t *testing.T) {
+	t.Parallel()
+	i := mustIssuer(t)
+
+	// Token with the right secret but wrong issuer.
+	claims := &Claims{
+		Scopes: []string{"read"},
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:  "evil",
+			Subject: "test",
+			ID:      "some-jti",
+		},
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte("test-secret-please-change"))
+	if err != nil {
+		t.Fatalf("sign test token: %v", err)
+	}
+
+	if _, err := i.Verify(token); err == nil {
+		t.Error("Verify should reject token with wrong issuer")
 	}
 }

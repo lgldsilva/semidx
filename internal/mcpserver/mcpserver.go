@@ -9,8 +9,11 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -21,14 +24,17 @@ const version = "0.1.0"
 type Hit struct {
 	Path      string
 	StartLine int
+	EndLine   int
 	Score     float64
 	Content   string
+	Language  string
 }
 
 // SearchOutput is a backend-neutral search result set.
 type SearchOutput struct {
 	Project  string
 	Fallback bool
+	TookMS   int64
 	Results  []Hit
 }
 
@@ -86,13 +92,76 @@ func New(b Backend) *mcp.Server {
 		Description: "Get the indexing status of a registered project. Reports file count, status, and model.",
 	}, statusHandler(b))
 
-	// Conditionally register semantic_ask if the backend supports RAG.
-	if ab, ok := b.(AskBackend); ok {
-		mcp.AddTool(s, &mcp.Tool{
-			Name:        "semantic_ask",
-			Description: "Ask a question about a registered project using RAG (Retrieval-Augmented Generation). Searches the index for relevant chunks, then uses an LLM to compose an answer citing file:line sources. Stateless — each call is independent.",
-		}, askHandler(ab))
-	}
+	// ---- Resources ----
+	s.AddResource(&mcp.Resource{
+		URI:         "semidx://projects",
+		Name:        "Projects",
+		MIMEType:    "application/json",
+		Description: "List of indexed projects with their indexing status, model, and source type.",
+	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		projects, err := b.Projects(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list projects: %w", err)
+		}
+		type projectRow struct {
+			Name       string `json:"name"`
+			SourceType string `json:"source_type"`
+			GitURL     string `json:"git_url,omitempty"`
+			Status     string `json:"status"`
+			Model      string `json:"model"`
+		}
+		rows := make([]projectRow, len(projects))
+		for i, p := range projects {
+			rows[i] = projectRow{Name: p.Name, SourceType: p.SourceType, GitURL: p.GitURL, Status: p.Status, Model: p.Model}
+		}
+		data, _ := json.MarshalIndent(rows, "", "  ")
+		return &mcp.ReadResourceResult{
+			Contents: []*mcp.ResourceContents{{
+				URI:      "semidx://projects",
+				MIMEType: "application/json",
+				Text:     string(data),
+			}},
+		}, nil
+	})
+
+	s.AddResourceTemplate(&mcp.ResourceTemplate{
+		URITemplate: "semidx://project/{name}/stats",
+		Name:        "Project Stats",
+		MIMEType:    "application/json",
+		Description: "Indexing statistics for a specific project: file count, chunk count, languages, and model info.",
+	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		uri := req.Params.URI
+		// Extract project name from URI template: semidx://project/{name}/stats
+		name := strings.TrimPrefix(uri, "semidx://project/")
+		name = strings.TrimSuffix(name, "/stats")
+		if name == "" || strings.Contains(name, "/") {
+			return nil, mcp.ResourceNotFoundError(uri)
+		}
+		info, err := b.Status(ctx, name)
+		if err != nil {
+			return nil, mcp.ResourceNotFoundError(uri)
+		}
+		type statsRow struct {
+			Name       string `json:"name"`
+			SourceType string `json:"source_type"`
+			Identity   string `json:"identity,omitempty"`
+			Status     string `json:"status"`
+			Model      string `json:"model"`
+			TotalFiles int    `json:"total_files"`
+		}
+		stats := statsRow{
+			Name: info.Name, SourceType: info.SourceType, Identity: info.Identity,
+			Status: info.Status, Model: info.Model, TotalFiles: info.TotalFiles,
+		}
+		data, _ := json.MarshalIndent(stats, "", "  ")
+		return &mcp.ReadResourceResult{
+			Contents: []*mcp.ResourceContents{{
+				URI:      uri,
+				MIMEType: "application/json",
+				Text:     string(data),
+			}},
+		}, nil
+	})
 
 	return s
 }
@@ -110,6 +179,7 @@ type searchInput struct {
 	TopK       int    `json:"top_k,omitempty" jsonschema:"number of results to return (default 5)"`
 	Graph      bool   `json:"graph,omitempty" jsonschema:"expand results via dependency graph (Graph-RAG)"`
 	GraphDepth int    `json:"graph_depth,omitempty" jsonschema:"max BFS depth for graph expansion (default 2)"`
+	Format     string `json:"format,omitempty" jsonschema:"output format: structured (default, JSON), text (legacy plain text), or minimal (compact JSON with abbreviated keys)"`
 }
 
 func searchHandler(b Backend) mcp.ToolHandlerFor[searchInput, any] {
@@ -122,11 +192,21 @@ func searchHandler(b Backend) mcp.ToolHandlerFor[searchInput, any] {
 		if graphDepth == 0 {
 			graphDepth = 2
 		}
+		start := time.Now()
 		out, err := b.Search(ctx, in.Project, in.Query, in.Model, topK, in.Graph, graphDepth)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(formatSearch(out)), nil, nil
+		out.TookMS = time.Since(start).Milliseconds()
+
+		switch in.Format {
+		case "text":
+			return textResult(formatSearchText(out)), nil, nil
+		case "minimal":
+			return textResult(formatSearchMinimal(out)), nil, nil
+		default: // "structured" or unspecified
+			return textResult(formatSearchStructured(out)), nil, nil
+		}
 	}
 }
 
@@ -192,7 +272,7 @@ func formatStatus(info *StatusInfo) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func formatSearch(out *SearchOutput) string {
+func formatSearchText(out *SearchOutput) string {
 	if len(out.Results) == 0 {
 		return fmt.Sprintf("No results in project %q for that query.", out.Project)
 	}
@@ -201,7 +281,13 @@ func formatSearch(out *SearchOutput) string {
 		b.WriteString("[warning] embedding was unavailable — results come from keyword search, not semantic ranking.\n\n")
 	}
 	for i, r := range out.Results {
-		fmt.Fprintf(&b, "%d. %s:%d  (score %.3f)\n%s\n\n", i+1, r.Path, r.StartLine, r.Score, preview(r.Content, 300))
+		loc := r.Path
+		if r.EndLine > r.StartLine {
+			loc = fmt.Sprintf("%s:%d-%d", r.Path, r.StartLine, r.EndLine)
+		} else {
+			loc = fmt.Sprintf("%s:%d", r.Path, r.StartLine)
+		}
+		fmt.Fprintf(&b, "%d. %s  (score %.3f)\n%s\n\n", i+1, loc, r.Score, preview(r.Content, 300))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -240,5 +326,166 @@ func errorResult(err error) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		IsError: true,
 		Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+	}
+}
+
+// ---- structured result (default format) ----
+
+// structuredHit is the JSON shape for one search result in structured mode.
+type structuredHit struct {
+	File      string  `json:"file"`
+	StartLine int     `json:"start_line"`
+	EndLine   int     `json:"end_line"`
+	Score     float64 `json:"score"`
+	Language  string  `json:"language,omitempty"`
+	Content   string  `json:"content"`
+	Project   string  `json:"project"`
+}
+
+// structuredOutput is the JSON envelope for structured search results.
+type structuredOutput struct {
+	Results     []structuredHit `json:"results"`
+	Fallback    bool            `json:"fallback"`
+	Total       int             `json:"total_results"`
+	QueryTimeMS int64           `json:"query_time_ms"`
+}
+
+func formatSearchStructured(out *SearchOutput) string {
+	if len(out.Results) == 0 {
+		data, _ := json.Marshal(struct {
+			Results     []structuredHit `json:"results"`
+			Fallback    bool            `json:"fallback"`
+			Total       int             `json:"total_results"`
+			QueryTimeMS int64           `json:"query_time_ms"`
+		}{Total: 0, QueryTimeMS: out.TookMS})
+		return string(data)
+	}
+	hits := make([]structuredHit, len(out.Results))
+	for i, r := range out.Results {
+		lang := r.Language
+		if lang == "" {
+			lang = detectLanguage(r.Path)
+		}
+		hits[i] = structuredHit{
+			File:      r.Path,
+			StartLine: r.StartLine,
+			EndLine:   r.EndLine,
+			Score:     r.Score,
+			Language:  lang,
+			Content:   r.Content,
+			Project:   out.Project,
+		}
+	}
+	outJSON := structuredOutput{Results: hits, Fallback: out.Fallback, Total: len(hits), QueryTimeMS: out.TookMS}
+	data, _ := json.Marshal(outJSON)
+	return string(data)
+}
+
+// ---- minimal format (abbreviated keys, ~60% token savings) ----
+
+// minimalHit is the compact JSON shape for one search result.
+type minimalHit struct {
+	F string  `json:"f"` // file path
+	L string  `json:"l"` // line range ("start-end" or "start")
+	S float64 `json:"s"` // score
+	C string  `json:"c"` // content preview
+}
+
+// minimalOutput is the compact JSON envelope.
+type minimalOutput struct {
+	R  []minimalHit `json:"r"`  // results
+	Fb bool         `json:"fb"` // fallback
+	T  int          `json:"t"`  // total
+	Ms int64        `json:"ms"` // query time ms
+}
+
+func formatSearchMinimal(out *SearchOutput) string {
+	if len(out.Results) == 0 {
+		data, _ := json.Marshal(minimalOutput{T: 0, Ms: out.TookMS})
+		return string(data)
+	}
+	hits := make([]minimalHit, len(out.Results))
+	for i, r := range out.Results {
+		lineRange := fmt.Sprintf("%d", r.StartLine)
+		if r.EndLine > r.StartLine {
+			lineRange = fmt.Sprintf("%d-%d", r.StartLine, r.EndLine)
+		}
+		hits[i] = minimalHit{
+			F: r.Path,
+			L: lineRange,
+			S: r.Score,
+			C: preview(r.Content, 120),
+		}
+	}
+	outJSON := minimalOutput{R: hits, Fb: out.Fallback, T: len(hits), Ms: out.TookMS}
+	data, _ := json.Marshal(outJSON)
+	return string(data)
+}
+
+// ---- language detection helper ----
+
+// detectLanguage returns a language name for a file path, based on its extension.
+// Used for populating the "language" field in structured results.
+func detectLanguage(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".go":
+		return "go"
+	case ".js", ".mjs", ".cjs":
+		return "javascript"
+	case ".ts", ".mts", ".cts":
+		return "typescript"
+	case ".tsx":
+		return "tsx"
+	case ".jsx":
+		return "jsx"
+	case ".py":
+		return "python"
+	case ".java":
+		return "java"
+	case ".rs":
+		return "rust"
+	case ".rb":
+		return "ruby"
+	case ".c":
+		return "c"
+	case ".cpp", ".cc", ".cxx":
+		return "cpp"
+	case ".h", ".hpp":
+		return "c-header"
+	case ".cs":
+		return "csharp"
+	case ".swift":
+		return "swift"
+	case ".kt", ".kts":
+		return "kotlin"
+	case ".scala":
+		return "scala"
+	case ".php":
+		return "php"
+	case ".r", ".rdata":
+		return "r"
+	case ".sql":
+		return "sql"
+	case ".sh", ".bash", ".zsh":
+		return "shell"
+	case ".yaml", ".yml":
+		return "yaml"
+	case ".json":
+		return "json"
+	case ".xml", ".html", ".htm":
+		return "html"
+	case ".css":
+		return "css"
+	case ".md", ".markdown":
+		return "markdown"
+	case ".proto":
+		return "protobuf"
+	case ".lua":
+		return "lua"
+	case ".ex", ".exs":
+		return "elixir"
+	default:
+		return ""
 	}
 }

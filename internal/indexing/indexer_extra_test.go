@@ -212,6 +212,9 @@ func (e *errStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID i
 }
 func (e *errStore) UpdateProjectStatus(ctx context.Context, id int, status string) error { return nil }
 func (e *errStore) InsertFileDependencies(context.Context, int, string, []string) error  { return nil }
+func (e *errStore) GetProjectCommit(ctx context.Context, projectID int) (string, error)  { return "", nil }
+func (e *errStore) UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error { return nil }
+func (e *errStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) { return nil, nil }
 
 func TestIndexContentUpsertFileError(t *testing.T) {
 	es := &errStore{upsertFileErr: errors.New("upsert boom")}
@@ -514,11 +517,12 @@ func TestMergeOutcomeEncryptedPreservesCurrent(t *testing.T) {
 
 func TestIndexProjectMaxChunksPerProject(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "a.go", "package a\nfunc A() {}\n")
-	writeFile(t, dir, "b.go", "package b\nfunc B() {}\n")
+	// Using .txt extension to avoid AST chunking (produces 1 chunk per file).
+	writeFile(t, dir, "a.txt", "content a\n")
+	writeFile(t, dir, "b.txt", "content b\n")
 
 	fs := &fakeStore{}
-	// Cap at 1 chunk per project: the first file's chunks are counted, the
+	// Cap at 1 chunk per project: the first file's chunk is counted, the
 	// second file's chunk triggers the cap warning in accumulate.
 	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{
 		Workers:             1,
