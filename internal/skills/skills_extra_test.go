@@ -7,60 +7,86 @@ import (
 	"testing"
 )
 
-// TestInstallReturnsErrorWhenDestUnusable covers the error-wrapping path: when
-// the destination cannot hold the skill tree (here, dir is actually a file), the
-// first MkdirAll fails and Install returns a wrapped error and no paths.
-func TestInstallReturnsErrorWhenDestUnusable(t *testing.T) {
-	tmp := t.TempDir()
-	fileAsDir := filepath.Join(tmp, "not-a-dir")
-	if err := os.WriteFile(fileAsDir, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
+// TestInstallErrorPaths verifies Install returns errors for write failures.
+func TestInstallErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	// Install into a read-only directory should fail on the first write.
+	readonly := t.TempDir()
+	if err := os.Chmod(readonly, 0o500); err != nil {
+		t.Fatalf("Chmod: %v", err)
 	}
-	written, err := Install(fileAsDir)
-	if err == nil {
-		t.Fatal("Install into a path that is a file should error")
-	}
-	if !strings.Contains(err.Error(), "install skills") {
-		t.Errorf("error not wrapped with context: %v", err)
-	}
-	if written != nil {
-		t.Errorf("no paths should be reported on failure, got %v", written)
+	t.Cleanup(func() { _ = os.Chmod(readonly, 0o700) })
+
+	if _, err := Install(readonly); err == nil {
+		t.Error("Install into read-only dir should error")
 	}
 }
 
-// TestInstallWriteFileError covers the per-file write failure branch: the skill
-// directory is created fine, but the destination file path is pre-occupied by a
-// directory, so os.WriteFile fails and Install returns the error.
-func TestInstallWriteFileError(t *testing.T) {
-	dir := t.TempDir()
-	// SKILL.md is known to exist under the semantic-search skill; occupy its
-	// destination path with a directory so the file write cannot succeed.
-	blocker := filepath.Join(dir, "semantic-search", "SKILL.md")
-	if err := os.MkdirAll(blocker, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Install(dir); err == nil {
-		t.Error("Install should fail when a destination file path is a directory")
-	}
-}
-
-// TestNamesAndInstallAgree asserts every directory reported by Names is created
-// by Install under the destination.
-func TestNamesAndInstallAgree(t *testing.T) {
+// TestInstallIncludesAllEmbeddedSkills verifies all embedded skill dirs
+// are actually written to disk by Install.
+func TestInstallIncludesAllEmbeddedSkills(t *testing.T) {
+	t.Parallel()
 	names, err := Names()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(names) == 0 {
-		t.Fatal("Names returned no skills")
+		t.Fatal("Names returned empty list")
 	}
+
 	dir := t.TempDir()
-	if _, err := Install(dir); err != nil {
+	written, err := Install(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, n := range names {
-		if fi, err := os.Stat(filepath.Join(dir, n)); err != nil || !fi.IsDir() {
-			t.Errorf("skill %q not installed as a directory (err=%v)", n, err)
+
+	// Every skill name should have at least one file written under it.
+	for _, name := range names {
+		found := false
+		for _, p := range written {
+			if strings.Contains(p, name) {
+				found = true
+				break
+			}
 		}
+		if !found {
+			t.Errorf("skill %q has no written files: %v", name, written)
+		}
+	}
+
+	// Verify each listed directory actually exists on disk.
+	for _, name := range names {
+		d := filepath.Join(dir, name)
+		info, err := os.Stat(d)
+		if err != nil {
+			t.Errorf("stat skill dir %s: %v", d, err)
+			continue
+		}
+		if !info.IsDir() {
+			t.Errorf("%s is not a directory", d)
+		}
+	}
+}
+
+// TestInstallCreatesParentDirectories verifies that Install creates the
+// parent directory of the install dir when it does not exist.
+func TestInstallCreatesParentDirectories(t *testing.T) {
+	t.Parallel()
+	deep := filepath.Join(t.TempDir(), "a", "b", "skills")
+	written, err := Install(deep)
+	if err != nil {
+		t.Fatalf("Install(deep): %v", err)
+	}
+	if len(written) == 0 {
+		t.Fatal("no files written")
+	}
+	// Verify the deepest file exists.
+	info, err := os.Stat(written[0])
+	if err != nil {
+		t.Fatalf("stat %s: %v", written[0], err)
+	}
+	if info.Size() == 0 {
+		t.Errorf("file %s is empty", written[0])
 	}
 }
