@@ -39,9 +39,10 @@ func NewQueryCache(ttl time.Duration, maxSize int) *QueryCache {
 	}
 }
 
-// cacheKey builds a deterministic key from the query parameters.
-func cacheKey(query string, projectID, topK int, model string) string {
-	return fmt.Sprintf("%s|%d|%d|%s", query, projectID, topK, model)
+// cacheKey builds a deterministic key from all query parameters that affect
+// the result set. Missing fields would cause cross-mode cache pollution.
+func cacheKey(query string, projectID, topK int, model, worktree string, keywordOnly, hybridSearch bool, forceMode string) string {
+	return fmt.Sprintf("%s|%d|%d|%s|%s|%t|%t|%s", query, projectID, topK, model, worktree, keywordOnly, hybridSearch, forceMode)
 }
 
 // Get returns cached results if a fresh entry exists.
