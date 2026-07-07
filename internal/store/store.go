@@ -121,9 +121,8 @@ type IndexStore interface {
 	SearchSimilarWorktree(ctx context.Context, projectID int, embedding []float32, dims, topK int, worktree string) ([]SearchResult, error)
 	SearchSimilarKeywordsWorktree(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]SearchResult, error)
 
-	// InsertFileDependencies records import/dependency edges for a source file.
-	// Each edge is identified by (project_id, source_file, target_file) which
-	// form the primary key. Duplicate edges are silently ignored (upsert).
+	// InsertFileDependencies replaces import/dependency edges for a source file.
+	// Existing edges for sourceFile are removed first, then targets are inserted.
 	InsertFileDependencies(ctx context.Context, projectID int, sourceFile string, targets []string) error
 
 	// FetchGraphNeighbors returns the full dependency graph for a project as
@@ -486,6 +485,16 @@ func (s *PgStore) PruneUnreferencedFiles(ctx context.Context, projectID int) (in
 	if err != nil {
 		return 0, err
 	}
+	if _, err := s.pool.Exec(ctx, `
+		DELETE FROM file_dependencies d
+		WHERE d.project_id = $1
+		  AND NOT EXISTS (
+		    SELECT 1 FROM files f
+		    WHERE f.project_id = d.project_id AND f.path = d.source_file
+		  )
+	`, projectID); err != nil {
+		return 0, err
+	}
 	return tag.RowsAffected(), nil
 }
 
@@ -636,6 +645,12 @@ func (s *PgStore) ListFileHashes(ctx context.Context, projectID int) (map[string
 
 // DeleteFileByPath removes a file and its chunks (FK cascade) by path.
 func (s *PgStore) DeleteFileByPath(ctx context.Context, projectID int, path string) error {
+	if _, err := s.pool.Exec(ctx, `
+		DELETE FROM file_dependencies
+		WHERE project_id = $1 AND (source_file = $2 OR target_file = $2)
+	`, projectID, path); err != nil {
+		return err
+	}
 	_, err := s.pool.Exec(ctx, `DELETE FROM files WHERE project_id = $1 AND path = $2`, projectID, path)
 	return err
 }
@@ -1020,12 +1035,21 @@ func (s *PgStore) DeleteExpiredSessions(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
-// InsertFileDependencies records import/dependency edges for a source file.
-// Each edge is identified by (project_id, source_file, target_file) which
-// form the primary key. Duplicate edges are silently ignored (upsert).
+// InsertFileDependencies replaces import/dependency edges for a source file.
 func (s *PgStore) InsertFileDependencies(ctx context.Context, projectID int, sourceFile string, targets []string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM file_dependencies WHERE project_id = $1 AND source_file = $2
+	`, projectID, sourceFile); err != nil {
+		return err
+	}
 	if len(targets) == 0 {
-		return nil
+		return tx.Commit(ctx)
 	}
 
 	batch := &pgx.Batch{}
@@ -1033,19 +1057,19 @@ func (s *PgStore) InsertFileDependencies(ctx context.Context, projectID int, sou
 		batch.Queue(`
 			INSERT INTO file_dependencies (project_id, source_file, target_file)
 			VALUES ($1, $2, $3)
-			ON CONFLICT (project_id, source_file, target_file) DO NOTHING
 		`, projectID, sourceFile, target)
 	}
-
-	br := s.pool.SendBatch(ctx, batch)
-	defer func() { _ = br.Close() }()
-
+	br := tx.SendBatch(ctx, batch)
 	for range targets {
 		if _, err := br.Exec(); err != nil {
+			_ = br.Close()
 			return err
 		}
 	}
-	return br.Close()
+	if err := br.Close(); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // FetchGraphNeighbors returns the full dependency graph for a project as

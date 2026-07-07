@@ -284,6 +284,16 @@ func (s *SQLiteStore) PruneUnreferencedFiles(ctx context.Context, projectID int)
 	if err != nil {
 		return 0, err
 	}
+	if _, err := s.db.ExecContext(ctx, `
+		DELETE FROM file_dependencies
+		WHERE project_id = ?
+		  AND NOT EXISTS (
+		    SELECT 1 FROM files f
+		    WHERE f.project_id = file_dependencies.project_id AND f.path = file_dependencies.source_file
+		  )
+	`, projectID); err != nil {
+		return 0, err
+	}
 	return res.RowsAffected()
 }
 
@@ -446,6 +456,12 @@ func (s *SQLiteStore) ListFileHashes(ctx context.Context, projectID int) (map[st
 
 // DeleteFileByPath removes a file and its chunks (cascade) by path.
 func (s *SQLiteStore) DeleteFileByPath(ctx context.Context, projectID int, path string) error {
+	if _, err := s.db.ExecContext(ctx, `
+		DELETE FROM file_dependencies
+		WHERE project_id = ? AND (source_file = ? OR target_file = ?)
+	`, projectID, path, path); err != nil {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE project_id = ? AND path = ?`, projectID, path)
 	return err
 }
@@ -659,21 +675,25 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 	return results, rows.Err()
 }
 
-// InsertFileDependencies records import/dependency edges for a source file.
-// Each edge is identified by (project_id, source_file, target_file) which
-// form the primary key. Duplicate edges are silently ignored (upsert).
+// InsertFileDependencies replaces import/dependency edges for a source file.
 func (s *SQLiteStore) InsertFileDependencies(ctx context.Context, projectID int, sourceFile string, targets []string) error {
-	if len(targets) == 0 {
-		return nil
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM file_dependencies WHERE project_id = ? AND source_file = ?
+	`, projectID, sourceFile); err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		return tx.Commit()
+	}
+
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT OR IGNORE INTO file_dependencies (project_id, source_file, target_file)
+		INSERT INTO file_dependencies (project_id, source_file, target_file)
 		VALUES (?, ?, ?)
 	`)
 	if err != nil {

@@ -28,3 +28,4 @@ testdata/rapid/
 .scannerwork/ bin/ semidx.exe
 .scannerwork/
 semidx.exe
+docs/auditoria-2026-07-06.md

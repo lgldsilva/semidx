@@ -102,6 +102,70 @@ func main() {
 	}
 }
 
+// TestGraphIntegrationDependenciesReplaced verifies that re-indexing a file
+// with changed imports replaces stale edges instead of accumulating them.
+func TestGraphIntegrationDependenciesReplaced(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	st, err := localstore.New(dbPath)
+	if err != nil {
+		t.Fatalf("localstore.New: %v", err)
+	}
+	t.Cleanup(st.Close)
+
+	src := t.TempDir()
+	writeFile(t, src, "go.mod", "module github.com/semidx/test\n\ngo 1.25\n")
+	writeFile(t, src, "main.go", `package main
+
+import "github.com/semidx/test/internal/worker"
+
+func main() { worker.Run() }
+`)
+
+	pid, err := st.UpsertProject(ctx, "proj", src, "m", 0)
+	if err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+
+	emb := &semanticEmbedder{}
+	idx := NewIndexer(st, emb, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+
+	if _, err := idx.IndexProject(ctx, pid, src, "m", 0); err != nil {
+		t.Fatalf("IndexProject (first): %v", err)
+	}
+
+	graph, err := st.FetchGraphNeighbors(ctx, pid)
+	if err != nil {
+		t.Fatalf("FetchGraphNeighbors: %v", err)
+	}
+	if got := graph["main.go"]; len(got) != 1 || got[0] != "internal/worker/" {
+		t.Fatalf("first index deps = %v, want [internal/worker/]", got)
+	}
+
+	// Change imports and re-index.
+	writeFile(t, src, "main.go", `package main
+
+import "github.com/semidx/test/pkg/util"
+
+func main() { util.Help() }
+`)
+	if _, err := idx.IndexProject(ctx, pid, src, "m", 0); err != nil {
+		t.Fatalf("IndexProject (second): %v", err)
+	}
+
+	graph, err = st.FetchGraphNeighbors(ctx, pid)
+	if err != nil {
+		t.Fatalf("FetchGraphNeighbors: %v", err)
+	}
+	deps := graph["main.go"]
+	if len(deps) != 1 {
+		t.Fatalf("after re-index main.go has %d deps %v, want 1", len(deps), deps)
+	}
+	if deps[0] != "pkg/util/" {
+		t.Fatalf("after re-index deps = %v, want [pkg/util/]", deps)
+	}
+}
+
 // TestGraphIntegrationNoGoMod verifies that indexing a Go file without a go.mod
 // still records dependencies (AnalyzeGoImports treats all non-stdlib imports as
 // local when modulePath is empty).

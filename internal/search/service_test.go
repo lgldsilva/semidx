@@ -22,6 +22,10 @@ type fakeStore struct {
 	gotTopK      int
 }
 
+func (f *fakeStore) InsertFileDependencies(context.Context, int, string, []string) error {
+	return nil
+}
+
 func (f *fakeStore) GetProject(ctx context.Context, name string) (*store.Project, error) {
 	if f.getErr != nil {
 		return nil, f.getErr

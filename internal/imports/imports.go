@@ -21,6 +21,9 @@ import (
 // ---------------------------------------------------------------------------
 
 var (
+	// Markdown: [text](path/to/file.md) or [text](./relative.md)
+	mdLinkRe = regexp.MustCompile(`\[([^\]]*)\]\(([^)]+)\)`)
+
 	// Java / JVM languages (semicolon optional for Kotlin/Scala support)
 	javaImportRe = regexp.MustCompile(`import\s+(?:static\s+)?([\w.*]+)\s*;?`)
 
@@ -199,6 +202,8 @@ func Analyze(path string, content []byte, modulePath string) []string {
 		return analyzeRuby(path, content)
 	case ".cs":
 		return analyzeCsharp(content)
+	case ".md", ".mdx", ".markdown", ".rst", ".adoc":
+		return analyzeMarkdown(content)
 	default:
 		return nil
 	}
@@ -347,6 +352,21 @@ func analyzeTS(path string, content []byte) []string {
 	for _, c := range candidates {
 		p := string(c.raw)
 
+		// Handle @/ path alias (Vue/React/Next.js tsconfig paths).
+		if strings.HasPrefix(p, "@/") {
+			dir := strings.TrimPrefix(p, "@/")
+			dir = filepath.Dir(dir)
+			if dir == "." {
+				continue
+			}
+			dir += "/"
+			if !seen[dir] {
+				seen[dir] = true
+				result = append(result, dir)
+			}
+			continue
+		}
+
 		// Skip scoped npm packages (@scope/package).
 		if strings.HasPrefix(p, "@") {
 			continue
@@ -361,8 +381,9 @@ func analyzeTS(path string, content []byte) []string {
 		}
 
 		// Resolve relative path to a directory.
-		resolved := filepath.Dir(filepath.Join(srcDir, p)) + "/"
-		if resolved == "/" || resolved == "./" {
+		resolved := filepath.Join(srcDir, p)
+		resolved = filepath.Clean(resolved) + "/"
+		if resolved == "/" {
 			continue
 		}
 		if !seen[resolved] {
@@ -461,7 +482,9 @@ func analyzeRust(content []byte) []string {
 	for _, m := range rustExternCrateRe.FindAllSubmatch(content, -1) {
 		pkg := string(m[1])
 		// extern crate always refers to the crate root; skip stdlib crates.
-		if hasAnyPrefix(pkg+":", rustStdlibPrefixes) {
+		// rustStdlibPrefixes use the "std::" form, so append "::" to the bare
+		// crate name for the prefix check (e.g. "std" → "std::").
+		if hasAnyPrefix(pkg+"::", rustStdlibPrefixes) {
 			continue
 		}
 		dir := pkg + "/"
@@ -597,6 +620,48 @@ func analyzeCsharp(content []byte) []string {
 
 	if len(result) == 0 {
 		return nil
+	}
+	return result
+}
+
+// ---------------------------------------------------------------------------
+// Markdown / RST / AsciiDoc extractor
+// ---------------------------------------------------------------------------
+
+// analyzeMarkdown extracts local link directory prefixes from Markdown
+// (and related) documents. External URLs and anchor-only links are skipped.
+// Directory prefixes are deduplicated.
+func analyzeMarkdown(content []byte) []string {
+	matches := mdLinkRe.FindAllSubmatch(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(matches))
+	var result []string
+	for _, m := range matches {
+		link := string(m[2])
+		link = strings.TrimSpace(link)
+		// Skip external URLs.
+		if strings.HasPrefix(link, "http://") || strings.HasPrefix(link, "https://") {
+			continue
+		}
+		// Skip anchor-only links.
+		if strings.HasPrefix(link, "#") {
+			continue
+		}
+		// Extract directory prefix: "docs/foo.md" -> "docs/"
+		// "./relative/file.md" -> "./relative/"
+		// "../parent/file.md" -> "../parent/"
+		dir := filepath.Dir(link)
+		if dir == "." {
+			continue // same-directory link, no useful path
+		}
+		dir = strings.TrimPrefix(dir, "./")
+		key := dir + "/"
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, key)
+		}
 	}
 	return result
 }
