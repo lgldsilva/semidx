@@ -246,6 +246,7 @@ func (s *SQLiteStore) LookupEmbeddingCache(ctx context.Context, inputHashes []st
 	}
 	args = append(args, model)
 
+	// #nosec G202 -- placeholders are always literal "?" strings, not user input.
 	query := `SELECT input_hash, embedding FROM embedding_cache WHERE input_hash IN (` +
 		strings.Join(placeholders, ",") + `) AND model = ? LIMIT ?`
 	args = append(args, len(inputHashes))

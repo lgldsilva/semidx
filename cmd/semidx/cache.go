@@ -47,16 +47,16 @@ garbage collection).`,
 					}
 					return fmt.Errorf("prune cache dims=%d: %w", dims, err)
 				}
-				if n > 0 {
-					fmt.Fprintf(cmd.OutOrStdout(), "  dims=%d: %d entries removed\n", dims, n)
-				}
-				total += n
+			if n > 0 {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  dims=%d: %d entries removed\n", dims, n)
 			}
-			if total == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "  (cache is empty)")
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Total: %d entries removed\n", total)
-			}
+			total += n
+		}
+		if total == 0 {
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  (cache is empty)")
+		} else {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Total: %d entries removed\n", total)
+		}
 			return nil
 		},
 	}
