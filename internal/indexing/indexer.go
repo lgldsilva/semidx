@@ -643,7 +643,7 @@ func (idx *Indexer) embedAndInsert(ctx context.Context, projectID, fileID int, c
 		if res.uncachedCount == 0 {
 			idx.logf("  [cache-hit] %s batch %d-%d: %d/%d cached", rel, start, end, res.hitCount, res.totalCount)
 		} else {
-			soft, ok := idx.embedUncachedBatch(ctx, projectID, fileID, sub, model, rel, start, end, &res)
+			soft, ok := idx.embedUncachedBatch(ctx, model, rel, start, end, &res)
 			if soft > 0 {
 				softErrs += soft
 			}
@@ -715,7 +715,7 @@ func resolveBatchEmbeddings(inputs, hashes []string, cached map[string][]float32
 
 // embedUncachedBatch calls the embedding API for uncached entries, stores new
 // embeddings in the cache, and merges them into the batch result. Returns (softErrs, ok).
-func (idx *Indexer) embedUncachedBatch(ctx context.Context, projectID, fileID int, sub []chunker.Chunk, model, rel string, start, end int, res *batchResult) (int, bool) {
+func (idx *Indexer) embedUncachedBatch(ctx context.Context, model, rel string, start, end int, res *batchResult) (int, bool) {
 	embeddings, err := idx.embedWithRetry(ctx, model, res.uncachedInputs)
 	if err != nil {
 		idx.logf("[err] embed %s batch %d-%d: %s", rel, start, end, truncateErr(err, 200))
