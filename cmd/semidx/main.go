@@ -240,6 +240,7 @@ func registerCommandGroups(root *cobra.Command, d *deps) {
 		newMigrateCmd(d),
 		newUpgradeCmd(d),
 		newDropCmd(d),
+		newCacheCmd(d),
 	)
 }
 

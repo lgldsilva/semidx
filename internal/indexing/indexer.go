@@ -634,14 +634,77 @@ func (idx *Indexer) embedAndInsert(ctx context.Context, projectID, fileID int, c
 		}
 		sub := chunks[start:end]
 		inputs := buildChunkInputs(sub, syms)
+		totalCount := len(inputs)
 
-		embeddings, err := idx.embedWithRetry(ctx, model, inputs)
-		if err != nil {
-			softErrs++
-			idx.logf("[err] embed %s batch %d-%d: %s", rel, start, end, truncateErr(err, 200))
-			continue
+		// Compute SHA-256 hashes for cache lookup.
+		hashes := make([]string, totalCount)
+		for j, input := range inputs {
+			h := sha256.Sum256([]byte(input))
+			hashes[j] = fmt.Sprintf("%x", h)
 		}
-		if err := idx.db.InsertChunks(ctx, projectID, fileID, sub, embeddings, idx.dims); err != nil {
+
+		// Look up cache.
+		cached, err := idx.db.LookupEmbeddingCache(ctx, hashes, model, idx.dims)
+		if err != nil {
+			idx.logf("[warn] cache lookup %s batch %d-%d: %s", rel, start, end, truncateErr(err, 200))
+			cached = nil // Fall through to full embedding.
+		}
+
+		// Partition indices into cached and uncached.
+		var uncachedIndices []int
+		var uncachedInputs []string
+		var uncachedHashes []string
+		finalEmbeddings := make([][]float32, totalCount)
+
+		if cached != nil {
+			for j, h := range hashes {
+				if emb, ok := cached[h]; ok {
+					finalEmbeddings[j] = emb
+				} else {
+					uncachedIndices = append(uncachedIndices, j)
+					uncachedInputs = append(uncachedInputs, inputs[j])
+					uncachedHashes = append(uncachedHashes, h)
+				}
+			}
+		} else {
+			// Cache lookup failed: embed everything.
+			for j := range hashes {
+				uncachedIndices = append(uncachedIndices, j)
+				uncachedInputs = append(uncachedInputs, inputs[j])
+				uncachedHashes = append(uncachedHashes, hashes[j])
+			}
+		}
+
+		hitCount := totalCount - len(uncachedIndices)
+
+		if len(uncachedIndices) == 0 {
+			// ALL cached: skip API call.
+			idx.logf("  [cache-hit] %s batch %d-%d: %d/%d cached", rel, start, end, hitCount, totalCount)
+		} else {
+			// Embed the uncached subset.
+			embeddings, err := idx.embedWithRetry(ctx, model, uncachedInputs)
+			if err != nil {
+				softErrs++
+				idx.logf("[err] embed %s batch %d-%d: %s", rel, start, end, truncateErr(err, 200))
+				continue
+			}
+
+			// Insert new embeddings into cache (best effort).
+			if err := idx.db.InsertEmbeddingCache(ctx, uncachedHashes, model, embeddings, idx.dims); err != nil {
+				idx.logf("[warn] cache insert %s: %s", rel, truncateErr(err, 200))
+			}
+
+			// Merge new embeddings into final slice, maintaining input order.
+		for i, origIdx := range uncachedIndices {
+			finalEmbeddings[origIdx] = embeddings[i]
+		}
+
+			if hitCount > 0 {
+				idx.logf("  [cache-partial] %s batch %d-%d: %d/%d cached, %d new", rel, start, end, hitCount, totalCount, len(uncachedIndices))
+			}
+		}
+
+		if err := idx.db.InsertChunks(ctx, projectID, fileID, sub, finalEmbeddings, idx.dims); err != nil {
 			softErrs++
 			idx.logf("[err] insert %s batch %d-%d: %s", rel, start, end, truncateErr(err, 200))
 			continue
