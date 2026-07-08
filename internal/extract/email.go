@@ -133,45 +133,9 @@ func extractEmailMultipartBody(body io.Reader, boundary string) (string, error) 
 			break
 		}
 		if err != nil {
-			continue // skip malformed parts
-		}
-
-		partCT := part.Header.Get("Content-Type")
-		partMedia, partParams, perr := mime.ParseMediaType(partCT)
-		if perr != nil {
 			continue
 		}
-
-		if strings.HasPrefix(partMedia, "multipart/") {
-			inner, ierr := extractEmailMultipartBody(part, partParams["boundary"])
-			if ierr == nil {
-				if plainText == "" {
-					plainText = inner
-				}
-			}
-			continue
-		}
-
-		cte := part.Header.Get("Content-Transfer-Encoding")
-
-		switch partMedia {
-		case "text/plain":
-			if plainText == "" {
-				txt, derr := decodeEmailPart(part, cte, partMedia)
-				if derr == nil {
-					plainText = txt
-				}
-			}
-		case "text/html":
-			if htmlText == "" {
-				txt, derr := decodeEmailPart(part, cte, partMedia)
-				if derr == nil {
-					htmlText = txt
-				}
-			}
-		default:
-			// Skip binary attachments and unknown types.
-		}
+		processEmailMultipartPart(part, &plainText, &htmlText)
 	}
 
 	if plainText != "" {
@@ -181,6 +145,42 @@ func extractEmailMultipartBody(body io.Reader, boundary string) (string, error) 
 		return htmlText, nil
 	}
 	return "", nil
+}
+
+func processEmailMultipartPart(part *multipart.Part, plainText, htmlText *string) {
+	partCT := part.Header.Get("Content-Type")
+	partMedia, partParams, perr := mime.ParseMediaType(partCT)
+	if perr != nil {
+		return
+	}
+
+	if strings.HasPrefix(partMedia, "multipart/") {
+		inner, ierr := extractEmailMultipartBody(part, partParams["boundary"])
+		if ierr == nil && *plainText == "" {
+			*plainText = inner
+		}
+		return
+	}
+
+	cte := part.Header.Get("Content-Transfer-Encoding")
+	collectEmailTextPart(part, partMedia, cte, plainText, htmlText)
+}
+
+func collectEmailTextPart(part io.Reader, partMedia, cte string, plainText, htmlText *string) {
+	switch partMedia {
+	case "text/plain":
+		if *plainText == "" {
+			if txt, err := decodeEmailPart(part, cte, partMedia); err == nil {
+				*plainText = txt
+			}
+		}
+	case "text/html":
+		if *htmlText == "" {
+			if txt, err := decodeEmailPart(part, cte, partMedia); err == nil {
+				*htmlText = txt
+			}
+		}
+	}
 }
 
 // decodeEmailPart reads a MIME part body, decodes Content-Transfer-Encoding,
