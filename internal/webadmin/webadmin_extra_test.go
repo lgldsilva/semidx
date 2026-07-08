@@ -1,8 +1,11 @@
 package webadmin
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -57,20 +60,20 @@ func TestLoginForm(t *testing.T) {
 	fs.addUser("admin", "supersecret", "admin")
 	c := newClient(t, srv)
 
-	// Not logged in: the form renders with 200, and an ?err= flashes.
-	if code, body := getBody(t, c, srv.URL+"/admin/login?err=nope"); code != 200 || !strings.Contains(body, `name="password"`) {
-		t.Errorf("login form = %d, missing form fields", code)
+	// GET /admin/login is the React SPA shell (client-side login).
+	if code, body := getBody(t, c, srv.URL+"/admin/login?err=nope"); code != 200 || !strings.Contains(body, "root") {
+		t.Errorf("SPA login route = %d, missing #root", code)
 	}
 
-	// Already logged in: GET /admin/login redirects to the dashboard.
+	// Already logged in: SPA still serves 200 (client router decides).
 	login(t, c, srv.URL, "admin", "supersecret")
 	resp, err := c.Get(srv.URL + "/admin/login")
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Errorf("logged-in GET /admin/login = %d, want 303", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("logged-in GET /admin/login = %d, want 200 SPA", resp.StatusCode)
 	}
 }
 
@@ -83,7 +86,7 @@ func TestLogout(t *testing.T) {
 		t.Fatalf("expected an active session, got %d", len(fs.sessions))
 	}
 
-	csrf := csrfFrom(t, c, srv.URL+"/admin/")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
 	code, _ := post(t, c, srv.URL+"/admin/logout", url.Values{"csrf_token": {csrf}})
 	if code != http.StatusSeeOther {
 		t.Errorf("logout = %d, want 303", code)
@@ -145,27 +148,49 @@ func TestLoginSubmitEdgeCases(t *testing.T) {
 	})
 }
 
-// --- search page --------------------------------------------------------------
+// --- search JSON API (SPA) ----------------------------------------------------
 
-func TestSearchPage(t *testing.T) {
+func postSearchJSON(t *testing.T, c *http.Client, base, csrf string, body map[string]any) (int, string) {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, base+"/admin/api/search", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+func TestSearchAPI(t *testing.T) {
 	t.Run("query without project shows validation error", func(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
-		code, body := getBody(t, c, srv.URL+"/admin/search?q=hello")
-		if code != 200 || !strings.Contains(body, "pick a project") {
+		csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+		code, body := postSearchJSON(t, c, srv.URL, csrf, map[string]any{"query": "hello"})
+		if code != 400 || !strings.Contains(body, "project is required") {
 			t.Errorf("missing project validation = %d, body=%q", code, body)
 		}
 	})
 
-	t.Run("no query renders the empty form", func(t *testing.T) {
+	t.Run("SPA search route serves shell", func(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
-		if code, _ := getBody(t, c, srv.URL+"/admin/search"); code != 200 {
-			t.Errorf("search page = %d, want 200", code)
+		if code, body := getBody(t, c, srv.URL+"/admin/search"); code != 200 || !strings.Contains(body, "root") {
+			t.Errorf("search SPA = %d", code)
 		}
 	})
 
@@ -174,20 +199,22 @@ func TestSearchPage(t *testing.T) {
 		fs.addUser("admin", "supersecret", "admin")
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
-		code, body := getBody(t, c, srv.URL+"/admin/search?project=ghost&q=hello")
-		if code != 200 || !strings.Contains(body, "project not found") {
+		csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+		code, body := postSearchJSON(t, c, srv.URL, csrf, map[string]any{"project": "ghost", "query": "hello"})
+		if code != 404 || !strings.Contains(body, "project not found") {
 			t.Errorf("missing-project search = %d, body=%q", code, body)
 		}
 	})
 
-	t.Run("successful search renders results", func(t *testing.T) {
+	t.Run("successful search returns results", func(t *testing.T) {
 		srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
 		fs.addUser("admin", "supersecret", "admin")
 		fs.searchProject = &store.Project{ID: 1, Name: "proj", Model: "bge-m3"}
 		fs.searchResults = []store.SearchResult{{FilePath: "a.go", Content: "hit", Score: 0.9}}
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
-		code, body := getBody(t, c, srv.URL+"/admin/search?project=proj&q=hello")
+		csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+		code, body := postSearchJSON(t, c, srv.URL, csrf, map[string]any{"project": "proj", "query": "hello"})
 		if code != 200 || !strings.Contains(body, "a.go") {
 			t.Errorf("search results = %d, body=%q", code, body)
 		}
@@ -203,11 +230,12 @@ func TestSearchPage(t *testing.T) {
 		fs.searchResults = []store.SearchResult{{FilePath: "main.go", Content: "hit", Score: 0.85}}
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
-		code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello&top=5")
+		csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+		code, body := postSearchJSON(t, c, srv.URL, csrf, map[string]any{"all": true, "query": "hello", "top": 5})
 		if code != 200 {
-			t.Fatalf("status = %d", code)
+			t.Fatalf("status = %d body=%s", code, body)
 		}
-		if !strings.Contains(body, "Searched 1 project") {
+		if !strings.Contains(body, `"project_count":1`) {
 			t.Errorf("expected deduped project count, body=%q", body)
 		}
 	})
@@ -219,7 +247,8 @@ func TestSearchPage(t *testing.T) {
 		fs.searchResults = []store.SearchResult{{FilePath: "a.go", Content: "hit", Score: 0.9}}
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
-		code, body := getBody(t, c, srv.URL+"/admin/search?project=JackUI&q=hello")
+		csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+		code, body := postSearchJSON(t, c, srv.URL, csrf, map[string]any{"project": "JackUI", "query": "hello"})
 		if code != 200 || !strings.Contains(body, "a.go") {
 			t.Errorf("case-insensitive search = %d, body=%q", code, body)
 		}
@@ -235,14 +264,15 @@ func TestSearchPage(t *testing.T) {
 		fs.searchResults = []store.SearchResult{{FilePath: "main.go", Content: "hit", Score: 0.85}}
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
-		code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello&top=5")
+		csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+		code, body := postSearchJSON(t, c, srv.URL, csrf, map[string]any{"all": true, "query": "hello", "top": 5})
 		if code != 200 {
 			t.Fatalf("status = %d", code)
 		}
 		if !strings.Contains(body, "main.go") || !strings.Contains(body, "alpha") || !strings.Contains(body, "beta") {
 			t.Errorf("expected merged labeled results, body=%q", body)
 		}
-		if !strings.Contains(body, "Searched 2 project") {
+		if !strings.Contains(body, `"project_count":2`) {
 			t.Errorf("expected project count summary, body=%q", body)
 		}
 	})
@@ -255,8 +285,9 @@ func TestSearchAllProjectsMergeError(t *testing.T) {
 	fs.searchErr = context.Canceled
 	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
-	code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello")
-	if code != 200 || !strings.Contains(body, context.Canceled.Error()) {
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+	code, body := postSearchJSON(t, c, srv.URL, csrf, map[string]any{"all": true, "query": "hello"})
+	if code != 400 || !strings.Contains(body, context.Canceled.Error()) {
 		t.Errorf("search all merge error = %d, body=%q", code, body)
 	}
 }
@@ -321,15 +352,16 @@ func TestProjectsAPIListError(t *testing.T) {
 	}
 }
 
-func TestSearchPageSearchServiceError(t *testing.T) {
+func TestSearchAPISearchServiceError(t *testing.T) {
 	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
 	fs.addUser("admin", "supersecret", "admin")
 	fs.projects = []store.Project{{ID: 1, Name: "alpha", Model: "bge-m3"}}
 	fs.searchErr = errors.New("embed down")
 	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
-	code, body := getBody(t, c, srv.URL+"/admin/search?project=alpha&q=hello")
-	if code != 200 || !strings.Contains(body, "embed down") {
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+	code, body := postSearchJSON(t, c, srv.URL, csrf, map[string]any{"project": "alpha", "query": "hello"})
+	if code != 500 || !strings.Contains(body, "search failed") {
 		t.Errorf("search service error = %d, body=%q", code, body)
 	}
 }
@@ -340,8 +372,9 @@ func TestSearchAllProjectsListError(t *testing.T) {
 	fs.listProjectsErr = errors.New("db down")
 	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
-	code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello")
-	if code != 200 || !strings.Contains(body, "could not list projects") {
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+	code, body := postSearchJSON(t, c, srv.URL, csrf, map[string]any{"all": true, "query": "hello"})
+	if code != 400 || !strings.Contains(body, "could not list projects") {
 		t.Errorf("search all list error = %d, body=%q", code, body)
 	}
 }
@@ -352,21 +385,23 @@ func TestSearchAllProjectsEmpty(t *testing.T) {
 	fs.projects = []store.Project{}
 	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
-	code, body := getBody(t, c, srv.URL+"/admin/search?all=1&q=hello")
-	if code != 200 || !strings.Contains(body, "no indexed projects") {
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+	code, body := postSearchJSON(t, c, srv.URL, csrf, map[string]any{"all": true, "query": "hello"})
+	if code != 400 || !strings.Contains(body, "no indexed projects") {
 		t.Errorf("empty index = %d, body=%q", code, body)
 	}
 }
 
-func TestSearchPageShowsResolvedProject(t *testing.T) {
+func TestSearchAPIShowsResolvedProject(t *testing.T) {
 	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
 	fs.addUser("admin", "supersecret", "admin")
 	fs.projects = []store.Project{{ID: 1, Name: "jackui", Model: "bge-m3"}}
 	fs.searchResults = []store.SearchResult{{FilePath: "a.go", Content: "hit", Score: 0.9}}
 	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
-	code, body := getBody(t, c, srv.URL+"/admin/search?project=JackUI&q=hello&top=20")
-	if code != 200 || !strings.Contains(body, "Project:") || !strings.Contains(body, "jackui") {
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+	code, body := postSearchJSON(t, c, srv.URL, csrf, map[string]any{"project": "JackUI", "query": "hello", "top": 20})
+	if code != 200 || !strings.Contains(body, `"resolved_project":"jackui"`) {
 		t.Errorf("resolved project label = %d, body=%q", code, body)
 	}
 }
@@ -664,7 +699,8 @@ func TestProtectEdgeCases(t *testing.T) {
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		fs.sessionErr = errors.New("db down")
-		if code, _ := getBody(t, c, srv.URL+"/admin/"); code != http.StatusInternalServerError {
+		// SPA shell is static; protected HTML routes still enforce sessions.
+		if code, _ := getBody(t, c, srv.URL+"/admin/keys"); code != http.StatusInternalServerError {
 			t.Errorf("session lookup error = %d, want 500", code)
 		}
 	})
@@ -676,7 +712,7 @@ func TestProtectEdgeCases(t *testing.T) {
 		login(t, c, srv.URL, "admin", "supersecret")
 		// Drop the session server-side; the cookie is now stale.
 		fs.sessions = map[string]int{}
-		resp, err := c.Get(srv.URL + "/admin/")
+		resp, err := c.Get(srv.URL + "/admin/keys")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -736,7 +772,7 @@ func TestSessionCookieAttributes(t *testing.T) {
 		fs.addUser("admin", "supersecret", "admin")
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
-		csrf := csrfFrom(t, c, srv.URL+"/admin/")
+		csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
 		resp, err := c.PostForm(srv.URL+"/admin/logout", url.Values{"csrf_token": {csrf}})
 		if err != nil {
 			t.Fatal(err)
@@ -754,16 +790,16 @@ func TestSessionCookieAttributes(t *testing.T) {
 	})
 }
 
-// --- dashboard list error (also exercises the nil-logger discard sink) --------
+// --- projects API list error (dashboard was SPA-only; API still fails closed) --
 
-func TestDashboardListError(t *testing.T) {
+func TestProjectsAPIListErrorLogged(t *testing.T) {
 	srv, fs := newTestAdmin(t)
 	fs.addUser("admin", "supersecret", "admin")
 	fs.listProjectsErr = errors.New("query failed")
 	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
-	// The dashboard still renders (the error is logged, not fatal).
-	if code, _ := getBody(t, c, srv.URL+"/admin/"); code != 200 {
-		t.Errorf("dashboard with list error = %d, want 200", code)
+	// JSON projects API returns 500 when the store fails.
+	if code, body := getBody(t, c, srv.URL+"/admin/api/projects"); code != 500 || !strings.Contains(body, "error") {
+		t.Errorf("projects api list error = %d %s, want 500 JSON error", code, body)
 	}
 }

@@ -334,20 +334,23 @@ func TestLoginFlowAndSession(t *testing.T) {
 	fs.addUser("admin", "supersecret", "admin")
 	c := newClient(t, srv)
 
-	// Unauthenticated dashboard redirects to login.
-	if code, _ := getBody(t, c, srv.URL+"/admin/"); code != http.StatusSeeOther {
-		t.Errorf("unauth dashboard = %d; want 303 redirect", code)
+	// Unauthenticated /admin serves the SPA shell (client-side auth gate).
+	if code, body := getBody(t, c, srv.URL+"/admin/"); code != http.StatusOK || !strings.Contains(body, "root") {
+		t.Errorf("unauth SPA shell = %d; want 200 with #root", code)
 	}
-	// Bad password does not create a session.
+	// Bad password does not create a session (legacy form POST still supported).
 	resp, _ := c.PostForm(srv.URL+"/admin/login", url.Values{"username": {"admin"}, "password": {"wrong"}})
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("bad login = %d; want 200 (form re-render)", resp.StatusCode)
 	}
-	// Correct login → session → dashboard reachable.
+	// Correct login → session → SPA + keys page still work.
 	login(t, c, srv.URL, "admin", "supersecret")
-	if code, body := getBody(t, c, srv.URL+"/admin/"); code != http.StatusOK || !strings.Contains(body, "Projects") {
-		t.Errorf("dashboard after login = %d", code)
+	if code, body := getBody(t, c, srv.URL+"/admin/"); code != http.StatusOK || !strings.Contains(body, "root") {
+		t.Errorf("SPA after login = %d body has root? %v", code, strings.Contains(body, "root"))
+	}
+	if code, body := getBody(t, c, srv.URL+"/admin/keys"); code != http.StatusOK || !strings.Contains(body, "API") {
+		t.Errorf("keys page after login = %d", code)
 	}
 }
 

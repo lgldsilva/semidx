@@ -1,7 +1,8 @@
 // Package webadmin is the server's management UI, mounted at /admin by
-// `semidx serve`. It is server-rendered (html/template, no external JS) and
-// embedded in the binary. Auth is a cookie-backed server-side session; every
-// mutating request carries a CSRF token bound to the session; roles gate access.
+// `semidx serve`. Product surfaces (projects, search, CLI guide) are a React SPA
+// embedded from internal/webui; account/keys/tokens/users remain html/template
+// pages. Auth is a cookie-backed server-side session; mutating requests carry a
+// CSRF token (form field or X-CSRF-Token header).
 package webadmin
 
 import (
@@ -93,15 +94,29 @@ func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies 
 	}, nil
 }
 
-// Handler returns a mux serving the /admin/* routes.
+// Handler returns a mux serving the /admin/* routes: JSON SPA APIs, legacy
+// HTML admin pages (keys/tokens/users), and the embedded React SPA for the
+// product surfaces (projects, search, CLI guide).
 func (a *Admin) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /admin/login", a.loginForm)
+
+	// --- SPA JSON API (cookie session + X-CSRF-Token) ---------------------------
+	mux.HandleFunc("POST /admin/api/login", a.apiLogin)
+	mux.HandleFunc("POST /admin/api/logout", a.protectAPI("", a.apiLogout))
+	mux.HandleFunc("GET /admin/api/me", a.protectAPI("", a.apiMe))
+	mux.HandleFunc("GET /admin/api/system", a.protectAPI("", a.apiSystem))
+	mux.HandleFunc("GET /admin/api/projects", a.protectAPI("", a.projectsAPI))
+	mux.HandleFunc("POST /admin/api/projects", a.protectAPI("", a.apiCreateProject))
+	mux.HandleFunc("DELETE /admin/api/projects/{project}", a.protectAPI("", a.apiDeleteProject))
+	mux.HandleFunc("GET /admin/api/projects/{project}/status", a.protectAPI("", a.apiProjectStatus))
+	mux.HandleFunc("POST /admin/api/projects/{project}/reindex", a.protectAPI("", a.apiReindex))
+	mux.HandleFunc("GET /admin/api/jobs/{id}", a.protectAPI("", a.apiGetJob))
+	mux.HandleFunc("POST /admin/api/search", a.protectAPI("", a.apiSearch))
+
+	// --- Legacy form auth (POST) for older HTML pages; SPA uses /admin/api/* ---
+	// GET /admin/login is served by the SPA (client route), not the HTML form.
 	mux.HandleFunc("POST /admin/login", a.loginSubmit)
 	mux.HandleFunc("POST /admin/logout", a.protect("", a.logout))
-	mux.HandleFunc("GET /admin/{$}", a.protect("", a.dashboard))
-	mux.HandleFunc("GET /admin/api/projects", a.protect("", a.projectsAPI))
-	mux.HandleFunc("GET /admin/search", a.protect("", a.searchPage))
 	mux.HandleFunc("GET /admin/keys", a.protect("", a.keysList))
 	mux.HandleFunc("POST /admin/keys", a.protect("", a.keysCreate))
 	mux.HandleFunc("POST /admin/keys/revoke", a.protect("", a.keysRevoke))
@@ -113,6 +128,12 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/users", a.protect("admin", a.usersList))
 	mux.HandleFunc("POST /admin/users", a.protect("admin", a.usersCreate))
 	mux.HandleFunc("POST /admin/users/disable", a.protect("admin", a.usersDisable))
+
+	// --- React SPA (projects, search, cli guide) + static assets ---------------
+	// More specific /admin/api and legacy routes above win; this catches the rest.
+	spa := spaFileServer()
+	mux.Handle("GET /admin/{$}", spa)
+	mux.Handle("GET /admin/", spa)
 	return mux
 }
 
@@ -128,20 +149,42 @@ type authedHandler func(http.ResponseWriter, *http.Request, *authCtx)
 // protect resolves the session, enforces CSRF on unsafe methods, and checks the
 // role before invoking fn. An unauthenticated GET redirects to the login page.
 func (a *Admin) protect(role string, fn authedHandler) http.HandlerFunc {
+	return a.protectMode(role, fn, false)
+}
+
+// protectAPI is like protect but returns JSON 401/403 instead of HTML redirects,
+// for the React SPA.
+func (a *Admin) protectAPI(role string, fn authedHandler) http.HandlerFunc {
+	return a.protectMode(role, fn, true)
+}
+
+func (a *Admin) protectMode(role string, fn authedHandler, jsonAPI bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(sessionCookie)
 		if err != nil {
+			if jsonAPI {
+				writeJSONErr(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
 			a.redirectLogin(w, r)
 			return
 		}
 		user, err := a.store.SessionUser(r.Context(), hashToken(cookie.Value))
 		if errors.Is(err, store.ErrNotFound) {
 			a.clearSession(w)
+			if jsonAPI {
+				writeJSONErr(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
 			a.redirectLogin(w, r)
 			return
 		}
 		if err != nil {
 			a.log.Error("session lookup failed", "err", err)
+			if jsonAPI {
+				writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
+				return
+			}
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -149,11 +192,19 @@ func (a *Admin) protect(role string, fn authedHandler) http.HandlerFunc {
 
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			if !a.validCSRF(r, ac) {
+				if jsonAPI {
+					writeJSONErr(w, http.StatusForbidden, "invalid or missing CSRF token")
+					return
+				}
 				http.Error(w, "invalid or missing CSRF token", http.StatusForbidden)
 				return
 			}
 		}
 		if role == "admin" && user.Role != "admin" {
+			if jsonAPI {
+				writeJSONErr(w, http.StatusForbidden, "admin only")
+				return
+			}
 			http.Error(w, "admin only", http.StatusForbidden)
 			return
 		}
@@ -163,17 +214,16 @@ func (a *Admin) protect(role string, fn authedHandler) http.HandlerFunc {
 
 // --- sessions & cookies ------------------------------------------------------
 
-// sessionCookie creates an http.Cookie with security attributes. The Secure
-// flag is always true (admin is designed to be served behind HTTPS); callers
-// that serve over plain HTTP (e.g. tests) must provide a client that handles
-// Secure cookies or use an HTTPS test server.
+// sessionCookie creates an http.Cookie with security attributes. Secure follows
+// New(..., secureCookies): true behind HTTPS (production), false for local HTTP
+// demos and tests (SEMIDX_COOKIE_SECURE=false).
 func (a *Admin) sessionCookie(name, value string, ttl time.Duration, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name:     name,
 		Value:    value,
 		Path:     "/admin",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   a.secure,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  time.Now().Add(ttl),
 		MaxAge:   maxAge,
@@ -228,6 +278,9 @@ func (a *Admin) csrfToken(sessionPlaintext string) string {
 
 func (a *Admin) validCSRF(r *http.Request, ac *authCtx) bool {
 	got := r.FormValue("csrf_token")
+	if got == "" {
+		got = r.Header.Get("X-CSRF-Token")
+	}
 	return got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(ac.csrf)) == 1
 }
 
