@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +15,26 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/chunker"
 )
+
+// One pgvector container is shared across the whole package so CI does not
+// start dozens of Postgres instances (which flakes the testcontainers reaper).
+var (
+	sharedStore     *PgStore
+	sharedContainer testcontainers.Container
+	sharedOnce      sync.Once
+	sharedInitErr   error
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if sharedStore != nil {
+		sharedStore.Close()
+	}
+	if sharedContainer != nil {
+		_ = sharedContainer.Terminate(context.Background())
+	}
+	os.Exit(code)
+}
 
 // TestChunksTableValidation is a pure unit test (no container) for the dynamic
 // table-name guard.
@@ -31,39 +53,66 @@ func TestChunksTableValidation(t *testing.T) {
 	}
 }
 
-// newTestStore starts a throwaway pgvector container and applies the base
-// schema (mirrors init.sql). Skips when no Docker provider is available.
+// newTestStore returns a PgStore backed by a package-scoped pgvector container.
+// Skips when no Docker provider is available. Each test cleans up with DropAll.
 func newTestStore(t *testing.T) *PgStore {
 	t.Helper()
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
+	sharedOnce.Do(func() {
+		ctx := context.Background()
+		ctr, err := postgres.Run(ctx, "pgvector/pgvector:pg16",
+			postgres.WithDatabase("semantic_indexer"),
+			postgres.WithUsername("semantic"),
+			postgres.WithPassword("semantic"),
+			testcontainers.WithWaitStrategy(
+				wait.ForLog("database system is ready to accept connections").
+					WithOccurrence(2).WithStartupTimeout(180*time.Second),
+			),
+		)
+		if err != nil {
+			sharedInitErr = fmt.Errorf("start pgvector container: %w", err)
+			return
+		}
+		sharedContainer = ctr
+
+		dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
+		if err != nil {
+			sharedInitErr = fmt.Errorf("connection string: %w", err)
+			return
+		}
+		s, err := NewPgStore(ctx, dsn)
+		if err != nil {
+			sharedInitErr = fmt.Errorf("NewPgStore: %w", err)
+			return
+		}
+		sharedStore = s
+	})
+
+	if sharedInitErr != nil {
+		t.Fatal(sharedInitErr)
+	}
+
+	resetIntegrationDB(t, sharedStore)
+	t.Cleanup(func() { resetIntegrationDB(t, sharedStore) })
+	return sharedStore
+}
+
+// resetIntegrationDB clears all mutable tables between integration tests.
+// DropAll only truncates projects/files/chunks; auth and job tables need an
+// explicit truncate when tests share one Postgres instance.
+func resetIntegrationDB(t *testing.T, s *PgStore) {
+	t.Helper()
 	ctx := context.Background()
-	ctr, err := postgres.Run(ctx, "pgvector/pgvector:pg16",
-		postgres.WithDatabase("semantic_indexer"),
-		postgres.WithUsername("semantic"),
-		postgres.WithPassword("semantic"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(180*time.Second),
-		),
-	)
-	if err != nil {
-		t.Fatalf("start pgvector container: %v", err)
+	if err := s.DropAll(ctx); err != nil {
+		t.Errorf("DropAll: %v", err)
 	}
-	t.Cleanup(func() { _ = ctr.Terminate(ctx) })
-
-	dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
+	_, err := s.pool.Exec(ctx, `
+		TRUNCATE api_tokens, index_jobs, web_sessions, users, worktree_files
+		RESTART IDENTITY CASCADE`)
 	if err != nil {
-		t.Fatalf("connection string: %v", err)
+		t.Errorf("truncate integration tables: %v", err)
 	}
-
-	// NewPgStore applies the goose migrations, so the schema is ready here.
-	s, err := NewPgStore(ctx, dsn)
-	if err != nil {
-		t.Fatalf("NewPgStore: %v", err)
-	}
-	t.Cleanup(s.Close)
-	return s
 }
 
 func TestProjectLifecycle(t *testing.T) {
