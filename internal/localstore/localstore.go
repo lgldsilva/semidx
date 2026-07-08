@@ -97,6 +97,15 @@ CREATE TABLE IF NOT EXISTS chunks (
     end_line    INTEGER,
     UNIQUE(project_id, file_id, chunk_index)
 );
+CREATE TABLE IF NOT EXISTS embedding_cache (
+    input_hash  TEXT NOT NULL,
+    model       TEXT NOT NULL,
+    dims        INTEGER NOT NULL,
+    embedding   BLOB NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (input_hash, model)
+);
+CREATE INDEX IF NOT EXISTS idx_embedding_cache_lookup ON embedding_cache(input_hash, model);
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);
@@ -212,6 +221,98 @@ func (s *SQLiteStore) Ping(ctx context.Context) error { return s.db.PingContext(
 // EnsureChunksTable is a no-op: unlike pgvector there is a single, schemaless
 // chunks table created on open, so there is no per-dimension table to build.
 func (s *SQLiteStore) EnsureChunksTable(_ context.Context, _ int) error { return nil }
+
+// EnsureEmbeddingCacheTable is a no-op: the embedding_cache table is part of
+// the static schema created on open, so there is no runtime DDL to perform.
+func (s *SQLiteStore) EnsureEmbeddingCacheTable(_ context.Context, _ int) error { return nil }
+
+// LookupEmbeddingCache fetches cached embeddings for the given input hashes
+// and model. Returns a map of hash→embedding; hashes not found in the cache
+// are absent from the map.
+func (s *SQLiteStore) LookupEmbeddingCache(ctx context.Context, inputHashes []string, model string, _ int) (map[string][]float32, error) {
+	if len(inputHashes) == 0 {
+		return map[string][]float32{}, nil
+	}
+	if len(inputHashes) > 990 {
+		return nil, fmt.Errorf("too many input hashes: %d (max 990)", len(inputHashes))
+	}
+
+	// Build dynamic IN clause: (?, ?, ..., ?)
+	placeholders := make([]string, len(inputHashes))
+	args := make([]any, 0, len(inputHashes)+1)
+	for i, h := range inputHashes {
+		placeholders[i] = "?"
+		args = append(args, h)
+	}
+	args = append(args, model)
+
+	query := `SELECT input_hash, embedding FROM embedding_cache WHERE input_hash IN (` +
+		strings.Join(placeholders, ",") + `) AND model = ? LIMIT ?`
+	args = append(args, len(inputHashes))
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string][]float32, len(inputHashes))
+	for rows.Next() {
+		var inputHash string
+		var blob []byte
+		if err := rows.Scan(&inputHash, &blob); err != nil {
+			return nil, err
+		}
+		result[inputHash] = decodeEmbedding(blob)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// InsertEmbeddingCache stores embeddings in the cache table. Uses
+// ON CONFLICT(input_hash, model) DO NOTHING for concurrent safety.
+func (s *SQLiteStore) InsertEmbeddingCache(ctx context.Context, inputHashes []string, model string, embeddings [][]float32, dims int) error {
+	if len(inputHashes) != len(embeddings) {
+		return fmt.Errorf("inputHashes and embeddings length mismatch: %d vs %d", len(inputHashes), len(embeddings))
+	}
+	if len(inputHashes) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO embedding_cache (input_hash, model, dims, embedding)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(input_hash, model) DO NOTHING
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for i, hash := range inputHashes {
+		if _, err := stmt.ExecContext(ctx, hash, model, dims, encodeEmbedding(embeddings[i])); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// PruneEmbeddingCache removes all cache entries for the given dimension.
+func (s *SQLiteStore) PruneEmbeddingCache(ctx context.Context, dims int) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM embedding_cache WHERE dims = ?`, dims)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
 
 func (s *SQLiteStore) UpsertProject(ctx context.Context, name, path, model string, dims int) (int, error) {
 	var id int
@@ -801,6 +902,7 @@ func (s *SQLiteStore) DropAll(ctx context.Context) error {
 	for _, stmt := range []string{
 		`DELETE FROM chunks`,
 		`DELETE FROM chunks_fts`,
+		`DELETE FROM embedding_cache`,
 		`DELETE FROM file_dependencies`,
 		`DELETE FROM files`,
 		`DELETE FROM projects`,

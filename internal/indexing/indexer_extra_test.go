@@ -222,6 +222,15 @@ func (e *errStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPa
 	return nil, nil
 }
 
+func (e *errStore) EnsureEmbeddingCacheTable(context.Context, int) error          { return nil }
+func (e *errStore) LookupEmbeddingCache(context.Context, []string, string, int) (map[string][]float32, error) {
+	return map[string][]float32{}, nil
+}
+func (e *errStore) InsertEmbeddingCache(context.Context, []string, string, [][]float32, int) error {
+	return nil
+}
+func (e *errStore) PruneEmbeddingCache(context.Context, int) (int64, error) { return 0, nil }
+
 func TestIndexContentUpsertFileError(t *testing.T) {
 	es := &errStore{upsertFileErr: errors.New("upsert boom")}
 	idx := NewIndexer(es, &fakeEmbedder{}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})

@@ -156,6 +156,26 @@ type IndexStore interface {
 	// Returns empty slice if no files match.
 	FetchChunksByDirPrefix(ctx context.Context, projectID int, dirPrefix string, dims, limit int) ([]SearchResult, error)
 
+	// EnsureEmbeddingCacheTable creates the per-dimension embedding cache table
+	// (embedding_cache_<dims> for Postgres, embedding_cache for SQLite) if it
+	// does not already exist. This is a runtime DDL operation (not a static
+	// migration) because the dimension is dynamic.
+	EnsureEmbeddingCacheTable(ctx context.Context, dims int) error
+
+	// LookupEmbeddingCache returns cached embeddings keyed by input hash
+	// (SHA-256 of the full embedding input including symbol prefix).
+	// Hashes that are not found in the cache are absent from the returned map.
+	LookupEmbeddingCache(ctx context.Context, inputHashes []string, model string, dims int) (map[string][]float32, error)
+
+	// InsertEmbeddingCache stores embeddings in the dimension-scoped cache table.
+	// Uses ON CONFLICT (input_hash, model) DO NOTHING for concurrent safety.
+	// inputHashes and embeddings must be the same length and correspond by index.
+	InsertEmbeddingCache(ctx context.Context, inputHashes []string, model string, embeddings [][]float32, dims int) error
+
+	// PruneEmbeddingCache removes all cache entries for the given dimension.
+	// Phase 1: simple TRUNCATE/DELETE (not reference-based pruning).
+	PruneEmbeddingCache(ctx context.Context, dims int) (int64, error)
+
 	DropAll(ctx context.Context) error
 }
 
@@ -379,8 +399,108 @@ func (s *PgStore) EnsureChunksTable(ctx context.Context, dims int) error {
 
 	// GIN trigram index for ILIKE keyword search (see searchKeywords).
 	trgmIdx := pgx.Identifier{fmt.Sprintf("chunks_%d_content_trgm", dims)}.Sanitize()
-	_, err = s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING gin (content gin_trgm_ops)", trgmIdx, table))
+	if _, err := s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING gin (content gin_trgm_ops)", trgmIdx, table)); err != nil {
+		return err
+	}
+
+	// Also ensure the embedding cache table exists alongside the chunks table.
+	if err := s.EnsureEmbeddingCacheTable(ctx, dims); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// EnsureEmbeddingCacheTable creates the per-dimension embedding_cache table.
+func (s *PgStore) EnsureEmbeddingCacheTable(ctx context.Context, dims int) error {
+	if _, err := chunksTable(dims); err != nil {
+		return err
+	}
+	table := pgx.Identifier{fmt.Sprintf("embedding_cache_%d", dims)}.Sanitize()
+	query := fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			input_hash  TEXT NOT NULL,
+			model       TEXT NOT NULL,
+			dims        INTEGER NOT NULL,
+			embedding   vector(%d),
+			created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (input_hash, model)
+		)`, table, dims)
+	_, err := s.pool.Exec(ctx, query)
 	return err
+}
+
+// LookupEmbeddingCache returns cached embeddings keyed by input hash.
+// Hashes not found in the cache are absent from the returned map.
+func (s *PgStore) LookupEmbeddingCache(ctx context.Context, inputHashes []string, model string, dims int) (map[string][]float32, error) {
+	if len(inputHashes) == 0 {
+		return map[string][]float32{}, nil
+	}
+
+	table := pgx.Identifier{fmt.Sprintf("embedding_cache_%d", dims)}.Sanitize()
+	placeholders := make([]string, len(inputHashes))
+	args := []any{model}
+	for i, h := range inputHashes {
+		placeholders[i] = fmt.Sprintf("$%d", i+2) // $1 is model
+		args = append(args, h)
+	}
+
+	query := fmt.Sprintf(`SELECT input_hash, embedding FROM %s WHERE model = $1 AND input_hash IN (%s)`, table, strings.Join(placeholders, ","))
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string][]float32, len(inputHashes))
+	for rows.Next() {
+		var inputHash string
+		var pgvec pgvector.Vector
+		if err := rows.Scan(&inputHash, &pgvec); err != nil {
+			return nil, err
+		}
+		result[inputHash] = pgvec.Slice()
+	}
+	return result, rows.Err()
+}
+
+// InsertEmbeddingCache stores embeddings in the dimension-scoped cache table.
+func (s *PgStore) InsertEmbeddingCache(ctx context.Context, inputHashes []string, model string, embeddings [][]float32, dims int) error {
+	if len(inputHashes) != len(embeddings) {
+		return fmt.Errorf("inputHashes and embeddings length mismatch: %d vs %d", len(inputHashes), len(embeddings))
+	}
+	if len(inputHashes) == 0 {
+		return nil
+	}
+
+	table := pgx.Identifier{fmt.Sprintf("embedding_cache_%d", dims)}.Sanitize()
+	query := fmt.Sprintf(`
+		INSERT INTO %s (input_hash, model, dims, embedding)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (input_hash, model) DO NOTHING
+	`, table)
+
+	batch := &pgx.Batch{}
+	for i, hash := range inputHashes {
+		batch.Queue(query, hash, model, dims, pgvector.NewVector(embeddings[i]))
+	}
+	br := s.pool.SendBatch(ctx, batch)
+	defer br.Close()
+	_, err := br.Exec()
+	return err
+}
+
+// PruneEmbeddingCache removes all cache entries for the given dimension.
+func (s *PgStore) PruneEmbeddingCache(ctx context.Context, dims int) (int64, error) {
+	if _, err := chunksTable(dims); err != nil {
+		return 0, err
+	}
+	table := pgx.Identifier{fmt.Sprintf("embedding_cache_%d", dims)}.Sanitize()
+	tag, err := s.pool.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE dims = $1", table), dims)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // applyTrigramIndexes scans for existing chunks_* tables (from prior runs) and
@@ -1240,7 +1360,7 @@ func (s *PgStore) DropAll(ctx context.Context) error {
 		DECLARE
 			tbl text;
 		BEGIN
-			FOR tbl IN SELECT tablename FROM pg_tables WHERE tablename LIKE 'chunks_%'
+			FOR tbl IN SELECT tablename FROM pg_tables WHERE tablename LIKE 'chunks_%' OR tablename LIKE 'embedding_cache_%'
 			LOOP
 				EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(tbl) || ' CASCADE';
 			END LOOP;
