@@ -196,43 +196,23 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		idx.modulePath = ReadModulePath(projectPath)
 	}
 
-	// Git-diff incremental: if we have a stored commit, only index changed files.
-	var err error
-	changedFiles, diffErr := idx.gitDiffChanged(ctx, projectID, projectPath)
-	if diffErr != nil {
-		// Git command failed — fall back to full walk.
-		idx.logf("[warn] git diff incremental failed, falling back to full walk: %s", truncateErr(diffErr, 200))
-	}
-
-	var files []string
-	if len(changedFiles) > 0 {
-		// Only index the files that changed. Resolve relative paths to absolute.
-		for _, rel := range changedFiles {
-			files = append(files, filepath.Join(projectPath, rel))
-		}
-	} else {
-		files, err = ScanFiles(projectPath, maxFiles)
-		if err != nil {
-			return nil, err
-		}
+	files, err := idx.resolveIndexFiles(ctx, projectID, projectPath, maxFiles)
+	if err != nil {
+		return nil, err
 	}
 	stats.FilesScanned = len(files)
 
-	// Index files concurrently, bounded to idx.workers. Files are independent
-	// (distinct file_id rows, pool-safe DB access); a mutex guards the shared
-	// stats. Per-file errors are counted, not fatal, so goroutines return nil
-	// and errgroup is used purely for the bounded fan-out.
 	var (
 		mu        sync.Mutex
 		processed int
 		g         errgroup.Group
-		manifest  = map[string]string{} // rel -> hash of files present in this worktree
+		manifest  = map[string]string{}
 	)
 	g.SetLimit(idx.workers)
 
 	for _, path := range files {
 		if ctx.Err() != nil {
-			break // stop scheduling on Ctrl-C / SIGTERM; in-flight files finish
+			break
 		}
 		path := path
 		g.Go(func() error {
@@ -261,12 +241,33 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 	_ = g.Wait()
 
 	if err := ctx.Err(); err != nil {
-		return stats, err // cancelled: leave the project as 'indexing'
+		return stats, err
 	}
 
-	// Worktree tracking: record this worktree's manifest, then prune file versions
-	// no worktree still references (bounding growth). Best-effort — a manifest
-	// failure shouldn't fail an otherwise-successful index.
+	idx.finalizeProject(ctx, projectID, projectPath, model, stats, manifest)
+	return stats, nil
+}
+
+// resolveIndexFiles returns the files to index: git-diff incremental when a
+// previous commit is stored, otherwise a full walk of projectPath.
+func (idx *Indexer) resolveIndexFiles(ctx context.Context, projectID int, projectPath string, maxFiles int) ([]string, error) {
+	changedFiles, diffErr := idx.gitDiffChanged(ctx, projectID, projectPath)
+	if diffErr != nil {
+		idx.logf("[warn] git diff incremental failed, falling back to full walk: %s", truncateErr(diffErr, 200))
+	}
+	if len(changedFiles) > 0 {
+		files := make([]string, 0, len(changedFiles))
+		for _, rel := range changedFiles {
+			files = append(files, filepath.Join(projectPath, rel))
+		}
+		return files, nil
+	}
+	return ScanFiles(projectPath, maxFiles)
+}
+
+// finalizeProject runs the post-index steps: worktree manifest, git history,
+// commit SHA storage, and status update. All steps are best-effort.
+func (idx *Indexer) finalizeProject(ctx context.Context, projectID int, projectPath, model string, stats *IndexStats, manifest map[string]string) {
 	if idx.worktree != "" {
 		idx.recordWorktree(ctx, projectID, manifest)
 	}
@@ -278,7 +279,6 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		}
 	}
 
-	// Store the current commit SHA for git-diff incremental on next index.
 	if commitSHA := idx.gitHeadCommit(ctx, projectPath); commitSHA != "" {
 		if err := idx.db.UpdateProjectCommit(ctx, projectID, commitSHA); err != nil {
 			idx.logf("[warn] store indexed commit: %s", truncateErr(err, 200))
@@ -288,7 +288,6 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 	if err := idx.db.UpdateProjectStatus(ctx, projectID, "ready"); err != nil {
 		idx.log.Warn("update project status", "project", projectID, "err", err)
 	}
-	return stats, nil
 }
 
 // accumulate folds one file's indexing result into the run stats and the
@@ -555,11 +554,31 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		}
 	}
 
-	created, softErrs, err = idx.storeChunks(ctx, projectID, fileID, rel, model, chunks, syms, hasSecrets)
+	created, softErrs, err = idx.storeChunks(ctx, chunkStoreParams{
+		projectID:  projectID,
+		fileID:     fileID,
+		rel:        rel,
+		model:      model,
+		chunks:     chunks,
+		syms:       syms,
+		hasSecrets: hasSecrets,
+	})
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, "", err
 	}
 	return created, softErrs, outcomeIndexed, hash, nil
+}
+
+// chunkStoreParams groups the arguments to storeChunks that describe the file
+// being indexed and its chunking context.
+type chunkStoreParams struct {
+	projectID  int
+	fileID     int
+	rel        string
+	model      string
+	chunks     []chunker.Chunk
+	syms       []sym.Symbol
+	hasSecrets bool
 }
 
 // storeChunks turns a unit's chunks into stored rows, honoring keyword-only mode,
@@ -567,14 +586,14 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 // keyword-only mode, when a sensitive file cannot be embedded by a local provider,
 // or when secrets were detected and SECRET_BLOCK_EMBEDDING is true; otherwise it
 // embeds them (forcing a local provider for sensitive files).
-func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel, model string, chunks []chunker.Chunk, syms []sym.Symbol, hasSecrets bool) (created, softErrs int, hardErr error) {
+func (idx *Indexer) storeChunks(ctx context.Context, p chunkStoreParams) (created, softErrs int, hardErr error) {
 	// Keyword-only mode: no embedding provider at all — store the chunks as text
 	// so they stay searchable by keyword (FTS/ILIKE) without any model.
 	if idx.keywordOnly {
-		if err := idx.db.InsertChunksTextOnly(ctx, projectID, fileID, chunks, idx.dims); err != nil {
+		if err := idx.db.InsertChunksTextOnly(ctx, p.projectID, p.fileID, p.chunks, idx.dims); err != nil {
 			return 0, 0, err
 		}
-		return len(chunks), 0, nil
+		return len(p.chunks), 0, nil
 	}
 
 	// Privacy routing + secret scan: a sensitive file or one with detected
@@ -583,20 +602,20 @@ func (idx *Indexer) storeChunks(ctx context.Context, projectID, fileID int, rel,
 	// (embedding NULL) so it stays findable via keyword search without ever
 	// leaving the machine.
 	embedCtx := ctx
-	isSensitive := privacy.IsSensitive(rel) || (hasSecrets && idx.secretBlockEmbedding)
+	isSensitive := privacy.IsSensitive(p.rel) || (p.hasSecrets && idx.secretBlockEmbedding)
 	if isSensitive {
 		localCtx := embed.WithForceLocal(ctx, true)
-		if _, err := idx.embedder.ModelInfo(localCtx, model); err != nil {
-			if err := idx.db.InsertChunksTextOnly(ctx, projectID, fileID, chunks, idx.dims); err != nil {
+		if _, err := idx.embedder.ModelInfo(localCtx, p.model); err != nil {
+			if err := idx.db.InsertChunksTextOnly(ctx, p.projectID, p.fileID, p.chunks, idx.dims); err != nil {
 				return 0, 0, err
 			}
-			idx.logf("  [local-text] %s (sensitive; stored text-only, no cloud embedding)", rel)
-			return len(chunks), 0, nil
+			idx.logf("  [local-text] %s (sensitive; stored text-only, no cloud embedding)", p.rel)
+			return len(p.chunks), 0, nil
 		}
 		embedCtx = localCtx
 	}
 
-	created, softErrs = idx.embedAndInsert(embedCtx, projectID, fileID, chunks, model, rel, syms)
+	created, softErrs = idx.embedAndInsert(embedCtx, p.projectID, p.fileID, p.chunks, p.model, p.rel, p.syms)
 	return created, softErrs, nil
 }
 
@@ -692,11 +711,11 @@ func computeHashes(inputs []string) []string {
 func resolveBatchEmbeddings(inputs, hashes []string, cached map[string][]float32) batchResult {
 	total := len(inputs)
 	res := batchResult{
-		embeddings:    make([][]float32, total),
-		uncachedIdx:   make([]int, 0, total),
+		embeddings:     make([][]float32, total),
+		uncachedIdx:    make([]int, 0, total),
 		uncachedInputs: make([]string, 0, total),
 		uncachedHashes: make([]string, 0, total),
-		totalCount:    total,
+		totalCount:     total,
 	}
 
 	for i, h := range hashes {
@@ -781,27 +800,27 @@ func sleepBackoff(ctx context.Context, attempt int) error {
 	}
 }
 
-func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectPath, model string) error {
+// runGitLog executes git log -p with an optional --since window and returns the
+// raw output. The projectPath is validated with safeGitDir first.
+func runGitLog(projectPath, gitSince string) ([]byte, error) {
 	if !safeGitDir(projectPath) {
-		return fmt.Errorf("unsafe git project path: %q", projectPath)
+		return nil, fmt.Errorf("unsafe git project path: %q", projectPath)
 	}
-	// Only pass --since when a window is set: an empty --since= is parsed
-	// inconsistently across git versions (some ignore it and show all history,
-	// newer ones treat the empty approxidate as "now" and return nothing), which
-	// made history indexing silently no-op on some hosts.
 	args := []string{"-C", projectPath, "log", "-p"}
-	if idx.gitSince != "" {
-		if !safeGitRef(idx.gitSince) {
-			return fmt.Errorf("unsafe git since value: %q", idx.gitSince)
+	if gitSince != "" {
+		if !safeGitRef(gitSince) {
+			return nil, fmt.Errorf("unsafe git since value: %q", gitSince)
 		}
-		args = append(args, "--since="+idx.gitSince)
+		args = append(args, "--since="+gitSince)
 	}
 	cmd := exec.Command("git")
 	cmd.Args = append([]string{"git"}, args...)
-	// Strip any inherited GIT_DIR/GIT_WORK_TREE so `git -C projectPath` reads that
-	// repo's history, not an ambient repo leaked by a hook or bare-repo worktree.
 	cmd.Env = gitenv.Clean(cmd.Environ())
-	out, err := cmd.Output()
+	return cmd.Output()
+}
+
+func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectPath, model string) error {
+	out, err := runGitLog(projectPath, idx.gitSince)
 	if err != nil {
 		return fmt.Errorf("git log -p: %w", err)
 	}
