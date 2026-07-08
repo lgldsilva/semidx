@@ -93,65 +93,89 @@ func extractYAMLOpenAPI(text string) string {
 	lines := strings.Split(text, "\n")
 	var title, version string
 	var endpoints []string
-	inInfo := false
-	inPaths := false
-	currentPath := ""
+	state := newOpenAPIState()
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-
 		indent := len(line) - len(strings.TrimLeft(line, " "))
-
-		switch {
-		case indent == 0 && strings.HasPrefix(trimmed, "info:"):
-			inInfo = true
-			inPaths = false
-			currentPath = ""
-			continue
-		case indent == 0 && strings.HasPrefix(trimmed, "paths:"):
-			inInfo = false
-			inPaths = true
-			currentPath = ""
-			continue
-		case indent == 0 && !strings.HasPrefix(trimmed, "openapi:") && !strings.HasPrefix(trimmed, "swagger:"):
-			inInfo = false
-			inPaths = false
-		}
-
-		if inInfo && indent == 2 {
-			if strings.HasPrefix(trimmed, "title:") {
-				title = strings.TrimSpace(strings.TrimPrefix(trimmed, "title:"))
-				title = strings.Trim(title, `"'`)
+		ep := state.processLine(trimmed, indent)
+		if state.inInfo && indent == 2 {
+			info := extractOpenAPIInfoField(trimmed)
+			if info.title != "" {
+				title = info.title
 			}
-			if strings.HasPrefix(trimmed, "version:") {
-				version = strings.TrimSpace(strings.TrimPrefix(trimmed, "version:"))
-				version = strings.Trim(version, `"'`)
+			if info.version != "" {
+				version = info.version
 			}
 		}
-
-		if inPaths && indent == 2 {
-			if strings.HasPrefix(trimmed, "/") {
-				currentPath = strings.TrimSuffix(trimmed, ":")
-				continue
-			}
+		if state.inPaths && indent == 2 && strings.HasPrefix(trimmed, "/") {
+			state.currentPath = strings.TrimSuffix(trimmed, ":")
 		}
-
-		if inPaths && indent == 4 && currentPath != "" {
-			method := strings.TrimSuffix(trimmed, ":")
-			if isHTTPMethod(method) {
-				endpoints = append(endpoints, strings.ToUpper(method)+" "+currentPath)
-			}
-		}
-
-		if inPaths && indent > 0 && indent < 2 {
-			inPaths = false
-			currentPath = ""
+		if ep != "" {
+			endpoints = append(endpoints, ep)
 		}
 	}
 
+	return formatOpenAPISummary(title, version, endpoints)
+}
+
+type openapiState struct {
+	inInfo      bool
+	inPaths     bool
+	currentPath string
+}
+
+func newOpenAPIState() *openapiState { return &openapiState{} }
+
+func (s *openapiState) processLine(trimmed string, indent int) string {
+	switch {
+	case indent == 0 && strings.HasPrefix(trimmed, "info:"):
+		s.inInfo = true
+		s.inPaths = false
+		s.currentPath = ""
+	case indent == 0 && strings.HasPrefix(trimmed, "paths:"):
+		s.inInfo = false
+		s.inPaths = true
+		s.currentPath = ""
+	case indent == 0 && !strings.HasPrefix(trimmed, "openapi:") && !strings.HasPrefix(trimmed, "swagger:"):
+		s.inInfo = false
+		s.inPaths = false
+	}
+
+	if s.inPaths && indent == 4 && s.currentPath != "" {
+		method := strings.TrimSuffix(trimmed, ":")
+		if isHTTPMethod(method) {
+			return strings.ToUpper(method) + " " + s.currentPath
+		}
+	}
+
+	if s.inPaths && indent > 0 && indent < 2 {
+		s.inPaths = false
+		s.currentPath = ""
+	}
+
+	return ""
+}
+
+type infoFields struct{ title, version string }
+
+func extractOpenAPIInfoField(trimmed string) infoFields {
+	var res infoFields
+	if strings.HasPrefix(trimmed, "title:") {
+		t := strings.TrimSpace(strings.TrimPrefix(trimmed, "title:"))
+		res.title = strings.Trim(t, `"'`)
+	}
+	if strings.HasPrefix(trimmed, "version:") {
+		v := strings.TrimSpace(strings.TrimPrefix(trimmed, "version:"))
+		res.version = strings.Trim(v, `"'`)
+	}
+	return res
+}
+
+func formatOpenAPISummary(title, version string, endpoints []string) string {
 	var b strings.Builder
 	if title != "" {
 		fmt.Fprintf(&b, "Title: %s\n", title)

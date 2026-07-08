@@ -168,61 +168,58 @@ func extractTarEntries(name string, data []byte, decompress io.Reader, depth int
 			break
 		}
 		if err != nil {
-			continue // skip unreadable entries
+			continue
 		}
 		if hdr.Typeflag == tar.TypeDir {
 			continue
 		}
 		entryCount++
-		if entryCount > maxArchiveEntries {
+		if entryCount > maxArchiveEntries || totalSize >= maxArchiveTotalSize {
 			break
 		}
+
+		entryDocs := tryProcessTarEntry(tr, hdr, name, depth, &totalSize)
+		docs = append(docs, entryDocs...)
+
 		if totalSize >= maxArchiveTotalSize {
 			break
 		}
-
-		entryName := hdr.Name
-		virtualPath := name + "!" + entryName
-		entryExt := strings.ToLower(path.Ext(entryName))
-
-		// Check if the entry is itself an archive and we're within depth limit.
-		if depth < maxArchiveDepth && isGenericArchive(entryName) {
-			entryData, err := io.ReadAll(io.LimitReader(tr, maxArchiveEntrySize))
-			if err != nil {
-				continue
-			}
-			innerDocs, ierr := extractArchiveEntries(virtualPath, entryData, depth+1)
-			if ierr == nil {
-				docs = append(docs, innerDocs...)
-			}
-			continue
-		}
-
-		// Only index text entries.
-		if !isTextEntry(entryExt) {
-			// entry was already consumed via ReadAll above — skip to next.
-			continue
-		}
-
-		raw, err := io.ReadAll(io.LimitReader(tr, maxArchiveEntrySize))
-		if err != nil {
-			continue
-		}
-		if !utf8.Valid(raw) {
-			continue
-		}
-		text := string(raw)
-		if strings.TrimSpace(text) == "" {
-			continue
-		}
-		if totalSize+len(text) > maxArchiveTotalSize {
-			break
-		}
-		totalSize += len(text)
-		docs = append(docs, Doc{Path: virtualPath, Text: text})
 	}
 
 	return docs, nil
+}
+
+func tryProcessTarEntry(tr *tar.Reader, hdr *tar.Header, name string, depth int, totalSize *int) []Doc {
+	entryName := hdr.Name
+	virtualPath := name + "!" + entryName
+	entryExt := strings.ToLower(path.Ext(entryName))
+
+	if depth < maxArchiveDepth && isGenericArchive(entryName) {
+		entryData, err := io.ReadAll(io.LimitReader(tr, maxArchiveEntrySize))
+		if err != nil {
+			return nil
+		}
+		innerDocs, _ := extractArchiveEntries(virtualPath, entryData, depth+1)
+		return innerDocs
+	}
+
+	if !isTextEntry(entryExt) {
+		return nil
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(tr, maxArchiveEntrySize))
+	if err != nil || !utf8.Valid(raw) {
+		return nil
+	}
+	text := string(raw)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	if *totalSize+len(text) > maxArchiveTotalSize {
+		return nil
+	}
+	*totalSize += len(text)
+	return []Doc{{Path: virtualPath, Text: text}}
 }
 
 // isTextEntry reports whether a file extension is likely to hold text content
