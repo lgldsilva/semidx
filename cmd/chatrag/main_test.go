@@ -131,6 +131,19 @@ func (f *fakeIndexStore) CountProjectFiles(_ context.Context, _ int) (int, error
 }
 func (f *fakeIndexStore) DropAll(context.Context) error { return errors.New("unimplemented") }
 
+func (f *fakeIndexStore) EnsureEmbeddingCacheTable(context.Context, int) error {
+	return errors.New("unimplemented")
+}
+func (f *fakeIndexStore) LookupEmbeddingCache(context.Context, []string, string, int) (map[string][]float32, error) {
+	return nil, errors.New("unimplemented")
+}
+func (f *fakeIndexStore) InsertEmbeddingCache(context.Context, []string, string, [][]float32, int) error {
+	return errors.New("unimplemented")
+}
+func (f *fakeIndexStore) PruneEmbeddingCache(context.Context, int) (int64, error) {
+	return 0, errors.New("unimplemented")
+}
+
 // fakeEmbedder returns a fixed vector for any embedding request.
 type fakeEmbedder struct{}
 

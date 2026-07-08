@@ -84,6 +84,17 @@ func (f *fakeStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedP
 	return nil, nil
 }
 
+// Cache methods: return empty map/do nothing so tests exercise the full
+// embedding path (no pre-warmed cache).
+func (f *fakeStore) EnsureEmbeddingCacheTable(context.Context, int) error { return nil }
+func (f *fakeStore) LookupEmbeddingCache(context.Context, []string, string, int) (map[string][]float32, error) {
+	return map[string][]float32{}, nil
+}
+func (f *fakeStore) InsertEmbeddingCache(context.Context, []string, string, [][]float32, int) error {
+	return nil
+}
+func (f *fakeStore) PruneEmbeddingCache(context.Context, int) (int64, error) { return 0, nil }
+
 // fakeEmbedder returns fixed vectors; localAvailable controls whether a
 // force-local ModelInfo succeeds (simulating a local provider being present).
 type fakeEmbedder struct {
