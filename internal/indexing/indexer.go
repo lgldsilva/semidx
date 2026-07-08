@@ -806,6 +806,9 @@ func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectP
 // indexCommit embeds and stores a single `git log -p` commit block as one chunk,
 // returning true only when the chunk was stored. Every step is best-effort: any
 // error skips this commit without failing the history pass.
+//
+// Uses the embedding cache to avoid re-embedding identical commits across
+// worktrees and re-index cycles (added in feat/embedding-cache Phase 1).
 func (idx *Indexer) indexCommit(ctx context.Context, projectID int, model string, commit []byte) bool {
 	if len(commit) > idx.maxChunkChars {
 		commit = commit[:idx.maxChunkChars]
@@ -822,12 +825,37 @@ func (idx *Indexer) indexCommit(ctx context.Context, projectID int, model string
 		return false
 	}
 
-	embedding, err := idx.embedder.EmbedSingle(ctx, model, string(commit))
-	if err != nil {
+	embedding, ok := idx.embedSingleWithCache(ctx, model, string(commit))
+	if !ok {
 		return false
 	}
 	chunk := chunker.Chunk{Content: string(commit), StartLine: 1, EndLine: 1}
 	return idx.db.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{chunk}, [][]float32{embedding}, idx.dims) == nil
+}
+
+// embedSingleWithCache returns an embedding for text, using the cache when
+// available. The hash key is SHA-256(text) — git commit messages are plain text
+// without symbol enrichment, so the key matches the cache schema exactly.
+// Returns (nil, false) on any error (best-effort; the caller skips the commit).
+func (idx *Indexer) embedSingleWithCache(ctx context.Context, model, text string) ([]float32, bool) {
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(text)))
+
+	cached, err := idx.db.LookupEmbeddingCache(ctx, []string{hash}, model, idx.dims)
+	if err == nil {
+		if emb, ok := cached[hash]; ok {
+			return emb, true
+		}
+	}
+	// Cache miss or lookup error — compute and store.
+	embedding, err := idx.embedder.EmbedSingle(ctx, model, text)
+	if err != nil {
+		return nil, false
+	}
+	// Best-effort cache insert (non-fatal).
+	if err := idx.db.InsertEmbeddingCache(ctx, []string{hash}, model, [][]float32{embedding}, idx.dims); err != nil {
+		idx.logf("[warn] cache insert git commit: %s", truncateErr(err, 200))
+	}
+	return embedding, true
 }
 
 // gitDiffChanged returns the list of files changed since the last stored
