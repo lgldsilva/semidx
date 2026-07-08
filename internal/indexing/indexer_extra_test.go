@@ -226,7 +226,7 @@ func (e *errStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPa
 	return nil, nil
 }
 
-func (e *errStore) EnsureEmbeddingCacheTable(context.Context, int) error          { return nil }
+func (e *errStore) EnsureEmbeddingCacheTable(context.Context, int) error { return nil }
 func (e *errStore) LookupEmbeddingCache(context.Context, []string, string, int) (map[string][]float32, error) {
 	return map[string][]float32{}, nil
 }
@@ -718,8 +718,12 @@ func (c *cachingStore) InsertChunks(ctx context.Context, projectID, fileID int, 
 func (c *cachingStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, dims int) error {
 	return nil
 }
-func (c *cachingStore) UpdateProjectStatus(ctx context.Context, id int, status string) error { return nil }
-func (c *cachingStore) InsertFileDependencies(context.Context, int, string, []string) error  { return nil }
+func (c *cachingStore) UpdateProjectStatus(ctx context.Context, id int, status string) error {
+	return nil
+}
+func (c *cachingStore) InsertFileDependencies(context.Context, int, string, []string) error {
+	return nil
+}
 func (c *cachingStore) GetProjectCommit(ctx context.Context, projectID int) (string, error) {
 	return "", nil
 }

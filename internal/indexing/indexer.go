@@ -695,9 +695,9 @@ func (idx *Indexer) embedAndInsert(ctx context.Context, projectID, fileID int, c
 			}
 
 			// Merge new embeddings into final slice, maintaining input order.
-		for i, origIdx := range uncachedIndices {
-			finalEmbeddings[origIdx] = embeddings[i]
-		}
+			for i, origIdx := range uncachedIndices {
+				finalEmbeddings[origIdx] = embeddings[i]
+			}
 
 			if hitCount > 0 {
 				idx.logf("  [cache-partial] %s batch %d-%d: %d/%d cached, %d new", rel, start, end, hitCount, totalCount, len(uncachedIndices))

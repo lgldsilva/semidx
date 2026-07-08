@@ -485,7 +485,7 @@ func (s *PgStore) InsertEmbeddingCache(ctx context.Context, inputHashes []string
 		batch.Queue(query, hash, model, dims, pgvector.NewVector(embeddings[i]))
 	}
 	br := s.pool.SendBatch(ctx, batch)
-	defer br.Close()
+	defer func() { _ = br.Close() }()
 	_, err := br.Exec()
 	return err
 }
