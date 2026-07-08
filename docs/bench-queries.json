@@ -1,0 +1,27 @@
+[
+  {
+    "query": "where is password verification handled",
+    "relevant_files": ["testdata/graphrag-fixture/auth/auth.go"],
+    "description": "Graph-RAG fixture auth flow"
+  },
+  {
+    "query": "JWT token validation middleware",
+    "relevant_files": ["testdata/graphrag-fixture/jwt/jwt.go", "testdata/graphrag-fixture/gateway/gateway.go"],
+    "description": "Graph-RAG cross-file dependency"
+  },
+  {
+    "query": "bootstrap admin token generation",
+    "relevant_files": ["internal/server/server.go", "cmd/semidx/commands.go"],
+    "description": "Server bootstrap security path"
+  },
+  {
+    "query": "semantic search hybrid RRF fusion",
+    "relevant_files": ["internal/search/hybrid.go", "internal/search/routing.go"],
+    "description": "Search quality routing"
+  },
+  {
+    "query": "testcontainers shared postgres integration test",
+    "relevant_files": ["internal/store/store_test.go"],
+    "description": "Store integration harness"
+  }
+]

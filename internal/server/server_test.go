@@ -365,9 +365,13 @@ func TestEnqueueJob(t *testing.T) {
 
 func TestGetJob(t *testing.T) {
 	readTok := &store.Token{Scopes: []string{"read"}}
-	srv := New(&fakeStore{token: readTok, job: &store.Job{ID: 5, Type: "full", Status: "succeeded", FilesIndexed: 3, ChunksCreated: 9}}, fakeEmbedder{}, nil)
+	srv := New(&fakeStore{
+		token:   readTok,
+		project: &store.Project{ID: 1, Name: "p"},
+		job:     &store.Job{ID: 5, ProjectID: 1, Type: "full", Status: "succeeded", FilesIndexed: 3, ChunksCreated: 9},
+	}, fakeEmbedder{}, nil)
 
-	rec := do(t, srv, "GET", "/api/v1/jobs/5", "tok", "")
+	rec := do(t, srv, "GET", "/api/v1/projects/p/jobs/5", "tok", "")
 	if rec.Code != 200 {
 		t.Fatalf("get job = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -376,13 +380,25 @@ func TestGetJob(t *testing.T) {
 	if jv.ID != 5 || jv.Status != "succeeded" || jv.FilesIndexed != 3 {
 		t.Errorf("job view = %+v", jv)
 	}
+	// legacy route requires ?project=
+	if rec := do(t, srv, "GET", "/api/v1/jobs/5", "tok", ""); rec.Code != 400 {
+		t.Errorf("legacy get job without project = %d, want 400", rec.Code)
+	}
+	rec = do(t, srv, "GET", "/api/v1/jobs/5?project=p", "tok", "")
+	if rec.Code != 200 {
+		t.Errorf("legacy get job with project = %d, want 200", rec.Code)
+	}
+	// wrong project → 404 (IDOR guard).
+	if rec := do(t, srv, "GET", "/api/v1/projects/other/jobs/5", "tok", ""); rec.Code != 404 {
+		t.Errorf("wrong project = %d, want 404", rec.Code)
+	}
 	// non-integer id → 400.
-	if rec := do(t, srv, "GET", "/api/v1/jobs/abc", "tok", ""); rec.Code != 400 {
+	if rec := do(t, srv, "GET", "/api/v1/projects/p/jobs/abc", "tok", ""); rec.Code != 400 {
 		t.Errorf("bad id = %d, want 400", rec.Code)
 	}
 	// unknown job → 404.
-	nf := New(&fakeStore{token: readTok, job: nil}, fakeEmbedder{}, nil)
-	if rec := do(t, nf, "GET", "/api/v1/jobs/9999", "tok", ""); rec.Code != 404 {
+	nf := New(&fakeStore{token: readTok, job: nil, project: &store.Project{ID: 1, Name: "p"}}, fakeEmbedder{}, nil)
+	if rec := do(t, nf, "GET", "/api/v1/projects/p/jobs/9999", "tok", ""); rec.Code != 404 {
 		t.Errorf("unknown job = %d, want 404", rec.Code)
 	}
 }
@@ -467,8 +483,8 @@ func TestSearchRetryableError(t *testing.T) {
 	if ra := rec.Header().Get("Retry-After"); ra != want {
 		t.Errorf("Retry-After = %q, want %q", ra, want)
 	}
-	if !strings.Contains(rec.Body.String(), "circuit breaker open for test") {
-		t.Errorf("body should mention circuit breaker; got %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "embedding provider temporarily unavailable") {
+		t.Errorf("body should not leak internal error; got %s", rec.Body.String())
 	}
 }
 

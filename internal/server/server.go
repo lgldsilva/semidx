@@ -147,6 +147,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/projects/{project}/index-jobs", s.limited(100<<10, s.authed("write", s.handleEnqueueJob)))
 	mux.Handle("POST /api/v1/projects/{project}/files/diff", s.limited(10<<20, s.authed("write", s.handleFilesDiff)))
 	mux.Handle("POST /api/v1/projects/{project}/files/batch", s.limited(100<<20, s.authed("write", s.handleFilesBatch)))
+	mux.Handle("GET /api/v1/projects/{project}/jobs/{id}", s.authed("read", s.handleGetProjectJob))
 	mux.Handle("GET /api/v1/jobs/{id}", s.authed("read", s.handleGetJob))
 	if s.admin != nil {
 		mux.Handle("/admin/", s.admin)
@@ -202,8 +203,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.GraphDepth <= 0 {
-		body.GraphDepth = 2
+		body.GraphDepth = search.DefaultGraphDepth
 	}
+	body.GraphDepth = search.ClampGraphDepth(body.GraphDepth)
 
 	start := time.Now()
 	resp, err := s.search.Search(r.Context(), search.Request{
@@ -212,13 +214,17 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.log.Warn("search failed", "project", project, "err", err)
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSONError(w, http.StatusNotFound, "project not found")
+			return
+		}
 		var re interface{ RetryAfter() time.Duration }
 		if errors.As(err, &re) {
 			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(re.RetryAfter().Seconds()))))
-			writeJSONError(w, http.StatusServiceUnavailable, err.Error())
+			writeJSONError(w, http.StatusServiceUnavailable, "embedding provider temporarily unavailable")
 			return
 		}
-		writeJSONError(w, http.StatusNotFound, "project not found")
+		writeJSONError(w, http.StatusInternalServerError, "search failed")
 		return
 	}
 

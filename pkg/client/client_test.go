@@ -91,7 +91,7 @@ func TestEnqueueAndGetJob(t *testing.T) {
 		case r.Method == "POST" && r.URL.Path == "/api/v1/projects/p/index-jobs":
 			w.WriteHeader(202)
 			_ = json.NewEncoder(w).Encode(map[string]any{"job_id": 7, "status": "queued"})
-		case r.Method == "GET" && r.URL.Path == "/api/v1/jobs/7":
+		case r.Method == "GET" && r.URL.Path == "/api/v1/projects/p/jobs/7":
 			_ = json.NewEncoder(w).Encode(Job{ID: 7, Status: "succeeded", FilesIndexed: 4})
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
@@ -103,7 +103,7 @@ func TestEnqueueAndGetJob(t *testing.T) {
 	if err != nil || id != 7 {
 		t.Fatalf("enqueue = %d, err %v", id, err)
 	}
-	job, err := c.GetJob(context.Background(), 7)
+	job, err := c.GetJob(context.Background(), "p", 7)
 	if err != nil || job.Status != "succeeded" || job.FilesIndexed != 4 {
 		t.Fatalf("job = %+v, err %v", job, err)
 	}
@@ -197,7 +197,7 @@ func TestWaitForJob(t *testing.T) {
 		})
 		defer done()
 
-		job, err := c.WaitForJob(context.Background(), 42, time.Millisecond)
+		job, err := c.WaitForJob(context.Background(), "p", 42, time.Millisecond)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -215,7 +215,7 @@ func TestWaitForJob(t *testing.T) {
 		})
 		defer done()
 
-		job, err := c.WaitForJob(context.Background(), 7, time.Millisecond)
+		job, err := c.WaitForJob(context.Background(), "p", 7, time.Millisecond)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,7 +245,7 @@ func TestWaitForJob(t *testing.T) {
 		})
 		defer done()
 
-		job, err := c.WaitForJob(context.Background(), 99, time.Millisecond)
+		job, err := c.WaitForJob(context.Background(), "p", 99, time.Millisecond)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -264,7 +264,7 @@ func TestWaitForJob(t *testing.T) {
 		defer cancel()
 		time.Sleep(15 * time.Millisecond) // ensure ctx is already expired
 
-		_, err := c.WaitForJob(ctx, 1, time.Second)
+		_, err := c.WaitForJob(ctx, "p", 1, time.Second)
 		if err == nil {
 			t.Fatal("expected error from cancelled context")
 		}

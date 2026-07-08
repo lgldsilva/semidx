@@ -58,10 +58,10 @@ func (s *Server) handleChatPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	var req chatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, err := s.decodeChatRequest(w, r)
+	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(errorResponse{Error: "invalid JSON: " + err.Error()})
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: "invalid JSON"})
 		return
 	}
 
@@ -71,9 +71,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	project := req.Project
-	if project == "" {
-		project = s.project
+	project, err := s.resolveProject(req.Project)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errProjectNotAllowed) {
+			status = http.StatusForbidden
+		}
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: publicChatError(err)})
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
@@ -87,7 +93,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusGatewayTimeout
 		}
 		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(errorResponse{Error: err.Error()})
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: publicChatError(err)})
 		return
 	}
 
@@ -115,11 +121,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 // handleChatStream handles POST /api/chat/stream with SSE streaming.
 func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
-	var req chatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, err := s.decodeChatRequest(w, r)
+	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(errorResponse{Error: "invalid JSON: " + err.Error()})
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: "invalid JSON"})
 		return
 	}
 
@@ -130,9 +136,16 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	project := req.Project
-	if project == "" {
-		project = s.project
+	project, err := s.resolveProject(req.Project)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		status := http.StatusBadRequest
+		if errors.Is(err, errProjectNotAllowed) {
+			status = http.StatusForbidden
+		}
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: publicChatError(err)})
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
@@ -152,8 +165,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	chunks, sources, modelName, fallback, err := s.pipeline.StreamAsk(ctx, req.Question, project, req.History)
 	if err != nil {
 		s.log.Error("stream ask failed", "err", err)
-		// Send error as SSE event.
-		errJSON, _ := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
+		errJSON, _ := json.Marshal(map[string]string{"type": "error", "error": publicChatError(err)})
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", errJSON)
 		flusher.Flush()
 		return

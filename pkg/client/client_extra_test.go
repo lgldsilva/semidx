@@ -121,7 +121,7 @@ func TestErrorPropagation(t *testing.T) {
 	if _, err := c.EnqueueJob(ctx, "p", "full"); err == nil {
 		t.Error("EnqueueJob should propagate a 500")
 	}
-	if _, err := c.GetJob(ctx, 1); err == nil {
+	if _, err := c.GetJob(ctx, "p", 1); err == nil {
 		t.Error("GetJob should propagate a 500")
 	}
 	if _, err := c.FilesDiff(ctx, "p", map[string]string{"a": "b"}); err == nil {

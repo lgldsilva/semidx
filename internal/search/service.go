@@ -79,6 +79,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	if req.TopK <= 0 {
 		req.TopK = 5
 	}
+	req.GraphMaxDepth = ClampGraphDepth(req.GraphMaxDepth)
 
 	project, err := s.resolveProject(ctx, req)
 	if err != nil {
@@ -236,10 +237,7 @@ func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults [
 		}
 	}
 
-	maxDepth := req.GraphMaxDepth
-	if maxDepth <= 0 {
-		maxDepth = 2
-	}
+	maxDepth := ClampGraphDepth(req.GraphMaxDepth)
 
 	const decay = 0.85
 	const floor = 0.3
