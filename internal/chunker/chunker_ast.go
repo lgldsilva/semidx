@@ -48,45 +48,65 @@ func astChunkFromSyms(content []byte, maxChars int, syms []analyzer.Symbol) []Ch
 	lastLine := 0 // 0-indexed line processed so far
 
 	for _, sym := range sorted {
-		// Non-symbol content before this symbol.
-		if zeroBasedStart := sym.StartLine - 1; zeroBasedStart > lastLine {
-			nonSym := lines[lastLine:zeroBasedStart]
-			if text := strings.TrimSpace(strings.Join(nonSym, "\n")); text != "" {
-				chunks = append(chunks, chunkLines(lines, lastLine+1, zeroBasedStart, maxChars)...)
-			}
-		}
+		zeroBasedStart := sym.StartLine - 1
+		chunks = appendNonSymbolChunks(chunks, lines, lastLine, zeroBasedStart, maxChars)
 
-		// Clip symbol end to file bounds.
-		symEnd := sym.EndLine
-		if symEnd > len(lines) {
-			symEnd = len(lines)
-		}
-
-		symLines := lines[sym.StartLine-1 : symEnd]
-		symContent := strings.Join(symLines, "\n")
-		prefix := fmt.Sprintf("[%s] %s\n", sym.Kind, sym.Name)
-
-		if len(prefix)+len(symContent) <= maxChars {
-			chunks = append(chunks, Chunk{
-				Content:   prefix + symContent,
-				StartLine: sym.StartLine,
-				EndLine:   symEnd,
-			})
-		} else {
-			chunks = append(chunks, splitSymbolChunks(symContent, prefix, sym.StartLine, maxChars)...)
-		}
-
+		symEnd := clipSymbolEnd(sym.EndLine, len(lines))
+		chunks = appendSymbolChunks(chunks, lines, sym, symEnd, maxChars)
 		lastLine = symEnd
 	}
 
-	// Trailing content after the last symbol.
-	if lastLine < len(lines) {
-		tail := strings.TrimSpace(strings.Join(lines[lastLine:], "\n"))
-		if tail != "" {
-			chunks = append(chunks, chunkLines(lines, lastLine+1, len(lines), maxChars)...)
-		}
-	}
+	return appendTrailingChunks(chunks, lines, lastLine, maxChars)
+}
 
+// appendNonSymbolChunks emits blank-line-split chunks for content between
+// lastLine and zeroBasedStart (both 0-indexed) when that range is non-empty.
+func appendNonSymbolChunks(chunks []Chunk, lines []string, lastLine, zeroBasedStart, maxChars int) []Chunk {
+	if zeroBasedStart <= lastLine {
+		return chunks
+	}
+	nonSym := lines[lastLine:zeroBasedStart]
+	if text := strings.TrimSpace(strings.Join(nonSym, "\n")); text != "" {
+		chunks = append(chunks, chunkLines(lines, lastLine+1, zeroBasedStart, maxChars)...)
+	}
+	return chunks
+}
+
+// clipSymbolEnd clamps a symbol's end line to the file's line count.
+func clipSymbolEnd(symEnd, lineCount int) int {
+	if symEnd > lineCount {
+		return lineCount
+	}
+	return symEnd
+}
+
+// appendSymbolChunks emits one or more chunks for a single symbol, splitting
+// internally when the symbol content exceeds maxChars.
+func appendSymbolChunks(chunks []Chunk, lines []string, sym analyzer.Symbol, symEnd, maxChars int) []Chunk {
+	symLines := lines[sym.StartLine-1 : symEnd]
+	symContent := strings.Join(symLines, "\n")
+	prefix := fmt.Sprintf("[%s] %s\n", sym.Kind, sym.Name)
+
+	if len(prefix)+len(symContent) <= maxChars {
+		return append(chunks, Chunk{
+			Content:   prefix + symContent,
+			StartLine: sym.StartLine,
+			EndLine:   symEnd,
+		})
+	}
+	return append(chunks, splitSymbolChunks(symContent, prefix, sym.StartLine, maxChars)...)
+}
+
+// appendTrailingChunks emits blank-line-split chunks for content after the last
+// symbol when that trailing range is non-empty.
+func appendTrailingChunks(chunks []Chunk, lines []string, lastLine, maxChars int) []Chunk {
+	if lastLine >= len(lines) {
+		return chunks
+	}
+	tail := strings.TrimSpace(strings.Join(lines[lastLine:], "\n"))
+	if tail != "" {
+		chunks = append(chunks, chunkLines(lines, lastLine+1, len(lines), maxChars)...)
+	}
 	return chunks
 }
 
@@ -101,43 +121,11 @@ func splitSymbolChunks(content, prefix string, startLine int, maxChars int) []Ch
 	for len(remaining) > 0 {
 		// If the prefix alone exceeds maxChars, fall back to un-prefixed rune split.
 		if prefixLen >= maxChars {
-			for _, piece := range splitRunes(prefix+remaining, maxChars) {
-				pieceLines := strings.Count(piece, "\n") + 1
-				chunks = append(chunks, Chunk{
-					Content:   piece,
-					StartLine: currentLine,
-					EndLine:   currentLine + pieceLines - 1,
-				})
-				currentLine += pieceLines
-			}
-			return chunks
+			return append(chunks, splitOversizedPrefix(remaining, prefix, currentLine, maxChars)...)
 		}
 
 		spaceLeft := maxChars - prefixLen
-		// Take up to spaceLeft bytes; try to cut at a newline past halfway.
-		end := spaceLeft
-		if end > len(remaining) {
-			end = len(remaining)
-		}
-		piece := remaining[:end]
-		if end < len(remaining) {
-			if nl := strings.LastIndex(piece, "\n"); nl > spaceLeft/2 {
-				piece = piece[:nl]
-			}
-			// Avoid cutting a multi-byte rune at the end.
-			for len(piece) > 0 && piece[len(piece)-1] != '\n' &&
-				(piece[len(piece)-1]&0x80 != 0) {
-				piece = piece[:len(piece)-1]
-			}
-		}
-
-		if piece == "" {
-			// Safeguard: if piece is empty after trimming, advance by maxChars bytes.
-			piece = remaining
-			if len(piece) > maxChars {
-				piece = piece[:maxChars]
-			}
-		}
+		piece := cutSymbolPiece(remaining, spaceLeft, maxChars)
 
 		pieceLines := strings.Count(piece, "\n") + 1
 		chunks = append(chunks, Chunk{
@@ -150,6 +138,60 @@ func splitSymbolChunks(content, prefix string, startLine int, maxChars int) []Ch
 	}
 
 	return chunks
+}
+
+// splitOversizedPrefix handles the degenerate case where the metadata prefix
+// alone exceeds maxChars: it drops the prefix and splits the combined text by
+// runes, returning chunks with no symbol prefix.
+func splitOversizedPrefix(remaining, prefix string, currentLine, maxChars int) []Chunk {
+	var chunks []Chunk
+	for _, piece := range splitRunes(prefix+remaining, maxChars) {
+		pieceLines := strings.Count(piece, "\n") + 1
+		chunks = append(chunks, Chunk{
+			Content:   piece,
+			StartLine: currentLine,
+			EndLine:   currentLine + pieceLines - 1,
+		})
+		currentLine += pieceLines
+	}
+	return chunks
+}
+
+// cutSymbolPiece extracts a chunk-sized piece from remaining, trying to cut at
+// a newline past the halfway point and trimming any partial UTF-8 rune at the
+// boundary. If trimming yields an empty piece, it falls back to maxChars bytes.
+func cutSymbolPiece(remaining string, spaceLeft, maxChars int) string {
+	end := spaceLeft
+	if end > len(remaining) {
+		end = len(remaining)
+	}
+	piece := remaining[:end]
+	if end >= len(remaining) {
+		return piece
+	}
+	// Try to cut at a newline past halfway.
+	if nl := strings.LastIndex(piece, "\n"); nl > spaceLeft/2 {
+		piece = piece[:nl]
+	}
+	piece = trimRuneBoundary(piece)
+	if piece == "" {
+		// Safeguard: if piece is empty after trimming, advance by maxChars bytes.
+		piece = remaining
+		if len(piece) > maxChars {
+			piece = piece[:maxChars]
+		}
+	}
+	return piece
+}
+
+// trimRuneBoundary removes trailing bytes that are part of a split multi-byte
+// UTF-8 rune, stopping at a newline or a clean rune boundary.
+func trimRuneBoundary(piece string) string {
+	for len(piece) > 0 && piece[len(piece)-1] != '\n' &&
+		(piece[len(piece)-1]&0x80 != 0) {
+		piece = piece[:len(piece)-1]
+	}
+	return piece
 }
 
 // chunkLines splits a range of lines (1‑based start/end exclusive) into chunks

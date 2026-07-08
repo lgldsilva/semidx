@@ -72,34 +72,49 @@ func rerankRRF(vector, keyword []store.SearchResult, topK int) []store.SearchRes
 	}
 
 	// Build position maps: chunkKey -> rank (1-based).
-	vecRanks := make(map[string]int, len(vector))
-	for i, r := range vector {
-		vecRanks[chunkKey(r)] = i + 1
-	}
-	kwRanks := make(map[string]int, len(keyword))
-	for i, r := range keyword {
-		kwRanks[chunkKey(r)] = i + 1
-	}
+	vecRanks := buildRanks(vector)
+	kwRanks := buildRanks(keyword)
 
-	// Collect all unique chunks.
-	seen := make(map[string]bool)
-	type scored struct {
-		result store.SearchResult
-		score  float64
-	}
+	// Collect all unique chunks with their fused RRF scores.
+	scoredList := fuseRRF(vector, keyword, vecRanks, kwRanks)
 
-	var scoredList []scored
+	slices.SortFunc(scoredList, compareScoredDesc)
+
+	if topK <= 0 || topK >= len(scoredList) {
+		topK = len(scoredList)
+	}
+	return normaliseRRF(scoredList, topK)
+}
+
+// rrfScored pairs a search result with its fused RRF score.
+type rrfScored struct {
+	result store.SearchResult
+	score  float64
+}
+
+// buildRanks returns a chunkKey -> 1-based rank map for the given results.
+func buildRanks(results []store.SearchResult) map[string]int {
+	ranks := make(map[string]int, len(results))
+	for i, r := range results {
+		ranks[chunkKey(r)] = i + 1
+	}
+	return ranks
+}
+
+// fuseRRF walks both ranked lists, deduplicates by chunk key, and assigns each
+// unique chunk a fused RRF score (with a small bonus for overlapping hits).
+func fuseRRF(vector, keyword []store.SearchResult, vecRanks, kwRanks map[string]int) []rrfScored {
+	seen := make(map[string]bool, len(vector)+len(keyword))
+	scoredList := make([]rrfScored, 0, len(vector)+len(keyword))
 
 	for _, r := range vector {
 		ck := chunkKey(r)
 		seen[ck] = true
-		vr := vecRanks[ck]
-		score := 1.0 / (rrfK + float64(vr))
-		kr, inKW := kwRanks[ck]
-		if inKW {
+		score := 1.0 / (rrfK + float64(vecRanks[ck]))
+		if kr, ok := kwRanks[ck]; ok {
 			score += 1.0/(rrfK+float64(kr)) + rrfBonus
 		}
-		scoredList = append(scoredList, scored{result: r, score: score})
+		scoredList = append(scoredList, rrfScored{result: r, score: score})
 	}
 
 	for _, r := range keyword {
@@ -107,27 +122,29 @@ func rerankRRF(vector, keyword []store.SearchResult, topK int) []store.SearchRes
 		if seen[ck] {
 			continue
 		}
-		kr := kwRanks[ck]
-		score := 1.0 / (rrfK + float64(kr))
-		scoredList = append(scoredList, scored{result: r, score: score})
+		scoredList = append(scoredList, rrfScored{
+			result: r,
+			score:  1.0 / (rrfK + float64(kwRanks[ck])),
+		})
 	}
+	return scoredList
+}
 
-	slices.SortFunc(scoredList, func(a, b scored) int {
-		switch {
-		case math.Abs(a.score-b.score) < 1e-9:
-			return 0
-		case a.score > b.score:
-			return -1
-		default:
-			return 1
-		}
-	})
-
-	if topK <= 0 || topK >= len(scoredList) {
-		topK = len(scoredList)
+// compareScoredDesc sorts RRF scores descending; ties (within 1e-9) are stable.
+func compareScoredDesc(a, b rrfScored) int {
+	switch {
+	case math.Abs(a.score-b.score) < 1e-9:
+		return 0
+	case a.score > b.score:
+		return -1
+	default:
+		return 1
 	}
+}
 
-	// Normalise scores to [0,1] so UX labels ("92%") are meaningful.
+// normaliseRRF takes the top-K scored results and scales scores to [0,1] so UX
+// labels ("92%") are meaningful. The list must be sorted descending and non-empty.
+func normaliseRRF(scoredList []rrfScored, topK int) []store.SearchResult {
 	maxScore := scoredList[0].score
 	out := make([]store.SearchResult, topK)
 	for i := 0; i < topK; i++ {

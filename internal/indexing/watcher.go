@@ -63,38 +63,14 @@ func (w *Watcher) Watch(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			// Cancel all pending debounce timers.
-			w.mu.Lock()
-			for _, t := range debounceTimers {
-				t.Stop()
-			}
-			w.mu.Unlock()
+			w.cancelTimers(debounceTimers)
 			return ctx.Err()
 
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return nil
 			}
-
-			// Ignore events in ignored directories.
-			if isIgnored(event.Name) {
-				continue
-			}
-
-			switch {
-			case event.Op&fsnotify.Create != 0:
-				// New directory: start watching its children.
-				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-					if !chunker.IsIgnoredDir(filepath.Base(event.Name)) {
-						_ = watcher.Add(event.Name) // best-effort
-					}
-				}
-				w.handleCreate(ctx, event.Name)
-			case event.Op&fsnotify.Write != 0:
-				w.debounce(ctx, debounceTimers, event.Name, debounceWindow)
-			case event.Op&fsnotify.Remove != 0 || event.Op&fsnotify.Rename != 0:
-				w.handleRemove(ctx, event.Name)
-			}
+			w.handleEvent(ctx, watcher, event, debounceTimers, debounceWindow)
 
 		case err, ok := <-watcher.Errors:
 			if !ok {
@@ -103,6 +79,41 @@ func (w *Watcher) Watch(ctx context.Context) error {
 			w.log.Warn("watcher error", "error", err)
 		}
 	}
+}
+
+// cancelTimers stops all pending debounce timers.
+func (w *Watcher) cancelTimers(timers map[string]*time.Timer) {
+	w.mu.Lock()
+	for _, t := range timers {
+		t.Stop()
+	}
+	w.mu.Unlock()
+}
+
+// handleEvent dispatches a single fsnotify event to the appropriate handler.
+func (w *Watcher) handleEvent(ctx context.Context, watcher *fsnotify.Watcher, event fsnotify.Event, timers map[string]*time.Timer, window time.Duration) {
+	if isIgnored(event.Name) {
+		return
+	}
+	switch {
+	case event.Op&fsnotify.Create != 0:
+		w.handleCreateDir(ctx, watcher, event.Name)
+	case event.Op&fsnotify.Write != 0:
+		w.debounce(ctx, timers, event.Name, window)
+	case event.Op&fsnotify.Remove != 0 || event.Op&fsnotify.Rename != 0:
+		w.handleRemove(ctx, event.Name)
+	}
+}
+
+// handleCreateDir starts watching a new directory (if applicable) and
+// re-indexes the created file.
+func (w *Watcher) handleCreateDir(ctx context.Context, watcher *fsnotify.Watcher, path string) {
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		if !chunker.IsIgnoredDir(filepath.Base(path)) {
+			_ = watcher.Add(path) // best-effort
+		}
+	}
+	w.handleCreate(ctx, path)
 }
 
 // addDirs recursively adds all directories under root to the watcher.
