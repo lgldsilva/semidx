@@ -432,23 +432,25 @@ store. This is destructive and cannot be undone. You must confirm: either type
 }
 
 func newStatusCmd(d *deps) *cobra.Command {
-	var projectPath string
+	var projectPath, branch string
 	c := &cobra.Command{
 		Use:   "status",
 		Short: "Show indexing status of a project",
 		Long: `Show the indexing status of a project: whether it is ready, how many files
 are indexed, and what embedding model is in use.`,
 		Example: `  semidx status                          # show status for the current project
-  semidx status --project ./my-repo      # show status for a specific project`,
+  semidx status --project ./my-repo      # show status for a specific project
+  semidx status --project . --branch develop  # match index --branch develop`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			if d.remote() {
 				return runStatusRemote(ctx, d, projectPath)
 			}
-			return runStatusLocal(ctx, d, projectPath)
+			return runStatusLocal(ctx, d, projectPath, branch)
 		},
 	}
 	c.Flags().StringVar(&projectPath, "project", ".", "Path to the project directory (default: current directory)")
+	c.Flags().StringVar(&branch, "branch", "", "Branch suffix used at index time (must match index --branch)")
 	return c
 }
 
@@ -477,8 +479,9 @@ func runStatusRemote(ctx context.Context, d *deps, projectPath string) error {
 	return nil
 }
 
-func runStatusLocal(ctx context.Context, d *deps, projectPath string) error {
+func runStatusLocal(ctx context.Context, d *deps, projectPath, branch string) error {
 	tgt := resolveTarget(ctx, projectPath, false)
+	tgt = applyBranchSuffix(tgt, branch)
 	db, err := d.indexStore(ctx)
 	if err != nil {
 		return err
@@ -533,6 +536,14 @@ first run it generates a one-time bootstrap admin token. Requires Postgres
 				return err
 			}
 			srv.StartWorkers(cmd.Context(), d.cfg.IndexWorkers, d.cfg.DataDir)
+			host := d.cfg.ListenAddr
+			if host == "" {
+				host = ":8080"
+			}
+			if strings.HasPrefix(host, ":") {
+				host = "localhost" + host
+			}
+			fmt.Fprintf(os.Stderr, "Web admin UI: http://%s/admin\n", host)
 			return srv.Run(cmd.Context(), d.cfg.ListenAddr)
 		},
 	}

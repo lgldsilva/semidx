@@ -319,7 +319,7 @@ func (p *pusher) pushAsyncSingle(ctx context.Context, batch []client.BatchFile, 
 	pollCtx, cancel := context.WithTimeout(ctx, asyncPollTimeout)
 	defer cancel()
 
-	job, err := p.cli.WaitForJob(pollCtx, jobID, asyncPollInterval)
+	job, err := p.cli.WaitForJob(pollCtx, p.projectName, jobID, asyncPollInterval)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("timed out after %v waiting for job %d (job is still running on the server — re-run push to check status)", asyncPollTimeout, jobID)
@@ -363,7 +363,7 @@ func (p *pusher) pushAsyncBatched(ctx context.Context, batch []client.BatchFile,
 	var totalIndexed, totalChunks, totalDeleted, totalErrors int
 	for i, jid := range jobIDs {
 		pollCtx, cancel := context.WithTimeout(ctx, asyncPollTimeout)
-		job, err := p.cli.WaitForJob(pollCtx, jid, asyncPollInterval)
+		job, err := p.cli.WaitForJob(pollCtx, p.projectName, jid, asyncPollInterval)
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {

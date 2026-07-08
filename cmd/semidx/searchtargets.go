@@ -31,26 +31,33 @@ type projSearch struct {
 // identity) before calling the API.
 func (d *deps) runSearchTargets(cmd *cobra.Command, projectArg, query, model string, topK int, privacy bool) ([]projSearch, error) {
 	ctx := cmd.Context()
+	graph, graphDepth := searchGraphOpts(cmd)
 	if d.remote() {
-		return d.runRemoteSearch(ctx, projectArg, query, model, topK)
+		return d.runRemoteSearch(ctx, projectArg, query, model, topK, graph, graphDepth)
 	}
-	return d.runLocalSearch(ctx, projectArg, query, model, topK, privacy)
+	return d.runLocalSearch(ctx, projectArg, query, model, topK, privacy, graph, graphDepth)
 }
 
-func (d *deps) runRemoteSearch(ctx context.Context, projectArg, query, model string, topK int) ([]projSearch, error) {
+func searchGraphOpts(cmd *cobra.Command) (graph bool, graphDepth int) {
+	graph, _ = cmd.Flags().GetBool("graph")
+	depth, _ := cmd.Flags().GetInt("graph-depth")
+	return graph, search.ClampGraphDepth(depth)
+}
+
+func (d *deps) runRemoteSearch(ctx context.Context, projectArg, query, model string, topK int, graph bool, graphDepth int) ([]projSearch, error) {
 	api := d.apiClient()
 	p, err := searchtargets.ResolveRemoteProject(ctx, api, projectArg)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := api.Search(ctx, p.Name, query, model, topK, false, 0)
+	resp, err := api.Search(ctx, p.Name, query, model, topK, graph, graphDepth)
 	if err != nil {
 		return nil, err
 	}
 	return []projSearch{{p.Name, remoteToResponse(resp), time.Duration(resp.TookMS) * time.Millisecond}}, nil
 }
 
-func (d *deps) runLocalSearch(ctx context.Context, projectArg, query, model string, topK int, privacy bool) ([]projSearch, error) {
+func (d *deps) runLocalSearch(ctx context.Context, projectArg, query, model string, topK int, privacy bool, graph bool, graphDepth int) ([]projSearch, error) {
 	d.applyPrivacy(privacy)
 	db, err := d.indexStore(ctx)
 	if err != nil {
@@ -64,7 +71,10 @@ func (d *deps) runLocalSearch(ctx context.Context, projectArg, query, model stri
 	if gi := gitmeta.Resolve(ctx, "."); gi.IsGit {
 		cwdGit = gi
 	}
-	req := search.Request{Query: query, Model: model, TopK: topK, KeywordOnly: d.keywordOnly}
+	req := search.Request{
+		Query: query, Model: model, TopK: topK, KeywordOnly: d.keywordOnly,
+		Graph: graph, GraphMaxDepth: graphDepth,
+	}
 	results, err := searchtargets.SearchLocal(ctx, db, d.emb, targets, req, cwdGit)
 	if err != nil {
 		return nil, err

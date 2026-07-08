@@ -53,38 +53,38 @@ Uses git to find changed files and extracts Go symbols from them.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			refSpec := args[0]
-			ref1, ref2, err := parseRefRange(refSpec)
+			ref1, ref2, threeDot, err := parseRefRange(refSpec)
 			if err != nil {
 				return err
 			}
-			return runDiff(ref1, ref2)
+			return runDiff(ref1, ref2, threeDot)
 		},
 	}
 }
 
-// parseRefRange parses "ref1..ref2" or "ref1...ref2" into two refs.
-func parseRefRange(s string) (ref1, ref2 string, err error) {
+// parseRefRange parses "ref1..ref2" or "ref1...ref2" into two refs and range kind.
+func parseRefRange(s string) (ref1, ref2 string, threeDot bool, err error) {
 	if strings.Contains(s, "...") {
 		parts := strings.SplitN(s, "...", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return "", "", fmt.Errorf("invalid ref range: %q (expected ref1...ref2)", s)
+			return "", "", false, fmt.Errorf("invalid ref range: %q (expected ref1...ref2)", s)
 		}
-		return parts[0], parts[1], nil
+		return parts[0], parts[1], true, nil
 	}
 	if strings.Contains(s, "..") {
 		parts := strings.SplitN(s, "..", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return "", "", fmt.Errorf("invalid ref range: %q (expected ref1..ref2)", s)
+			return "", "", false, fmt.Errorf("invalid ref range: %q (expected ref1..ref2)", s)
 		}
-		return parts[0], parts[1], nil
+		return parts[0], parts[1], false, nil
 	}
-	return "", "", fmt.Errorf("invalid ref range: %q (expected ref1..ref2 or ref1...ref2)", s)
+	return "", "", false, fmt.Errorf("invalid ref range: %q (expected ref1..ref2 or ref1...ref2)", s)
 }
 
 // runDiff performs the semantic diff between two git refs.
-func runDiff(ref1, ref2 string) error {
+func runDiff(ref1, ref2 string, threeDot bool) error {
 	// Get changed files.
-	changedFiles, err := getChangedFiles(ref1, ref2)
+	changedFiles, err := getChangedFiles(ref1, ref2, threeDot)
 	if err != nil {
 		return fmt.Errorf("get changed files: %w", err)
 	}
@@ -205,13 +205,17 @@ func safeGitRef(ref string) bool {
 }
 
 // getChangedFiles returns the list of files changed between two refs using git diff.
-func getChangedFiles(ref1, ref2 string) ([]string, error) {
+func getChangedFiles(ref1, ref2 string, threeDot bool) ([]string, error) {
 	if !safeGitRef(ref1) || !safeGitRef(ref2) {
 		return nil, fmt.Errorf("invalid git ref: %q..%q contains unsafe characters", ref1, ref2)
 	}
+	sep := ".."
+	if threeDot {
+		sep = "..."
+	}
 	// #nosec G204 -- git arguments are validated via safeGitRef and '--' boundary separator
 	cmd := exec.Command("git")
-	cmd.Args = append([]string{"git", "diff", "--name-only", "--diff-filter=ACMR", "--"}, ref1+".."+ref2)
+	cmd.Args = append([]string{"git", "diff", "--name-only", "--diff-filter=ACMR", "--"}, ref1+sep+ref2)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {

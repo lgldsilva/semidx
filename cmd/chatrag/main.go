@@ -69,8 +69,8 @@ Commands:
 		"Project name or path to search")
 	root.PersistentFlags().StringVarP(&model, "model", "m", defaultChatModel,
 		"Chat model (default: "+defaultChatModel+")")
-	root.PersistentFlags().StringVar(&bindAddr, "bind", ":8976",
-		"HTTP server listen address (used by 'serve' subcommand)")
+	root.PersistentFlags().StringVar(&bindAddr, "bind", "127.0.0.1:8976",
+		"HTTP server listen address (used by 'serve' subcommand; default binds localhost only)")
 
 	// Hidden chat subcommand so `chatrag chat` also works.
 	root.AddCommand(&cobra.Command{

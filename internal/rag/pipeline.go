@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/lgldsilva/semidx/internal/chat"
+	"github.com/lgldsilva/semidx/internal/privacy"
 )
 
 // Pipeline runs the RAG loop: search → assemble context → call LLM.
@@ -45,17 +46,8 @@ func (p *Pipeline) Ask(ctx context.Context, question, project string, history []
 		return nil, fmt.Errorf("search failed: %w — is the project indexed? Run: semidx index --project <path>", err)
 	}
 
-	// 2. Convert results to sources.
-	sources := make([]Source, len(searchResp.Results))
-	for i, r := range searchResp.Results {
-		sources[i] = Source{
-			File:      r.FilePath,
-			StartLine: r.StartLine,
-			EndLine:   r.EndLine,
-			Content:   r.Content,
-			Score:     r.Score,
-		}
-	}
+	// 2. Convert results to sources (skip sensitive paths).
+	sources := filterSensitiveSources(searchResp.Results)
 
 	// 3. Build context string with token-budget awareness.
 	contextStr := assembleContext(sources, 8000)
@@ -100,17 +92,8 @@ func (p *Pipeline) StreamAsk(ctx context.Context, question, project string, hist
 		return nil, nil, "", false, fmt.Errorf("search failed: %w — is the project indexed? Run: semidx index --project <path>", err)
 	}
 
-	// 2. Convert results to sources.
-	sources := make([]Source, len(searchResp.Results))
-	for i, r := range searchResp.Results {
-		sources[i] = Source{
-			File:      r.FilePath,
-			StartLine: r.StartLine,
-			EndLine:   r.EndLine,
-			Content:   r.Content,
-			Score:     r.Score,
-		}
-	}
+	// 2. Convert results to sources (skip sensitive paths).
+	sources := filterSensitiveSources(searchResp.Results)
 
 	// 3. Build context string.
 	contextStr := assembleContext(sources, 8000)
@@ -155,4 +138,21 @@ func (p *Pipeline) StreamAsk(ctx context.Context, question, project string, hist
 	ch <- chat.StreamChunk{Done: true, Model: model}
 	close(ch)
 	return ch, sources, model, searchResp.Fallback, nil
+}
+
+func filterSensitiveSources(results []SearchResult) []Source {
+	sources := make([]Source, 0, len(results))
+	for _, r := range results {
+		if privacy.IsSensitive(r.FilePath) {
+			continue
+		}
+		sources = append(sources, Source{
+			File:      r.FilePath,
+			StartLine: r.StartLine,
+			EndLine:   r.EndLine,
+			Content:   r.Content,
+			Score:     r.Score,
+		})
+	}
+	return sources
 }
