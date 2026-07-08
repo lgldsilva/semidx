@@ -2,16 +2,20 @@ package indexing
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/lgldsilva/semidx/internal/chunker"
+	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/gitenv"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -221,6 +225,15 @@ func (e *errStore) UpdateProjectCommit(ctx context.Context, projectID int, commi
 func (e *errStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) {
 	return nil, nil
 }
+
+func (e *errStore) EnsureEmbeddingCacheTable(context.Context, int) error { return nil }
+func (e *errStore) LookupEmbeddingCache(context.Context, []string, string, int) (map[string][]float32, error) {
+	return map[string][]float32{}, nil
+}
+func (e *errStore) InsertEmbeddingCache(context.Context, []string, string, [][]float32, int) error {
+	return nil
+}
+func (e *errStore) PruneEmbeddingCache(context.Context, int) (int64, error) { return 0, nil }
 
 func TestIndexContentUpsertFileError(t *testing.T) {
 	es := &errStore{upsertFileErr: errors.New("upsert boom")}
@@ -667,5 +680,247 @@ func TestVerboseProgress(t *testing.T) {
 	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, Verbose: true})
 	if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
 		t.Fatalf("IndexProject: %v", err)
+	}
+}
+
+// --- embedding cache hit/partial/error paths ---------------------------------
+
+// cachingStore is a fake IndexStore with a pre-warmed embedding cache. It
+// records which hashes were stored via InsertEmbeddingCache (in the embedded
+// field) for later verification.
+type cachingStore struct {
+	store.Store
+	mu        sync.Mutex
+	nextID    int
+	cache     map[string][]float32 // hash → embedding, pre-warmed
+	embedded  [][]string           // records hashes passed to InsertEmbeddingCache
+	lookupErr error                // when set, LookupEmbeddingCache returns this error
+}
+
+func (c *cachingStore) FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error) {
+	return false, nil
+}
+func (c *cachingStore) UpsertProject(ctx context.Context, name, path, model string, dims int) (int, error) {
+	return 1, nil
+}
+func (c *cachingStore) UpsertFile(ctx context.Context, projectID int, path, hash string, size int) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nextID++
+	return c.nextID, nil
+}
+func (c *cachingStore) DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error {
+	return nil
+}
+func (c *cachingStore) InsertChunks(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, embeddings [][]float32, dims int) error {
+	return nil
+}
+func (c *cachingStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, dims int) error {
+	return nil
+}
+func (c *cachingStore) UpdateProjectStatus(ctx context.Context, id int, status string) error {
+	return nil
+}
+func (c *cachingStore) InsertFileDependencies(context.Context, int, string, []string) error {
+	return nil
+}
+func (c *cachingStore) GetProjectCommit(ctx context.Context, projectID int) (string, error) {
+	return "", nil
+}
+func (c *cachingStore) UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error {
+	return nil
+}
+func (c *cachingStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) {
+	return nil, nil
+}
+func (c *cachingStore) EnsureEmbeddingCacheTable(context.Context, int) error { return nil }
+
+// LookupEmbeddingCache returns entries from the pre-warmed cache map, or the
+// configured lookupErr when set.
+func (c *cachingStore) LookupEmbeddingCache(ctx context.Context, inputHashes []string, model string, dims int) (map[string][]float32, error) {
+	if c.lookupErr != nil {
+		return nil, c.lookupErr
+	}
+	result := make(map[string][]float32)
+	for _, h := range inputHashes {
+		if emb, ok := c.cache[h]; ok {
+			result[h] = emb
+		}
+	}
+	return result, nil
+}
+
+// InsertEmbeddingCache records what was inserted for later verification.
+func (c *cachingStore) InsertEmbeddingCache(ctx context.Context, inputHashes []string, model string, embeddings [][]float32, dims int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, h := range inputHashes {
+		c.embedded = append(c.embedded, []string{h})
+	}
+	return nil
+}
+func (c *cachingStore) PruneEmbeddingCache(context.Context, int) (int64, error) { return 0, nil }
+
+// countingEmbedder counts how many times Embed is called. Each successful call
+// returns fixed-dimension vectors. When embedErr is set, Embed returns that
+// error instead.
+type countingEmbedder struct {
+	count    int32
+	dims     int
+	embedErr error
+}
+
+func (e *countingEmbedder) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {
+	if e.embedErr != nil {
+		return nil, e.embedErr
+	}
+	atomic.AddInt32(&e.count, 1)
+	result := make([][]float32, len(inputs))
+	for i := range inputs {
+		result[i] = make([]float32, e.dims)
+		result[i][0] = 1.0
+	}
+	return result, nil
+}
+func (e *countingEmbedder) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
+	return make([]float32, e.dims), nil
+}
+func (e *countingEmbedder) ModelInfo(ctx context.Context, model string) (*embed.ModelInfo, error) {
+	return &embed.ModelInfo{Name: model, Dims: e.dims}, nil
+}
+func (e *countingEmbedder) ListModels(ctx context.Context) ([]string, error) { return nil, nil }
+
+// TestEmbedAndInsertAllCached verifies that when every chunk hash is already in
+// the embedding cache, the embedder is never called (zero Embed calls) and all
+// chunks are still counted as created via InsertChunks.
+func TestEmbedAndInsertAllCached(t *testing.T) {
+	content := []byte("package a\n\nfunc A() {}\n\nfunc B() {}\n\nfunc C() {}\n")
+	chunks := chunker.ChunkFile("a.go", content, 4000)
+	if len(chunks) < 2 {
+		t.Fatalf("need at least 2 chunks, got %d", len(chunks))
+	}
+
+	inputs := buildChunkInputs(chunks, nil)
+	cache := make(map[string][]float32, len(inputs))
+	for _, input := range inputs {
+		h := sha256.Sum256([]byte(input))
+		cache[fmt.Sprintf("%x", h)] = []float32{1.0, 2.0, 3.0}
+	}
+
+	cs := &cachingStore{cache: cache}
+	emb := &countingEmbedder{dims: 3}
+	idx := NewIndexer(cs, emb, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+
+	created, softErrs := idx.embedAndInsert(context.Background(), 1, 2, chunks, "test-model", "a.go", nil)
+	if softErrs != 0 {
+		t.Errorf("softErrs = %d, want 0", softErrs)
+	}
+	if created == 0 {
+		t.Error("created = 0, want > 0")
+	}
+	if count := atomic.LoadInt32(&emb.count); count != 0 {
+		t.Errorf("embedder called %d times, want 0 (all cached)", count)
+	}
+}
+
+// TestEmbedAndInsertPartialCached verifies that when some chunk hashes are
+// cached, only the uncached inputs are embedded (single Embed call with the
+// correct subset) and InsertEmbeddingCache records only the new hashes.
+func TestEmbedAndInsertPartialCached(t *testing.T) {
+	content := []byte("package a\n\nfunc A() {}\n\nfunc B() {}\n\nfunc C() {}\n")
+	chunks := chunker.ChunkFile("a.go", content, 4000)
+	if len(chunks) < 4 {
+		t.Fatalf("need at least 4 chunks, got %d", len(chunks))
+	}
+	chunks = chunks[:4]
+
+	inputs := buildChunkInputs(chunks, nil)
+	// Pre-warm cache with only the first two hashes.
+	cache := make(map[string][]float32)
+	for i := 0; i < 2; i++ {
+		h := sha256.Sum256([]byte(inputs[i]))
+		cache[fmt.Sprintf("%x", h)] = []float32{1.0, 2.0, 3.0}
+	}
+
+	cs := &cachingStore{cache: cache}
+	emb := &countingEmbedder{dims: 3}
+	idx := NewIndexer(cs, emb, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+
+	created, softErrs := idx.embedAndInsert(context.Background(), 1, 2, chunks, "test-model", "a.go", nil)
+	if softErrs != 0 {
+		t.Errorf("softErrs = %d, want 0", softErrs)
+	}
+	if created == 0 {
+		t.Error("created = 0, want > 0")
+	}
+	if count := atomic.LoadInt32(&emb.count); count != 1 {
+		t.Errorf("embedder called %d times, want 1 (partial cache)", count)
+	}
+	// Verify InsertEmbeddingCache was called with exactly the 2 uncached hashes.
+	cs.mu.Lock()
+	embeddedCount := len(cs.embedded)
+	cs.mu.Unlock()
+	if embeddedCount != 2 {
+		t.Errorf("InsertEmbeddingCache called with %d hashes, want 2", embeddedCount)
+	}
+}
+
+// TestEmbedAndInsertNoneCached verifies the cold-start path: empty cache leads
+// to a single Embed call with all inputs and InsertEmbeddingCache stores
+// every hash.
+func TestEmbedAndInsertNoneCached(t *testing.T) {
+	content := []byte("package a\n\nfunc A() {}\n\nfunc B() {}\n\nfunc C() {}\n")
+	chunks := chunker.ChunkFile("a.go", content, 4000)
+	if len(chunks) < 4 {
+		t.Fatalf("need at least 4 chunks, got %d", len(chunks))
+	}
+	chunks = chunks[:4]
+
+	cs := &cachingStore{cache: map[string][]float32{}} // empty cache (cold start)
+	emb := &countingEmbedder{dims: 3}
+	idx := NewIndexer(cs, emb, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+
+	created, softErrs := idx.embedAndInsert(context.Background(), 1, 2, chunks, "test-model", "a.go", nil)
+	if softErrs != 0 {
+		t.Errorf("softErrs = %d, want 0", softErrs)
+	}
+	if created == 0 {
+		t.Error("created = 0, want > 0")
+	}
+	if count := atomic.LoadInt32(&emb.count); count != 1 {
+		t.Errorf("embedder called %d times, want 1 (none cached)", count)
+	}
+	cs.mu.Lock()
+	embeddedCount := len(cs.embedded)
+	cs.mu.Unlock()
+	if embeddedCount != len(chunks) {
+		t.Errorf("InsertEmbeddingCache called with %d hashes, want %d (all chunks)", embeddedCount, len(chunks))
+	}
+}
+
+// TestEmbedAndInsertCacheLookupError verifies that a failure during cache lookup
+// is non-fatal: the code logs a warning and falls through to full embedding.
+// The embedder must be called exactly once.
+func TestEmbedAndInsertCacheLookupError(t *testing.T) {
+	content := []byte("package a\n\nfunc A() {}\n")
+	chunks := chunker.ChunkFile("a.go", content, 4000)
+	if len(chunks) < 1 {
+		t.Fatalf("need at least 1 chunk, got %d", len(chunks))
+	}
+
+	cs := &cachingStore{lookupErr: errors.New("cache unavailable")}
+	emb := &countingEmbedder{dims: 3}
+	// Enable verbose logging to exercise the warning path.
+	idx := NewIndexer(cs, emb, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, Verbose: true})
+
+	created, softErrs := idx.embedAndInsert(context.Background(), 1, 2, chunks, "test-model", "a.go", nil)
+	if softErrs != 0 {
+		t.Errorf("softErrs = %d, want 0 (lookup failure is non-fatal)", softErrs)
+	}
+	if created == 0 {
+		t.Error("created = 0, want > 0 (should fall through to full embedding)")
+	}
+	if count := atomic.LoadInt32(&emb.count); count != 1 {
+		t.Errorf("embedder called %d times, want 1 (full fallback)", count)
 	}
 }
