@@ -345,6 +345,15 @@ func chunksTable(dims int) (string, error) {
 	return pgx.Identifier{fmt.Sprintf("chunks_%d", dims)}.Sanitize(), nil
 }
 
+// embeddingCacheTable returns the safely-quoted table identifier for the
+// per-dimension embedding cache table or an error if the dimension is out of range.
+func embeddingCacheTable(dims int) (string, error) {
+	if dims < 1 || dims > maxDims {
+		return "", fmt.Errorf("invalid embedding dimension %d (must be 1..%d)", dims, maxDims)
+	}
+	return pgx.Identifier{fmt.Sprintf("embedding_cache_%d", dims)}.Sanitize(), nil
+}
+
 func (s *PgStore) EnsureChunksTable(ctx context.Context, dims int) error {
 	table, err := chunksTable(dims)
 	if err != nil {
@@ -413,10 +422,10 @@ func (s *PgStore) EnsureChunksTable(ctx context.Context, dims int) error {
 
 // EnsureEmbeddingCacheTable creates the per-dimension embedding_cache table.
 func (s *PgStore) EnsureEmbeddingCacheTable(ctx context.Context, dims int) error {
-	if _, err := chunksTable(dims); err != nil {
+	table, err := embeddingCacheTable(dims)
+	if err != nil {
 		return err
 	}
-	table := pgx.Identifier{fmt.Sprintf("embedding_cache_%d", dims)}.Sanitize()
 	query := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
 			input_hash  TEXT NOT NULL,
@@ -426,7 +435,7 @@ func (s *PgStore) EnsureEmbeddingCacheTable(ctx context.Context, dims int) error
 			created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (input_hash, model)
 		)`, table, dims)
-	_, err := s.pool.Exec(ctx, query)
+	_, err = s.pool.Exec(ctx, query)
 	return err
 }
 
@@ -437,7 +446,10 @@ func (s *PgStore) LookupEmbeddingCache(ctx context.Context, inputHashes []string
 		return map[string][]float32{}, nil
 	}
 
-	table := pgx.Identifier{fmt.Sprintf("embedding_cache_%d", dims)}.Sanitize()
+	table, err := embeddingCacheTable(dims)
+	if err != nil {
+		return nil, err
+	}
 	placeholders := make([]string, len(inputHashes))
 	args := []any{model}
 	for i, h := range inputHashes {
@@ -473,7 +485,10 @@ func (s *PgStore) InsertEmbeddingCache(ctx context.Context, inputHashes []string
 		return nil
 	}
 
-	table := pgx.Identifier{fmt.Sprintf("embedding_cache_%d", dims)}.Sanitize()
+	table, err := embeddingCacheTable(dims)
+	if err != nil {
+		return err
+	}
 	query := fmt.Sprintf(`
 		INSERT INTO %s (input_hash, model, dims, embedding)
 		VALUES ($1, $2, $3, $4)
@@ -486,17 +501,18 @@ func (s *PgStore) InsertEmbeddingCache(ctx context.Context, inputHashes []string
 	}
 	br := s.pool.SendBatch(ctx, batch)
 	defer func() { _ = br.Close() }()
-	_, err := br.Exec()
+	_, err = br.Exec()
 	return err
 }
 
 // PruneEmbeddingCache removes all cache entries for the given dimension.
 func (s *PgStore) PruneEmbeddingCache(ctx context.Context, dims int) (int64, error) {
-	if _, err := chunksTable(dims); err != nil {
+	table, err := embeddingCacheTable(dims)
+	if err != nil {
 		return 0, err
 	}
-	table := pgx.Identifier{fmt.Sprintf("embedding_cache_%d", dims)}.Sanitize()
-	tag, err := s.pool.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE dims = $1", table), dims)
+	var tag pgconn.CommandTag
+	tag, err = s.pool.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE dims = $1", table), dims)
 	if err != nil {
 		return 0, err
 	}
