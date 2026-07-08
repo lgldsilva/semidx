@@ -624,87 +624,35 @@ func buildChunkInputs(chunks []chunker.Chunk, syms []sym.Symbol) []string {
 }
 
 // embedAndInsert embeds chunks in sub-batches and inserts each successful batch.
-// Only symbols whose line range overlaps a chunk are included in that chunk's
-// prefix, so per-chunk symbol lists stay relevant and bounded.
+// Checks the embedding cache before calling the embedder; only uncached entries
+// trigger API calls (partial-batch aware).
 func (idx *Indexer) embedAndInsert(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, model, rel string, syms []sym.Symbol) (created, softErrs int) {
 	for start := 0; start < len(chunks); start += idx.embedBatchSize {
-		end := start + idx.embedBatchSize
-		if end > len(chunks) {
-			end = len(chunks)
-		}
+		end := min(start+idx.embedBatchSize, len(chunks))
 		sub := chunks[start:end]
 		inputs := buildChunkInputs(sub, syms)
-		totalCount := len(inputs)
+		hashes := computeHashes(inputs)
 
-		// Compute SHA-256 hashes for cache lookup.
-		hashes := make([]string, totalCount)
-		for j, input := range inputs {
-			h := sha256.Sum256([]byte(input))
-			hashes[j] = fmt.Sprintf("%x", h)
+		cached, cacheErr := idx.db.LookupEmbeddingCache(ctx, hashes, model, idx.dims)
+		if cacheErr != nil {
+			idx.logf("[warn] cache lookup %s batch %d-%d: %s", rel, start, end, truncateErr(cacheErr, 200))
 		}
 
-		// Look up cache.
-		cached, err := idx.db.LookupEmbeddingCache(ctx, hashes, model, idx.dims)
-		if err != nil {
-			idx.logf("[warn] cache lookup %s batch %d-%d: %s", rel, start, end, truncateErr(err, 200))
-			cached = nil // Fall through to full embedding.
-		}
+		res := resolveBatchEmbeddings(inputs, hashes, cached)
 
-		// Partition indices into cached and uncached.
-		var uncachedIndices []int
-		var uncachedInputs []string
-		var uncachedHashes []string
-		finalEmbeddings := make([][]float32, totalCount)
-
-		if cached != nil {
-			for j, h := range hashes {
-				if emb, ok := cached[h]; ok {
-					finalEmbeddings[j] = emb
-				} else {
-					uncachedIndices = append(uncachedIndices, j)
-					uncachedInputs = append(uncachedInputs, inputs[j])
-					uncachedHashes = append(uncachedHashes, h)
-				}
-			}
+		if res.uncachedCount == 0 {
+			idx.logf("  [cache-hit] %s batch %d-%d: %d/%d cached", rel, start, end, res.hitCount, res.totalCount)
 		} else {
-			// Cache lookup failed: embed everything.
-			for j := range hashes {
-				uncachedIndices = append(uncachedIndices, j)
-				uncachedInputs = append(uncachedInputs, inputs[j])
-				uncachedHashes = append(uncachedHashes, hashes[j])
+			soft, ok := idx.embedUncachedBatch(ctx, projectID, fileID, sub, model, rel, start, end, &res)
+			if soft > 0 {
+				softErrs += soft
 			}
-		}
-
-		hitCount := totalCount - len(uncachedIndices)
-
-		if len(uncachedIndices) == 0 {
-			// ALL cached: skip API call.
-			idx.logf("  [cache-hit] %s batch %d-%d: %d/%d cached", rel, start, end, hitCount, totalCount)
-		} else {
-			// Embed the uncached subset.
-			embeddings, err := idx.embedWithRetry(ctx, model, uncachedInputs)
-			if err != nil {
-				softErrs++
-				idx.logf("[err] embed %s batch %d-%d: %s", rel, start, end, truncateErr(err, 200))
+			if !ok {
 				continue
 			}
-
-			// Insert new embeddings into cache (best effort).
-			if err := idx.db.InsertEmbeddingCache(ctx, uncachedHashes, model, embeddings, idx.dims); err != nil {
-				idx.logf("[warn] cache insert %s: %s", rel, truncateErr(err, 200))
-			}
-
-			// Merge new embeddings into final slice, maintaining input order.
-			for i, origIdx := range uncachedIndices {
-				finalEmbeddings[origIdx] = embeddings[i]
-			}
-
-			if hitCount > 0 {
-				idx.logf("  [cache-partial] %s batch %d-%d: %d/%d cached, %d new", rel, start, end, hitCount, totalCount, len(uncachedIndices))
-			}
 		}
 
-		if err := idx.db.InsertChunks(ctx, projectID, fileID, sub, finalEmbeddings, idx.dims); err != nil {
+		if err := idx.db.InsertChunks(ctx, projectID, fileID, sub, res.embeddings, idx.dims); err != nil {
 			softErrs++
 			idx.logf("[err] insert %s batch %d-%d: %s", rel, start, end, truncateErr(err, 200))
 			continue
@@ -712,6 +660,81 @@ func (idx *Indexer) embedAndInsert(ctx context.Context, projectID, fileID int, c
 		created += len(sub)
 	}
 	return created, softErrs
+}
+
+// batchResult holds the partition state for one embedding batch after cache
+// resolution: which entries are cached, which need embedding, and the merged
+// final embeddings slice (cache hits pre-populated, uncached slots filled later).
+type batchResult struct {
+	embeddings     [][]float32
+	uncachedIdx    []int
+	uncachedInputs []string
+	uncachedHashes []string
+	uncachedCount  int
+	hitCount       int
+	totalCount     int
+}
+
+// computeHashes returns hex-encoded SHA-256 hashes for each input string.
+func computeHashes(inputs []string) []string {
+	hashes := make([]string, len(inputs))
+	for i, input := range inputs {
+		h := sha256.Sum256([]byte(input))
+		hashes[i] = fmt.Sprintf("%x", h)
+	}
+	return hashes
+}
+
+// resolveBatchEmbeddings partitions a batch into cached and uncached entries.
+// On cache-hit, embeddings are pre-filled; uncached slots are left nil to be
+// filled by the embedder. When cached is nil (lookup error), all entries are
+// treated as uncached.
+func resolveBatchEmbeddings(inputs, hashes []string, cached map[string][]float32) batchResult {
+	total := len(inputs)
+	res := batchResult{
+		embeddings:    make([][]float32, total),
+		uncachedIdx:   make([]int, 0, total),
+		uncachedInputs: make([]string, 0, total),
+		uncachedHashes: make([]string, 0, total),
+		totalCount:    total,
+	}
+
+	for i, h := range hashes {
+		if emb, ok := cached[h]; ok {
+			res.embeddings[i] = emb
+			res.hitCount++
+		} else {
+			res.uncachedIdx = append(res.uncachedIdx, i)
+			res.uncachedInputs = append(res.uncachedInputs, inputs[i])
+			res.uncachedHashes = append(res.uncachedHashes, h)
+		}
+	}
+	res.uncachedCount = len(res.uncachedIdx)
+	return res
+}
+
+// embedUncachedBatch calls the embedding API for uncached entries, stores new
+// embeddings in the cache, and merges them into the batch result. Returns (softErrs, ok).
+func (idx *Indexer) embedUncachedBatch(ctx context.Context, projectID, fileID int, sub []chunker.Chunk, model, rel string, start, end int, res *batchResult) (int, bool) {
+	embeddings, err := idx.embedWithRetry(ctx, model, res.uncachedInputs)
+	if err != nil {
+		idx.logf("[err] embed %s batch %d-%d: %s", rel, start, end, truncateErr(err, 200))
+		return 1, false
+	}
+
+	if err := idx.db.InsertEmbeddingCache(ctx, res.uncachedHashes, model, embeddings, idx.dims); err != nil {
+		idx.logf("[warn] cache insert %s: %s", rel, truncateErr(err, 200))
+	}
+
+	for i, origIdx := range res.uncachedIdx {
+		res.embeddings[origIdx] = embeddings[i]
+	}
+
+	if res.hitCount > 0 {
+		idx.logf("  [cache-partial] %s batch %d-%d: %d/%d cached, %d new",
+			rel, start, end, res.hitCount, res.totalCount, res.uncachedCount)
+	}
+	return 0, true
 }
 
 const maxEmbedAttempts = 3

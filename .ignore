@@ -3,3 +3,5 @@
 !.slim/deepwork/**
 !.slim/worktrees/
 !.slim/worktrees/**
+!.slim/deepwork/
+!.slim/deepwork/**
