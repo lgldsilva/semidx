@@ -62,8 +62,12 @@ func newLoginCmd(d *deps) *cobra.Command {
 		Use:   "login <server-url>",
 		Short: "Save credentials for a semidx server and verify reachability",
 		Long: `Save the URL and API token for a remote semidx server (health-checking it
-first) so search/sgrep/repo run against that server instead of a local index.
-The token comes from --token or the SEMIDX_TOKEN environment variable.`,
+first) so search/sgrep/repo/push run against that server instead of a local index.
+"semidx index" still writes locally unless you pass --to-server or use push.
+The token comes from --token or the SEMIDX_TOKEN environment variable.
+
+Use "semidx logout" to forget the server, or "--local" / "--backend local" on a
+single command to ignore the login for that run.`,
 		Example: `  semidx login https://semidx.example.com --token "$SEMIDX_TOKEN"
   semidx login https://semidx.example.com --token abc --default-project my-repo`,
 		Args: cobra.ExactArgs(1),
@@ -76,6 +80,7 @@ The token comes from --token or the SEMIDX_TOKEN environment variable.`,
 			}
 			cfg := &clientconfig.Config{ServerURL: args[0], Token: token, DefaultProject: defaultProject}
 			d.client = cfg
+			d.useRemote = true
 			if err := d.apiClient().Healthz(cmd.Context()); err != nil {
 				return fmt.Errorf("cannot reach server at %s: %w", args[0], err)
 			}
@@ -84,12 +89,38 @@ The token comes from --token or the SEMIDX_TOKEN environment variable.`,
 			}
 			path, _ := clientconfig.Path()
 			fmt.Printf("Logged in to %s (saved to %s)\n", args[0], path)
+			fmt.Println("Search/status/mcp use this server. Index locally with `semidx --local index`, or push with `semidx push`.")
 			return nil
 		},
 	}
 	c.Flags().StringVar(&token, "token", "", "API token (or set SEMIDX_TOKEN)")
 	c.Flags().StringVar(&defaultProject, "default-project", "", "Default project for search/sgrep")
 	return c
+}
+
+// newLogoutCmd removes the saved server URL and token so the CLI returns to
+// local (or Postgres) backend selection.
+func newLogoutCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "logout",
+		Short: "Remove saved server credentials from semidx login",
+		Long: `Delete the client config file written by "semidx login" (server URL and API
+token). Subsequent commands use the local SQLite/Postgres backend unless you
+log in again or set SEMIDX_SERVER_URL / SEMIDX_TOKEN in the environment.`,
+		Example: "  semidx logout",
+		Args:    cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			path, err := clientconfig.Path()
+			if err != nil {
+				return err
+			}
+			if err := clientconfig.Remove(); err != nil {
+				return fmt.Errorf("logout: %w", err)
+			}
+			fmt.Printf("Logged out (removed %s)\n", path)
+			return nil
+		},
+	}
 }
 
 // newRepoCmd groups server-side repository management (git projects the server
