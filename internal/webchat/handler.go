@@ -12,6 +12,26 @@ import (
 	"github.com/lgldsilva/semidx/internal/rag"
 )
 
+// SSE event type constants.
+const (
+	sseTypeError   = "error"
+	sseTypeDone    = "done"
+	sseTypeChunk   = "chunk"
+	sseTypeSources = "sources"
+)
+
+const hdrContentType = "Content-Type"
+const mimeJSON = "application/json"
+
+// jsonKey constants used in SSE payloads.
+const (
+	jsonKeyType    = "type"
+	jsonKeyError   = "error"
+	jsonKeyModel   = "model"
+	jsonKeyContent = "content"
+	jsonKeySources = "sources"
+)
+
 // --- Request/response types ---
 
 // chatRequest is the JSON body for POST /api/chat.
@@ -57,7 +77,7 @@ func (s *Server) handleChatPage(w http.ResponseWriter, r *http.Request) {
 
 // handleChat handles POST /api/chat requests.
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 
 	req, err := s.decodeChatRequest(w, r)
 	if err != nil {
@@ -132,7 +152,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		s.handleChat(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set(hdrContentType, "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
@@ -142,7 +162,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	chunks, sources, modelName, fallback, err := s.pipeline.StreamAsk(ctx, req.Question, project, req.History)
 	if err != nil {
 		s.log.Error("stream ask failed", "err", err)
-		errJSON, _ := json.Marshal(map[string]string{"type": "error", "error": publicChatError(err)})
+		errJSON, _ := json.Marshal(map[string]string{jsonKeyType: sseTypeError, jsonKeyError: publicChatError(err)})
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", errJSON)
 		flusher.Flush()
 		return
@@ -155,14 +175,14 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 func (s *Server) validateChatStreamRequest(w http.ResponseWriter, r *http.Request) (chatRequest, string, error) {
 	req, err := s.decodeChatRequest(w, r)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(hdrContentType, mimeJSON)
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(errorResponse{Error: "invalid JSON"})
 		return chatRequest{}, "", err
 	}
 
 	if req.Question == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(hdrContentType, mimeJSON)
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(errorResponse{Error: "question is required"})
 		return chatRequest{}, "", fmt.Errorf("question is required")
@@ -170,7 +190,7 @@ func (s *Server) validateChatStreamRequest(w http.ResponseWriter, r *http.Reques
 
 	project, err := s.resolveProject(req.Project)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(hdrContentType, mimeJSON)
 		status := http.StatusBadRequest
 		if errors.Is(err, errProjectNotAllowed) {
 			status = http.StatusForbidden
@@ -194,7 +214,7 @@ func (s *Server) streamChatChunks(ctx context.Context, w http.ResponseWriter, fl
 				if resolvedModel == "" {
 					resolvedModel = modelName
 				}
-				doneJSON, _ := json.Marshal(map[string]any{"type": "done", "model": resolvedModel})
+				doneJSON, _ := json.Marshal(map[string]any{jsonKeyType: sseTypeDone, jsonKeyModel: resolvedModel})
 				_, _ = fmt.Fprintf(w, "data: %s\n\n", doneJSON)
 				flusher.Flush()
 				return resolvedModel
@@ -204,7 +224,7 @@ func (s *Server) streamChatChunks(ctx context.Context, w http.ResponseWriter, fl
 				if chunk.Model != "" {
 					resolvedModel = chunk.Model
 				}
-				chunkJSON, _ := json.Marshal(map[string]any{"type": "chunk", "content": chunk.Content})
+				chunkJSON, _ := json.Marshal(map[string]any{jsonKeyType: sseTypeChunk, jsonKeyContent: chunk.Content})
 				_, _ = fmt.Fprintf(w, "data: %s\n\n", chunkJSON)
 				flusher.Flush()
 			}
@@ -216,7 +236,7 @@ func (s *Server) streamChatChunks(ctx context.Context, w http.ResponseWriter, fl
 				if resolvedModel == "" {
 					resolvedModel = modelName
 				}
-				doneJSON, _ := json.Marshal(map[string]any{"type": "done", "model": resolvedModel})
+				doneJSON, _ := json.Marshal(map[string]any{jsonKeyType: sseTypeDone, jsonKeyModel: resolvedModel})
 				_, _ = fmt.Fprintf(w, "data: %s\n\n", doneJSON)
 				flusher.Flush()
 				return resolvedModel
@@ -238,9 +258,9 @@ func (s *Server) sendChatSources(w http.ResponseWriter, flusher http.Flusher, so
 		}
 	}
 	sourcesJSON, _ := json.Marshal(map[string]any{
-		"type":     "sources",
-		"sources":  srcEntries,
-		"model":    resolvedModel,
+		jsonKeyType:    sseTypeSources,
+		jsonKeySources: srcEntries,
+		jsonKeyModel:   resolvedModel,
 		"fallback": fallback,
 	})
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", sourcesJSON)
@@ -249,6 +269,6 @@ func (s *Server) sendChatSources(w http.ResponseWriter, flusher http.Flusher, so
 
 // handleHealth handles GET /api/health.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }

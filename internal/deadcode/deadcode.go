@@ -42,6 +42,19 @@ func Analyze(ctx context.Context, projectID int, db store.IndexStore, projectPat
 	// Build importers index: target_dir -> set(source_files).
 	// The graph stores source_file -> [target_dir, ...]; we reverse it so we
 	// can quickly answer "does anything import this directory?"
+	importers := buildImporters(graph)
+
+	var findings []Finding
+	for filePath := range files {
+		classifyFileSymbols(filePath, projectPath, importers, &findings)
+	}
+
+	return findings, nil
+}
+
+// buildImporters reverses the dependency graph (source_file -> [target_dir])
+// into a lookup of target_dir -> set(source_files) for fast importer checks.
+func buildImporters(graph map[string][]string) map[string]map[string]bool {
 	importers := make(map[string]map[string]bool)
 	for src, targets := range graph {
 		for _, tgt := range targets {
@@ -51,40 +64,54 @@ func Analyze(ctx context.Context, projectID int, db store.IndexStore, projectPat
 			importers[tgt][src] = true
 		}
 	}
+	return importers
+}
 
-	var findings []Finding
-	for filePath := range files {
-		absPath := filepath.Clean(filepath.Join(projectPath, filePath))
-		if !strings.HasPrefix(absPath, filepath.Clean(projectPath)+string(filepath.Separator)) && filepath.Clean(projectPath) != "." {
-			continue
-		}
-		// #nosec G304 -- absPath is safely restricted within the projectRoot
-		content, err := os.ReadFile(absPath)
-		if err != nil {
-			// File may have been deleted or moved since last index — skip.
-			continue
-		}
-
-		syms := analyzer.Symbols(filePath, content)
-		if len(syms) == 0 {
-			continue
-		}
-
-		// Check whether this file's directory is imported by any other file.
-		dir := filepath.Dir(filePath) + "/"
-		hasImporters := len(importers[dir]) > 0
-
-		for _, sym := range syms {
-			isExported := len(sym.Name) > 0 && unicode.IsUpper(rune(sym.Name[0]))
-
-			f := classify(sym, filePath, hasImporters, isExported)
-			if f != nil {
-				findings = append(findings, *f)
-			}
-		}
+// classifyFileSymbols reads one file, extracts symbols, and appends dead-code
+// findings for any symbol whose package has no incoming import edges.
+func classifyFileSymbols(filePath, projectPath string, importers map[string]map[string]bool, findings *[]Finding) {
+	absPath := filepath.Clean(filepath.Join(projectPath, filePath))
+	if !isWithinProject(absPath, projectPath) {
+		return
+	}
+	// #nosec G304 -- absPath is safely restricted within the projectRoot
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		// File may have been deleted or moved since last index — skip.
+		return
 	}
 
-	return findings, nil
+	syms := analyzer.Symbols(filePath, content)
+	if len(syms) == 0 {
+		return
+	}
+
+	// Check whether this file's directory is imported by any other file.
+	dir := filepath.Dir(filePath) + "/"
+	hasImporters := len(importers[dir]) > 0
+
+	for _, sym := range syms {
+		isExported := isExportedSymbol(sym.Name)
+		if f := classify(sym, filePath, hasImporters, isExported); f != nil {
+			*findings = append(*findings, *f)
+		}
+	}
+}
+
+// isWithinProject reports whether absPath falls inside projectPath. A
+// projectPath of "." is treated as unrestricted (relative-index mode).
+func isWithinProject(absPath, projectPath string) bool {
+	cleanProject := filepath.Clean(projectPath)
+	if cleanProject == "." {
+		return true
+	}
+	return strings.HasPrefix(absPath, cleanProject+string(filepath.Separator))
+}
+
+// isExportedSymbol reports whether a Go identifier begins with an uppercase
+// letter (exported) — safe for empty names.
+func isExportedSymbol(name string) bool {
+	return len(name) > 0 && unicode.IsUpper(rune(name[0]))
 }
 
 // classify returns a Finding for a symbol that appears to be dead, or nil if
