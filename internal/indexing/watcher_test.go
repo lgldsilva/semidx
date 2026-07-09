@@ -282,10 +282,10 @@ func TestDebounce(t *testing.T) {
 
 	ctx := context.Background()
 	timers := make(map[string]*time.Timer)
-	w.debounce(ctx, timers, goFile, 10*time.Millisecond)
+	w.debounce(ctx, timers, goFile, 20*time.Millisecond)
 
-	// Wait for the timer to fire.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the timer to fire + indexFile (slower under -race).
+	time.Sleep(2 * time.Second)
 
 	fs.mu.Lock()
 	chunkCount := len(fs.embedded) + len(fs.textOnly)
@@ -316,11 +316,11 @@ func TestDebounceCancelsPrevious(t *testing.T) {
 	timers := make(map[string]*time.Timer)
 
 	// First debounce with a long window.
-	w.debounce(ctx, timers, goFile, 5*time.Second)
+	w.debounce(ctx, timers, goFile, 10*time.Second)
 	// Second debounce cancels the first.
-	w.debounce(ctx, timers, goFile, 10*time.Millisecond)
+	w.debounce(ctx, timers, goFile, 20*time.Millisecond)
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 
 	fs.mu.Lock()
 	chunkCount := len(fs.embedded) + len(fs.textOnly)
@@ -395,9 +395,9 @@ func TestHandleEventWrite(t *testing.T) {
 	timers := make(map[string]*time.Timer)
 	w.handleEvent(context.Background(), nil,
 		fsnotify.Event{Name: goFile, Op: fsnotify.Write},
-		timers, 10*time.Millisecond)
+		timers, 20*time.Millisecond)
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 
 	fs.mu.Lock()
 	chunkCount := len(fs.embedded) + len(fs.textOnly)

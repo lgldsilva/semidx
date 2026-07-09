@@ -146,8 +146,8 @@ func TestContainsProjectID(t *testing.T) {
 		{"query|42|rest", 42, true},
 		{"query|42|rest", 99, false},
 		{"no pipes here", 42, false},
-		{"x|42", 42, false},      // no trailing pipe
-		{"|42|", 42, false},      // no leading content before pipe... actually this has |42| so it matches
+		{"x|42", 42, false}, // no trailing pipe
+		{"|42|", 42, false}, // no leading content before pipe... actually this has |42| so it matches
 		{"", 42, false},
 	}
 	// |42| test: the function scans for | then checks if the next chars are "42|"
