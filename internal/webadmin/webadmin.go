@@ -262,6 +262,7 @@ func (a *Admin) protectMode(role string, fn authedHandler, jsonAPI bool) http.Ha
 // New(..., secureCookies): true behind HTTPS (production), false for local HTTP
 // demos and tests (SEMIDX_COOKIE_SECURE=false).
 func (a *Admin) sessionCookie(name, value string, ttl time.Duration, maxAge int) *http.Cookie {
+	// #nosec G124 -- Secure follows SEMIDX_COOKIE_SECURE (false only for deliberate plain-HTTP demos/tests).
 	return &http.Cookie{
 		Name:     name,
 		Value:    value,

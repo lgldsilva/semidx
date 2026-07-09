@@ -157,6 +157,7 @@ func (a *Admin) apiProjectArchiveBatch(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 
+	// #nosec G120 -- bounded by adminIngestMaxZipBytes (20 MiB) for browser archive uploads.
 	if err := r.ParseMultipartForm(adminIngestMaxZipBytes); err != nil {
 		writeJSONErr(w, http.StatusBadRequest, "invalid multipart upload")
 		return
