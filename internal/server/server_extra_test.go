@@ -75,6 +75,9 @@ func (f *fakeStore) CompleteJob(_ context.Context, id, files, chunks, deleted, e
 	f.compCalled = true
 	return nil
 }
+func (f *fakeStore) UpdateJobProgress(context.Context, int, int, int, int, int, int) error {
+	return nil
+}
 func (f *fakeStore) EnqueueBatchJob(context.Context, int, string) (int, error) { return 1, nil }
 
 // --- Tests ---

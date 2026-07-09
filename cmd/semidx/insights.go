@@ -100,6 +100,7 @@ func newInsightsCreateCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:     "create <name>",
 		Short:   "Create a new insight tracker",
+		Long:    "Create a named insight that tracks match-count evolution for a query over time.",
 		Args:    cobra.ExactArgs(1),
 		Example: `  semidx insights create "go-any-migration" --query "interface{}" --project myapp`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -137,6 +138,7 @@ func newInsightsRecordCmd(d *deps) *cobra.Command {
 	return &cobra.Command{
 		Use:     "record <name>",
 		Short:   "Record the current match count for an insight",
+		Long:    "Execute the insight query now and append a datapoint to its historical series.",
 		Args:    cobra.ExactArgs(1),
 		Example: `  semidx insights record go-any-migration`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -180,6 +182,7 @@ func newInsightsShowCmd(_ *deps) *cobra.Command {
 	return &cobra.Command{
 		Use:     "show <name>",
 		Short:   "Show the trend chart for an insight",
+		Long:    "Render an ASCII trend chart with historical datapoints for an insight.",
 		Args:    cobra.ExactArgs(1),
 		Example: `  semidx insights show go-any-migration`,
 		RunE: func(_ *cobra.Command, args []string) error {

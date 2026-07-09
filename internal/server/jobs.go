@@ -96,13 +96,18 @@ func (s *Server) claimAndRun(ctx context.Context, dataDir string) bool {
 	if job == nil {
 		return false
 	}
+	s.jobsQueued.Dec()
 	s.runJob(ctx, job, dataDir)
 	return true
 }
 
 func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
+	s.jobsRunning.Inc()
+	defer s.jobsRunning.Dec()
+
 	fail := func(msg string) {
 		s.log.Error("index job failed", "job", job.ID, "err", msg)
+		s.jobsTotal.WithLabelValues(job.Type, "failed").Inc()
 		if err := s.store.FailJob(ctx, job.ID, msg); err != nil {
 			s.log.Error("mark job failed", "job", job.ID, "err", err)
 		}
@@ -144,7 +149,14 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 		return
 	}
 
-	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, indexing.IndexerOpts{GitMode: job.Type == "git_history", GitSince: "30.days"})
+	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, indexing.IndexerOpts{
+		GitMode: job.Type == "git_history", GitSince: "30.days",
+		OnProgress: func(done, total, filesIndexed, chunksCreated, errorCount int) {
+			if err := s.store.UpdateJobProgress(ctx, job.ID, done, total, filesIndexed, chunksCreated, errorCount); err != nil {
+				s.log.Warn("update job progress", "job", job.ID, "err", err)
+			}
+		},
+	})
 	stats, err := idx.IndexProject(ctx, job.ProjectID, path, proj.Model, 0)
 	if err != nil {
 		fail("index: " + err.Error())
@@ -152,7 +164,10 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 	}
 	if err := s.store.CompleteJob(ctx, job.ID, stats.FilesIndexed, stats.ChunksCreated, 0, 0); err != nil {
 		s.log.Error("mark job complete", "job", job.ID, "err", err)
+		s.jobsTotal.WithLabelValues(job.Type, "failed").Inc()
+		return
 	}
+	s.jobsTotal.WithLabelValues(job.Type, "succeeded").Inc()
 	s.log.Info("index job done", "job", job.ID, "project", proj.Name,
 		"files", stats.FilesIndexed, "chunks", stats.ChunksCreated)
 }
@@ -181,7 +196,10 @@ func (s *Server) runBatchJob(ctx context.Context, job *store.Job, proj *store.Pr
 	indexed, chunks, deleted, errors := s.processBatchFiles(ctx, proj, body.Files, body.Delete, info.Dims)
 	if err := s.store.CompleteJob(ctx, job.ID, indexed, chunks, deleted, errors); err != nil {
 		s.log.Error("mark job complete", "job", job.ID, "err", err)
+		s.jobsTotal.WithLabelValues(job.Type, "failed").Inc()
+		return
 	}
+	s.jobsTotal.WithLabelValues(job.Type, "succeeded").Inc()
 	s.log.Info("batch job done", "job", job.ID, "project", proj.Name,
 		"files", indexed, "chunks", chunks, "deleted", deleted, "errors", errors)
 }
@@ -216,6 +234,7 @@ func (s *Server) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "could not enqueue job")
 		return
 	}
+	s.jobsQueued.Inc()
 	writeJSON(w, http.StatusAccepted, map[string]any{"job_id": id, "status": "queued"})
 }
 

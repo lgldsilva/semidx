@@ -19,8 +19,16 @@ const (
 
 // HybridSearch runs vector search and keyword search concurrently,
 // merges results using Reciprocal Rank Fusion, and returns the top K.
-// It uses the provided embedder for the vector branch.
 func (s *Service) HybridSearch(ctx context.Context, projectID int, query string, model string, dims, topK int, worktree string) ([]store.SearchResult, error) {
+	vec, err := s.emb.EmbedSingle(ctx, model, query)
+	if err != nil {
+		return nil, err
+	}
+	return s.hybridFuse(ctx, projectID, query, vec, dims, topK, worktree)
+}
+
+// hybridFuse merges vector and keyword ranked lists (caller supplies the query vector).
+func (s *Service) hybridFuse(ctx context.Context, projectID int, query string, vec []float32, dims, topK int, worktree string) ([]store.SearchResult, error) {
 	type result struct {
 		results []store.SearchResult
 		err     error
@@ -29,18 +37,11 @@ func (s *Service) HybridSearch(ctx context.Context, projectID int, query string,
 	vecCh := make(chan result, 1)
 	kwCh := make(chan result, 1)
 
-	// Run vector search in a goroutine.
 	go func() {
-		vec, err := s.emb.EmbedSingle(ctx, model, query)
-		if err != nil {
-			vecCh <- result{err: err}
-			return
-		}
 		r, err := s.vectorSearch(ctx, projectID, vec, dims, topK, worktree)
 		vecCh <- result{results: r, err: err}
 	}()
 
-	// Run keyword search in a goroutine.
 	go func() {
 		r, err := s.keywordSearch(ctx, projectID, query, dims, topK, worktree)
 		kwCh <- result{results: r, err: err}
@@ -52,7 +53,6 @@ func (s *Service) HybridSearch(ctx context.Context, projectID int, query string,
 	}
 	kres := <-kwCh
 	if kres.err != nil {
-		// Keyword search failure is non-fatal — return vector results alone.
 		return vres.results, nil
 	}
 

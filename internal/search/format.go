@@ -56,6 +56,9 @@ func (f HumanFormatter) formatResult(w io.Writer, i int, r store.SearchResult, k
 	if _, err := fmt.Fprintf(w, "File: %s\n", loc); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintf(w, "Score: %s\n", humanScore(keyword, r.Score)); err != nil {
+		return err
+	}
 	content := truncatePreview(r.Content, preview)
 	if f.NoLineNums || r.StartLine < 1 || r.EndLine < r.StartLine {
 		if _, err := fmt.Fprintf(w, "%s\n\n", content); err != nil {
@@ -67,6 +70,13 @@ func (f HumanFormatter) formatResult(w io.Writer, i int, r store.SearchResult, k
 		}
 	}
 	return nil
+}
+
+func humanScore(keyword bool, score float64) string {
+	if keyword {
+		return "keyword match"
+	}
+	return fmt.Sprintf("%.3f (%.0f%%)", score, score*100)
 }
 
 // prefixLineNumbers prepends padded line numbers to each line of content,

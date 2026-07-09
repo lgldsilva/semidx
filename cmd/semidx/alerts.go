@@ -114,6 +114,7 @@ func newAlertsCreateCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:     "create <name>",
 		Short:   "Create a new search alert",
+		Long:    "Create a named alert that stores a query and project scope for future checks.",
 		Args:    cobra.ExactArgs(1),
 		Example: `  semidx alerts create "deprecated-lib" --query "import.*old-lib" --project myapp`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -152,6 +153,7 @@ func newAlertsListCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List saved alerts",
+		Long:  "List saved alerts, optionally filtered by project.",
 		Example: `  semidx alerts list
   semidx alerts list --project myapp`,
 		RunE: func(_ *cobra.Command, _ []string) error {
@@ -186,13 +188,18 @@ func runAlertsList(project string) error {
 }
 
 func newAlertsDeleteCmd(_ *deps) *cobra.Command {
-	return &cobra.Command{
+	var confirm bool
+	c := &cobra.Command{
 		Use:     "delete <name>",
 		Short:   "Delete an alert",
+		Long:    "Delete a saved alert by name. This is destructive and requires --confirm.",
 		Args:    cobra.ExactArgs(1),
-		Example: `  semidx alerts delete deprecated-lib`,
+		Example: `  semidx alerts delete deprecated-lib --confirm`,
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := args[0]
+			if !confirm {
+				return fmt.Errorf("alerts delete is destructive; re-run with --confirm")
+			}
 			alerts, err := loadAlerts()
 			if err != nil {
 				return err
@@ -216,6 +223,8 @@ func newAlertsDeleteCmd(_ *deps) *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&confirm, "confirm", false, "Confirm alert deletion")
+	return c
 }
 
 func newAlertsCheckCmd(d *deps) *cobra.Command {
@@ -223,6 +232,7 @@ func newAlertsCheckCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "check",
 		Short: "Check alerts against the current index and report new matches",
+		Long:  "Run each alert query and report only new matches since the last check.",
 		Example: `  semidx alerts check
   semidx alerts check --project myapp`,
 		RunE: func(cmd *cobra.Command, _ []string) error {

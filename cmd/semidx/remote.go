@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -208,13 +209,14 @@ func resolveSkillsDir(target, dir string) (string, error) {
 
 func newRepoAddCmd(d *deps) *cobra.Command {
 	var name, branch, model string
-	var index bool
+	var index, wait bool
 	c := &cobra.Command{
 		Use:   "add <git-url>",
 		Short: "Register a git repository and (optionally) start indexing it",
 		Long: `Register a git repository with the server and, unless --index=false, queue a
 full index job the server runs itself. Requires "semidx login".`,
 		Example: `  semidx repo add https://github.com/org/project.git
+  semidx repo add https://github.com/org/project.git --branch main --wait
   semidx repo add https://github.com/org/project.git --branch main --index=false`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -238,7 +240,19 @@ full index job the server runs itself. Requires "semidx login".`,
 			if err != nil {
 				return fmt.Errorf("enqueue index job: %w", err)
 			}
-			fmt.Printf("Index job #%d queued. Poll it with: GET /api/v1/jobs/%d\n", jobID, jobID)
+			if !wait {
+				fmt.Printf("Index job #%d queued. Poll it with: GET /api/v1/projects/%s/jobs/%d\n", jobID, name, jobID)
+				return nil
+			}
+			fmt.Printf("Index job #%d queued — waiting for completion ...\n", jobID)
+			job, err := waitForRemoteJobWithProgress(ctx, cli, name, jobID)
+			if err != nil {
+				return fmt.Errorf("wait for job %d: %w", jobID, err)
+			}
+			if job.Status == client.JobStatusFailed {
+				return fmt.Errorf("job %d failed: %s", jobID, job.Error)
+			}
+			fmt.Printf("Done — indexed: %d, chunks: %d, errors: %d\n", job.FilesIndexed, job.ChunksCreated, job.ErrorCount)
 			return nil
 		},
 	}
@@ -246,5 +260,45 @@ full index job the server runs itself. Requires "semidx login".`,
 	c.Flags().StringVar(&branch, "branch", "", "Branch to index (default: server default)")
 	c.Flags().StringVar(&model, "model", "bge-m3", "Embedding model")
 	c.Flags().BoolVar(&index, "index", true, "Queue a full index job right away")
+	c.Flags().BoolVar(&wait, "wait", false, "Wait for the queued index job and print live progress")
 	return c
+}
+
+func waitForRemoteJobWithProgress(ctx context.Context, cli *client.Client, project string, jobID int) (*client.Job, error) {
+	ticker := time.NewTicker(asyncPollInterval)
+	defer ticker.Stop()
+
+	var (
+		lastStatus                                string
+		lastDone, lastTotal, lastFiles, lastChunk int
+		seen                                      bool
+		lastJob                                   *client.Job
+	)
+	for {
+		job, err := cli.GetJob(ctx, project, jobID)
+		if err != nil {
+			return nil, err
+		}
+		lastJob = job
+		if shouldPrintJobProgress(job, seen, lastStatus, lastDone, lastTotal, lastFiles, lastChunk) {
+			fmt.Println(formatJobProgress(job))
+			lastStatus = job.Status
+			lastDone = job.ProgressDone
+			lastTotal = job.ProgressTotal
+			lastFiles = job.FilesIndexed
+			lastChunk = job.ChunksCreated
+			seen = true
+		}
+		if job.Status == client.JobStatusSucceeded || job.Status == client.JobStatusFailed {
+			return job, nil
+		}
+		select {
+		case <-ctx.Done():
+			if lastJob != nil {
+				return lastJob, ctx.Err()
+			}
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }

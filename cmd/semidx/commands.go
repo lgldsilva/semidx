@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -257,6 +258,7 @@ func runIndex(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 		Verbose:             opts.verbose,
 		GitMode:             opts.gitMode,
 		GitSince:            opts.gitSince,
+		OnProgress:          cliProgressHook(opts.verbose),
 	}).
 		SetKeywordOnly(d.keywordOnly).
 		SetWorktree(tgt.worktree).
@@ -281,6 +283,34 @@ func runIndex(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 		}
 	}
 	return nil
+}
+
+// cliProgressHook returns an indexer progress callback that prints throttled
+// live updates to stderr when --verbose is set, or nil to disable progress.
+func cliProgressHook(enabled bool) func(done, total, filesIndexed, chunksCreated, errorCount int) {
+	if !enabled {
+		return nil
+	}
+	var lastShown atomic.Int64
+	return func(done, total, filesIndexed, chunksCreated, errorCount int) {
+		// Throttle noisy updates while still printing the final state.
+		now := time.Now().UnixMilli()
+		if total > 0 && done < total && now-lastShown.Load() < 400 {
+			return
+		}
+		lastShown.Store(now)
+		if total > 0 {
+			pct := done * 100 / total
+			if pct > 100 {
+				pct = 100
+			}
+			fmt.Fprintf(os.Stderr, "[progress] %d%% (%d/%d files) indexed=%d chunks=%d errors=%d\n",
+				pct, done, total, filesIndexed, chunksCreated, errorCount)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "[progress] done=%d indexed=%d chunks=%d errors=%d\n",
+			done, filesIndexed, chunksCreated, errorCount)
+	}
 }
 
 // validateIndexToServer rejects local-only index flags when aliasing to push.

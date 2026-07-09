@@ -61,13 +61,15 @@ export function ProjectWorkspace() {
   useEffect(() => {
     if (!jobPoll || jobPoll.status === 'succeeded' || jobPoll.status === 'failed') return
     const t = setInterval(() => {
-      void api.job(jobPoll.id).then((j) => {
+      void api
+        .job(name, jobPoll.id)
+        .then((j) => {
         setJobPoll(j)
         if (j.status === 'succeeded' || j.status === 'failed') void reload()
       })
     }, 1500)
     return () => clearInterval(t)
-  }, [jobPoll, reload])
+  }, [jobPoll, name, reload])
 
   async function onReindex() {
     try {
@@ -136,6 +138,11 @@ export function ProjectWorkspace() {
       {jobPoll && (
         <div className="alert ok">
           Job #{jobPoll.id}: <strong>{jobPoll.status}</strong>
+          {jobPoll.progress_percent != null && jobPoll.status === 'running' && (
+            <span> · {jobPoll.progress_percent}%</span>
+          )}
+          {jobPoll.files_indexed != null &&
+            ` · files ${jobPoll.files_indexed}${jobPoll.progress_total ? `/${jobPoll.progress_total}` : ''} · chunks ${jobPoll.chunks_created ?? 0}`}
           {jobPoll.error && ` · ${jobPoll.error}`}
         </div>
       )}
@@ -364,6 +371,9 @@ function FilesPanel({
   const [chunks, setChunks] = useState<
     { start_line: number; end_line: number; content: string }[]
   >([])
+  const [callers, setCallers] = useState<string[]>([])
+  const [deps, setDeps] = useState<string[]>([])
+  const [graphErr, setGraphErr] = useState('')
   const [truncated, setTruncated] = useState(false)
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(true)
@@ -395,6 +405,26 @@ function FilesPanel({
         setTruncated(r.truncated)
       })
       .catch((e) => setErr(e instanceof ApiError ? e.message : 'load content failed'))
+  }, [project, selected])
+
+  useEffect(() => {
+    if (!selected) {
+      setCallers([])
+      setDeps([])
+      return
+    }
+    setGraphErr('')
+    void Promise.all([
+      api.projectCallers(project, selected),
+      api.projectDeps(project, selected),
+    ])
+      .then(([c, d]) => {
+        setCallers(c.callers || [])
+        setDeps(d.dependencies || [])
+      })
+      .catch((e) =>
+        setGraphErr(e instanceof ApiError ? e.message : 'graph lookup failed'),
+      )
   }, [project, selected])
 
   useEffect(() => {
@@ -478,14 +508,62 @@ function FilesPanel({
               <div className="alert error">Showing first chunks only (truncated).</div>
             )}
             {chunks.length > 0 && (
-              <p className="muted small">
-                Chunks:{' '}
-                {chunks
-                  .map((c) => `${c.start_line}-${c.end_line}`)
-                  .slice(0, 12)
-                  .join(', ')}
-                {chunks.length > 12 ? '…' : ''}
-              </p>
+              <details className="file-detail-chunks" open>
+                <summary>Chunks ({chunks.length})</summary>
+                <ul className="chunk-list">
+                  {chunks.map((c) => (
+                    <li key={`${c.start_line}-${c.end_line}`}>
+                      <button
+                        type="button"
+                        className="link"
+                        onClick={() => {
+                          const el = document.getElementById(`L${c.start_line}`)
+                          el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+                        }}
+                      >
+                        L{c.start_line}–{c.end_line}
+                      </button>
+                      <span className="muted small">
+                        {c.content.slice(0, 80)}
+                        {c.content.length > 80 ? '…' : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            {(callers.length > 0 || deps.length > 0 || graphErr) && (
+              <div className="file-graph-stats">
+                {graphErr && <p className="muted small">{graphErr}</p>}
+                {deps.length > 0 && (
+                  <details open>
+                    <summary>Fan-out ({deps.length})</summary>
+                    <ul>
+                      {deps.map((d) => (
+                        <li key={d}>
+                          <button type="button" className="link" onClick={() => setSelected(d)}>
+                            {d}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+                {callers.length > 0 && (
+                  <details open>
+                    <summary>Fan-in ({callers.length})</summary>
+                    <ul>
+                      {callers.map((c) => (
+                        <li key={c}>
+                          <button type="button" className="link" onClick={() => setSelected(c)}>
+                            {c}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
             )}
             <pre className="snippet file-body">
               {numbered.length === 0
@@ -519,39 +597,83 @@ function IngestPanel({
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
+  const maxFileBytes = 512 * 1024
+  const batchSize = 50
+
+  async function ingestFileList(list: FileList) {
+    setBusy(true)
+    setErr('')
+    const all: { path: string; content: string }[] = []
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i]
+      const path =
+        (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name
+      if (f.size > maxFileBytes) {
+        setErr((e) => `${e}\n${path}: skipped (>512KiB)`.trim())
+        continue
+      }
+      const text = await f.text()
+      all.push({ path: path.replace(/^\/+/, ''), content: text })
+    }
+    let indexed = 0
+    let chunks = 0
+    let errors = 0
+    for (let i = 0; i < all.length; i += batchSize) {
+      const batch = all.slice(i, i + batchSize)
+      setStatus(`Indexing batch ${Math.floor(i / batchSize) + 1} (${batch.length} files)…`)
+      const res = await api.projectIngest(project, batch)
+      indexed += res.indexed
+      chunks += res.chunks
+      errors += res.errors
+      if (res.file_errors?.length) {
+        setErr(
+          (prev) =>
+            `${prev}\n${res.file_errors!
+              .slice(0, 3)
+              .map((x) => `${x.path}: ${x.error}`)
+              .join('\n')}`.trim(),
+        )
+      }
+    }
+    setStatus(`Done — indexed ${indexed}, chunks ${chunks}, errors ${errors}`)
+    onDone()
+  }
+
   async function onPick(e: { target: HTMLInputElement }) {
     const list = e.target.files
     if (!list || list.length === 0) return
-    setBusy(true)
-    setErr('')
     setStatus(`Reading ${list.length} file(s)…`)
     try {
-      const files: { path: string; content: string }[] = []
-      for (let i = 0; i < list.length && i < 50; i++) {
-        const f = list[i]
-        const path =
-          // webkitRelativePath for folder pick
-          (f as File & { webkitRelativePath?: string }).webkitRelativePath ||
-          f.name
-        const text = await f.text()
-        files.push({ path: path.replace(/^\/+/, ''), content: text })
-      }
-      setStatus(`Indexing ${files.length} file(s)…`)
-      const res = await api.projectIngest(project, files)
-      setStatus(
-        `Done — indexed ${res.indexed}, chunks ${res.chunks}, errors ${res.errors}`,
-      )
+      await ingestFileList(list)
+    } catch (ex) {
+      setErr(ex instanceof ApiError ? ex.message : 'ingest failed')
+    } finally {
+      setBusy(false)
+      e.target.value = ''
+    }
+  }
+
+  async function onPickArchive(e: { target: HTMLInputElement }) {
+    const list = e.target.files
+    if (!list || list.length === 0) return
+    const archive = list[0]
+    setBusy(true)
+    setErr('')
+    setStatus(`Uploading archive ${archive.name}…`)
+    try {
+      const res = await api.projectIngestArchive(project, archive)
+      setStatus(`Done — indexed ${res.indexed}, chunks ${res.chunks}, errors ${res.errors}`)
       if (res.file_errors?.length) {
         setErr(
           res.file_errors
-            .slice(0, 5)
+            .slice(0, 10)
             .map((x) => `${x.path}: ${x.error}`)
             .join('\n'),
         )
       }
       onDone()
     } catch (ex) {
-      setErr(ex instanceof ApiError ? ex.message : 'ingest failed')
+      setErr(ex instanceof ApiError ? ex.message : 'archive ingest failed')
     } finally {
       setBusy(false)
       e.target.value = ''
@@ -562,8 +684,8 @@ function IngestPanel({
     <div className="card">
       <h2>Ingest files</h2>
       <p className="muted">
-        Upload up to 50 text files (≤512KiB each) into this project index. For large
-        trees use CLI: <code>semidx push --project . --name {project}</code>
+        Upload text files, a whole folder, or a .zip archive (each file ≤512KiB). Large corpora:{' '}
+        <code>semidx push --project . --name {project}</code>
       </p>
       {status && <div className="alert ok">{status}</div>}
       {err && (
@@ -571,18 +693,33 @@ function IngestPanel({
           {err}
         </pre>
       )}
-      <label className="row-actions">
-        <input
-          type="file"
-          multiple
-          disabled={busy}
-          onChange={(e) => void onPick(e)}
-        />
-      </label>
-      <p className="muted small">
-        Tip: in Chrome/Edge you can also pick a folder via the file dialog
-        (enable folder upload if offered).
-      </p>
+      <div className="row-actions">
+        <label>
+          Files
+          <input type="file" multiple disabled={busy} onChange={(e) => void onPick(e)} />
+        </label>
+        <label>
+          Folder
+          <input
+            type="file"
+            // @ts-expect-error webkitdirectory is non-standard but widely supported
+            webkitdirectory=""
+            directory=""
+            multiple
+            disabled={busy}
+            onChange={(e) => void onPick(e)}
+          />
+        </label>
+        <label>
+          .zip
+          <input
+            type="file"
+            accept=".zip,application/zip"
+            disabled={busy}
+            onChange={(e) => void onPickArchive(e)}
+          />
+        </label>
+      </div>
     </div>
   )
 }

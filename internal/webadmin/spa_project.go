@@ -305,16 +305,25 @@ func (a *Admin) apiProjectJobs(w http.ResponseWriter, r *http.Request, ac *authC
 		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
 		return
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	jobs, err := a.store.ListRecentJobs(r.Context(), proj.ID, limit)
+	limit, offset := parseListParams(r)
+	fetchLimit := limit
+	if fetchLimit == 0 {
+		fetchLimit = 20
+	}
+	fetchLimit += offset
+	if fetchLimit < 0 {
+		fetchLimit = 20
+	}
+	jobs, err := a.store.ListRecentJobs(r.Context(), proj.ID, fetchLimit)
 	if err != nil {
 		a.log.Error("list jobs failed", "err", err)
 		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
 		return
 	}
+	jobs = paginateJobs(jobs, limit, offset)
 	items := make([]jobItem, 0, len(jobs))
 	for _, j := range jobs {
 		items = append(items, jobToItem(j))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"jobs": items})
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": items, "limit": limit, "offset": offset})
 }

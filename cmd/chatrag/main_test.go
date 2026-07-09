@@ -276,8 +276,11 @@ func TestSearchAdapter_ConvertsTypes(t *testing.T) {
 	if r.Content != "package main" {
 		t.Errorf("expected Content 'package main', got %q", r.Content)
 	}
-	if r.Score != 0.95 {
-		t.Errorf("expected Score 0.95, got %f", r.Score)
+	// The default semantic path now fuses vector + keyword results (RRF), so the
+	// raw store score is re-ranked and normalized. Assert a sensible normalized
+	// score instead of the raw 0.95 input; ordering and mapping are checked below.
+	if r.Score <= 0 || r.Score > 1 {
+		t.Errorf("expected normalized Score in (0,1], got %f", r.Score)
 	}
 	if r.StartLine != 1 {
 		t.Errorf("expected StartLine 1, got %d", r.StartLine)
