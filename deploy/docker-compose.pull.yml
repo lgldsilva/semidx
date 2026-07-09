@@ -40,6 +40,7 @@ services:
     environment:
       SEMIDX_DB_DSN: postgres://semidx:${SEMIDX_DB_PASSWORD:-changeme}@db:5432/semidx?sslmode=disable
       SEMIDX_LISTEN_ADDR: ":8080"
+      SEMIDX_INDEX_WORKERS: ${SEMIDX_INDEX_WORKERS:-1}
       SEMIDX_DATA_DIR: /data
       # Optional: fix the first admin token instead of a generated one.
       SEMIDX_BOOTSTRAP_TOKEN: ${SEMIDX_BOOTSTRAP_TOKEN:-}

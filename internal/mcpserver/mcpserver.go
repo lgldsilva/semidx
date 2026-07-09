@@ -22,6 +22,8 @@ import (
 
 const version = "0.1.0"
 
+const mimeApplicationJSON = "application/json"
+
 // Hit is one ranked search result, independent of the backend that produced it.
 type Hit struct {
 	Path      string
@@ -106,7 +108,7 @@ func New(b Backend) *mcp.Server {
 	s.AddResource(&mcp.Resource{
 		URI:         "semidx://projects",
 		Name:        "Projects",
-		MIMEType:    "application/json",
+		MIMEType:    mimeApplicationJSON,
 		Description: "List of indexed projects with their indexing status, model, and source type.",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		projects, err := b.Projects(ctx)
@@ -128,7 +130,7 @@ func New(b Backend) *mcp.Server {
 		return &mcp.ReadResourceResult{
 			Contents: []*mcp.ResourceContents{{
 				URI:      "semidx://projects",
-				MIMEType: "application/json",
+				MIMEType: mimeApplicationJSON,
 				Text:     string(data),
 			}},
 		}, nil
@@ -137,7 +139,7 @@ func New(b Backend) *mcp.Server {
 	s.AddResourceTemplate(&mcp.ResourceTemplate{
 		URITemplate: "semidx://project/{name}/stats",
 		Name:        "Project Stats",
-		MIMEType:    "application/json",
+		MIMEType:    mimeApplicationJSON,
 		Description: "Indexing statistics for a specific project: file count, chunk count, languages, and model info.",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		uri := req.Params.URI
@@ -167,7 +169,7 @@ func New(b Backend) *mcp.Server {
 		return &mcp.ReadResourceResult{
 			Contents: []*mcp.ResourceContents{{
 				URI:      uri,
-				MIMEType: "application/json",
+				MIMEType: mimeApplicationJSON,
 				Text:     string(data),
 			}},
 		}, nil

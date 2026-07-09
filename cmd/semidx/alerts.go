@@ -155,36 +155,34 @@ func newAlertsListCmd(d *deps) *cobra.Command {
 		Example: `  semidx alerts list
   semidx alerts list --project myapp`,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			alerts, err := loadAlerts()
-			if err != nil {
-				return err
-			}
-			if project != "" {
-				var filtered []Alert
-				for _, a := range alerts {
-					if a.Project == project {
-						filtered = append(filtered, a)
-					}
-				}
-				alerts = filtered
-			}
-			if len(alerts) == 0 {
-				fmt.Println("No alerts found.")
-				return nil
-			}
-			fmt.Println("Saved alerts:")
-			for _, a := range alerts {
-				status := "new"
-				if a.LastHash != "" {
-					status = "checked"
-				}
-				fmt.Printf("  %s (project: %s, query: %q) [%s]\n", a.Name, a.Project, a.Query, status)
-			}
-			return nil
+			return runAlertsList(project)
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "Filter by project")
 	return c
+}
+
+func runAlertsList(project string) error {
+	alerts, err := loadAlerts()
+	if err != nil {
+		return err
+	}
+	if project != "" {
+		alerts = filterAlertsByProject(alerts, project)
+	}
+	if len(alerts) == 0 {
+		fmt.Println("No alerts found.")
+		return nil
+	}
+	fmt.Println("Saved alerts:")
+	for _, a := range alerts {
+		status := "new"
+		if a.LastHash != "" {
+			status = "checked"
+		}
+		fmt.Printf("  %s (project: %s, query: %q) [%s]\n", a.Name, a.Project, a.Query, status)
+	}
+	return nil
 }
 
 func newAlertsDeleteCmd(_ *deps) *cobra.Command {
