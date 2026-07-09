@@ -127,7 +127,7 @@ func TestAddDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fsnotify.NewWatcher: %v", err)
 	}
-	defer fsw.Close()
+	defer func() { _ = fsw.Close() }()
 
 	idx := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, IndexerOpts{})
 	w := NewWatcher(1, root, "m", idx)
@@ -346,7 +346,7 @@ func TestHandleEventCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fsnotify.NewWatcher: %v", err)
 	}
-	defer fsw.Close()
+	defer func() { _ = fsw.Close() }()
 
 	// Add root so new subdirs can be discovered.
 	if err := fsw.Add(root); err != nil {
@@ -478,7 +478,7 @@ func TestHandleCreateDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fsnotify.NewWatcher: %v", err)
 	}
-	defer fsw.Close()
+	defer func() { _ = fsw.Close() }()
 
 	// Create a non-ignored directory and a .go file inside it.
 	newDir := filepath.Join(root, "pkg")
@@ -528,7 +528,7 @@ func TestHandleCreateDirIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fsnotify.NewWatcher: %v", err)
 	}
-	defer fsw.Close()
+	defer func() { _ = fsw.Close() }()
 
 	// Create an ignored directory.
 	ignoredDir := filepath.Join(root, ".git")
