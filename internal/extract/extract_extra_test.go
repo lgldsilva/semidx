@@ -14,9 +14,9 @@ import (
 // TestRegisterAndDuplicate verifies Register adds a new extractor and panics
 // on duplicate (init-time safety).
 func TestRegisterAndDuplicate(t *testing.T) {
-	t.Parallel()
-
 	// Register a new extension.
+	// NOTE: not parallel because it mutates the global byExt map and the
+	// t.Cleanup delete would race with parallel readers in Extract/Supported.
 	called := false
 	Register(".unittest", func(data []byte) (string, error) {
 		called = true
