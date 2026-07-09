@@ -61,3 +61,24 @@ func TestEnvOverridesFile(t *testing.T) {
 		t.Errorf("env did not override file: %+v", c)
 	}
 }
+
+func TestRemoveDeletesFile(t *testing.T) {
+	isolate(t)
+	if err := Save(&Config{ServerURL: "https://s", Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ServerURL != "" || c.Token != "" {
+		t.Errorf("after Remove, Load should be empty, got %+v", c)
+	}
+	// Idempotent.
+	if err := Remove(); err != nil {
+		t.Fatal(err)
+	}
+}
