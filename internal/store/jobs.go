@@ -19,6 +19,8 @@ type Job struct {
 	Payload       string // JSON payload for batch jobs
 	DeletedFiles  int
 	ErrorCount    int
+	ProgressTotal int
+	ProgressDone  int
 }
 
 // EnqueueJob queues an indexing job for a project.
@@ -96,6 +98,20 @@ func (s *PgStore) ListenJobInsert(ctx context.Context) (<-chan string, error) {
 	return ch, nil
 }
 
+// UpdateJobProgress updates live counters while a job is running.
+func (s *PgStore) UpdateJobProgress(ctx context.Context, id, progressDone, progressTotal, filesIndexed, chunksCreated, errorCount int) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE index_jobs SET
+			progress_done = $2,
+			progress_total = CASE WHEN $3 > 0 THEN $3 ELSE progress_total END,
+			files_indexed = $4,
+			chunks_created = $5,
+			error_count = $6
+		WHERE id = $1 AND status = 'running'
+	`, id, progressDone, progressTotal, filesIndexed, chunksCreated, errorCount)
+	return err
+}
+
 // CompleteJob marks a job succeeded with its result counts.
 func (s *PgStore) CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated, deletedFiles, errorCount int) error {
 	_, err := s.pool.Exec(ctx, `
@@ -119,10 +135,11 @@ func (s *PgStore) GetJob(ctx context.Context, id int) (*Job, error) {
 	var j Job
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, project_id, type, status, COALESCE(error, ''), files_indexed, chunks_created,
-			COALESCE(payload, ''), deleted_files, error_count
+			COALESCE(payload, ''), deleted_files, error_count,
+			progress_total, progress_done
 		FROM index_jobs WHERE id = $1
 	`, id).Scan(&j.ID, &j.ProjectID, &j.Type, &j.Status, &j.Error, &j.FilesIndexed, &j.ChunksCreated,
-		&j.Payload, &j.DeletedFiles, &j.ErrorCount)
+		&j.Payload, &j.DeletedFiles, &j.ErrorCount, &j.ProgressTotal, &j.ProgressDone)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -130,6 +147,42 @@ func (s *PgStore) GetJob(ctx context.Context, id int) (*Job, error) {
 		return nil, err
 	}
 	return &j, nil
+}
+
+// ListRecentJobs returns the newest jobs for a project (highest id first).
+// limit defaults to 10 and is capped at 50. projectID 0 lists across all projects.
+func (s *PgStore) ListRecentJobs(ctx context.Context, projectID, limit int) ([]Job, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	const cols = `id, project_id, type, status, COALESCE(error, ''), files_indexed, chunks_created,
+			COALESCE(payload, ''), deleted_files, error_count, progress_total, progress_done`
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if projectID > 0 {
+		rows, err = s.pool.Query(ctx, `SELECT `+cols+` FROM index_jobs WHERE project_id = $1 ORDER BY id DESC LIMIT $2`, projectID, limit)
+	} else {
+		rows, err = s.pool.Query(ctx, `SELECT `+cols+` FROM index_jobs ORDER BY id DESC LIMIT $1`, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Job
+	for rows.Next() {
+		var j Job
+		if err := rows.Scan(&j.ID, &j.ProjectID, &j.Type, &j.Status, &j.Error, &j.FilesIndexed, &j.ChunksCreated,
+			&j.Payload, &j.DeletedFiles, &j.ErrorCount, &j.ProgressTotal, &j.ProgressDone); err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
 }
 
 // GetProjectByID returns a project by id, or ErrNotFound.

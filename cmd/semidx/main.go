@@ -47,6 +47,10 @@ type deps struct {
 	// --keyword. It is computed in PersistentPreRunE so the loaded config is
 	// never mutated.
 	keywordOnly bool
+	// useRemote is the resolved backend decision for this invocation: true when
+	// search/status/mcp/push should talk to the configured server. Cleared by
+	// --local or --backend=local even if login credentials are still on disk.
+	useRemote bool
 }
 
 // database opens (once) and returns the full PostgreSQL store, or the connection
@@ -80,22 +84,31 @@ func (d *deps) indexStore(ctx context.Context) (store.IndexStore, error) {
 	return d.database(ctx)
 }
 
-// remote reports whether a server is configured (remote mode).
-func (d *deps) remote() bool { return d.client != nil && d.client.ServerURL != "" }
+// remote reports whether this invocation uses the remote server backend.
+// Unlike merely having credentials on disk, this honors --local / --backend.
+func (d *deps) remote() bool { return d.useRemote }
+
+// hasServerConfig reports whether a server URL is saved (or set via env),
+// regardless of whether this run uses it.
+func (d *deps) hasServerConfig() bool {
+	return d.client != nil && d.client.ServerURL != ""
+}
 
 // apiClient returns an SDK client for the configured server.
 func (d *deps) apiClient() *client.Client {
 	return client.New(d.client.ServerURL, d.client.Token)
 }
 
-// withProfile returns a PersistentPreRunE that resolves the config profile
-// before calling setup. Extracted to keep newRootCmd cognitive complexity in check.
-func (d *deps) withProfile(flagProfile string, forceLocal, keywordOnly bool) func(*cobra.Command, []string) error {
+// withRootFlags returns a PersistentPreRunE that resolves the config profile
+// and backend mode before calling setup. Flag values are read via pointers so
+// cobra's flag binding is visible at run time (passing bools by value at
+// command construction would freeze them at zero).
+func (d *deps) withRootFlags(profile, backend *string, forceLocal, keywordOnly *bool) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, _ []string) error {
-		if err := xdg.SetProfile(effectiveConfigProfile(flagProfile)); err != nil {
+		if err := xdg.SetProfile(effectiveConfigProfile(*profile)); err != nil {
 			return err
 		}
-		return d.setup(cmd, forceLocal, keywordOnly)
+		return d.setup(cmd, *forceLocal, *keywordOnly, *backend)
 	}
 }
 
@@ -138,7 +151,7 @@ func newRootCmd() *cobra.Command {
 
 	d := &deps{}
 	var forceLocal, keywordOnly bool
-	var profile string
+	var profile, backend string
 	root := &cobra.Command{
 		Use:   "semidx",
 		Short: "Self-hosted semantic code search",
@@ -155,13 +168,26 @@ For better results, configure an embedding provider once:
 
   semidx config set GEMINI_API_KEY <key>
 
+Backend selection (search/status/mcp):
+  auto (default)  — use the server after "semidx login", else local store
+  --local         — force local index for this run (ignores login)
+  --backend remote — require a logged-in server
+  SEMIDX_BACKEND  — same as --backend (auto|local|remote)
+
+"semidx index" always writes locally; with a login active use "semidx push"
+or "semidx index --to-server" to send files to the server.
+
 Run "semidx <command> --help" for details on any command.`,
 		Example: `  # Index the current project, then search it
   semidx index --project .
   semidx search --query "rate limiting middleware"
 
   # Push local files to a server for remote indexing
+  semidx login https://semidx.example.com --token "$SEMIDX_TOKEN"
   semidx push --project . --embed-locally
+
+  # Search the server, but index/search locally for this run
+  semidx --local search --query "auth"
 
   # Classic grep-style output (file:line:content)
   semidx sgrep --query "database connection pool"
@@ -171,15 +197,17 @@ Run "semidx <command> --help" for details on any command.`,
 		Version:           fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
 		SilenceUsage:      true,
 		SilenceErrors:     true,
-		PersistentPreRunE: d.withProfile(profile, forceLocal, keywordOnly),
+		PersistentPreRunE: d.withRootFlags(&profile, &backend, &forceLocal, &keywordOnly),
 		PersistentPostRun: d.teardown,
 	}
 	root.PersistentFlags().BoolVar(&forceLocal, "local", false,
-		"Use a standalone local index (no server/Postgres); path from SEMIDX_LOCAL_INDEX or the default data dir")
+		"Force local backend for this run (standalone SQLite; ignores saved login)")
 	root.PersistentFlags().BoolVar(&keywordOnly, "keyword", false,
 		"Index and search by keyword only, with no embedding model (SEMIDX_EMBED_MODE=none)")
 	root.PersistentFlags().StringVar(&profile, "profile", "",
 		"Use a named config profile (reads semidx-<name>.env and config-<name>.yaml); overridden by SEMIDX_PROFILE if flag is omitted")
+	root.PersistentFlags().StringVar(&backend, "backend", "",
+		"Backend mode: auto (default), local, or remote (SEMIDX_BACKEND)")
 	registerCommandGroups(root, d)
 	return root
 }
@@ -226,6 +254,7 @@ func registerCommandGroups(root *cobra.Command, d *deps) {
 	addGroup("setup",
 		newConfigCmd(d),
 		newLoginCmd(d),
+		newLogoutCmd(),
 		newModelsCmd(d),
 		newInitCmd(d),
 	)

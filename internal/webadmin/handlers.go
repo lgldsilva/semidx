@@ -2,7 +2,6 @@ package webadmin
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,7 +18,6 @@ import (
 
 const (
 	tmplLogin         = "login.html"
-	tmplSearch        = "search.html"
 	msgInternalError  = "internal error"
 	headerContentType = "Content-Type"
 )
@@ -44,17 +42,6 @@ func (a *Admin) render(w http.ResponseWriter, name string, p page) {
 }
 
 // --- auth pages --------------------------------------------------------------
-
-func (a *Admin) loginForm(w http.ResponseWriter, r *http.Request) {
-	// Already logged in? Go to the dashboard.
-	if cookie, err := r.Cookie(sessionCookie); err == nil {
-		if _, err := a.store.SessionUser(r.Context(), hashToken(cookie.Value)); err == nil {
-			http.Redirect(w, r, "/admin/", http.StatusSeeOther)
-			return
-		}
-	}
-	a.render(w, tmplLogin, page{Err: r.URL.Query().Get("err")})
-}
 
 func (a *Admin) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(r.FormValue("username"))
@@ -115,16 +102,7 @@ func (a *Admin) logout(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
 }
 
-// --- dashboard & search ------------------------------------------------------
-
-func (a *Admin) dashboard(w http.ResponseWriter, r *http.Request, ac *authCtx) {
-	limit, offset := parseListParams(r)
-	projects, err := a.store.ListProjects(r.Context(), limit, offset)
-	if err != nil {
-		a.log.Error("list projects failed", "err", err)
-	}
-	a.render(w, "dashboard.html", page{User: ac.user, CSRF: ac.csrf, Active: "projects", Data: projects})
-}
+// --- search helpers (SPA JSON API + tests) -------------------------------------
 
 type adminSearchHit struct {
 	Project string
@@ -141,23 +119,6 @@ type searchData struct {
 	Fallback        bool
 	Ran             bool
 	ProjectCount    int // set when AllProjects ran
-}
-
-func (a *Admin) searchPage(w http.ResponseWriter, r *http.Request, ac *authCtx) {
-	d, topK := parseSearchData(r)
-	p := page{User: ac.user, CSRF: ac.csrf, Active: "search", Data: &d}
-	if d.Query == "" {
-		a.render(w, tmplSearch, p)
-		return
-	}
-	if !d.AllProjects && d.Project == "" {
-		p.Err = "pick a project or enable “search all projects”"
-		a.render(w, tmplSearch, p)
-		return
-	}
-	d.Ran = true
-	a.runSearchPlayground(r.Context(), &d, topK, &p)
-	a.render(w, tmplSearch, p)
 }
 
 func parseSearchData(r *http.Request) (searchData, int) {
@@ -180,29 +141,6 @@ func parseSearchData(r *http.Request) (searchData, int) {
 		d.Project = project
 	}
 	return d, topK
-}
-
-func (a *Admin) runSearchPlayground(ctx context.Context, d *searchData, topK int, p *page) {
-	if d.AllProjects {
-		if err := a.searchAllProjects(ctx, d, topK); err != nil {
-			p.Err = err.Error()
-		}
-		return
-	}
-	resp, err := a.search.Search(ctx, search.Request{Project: d.Project, Query: d.Query, TopK: topK})
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			p.Err = "project not found"
-		} else {
-			p.Err = err.Error()
-		}
-		return
-	}
-	d.ResolvedProject = resp.Project.Name
-	d.Fallback = resp.Fallback
-	for _, hit := range resp.Results {
-		d.Results = append(d.Results, adminSearchHit{SearchResult: hit})
-	}
 }
 
 // searchAllProjects runs the query against every indexed project, merges the hits,
@@ -230,8 +168,15 @@ func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) 
 func (a *Admin) mergeProjectSearches(ctx context.Context, projects []store.Project, query string, topK int) ([]adminSearchHit, bool, error) {
 	var merged []adminSearchHit
 	fallback := false
+	perProject := topK * 3
+	if perProject < 10 {
+		perProject = 10
+	}
+	if perProject > 100 {
+		perProject = 100
+	}
 	for _, proj := range projects {
-		req := search.Request{Query: query, TopK: topK}
+		req := search.Request{Query: query, TopK: perProject}
 		if proj.Identity != "" {
 			req.Identity = proj.Identity
 		} else {
@@ -256,39 +201,6 @@ func (a *Admin) mergeProjectSearches(ctx context.Context, projects []store.Proje
 		merged = merged[:topK]
 	}
 	return merged, fallback, nil
-}
-
-type projectItem struct {
-	Name       string `json:"name"`
-	Identity   string `json:"identity,omitempty"`
-	Path       string `json:"path,omitempty"`
-	Model      string `json:"model"`
-	Status     string `json:"status"`
-	SourceType string `json:"source_type,omitempty"`
-}
-
-func (a *Admin) projectsAPI(w http.ResponseWriter, r *http.Request, ac *authCtx) {
-	limit, offset := parseListParams(r)
-	projects, err := a.store.ListProjects(r.Context(), limit, offset)
-	if err != nil {
-		a.log.Error("list projects (api) failed", "err", err)
-		w.Header().Set(headerContentType, "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal error"})
-		return
-	}
-	items := make([]projectItem, 0, len(projects))
-	for _, p := range projects {
-		items = append(items, projectItem{
-			Name: p.Name, Identity: p.Identity, Path: p.Path,
-			Model: p.Model, Status: p.Status, SourceType: p.SourceType,
-		})
-	}
-	if items == nil {
-		items = []projectItem{}
-	}
-	w.Header().Set(headerContentType, "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"projects": items})
 }
 
 // --- API keys ----------------------------------------------------------------

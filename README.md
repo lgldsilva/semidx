@@ -237,6 +237,7 @@ See [docs/self-hosting.md](docs/self-hosting.md) to run the server and
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) — how it is built.
+- [docs/requirements.md](docs/requirements.md) — product requirements and backlog status.
 - [docs/self-hosting.md](docs/self-hosting.md) — running the server.
 - [docs/api.md](docs/api.md) — the REST v1 API.
 - [SECURITY.md](SECURITY.md) — the security model and how to report issues.

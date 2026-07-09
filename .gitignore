@@ -2,6 +2,9 @@
 /semantic-indexer-poc
 /semidx
 dist/
+# Embedded React admin assets (built by scripts/build-web.sh / npm run build).
+!internal/webui/dist/
+!internal/webui/dist/**
 *.test
 coverage.out
 coverage.html

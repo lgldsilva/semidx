@@ -157,9 +157,6 @@ func (s *Service) searchKeywordOnly(ctx context.Context, projectID int, req Requ
 func (s *Service) searchSemantic(ctx context.Context, projectID int, req Request, model string, dims int, worktree string, resp *Response) (*Response, error) {
 	vec, err := s.emb.EmbedSingle(ctx, model, req.Query)
 	if err != nil {
-		// Propagate retryable errors (e.g. circuit breaker open) directly
-		// instead of falling back to keyword search — the caller should
-		// back off and retry after the indicated duration.
 		var re interface{ RetryAfter() time.Duration }
 		if errors.As(err, &re) {
 			return nil, err
@@ -174,9 +171,9 @@ func (s *Service) searchSemantic(ctx context.Context, projectID int, req Request
 		return resp, nil
 	}
 
-	results, serr := s.vectorSearch(ctx, projectID, vec, dims, req.TopK, worktree)
-	if serr != nil {
-		return nil, serr
+	results, herr := s.hybridFuse(ctx, projectID, req.Query, vec, dims, req.TopK, worktree)
+	if herr != nil {
+		return nil, herr
 	}
 	resp.Results = results
 	return resp, nil

@@ -666,7 +666,13 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 	}
 	defer func() { _ = rows.Close() }()
 
-	var results []store.SearchResult
+	// Stream rows into a fixed-size min-heap so we never materialise all chunks
+	// in memory (REQ-STOR-04). When topK<=0, accumulate everything.
+	var (
+		top     []store.SearchResult
+		all     []store.SearchResult
+		useHeap = topK > 0
+	)
 	for rows.Next() {
 		var (
 			r         store.SearchResult
@@ -680,30 +686,33 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 		r.StartLine = int(startLine.Int64)
 		r.EndLine = int(endLine.Int64)
 		r.Score = cosineSimilarity(embedding, decodeEmbedding(blob))
-		results = append(results, r)
+		if !useHeap {
+			all = append(all, r)
+			continue
+		}
+		if len(top) < topK {
+			top = append(top, r)
+			if len(top) == topK {
+				for j := topK/2 - 1; j >= 0; j-- {
+					siftDown(top, j, topK)
+				}
+			}
+			continue
+		}
+		if r.Score > top[0].Score {
+			top[0] = r
+			siftDown(top, 0, topK)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-
-	if topK <= 0 || topK >= len(results) {
-		sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
-		return results, nil
+	if !useHeap {
+		sort.SliceStable(all, func(i, j int) bool { return all[i].Score > all[j].Score })
+		return all, nil
 	}
-	// Min-heap of size topK: keep only the top-K scoring results during the
-	// scan, reducing O(n log n) sort + O(n) memory to O(n) scan + O(k log k)
-	// sort + O(k) memory. For typical topK=20 with 50k chunks this is a
-	// significant improvement.
-	top := make([]store.SearchResult, topK)
-	copy(top, results[:topK])
-	for j := topK/2 - 1; j >= 0; j-- {
-		siftDown(top, j, topK)
-	}
-	for i := topK; i < len(results); i++ {
-		if results[i].Score > top[0].Score {
-			top[0] = results[i]
-			siftDown(top, 0, topK)
-		}
+	if len(top) == 0 {
+		return nil, nil
 	}
 	sort.SliceStable(top, func(i, j int) bool { return top[i].Score > top[j].Score })
 	return top, nil

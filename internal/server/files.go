@@ -127,6 +127,7 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "could not enqueue batch job")
 		return
 	}
+	s.jobsQueued.Inc()
 	writeJSON(w, http.StatusAccepted, map[string]any{"job_id": jobID, "status": "queued"})
 }
 
@@ -271,6 +272,17 @@ func (s *Server) indexPreEmbedded(ctx context.Context, proj *store.Project, path
 
 	if err := s.store.InsertChunks(ctx, proj.ID, fileID, storeChunks, embeddings, dims); err != nil {
 		return 0, fmt.Errorf("insert chunks: %w", err)
+	}
+
+	// Keep embedding cache warm on pre-embedded pushes too (REQ-EMB-07), so
+	// later reindexes and repeated uploads can reuse content-addressed vectors.
+	hashes := make([]string, len(fileChunks))
+	for i, ch := range fileChunks {
+		h := sha256.Sum256([]byte(ch.Content))
+		hashes[i] = fmt.Sprintf("%x", h)
+	}
+	if err := s.store.InsertEmbeddingCache(ctx, hashes, proj.Model, embeddings, dims); err != nil {
+		s.log.Warn("cache insert pre-embedded chunks", "project", proj.Name, "path", path, "err", err)
 	}
 
 	return len(fileChunks), nil

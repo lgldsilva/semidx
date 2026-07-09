@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -62,8 +63,12 @@ func newLoginCmd(d *deps) *cobra.Command {
 		Use:   "login <server-url>",
 		Short: "Save credentials for a semidx server and verify reachability",
 		Long: `Save the URL and API token for a remote semidx server (health-checking it
-first) so search/sgrep/repo run against that server instead of a local index.
-The token comes from --token or the SEMIDX_TOKEN environment variable.`,
+first) so search/sgrep/repo/push run against that server instead of a local index.
+"semidx index" still writes locally unless you pass --to-server or use push.
+The token comes from --token or the SEMIDX_TOKEN environment variable.
+
+Use "semidx logout" to forget the server, or "--local" / "--backend local" on a
+single command to ignore the login for that run.`,
 		Example: `  semidx login https://semidx.example.com --token "$SEMIDX_TOKEN"
   semidx login https://semidx.example.com --token abc --default-project my-repo`,
 		Args: cobra.ExactArgs(1),
@@ -76,6 +81,7 @@ The token comes from --token or the SEMIDX_TOKEN environment variable.`,
 			}
 			cfg := &clientconfig.Config{ServerURL: args[0], Token: token, DefaultProject: defaultProject}
 			d.client = cfg
+			d.useRemote = true
 			if err := d.apiClient().Healthz(cmd.Context()); err != nil {
 				return fmt.Errorf("cannot reach server at %s: %w", args[0], err)
 			}
@@ -84,12 +90,38 @@ The token comes from --token or the SEMIDX_TOKEN environment variable.`,
 			}
 			path, _ := clientconfig.Path()
 			fmt.Printf("Logged in to %s (saved to %s)\n", args[0], path)
+			fmt.Println("Search/status/mcp use this server. Index locally with `semidx --local index`, or push with `semidx push`.")
 			return nil
 		},
 	}
 	c.Flags().StringVar(&token, "token", "", "API token (or set SEMIDX_TOKEN)")
 	c.Flags().StringVar(&defaultProject, "default-project", "", "Default project for search/sgrep")
 	return c
+}
+
+// newLogoutCmd removes the saved server URL and token so the CLI returns to
+// local (or Postgres) backend selection.
+func newLogoutCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "logout",
+		Short: "Remove saved server credentials from semidx login",
+		Long: `Delete the client config file written by "semidx login" (server URL and API
+token). Subsequent commands use the local SQLite/Postgres backend unless you
+log in again or set SEMIDX_SERVER_URL / SEMIDX_TOKEN in the environment.`,
+		Example: "  semidx logout",
+		Args:    cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			path, err := clientconfig.Path()
+			if err != nil {
+				return err
+			}
+			if err := clientconfig.Remove(); err != nil {
+				return fmt.Errorf("logout: %w", err)
+			}
+			fmt.Printf("Logged out (removed %s)\n", path)
+			return nil
+		},
+	}
 }
 
 // newRepoCmd groups server-side repository management (git projects the server
@@ -177,13 +209,14 @@ func resolveSkillsDir(target, dir string) (string, error) {
 
 func newRepoAddCmd(d *deps) *cobra.Command {
 	var name, branch, model string
-	var index bool
+	var index, wait bool
 	c := &cobra.Command{
 		Use:   "add <git-url>",
 		Short: "Register a git repository and (optionally) start indexing it",
 		Long: `Register a git repository with the server and, unless --index=false, queue a
 full index job the server runs itself. Requires "semidx login".`,
 		Example: `  semidx repo add https://github.com/org/project.git
+  semidx repo add https://github.com/org/project.git --branch main --wait
   semidx repo add https://github.com/org/project.git --branch main --index=false`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -207,7 +240,19 @@ full index job the server runs itself. Requires "semidx login".`,
 			if err != nil {
 				return fmt.Errorf("enqueue index job: %w", err)
 			}
-			fmt.Printf("Index job #%d queued. Poll it with: GET /api/v1/jobs/%d\n", jobID, jobID)
+			if !wait {
+				fmt.Printf("Index job #%d queued. Poll it with: GET /api/v1/projects/%s/jobs/%d\n", jobID, name, jobID)
+				return nil
+			}
+			fmt.Printf("Index job #%d queued — waiting for completion ...\n", jobID)
+			job, err := waitForRemoteJobWithProgress(ctx, cli, name, jobID)
+			if err != nil {
+				return fmt.Errorf("wait for job %d: %w", jobID, err)
+			}
+			if job.Status == client.JobStatusFailed {
+				return fmt.Errorf("job %d failed: %s", jobID, job.Error)
+			}
+			fmt.Printf("Done — indexed: %d, chunks: %d, errors: %d\n", job.FilesIndexed, job.ChunksCreated, job.ErrorCount)
 			return nil
 		},
 	}
@@ -215,5 +260,45 @@ full index job the server runs itself. Requires "semidx login".`,
 	c.Flags().StringVar(&branch, "branch", "", "Branch to index (default: server default)")
 	c.Flags().StringVar(&model, "model", "bge-m3", "Embedding model")
 	c.Flags().BoolVar(&index, "index", true, "Queue a full index job right away")
+	c.Flags().BoolVar(&wait, "wait", false, "Wait for the queued index job and print live progress")
 	return c
+}
+
+func waitForRemoteJobWithProgress(ctx context.Context, cli *client.Client, project string, jobID int) (*client.Job, error) {
+	ticker := time.NewTicker(asyncPollInterval)
+	defer ticker.Stop()
+
+	var (
+		lastStatus                                string
+		lastDone, lastTotal, lastFiles, lastChunk int
+		seen                                      bool
+		lastJob                                   *client.Job
+	)
+	for {
+		job, err := cli.GetJob(ctx, project, jobID)
+		if err != nil {
+			return nil, err
+		}
+		lastJob = job
+		if shouldPrintJobProgress(job, seen, lastStatus, lastDone, lastTotal, lastFiles, lastChunk) {
+			fmt.Println(formatJobProgress(job))
+			lastStatus = job.Status
+			lastDone = job.ProgressDone
+			lastTotal = job.ProgressTotal
+			lastFiles = job.FilesIndexed
+			lastChunk = job.ChunksCreated
+			seen = true
+		}
+		if job.Status == client.JobStatusSucceeded || job.Status == client.JobStatusFailed {
+			return job, nil
+		}
+		select {
+		case <-ctx.Done():
+			if lastJob != nil {
+				return lastJob, ctx.Err()
+			}
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
