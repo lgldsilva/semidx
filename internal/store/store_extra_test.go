@@ -564,3 +564,76 @@ func TestChunksTableInvalidDims(t *testing.T) {
 		t.Error("EnsureChunksTable(maxDims+1) should error")
 	}
 }
+
+func TestProjectCommitRoundTripPg(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	projectID, err := s.UpsertProject(ctx, "commit-pg", "/tmp/c", "bge-m3", 0)
+	if err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+	if sha, err := s.GetProjectCommit(ctx, projectID); err != nil || sha != "" {
+		t.Fatalf("initial commit = %q err=%v", sha, err)
+	}
+	if err := s.UpdateProjectCommit(ctx, projectID, "cafebabe"); err != nil {
+		t.Fatalf("UpdateProjectCommit: %v", err)
+	}
+	if sha, err := s.GetProjectCommit(ctx, projectID); err != nil || sha != "cafebabe" {
+		t.Fatalf("commit = %q err=%v", sha, err)
+	}
+}
+
+func TestFetchGraphPathsBFSPg(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	projectID, err := s.UpsertProject(ctx, "bfs-pg", "/tmp/bfs", "bge-m3", 0)
+	if err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+	if err := s.InsertFileDependencies(ctx, projectID, "main.go", []string{"util.go"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertFileDependencies(ctx, projectID, "util.go", []string{"config.go"}); err != nil {
+		t.Fatal(err)
+	}
+
+	paths, err := s.FetchGraphPathsBFS(ctx, projectID, []string{"main.go"}, 2)
+	if err != nil {
+		t.Fatalf("FetchGraphPathsBFS: %v", err)
+	}
+	if len(paths) < 1 {
+		t.Fatalf("paths = %+v", paths)
+	}
+
+	if got, err := s.FetchGraphPathsBFS(ctx, projectID, nil, 2); err != nil || got != nil {
+		t.Fatalf("empty seeds = %+v err=%v", got, err)
+	}
+}
+
+func TestEmbeddingCacheRoundTripPg(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	dims := 3
+	if err := s.EnsureEmbeddingCacheTable(ctx, dims); err != nil {
+		t.Fatal(err)
+	}
+	hashes := []string{"hash-a", "hash-b"}
+	embs := [][]float32{{1, 0, 0}, {0, 1, 0}}
+	if err := s.InsertEmbeddingCache(ctx, hashes, "bge-m3", embs, dims); err != nil {
+		t.Fatalf("InsertEmbeddingCache: %v", err)
+	}
+	got, err := s.LookupEmbeddingCache(ctx, hashes, "bge-m3", dims)
+	if err != nil {
+		t.Fatalf("LookupEmbeddingCache: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("cache = %+v", got)
+	}
+	n, err := s.PruneEmbeddingCache(ctx, dims)
+	if err != nil || n != 2 {
+		t.Fatalf("PruneEmbeddingCache = %d err=%v", n, err)
+	}
+}

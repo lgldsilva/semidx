@@ -26,7 +26,7 @@ func (f *fakeStore) UpdateProjectStatus(context.Context, int, string) error     
 func (f *fakeStore) DeleteFileByPath(context.Context, int, string) error               { return nil }
 func (f *fakeStore) UpsertFile(context.Context, int, string, string, int) (int, error) { return 1, nil }
 func (f *fakeStore) FileUpToDate(context.Context, int, string, string, int) (bool, error) {
-	return false, nil
+	return f.upToDate, nil
 }
 func (f *fakeStore) DeleteChunksForFile(context.Context, int, int, int) error { return nil }
 func (f *fakeStore) InsertChunks(context.Context, int, int, []chunker.Chunk, [][]float32, int) error {
@@ -78,7 +78,19 @@ func (f *fakeStore) CompleteJob(_ context.Context, id, files, chunks, deleted, e
 func (f *fakeStore) UpdateJobProgress(context.Context, int, int, int, int, int, int) error {
 	return nil
 }
-func (f *fakeStore) EnqueueBatchJob(context.Context, int, string) (int, error) { return 1, nil }
+func (f *fakeStore) EnqueueBatchJob(context.Context, int, string) (int, error) {
+	if f.enqueueBatchErr != nil {
+		return 0, f.enqueueBatchErr
+	}
+	return 1, nil
+}
+func (f *fakeStore) EnsureEmbeddingCacheTable(context.Context, int) error { return nil }
+func (f *fakeStore) LookupEmbeddingCache(context.Context, []string, string, int) (map[string][]float32, error) {
+	return map[string][]float32{}, nil
+}
+func (f *fakeStore) InsertEmbeddingCache(context.Context, []string, string, [][]float32, int) error {
+	return nil
+}
 
 // --- Tests ---
 

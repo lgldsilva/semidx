@@ -124,3 +124,43 @@ func TestParseJSONScopes(t *testing.T) {
 		t.Fatal("member cannot request admin scope")
 	}
 }
+
+func TestSettingsTokensDisabled(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+
+	code, body := getBody(t, c, srv.URL+"/admin/api/tokens")
+	if code != 200 || !strings.Contains(body, `"enabled":false`) {
+		t.Fatalf("tokens disabled = %d body=%s", code, body)
+	}
+
+	code, body = postAdminJSON(t, c, srv.URL+"/admin/api/tokens", csrf, map[string]any{
+		"name": "x", "scopes": []string{"read"},
+	})
+	if code != 403 {
+		t.Fatalf("create token disabled = %d body=%s", code, body)
+	}
+}
+
+func TestSettingsRevokeKeyNotFound(t *testing.T) {
+	iss, _ := jwtauth.New("test-secret")
+	srv, fs := newAdminWith(t, fakeEmbedder{}, iss)
+	fs.addUser("admin", "supersecret", "admin")
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/admin/api/keys/999", nil)
+	req.Header.Set("X-CSRF-Token", csrf)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("revoke missing key = %d", resp.StatusCode)
+	}
+}

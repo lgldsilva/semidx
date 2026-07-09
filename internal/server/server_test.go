@@ -42,8 +42,9 @@ type fakeStore struct {
 	getErr      error // GetProject generic (non-NotFound) error
 	tokenErr    error // TokenByHash error
 	fileHashErr error // ListFileHashes error
-	enqueueErr  error // EnqueueJob error
-	jobErr      error // GetJob generic (non-NotFound) error
+	enqueueErr      error // EnqueueJob error
+	enqueueBatchErr error // EnqueueBatchJob error
+	jobErr          error // GetJob generic (non-NotFound) error
 	ensureErr   error // EnsureChunksTable error
 
 	// bootstrap-token fields
@@ -67,6 +68,7 @@ type fakeStore struct {
 	compDeleted int         // last CompleteJob deletedFiles
 	compErrors  int         // last CompleteJob errorCount
 	compCalled  bool
+	upToDate    bool // FileUpToDate result
 }
 
 func (f *fakeStore) CountUsers(context.Context) (int, error) { return f.userCount, nil }
@@ -141,7 +143,7 @@ func (f *fakeStore) SearchSimilarKeywords(context.Context, int, string, int, int
 	return f.results, nil
 }
 
-type fakeEmbedder struct{ embed.Embedder }
+type fakeEmbedder struct{}
 
 func (fakeEmbedder) ModelInfo(_ context.Context, m string) (*embed.ModelInfo, error) {
 	return &embed.ModelInfo{Name: m, Dims: 3}, nil
@@ -149,6 +151,14 @@ func (fakeEmbedder) ModelInfo(_ context.Context, m string) (*embed.ModelInfo, er
 func (fakeEmbedder) EmbedSingle(context.Context, string, string) ([]float32, error) {
 	return []float32{1, 0, 0}, nil
 }
+func (fakeEmbedder) Embed(_ context.Context, _ string, inputs ...string) ([][]float32, error) {
+	out := make([][]float32, len(inputs))
+	for i := range inputs {
+		out[i] = []float32{1, 0, 0}
+	}
+	return out, nil
+}
+func (fakeEmbedder) ListModels(context.Context) ([]string, error) { return []string{"bge-m3"}, nil }
 
 func do(t *testing.T, srv *Server, method, path, token, body string) *httptest.ResponseRecorder {
 	t.Helper()
