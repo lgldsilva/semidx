@@ -118,13 +118,13 @@ func (a *Admin) apiProjectChatStream(w http.ResponseWriter, r *http.Request, ac 
 	w.Header().Set("Connection", "keep-alive")
 	// Emit sources first so the UI can render citations while tokens stream.
 	srcJSON, _ := json.Marshal(map[string]any{"type": "sources", "sources": sourcesJSON(sources), "model": model})
-	fmt.Fprintf(w, "data: %s\n\n", srcJSON)
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", srcJSON)
 	flusher.Flush()
 
 	for chunk := range ch {
 		if chunk.Content != "" {
 			tokJSON, _ := json.Marshal(map[string]any{"type": "chunk", "content": chunk.Content})
-			fmt.Fprintf(w, "data: %s\n\n", tokJSON)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", tokJSON)
 			flusher.Flush()
 		}
 		if chunk.Done {
@@ -132,6 +132,6 @@ func (a *Admin) apiProjectChatStream(w http.ResponseWriter, r *http.Request, ac 
 		}
 	}
 	doneJSON, _ := json.Marshal(map[string]any{"type": "done"})
-	fmt.Fprintf(w, "data: %s\n\n", doneJSON)
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", doneJSON)
 	flusher.Flush()
 }

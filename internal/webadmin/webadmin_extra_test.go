@@ -166,7 +166,7 @@ func postSearchJSON(t *testing.T, c *http.Client, base, csrf string, body map[st
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b)
 }
