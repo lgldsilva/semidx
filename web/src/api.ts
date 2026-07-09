@@ -309,11 +309,43 @@ export const api = {
     project?: string
     all?: boolean
     top?: number
+    graph?: boolean
+    graph_depth?: number
   }) =>
     request<SearchResponse>('/admin/api/search', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  projectIngest: (
+    name: string,
+    files: { path: string; content: string }[],
+    del: string[] = [],
+  ) =>
+    request<{
+      indexed: number
+      chunks: number
+      deleted: number
+      errors: number
+      file_errors?: { path: string; error: string }[]
+    }>(`/admin/api/projects/${encodeURIComponent(name)}/files/batch`, {
+      method: 'POST',
+      body: JSON.stringify({ files, delete: del }),
+    }),
+  projectExplain: (name: string, path: string, line: number) =>
+    request<{
+      symbol?: string
+      kind?: string
+      path: string
+      start_line?: number
+      end_line?: number
+      dependencies?: string[]
+      importers?: string[]
+      tests?: string[]
+      source?: string
+      snippet?: string
+    }>(
+      `/admin/api/projects/${encodeURIComponent(name)}/analyze/explain?path=${encodeURIComponent(path)}&line=${line}`,
+    ),
   chat: (
     name: string,
     question: string,

@@ -50,6 +50,7 @@ type ChatPipeline interface {
 // Admin renders and serves the management UI.
 type Admin struct {
 	store   store.Store
+	emb     embedpkg.Embedder
 	search  *search.Service
 	tmpl    *template.Template
 	log     *slog.Logger
@@ -95,6 +96,7 @@ func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies 
 	go limiter.reap()
 	return &Admin{
 		store:   st,
+		emb:     emb,
 		search:  search.NewService(st, emb),
 		tmpl:    tmpl,
 		log:     log,
@@ -126,10 +128,12 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/api/projects/{project}/status", a.protectAPI("", a.apiProjectStatus))
 	mux.HandleFunc("GET /admin/api/projects/{project}/files", a.protectAPI("", a.apiProjectFiles))
 	mux.HandleFunc("GET /admin/api/projects/{project}/files/content", a.protectAPI("", a.apiProjectFileContent))
+	mux.HandleFunc("POST /admin/api/projects/{project}/files/batch", a.protectAPI("", a.apiProjectFilesBatch))
 	mux.HandleFunc("GET /admin/api/projects/{project}/jobs", a.protectAPI("", a.apiProjectJobs))
 	mux.HandleFunc("POST /admin/api/projects/{project}/reindex", a.protectAPI("", a.apiReindex))
 	mux.HandleFunc("POST /admin/api/projects/{project}/chat", a.protectAPI("", a.apiProjectChat))
 	mux.HandleFunc("POST /admin/api/projects/{project}/chat/stream", a.protectAPI("", a.apiProjectChatStream))
+	mux.HandleFunc("GET /admin/api/projects/{project}/analyze/explain", a.protectAPI("", a.apiProjectExplain))
 	mux.HandleFunc("GET /admin/api/jobs", a.protectAPI("", a.apiListAllJobs))
 	mux.HandleFunc("GET /admin/api/jobs/{id}", a.protectAPI("", a.apiGetJob))
 	mux.HandleFunc("POST /admin/api/search", a.protectAPI("", a.apiSearch))

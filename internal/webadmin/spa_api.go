@@ -354,10 +354,12 @@ func (a *Admin) apiGetJob(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 }
 
 type searchJSONBody struct {
-	Query   string `json:"query"`
-	Project string `json:"project"`
-	All     bool   `json:"all"`
-	Top     int    `json:"top"`
+	Query      string `json:"query"`
+	Project    string `json:"project"`
+	All        bool   `json:"all"`
+	Top        int    `json:"top"`
+	Graph      bool   `json:"graph"`
+	GraphDepth int    `json:"graph_depth"`
 }
 
 func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
@@ -396,7 +398,11 @@ func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 		writeJSONErr(w, http.StatusBadRequest, "project is required unless all=true")
 		return
 	}
-	resp, err := a.search.Search(r.Context(), search.Request{Project: project, Query: body.Query, TopK: topK})
+	req := search.Request{
+		Project: project, Query: body.Query, TopK: topK,
+		Graph: body.Graph, GraphMaxDepth: body.GraphDepth,
+	}
+	resp, err := a.search.Search(r.Context(), req)
 	if errors.Is(err, store.ErrNotFound) {
 		writeJSONErr(w, http.StatusNotFound, "project not found")
 		return
@@ -414,6 +420,7 @@ func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 		"results":          hitsToJSON(hits),
 		"fallback":         resp.Fallback,
 		"resolved_project": resp.Project.Name,
+		"graph":            body.Graph,
 	})
 }
 
