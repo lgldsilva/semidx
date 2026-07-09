@@ -23,11 +23,7 @@ func TestRegisterAndDuplicate(t *testing.T) {
 		return "unit-test-result", nil
 	})
 	// Clean up after test so other tests aren't affected.
-	t.Cleanup(func() {
-		registryMu.Lock()
-		delete(byExt, ".unittest")
-		registryMu.Unlock()
-	})
+	t.Cleanup(func() { delete(byExt, ".unittest") })
 
 	got, err := Extract("test.unittest", []byte("x"))
 	if err != nil {
@@ -374,7 +370,7 @@ func TestPasswordExtractionEdgeCases(t *testing.T) {
 	}
 
 	// Unknown extension falls through.
-	_, err = ExtractAllWithPassword("binary.bin", []byte{0, 1, 2}, "password")
+	docs, err = ExtractAllWithPassword("binary.bin", []byte{0, 1, 2}, "password")
 	if err == nil || !errors.Is(err, ErrUnsupported) {
 		t.Errorf("ExtractAllWithPassword(bin) err = %v, want ErrUnsupported", err)
 	}

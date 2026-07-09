@@ -52,10 +52,11 @@ func TestLoadCorruptedJSON(t *testing.T) {
 	}
 }
 
-// TestRemoveErrorPath verifies Remove returns an error when os.Remove fails.
-// We replace the saved file with a non-empty directory so os.Remove fails
-// with ENOTEMPTY regardless of OS/uid.
+// TestRemoveErrorPath verifies Remove returns an error when os.Remove fails
+// for a reason other than IsNotExist (e.g., permission denied on a locked
+// parent directory). We simulate this by making the pending dir read-only.
 func TestRemoveErrorPath(t *testing.T) {
+	// Create a read-only pending directory.
 	base := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", base)
 
@@ -64,22 +65,16 @@ func TestRemoveErrorPath(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Get the ACTUAL file path used by Save/Remove (uses hashed filename).
-	p, err := fileFor(key)
-	if err != nil {
-		t.Fatalf("fileFor: %v", err)
-	}
-	// Replace the saved file with a non-empty directory.
-	if err := os.Remove(p); err != nil {
-		t.Fatalf("remove: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(p, "sub"), 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(p) }()
+	// Make the entire parent chain read-only to force Remove to fail.
+	fp, _ := fileFor(key)
+	_ = os.Chmod(filepath.Dir(fp), 0o000)
 
+	// Restore permissions in cleanup so the temp dir can be cleaned up.
+	t.Cleanup(func() { _ = os.Chmod(filepath.Dir(fp), 0o700) })
+
+	// Now Remove should fail with a permission error, not silently succeed.
 	if err := Remove(key); err == nil {
-		t.Error("Remove on non-empty directory should error")
+		t.Error("Remove on read-only dir should error")
 	}
 }
 
