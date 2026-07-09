@@ -53,6 +53,35 @@ func detectProjects(root string) []projectType {
 	return pts
 }
 
+// addGitSiblingsFromEntries scans entries (from a successful ReadDir) for
+// sibling directories containing a .git and appends them to repos (marking seen).
+func addGitSiblingsFromEntries(root string, entries []os.DirEntry, seen map[string]bool, repos *[]string) {
+	for _, e := range entries {
+		if !e.IsDir() || seen[e.Name()] {
+			continue
+		}
+		gitDir := filepath.Join(root, e.Name(), ".git")
+		if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+			*repos = append(*repos, filepath.Join(root, e.Name()))
+			seen[e.Name()] = true
+		}
+	}
+}
+
+// addSelfIfGit appends the git toplevel for root itself (if it is a git repo
+// and not already seen).
+func addSelfIfGit(root string, seen map[string]bool, repos *[]string) {
+	base := filepath.Base(root)
+	if seen[base] {
+		return
+	}
+	gi := gitmeta.Resolve(context.Background(), root)
+	if gi.IsGit {
+		*repos = append(*repos, gi.Toplevel)
+		seen[base] = true
+	}
+}
+
 // findNearbyGitRepos walks parent directories up to 3 levels deep looking for
 // git repos (directories containing a .git subdirectory).
 func findNearbyGitRepos(root string) []string {
@@ -65,26 +94,8 @@ func findNearbyGitRepos(root string) []string {
 		if err != nil {
 			return repos
 		}
-		// Check entries for .git subdirectories at this level.
-		for _, e := range entries {
-			if !e.IsDir() || seen[e.Name()] {
-				continue
-			}
-			gitDir := filepath.Join(root, e.Name(), ".git")
-			if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
-				repos = append(repos, filepath.Join(root, e.Name()))
-				seen[e.Name()] = true
-			}
-		}
-
-		// Also check if root itself is a git repo.
-		if !seen[filepath.Base(root)] {
-			gi := gitmeta.Resolve(context.Background(), root)
-			if gi.IsGit {
-				repos = append(repos, gi.Toplevel)
-				seen[filepath.Base(root)] = true
-			}
-		}
+		addGitSiblingsFromEntries(root, entries, seen, &repos)
+		addSelfIfGit(root, seen, &repos)
 
 		// Move up.
 		parent := filepath.Dir(root)
@@ -165,6 +176,76 @@ Pass --yes to skip all prompts and index the current directory immediately.`,
 	return c
 }
 
+func printInitBanner() {
+	fmt.Println("╭──────────────────────────────────────────────╮")
+	fmt.Println("│  semidx — interactive project setup          │")
+	fmt.Println("╰──────────────────────────────────────────────╯")
+	fmt.Println()
+}
+
+func printDetectedProjectTypes(types []projectType) {
+	if len(types) > 0 {
+		typeNames := make([]string, len(types))
+		for i, pt := range types {
+			typeNames[i] = pt.Type
+		}
+		fmt.Printf("Detected project type: %s\n", strings.Join(typeNames, ", "))
+	} else {
+		fmt.Println("No known project files found (go.mod, package.json, etc.)")
+	}
+}
+
+func resolveProjectPath(scanner *bufio.Scanner, defaultPath string, yes bool) string {
+	if yes {
+		return defaultPath
+	}
+	p := promptString(scanner, "Project root", defaultPath)
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
+}
+
+func decideShouldIndex(scanner *bufio.Scanner, yes bool) bool {
+	if yes {
+		return true
+	}
+	return promptYesNo(scanner, "Index this project?", true)
+}
+
+func collectExtraPaths(scanner *bufio.Scanner, projectPath string, nearby []string, yes bool) []string {
+	if len(nearby) == 0 || yes {
+		return nil
+	}
+	fmt.Println("\nNearby git repositories found:")
+	for _, r := range nearby {
+		fmt.Printf("  - %s\n", r)
+	}
+	if promptYesNo(scanner, "Index these too?", false) {
+		return nearby
+	}
+	return nil
+}
+
+func printInitSummary(projectPath string, keyword bool) {
+	fmt.Println()
+	fmt.Println("╭──────────────────────────────────────────────╮")
+	fmt.Println("│  semidx is ready!                            │")
+	fmt.Println("╰──────────────────────────────────────────────╯")
+	fmt.Println()
+	fmt.Println("Try searching your code:")
+	fmt.Printf("  semidx search --project %s --query \"how is auth handled\"\n", projectPath)
+	fmt.Println()
+	fmt.Println("Or use sgrep for grep-style output:")
+	fmt.Printf("  semidx sgrep --project %s --query \"database pool\"\n", projectPath)
+	fmt.Println()
+	if !keyword {
+		fmt.Println("Configure an embedding provider for better results:")
+		fmt.Println("  semidx config set GEMINI_API_KEY <key>")
+	}
+	fmt.Println("See semidx --help for all commands.")
+}
+
 func runInit(cmd *cobra.Command, d *deps, opts initOpts) error {
 	ctx := cmd.Context()
 	scanner := bufio.NewScanner(os.Stdin)
@@ -176,41 +257,16 @@ func runInit(cmd *cobra.Command, d *deps, opts initOpts) error {
 	}
 
 	if !opts.yes {
-		fmt.Println("╭──────────────────────────────────────────────╮")
-		fmt.Println("│  semidx — interactive project setup          │")
-		fmt.Println("╰──────────────────────────────────────────────╯")
-		fmt.Println()
+		printInitBanner()
 	}
 
 	// Step 1: Detect project type.
 	types := detectProjects(root)
-	projectPath := root
-
-	if len(types) > 0 {
-		typeNames := make([]string, len(types))
-		for i, pt := range types {
-			typeNames[i] = pt.Type
-		}
-		fmt.Printf("Detected project type: %s\n", strings.Join(typeNames, ", "))
-	} else {
-		fmt.Println("No known project files found (go.mod, package.json, etc.)")
-	}
-
-	if !opts.yes {
-		projectPath = promptString(scanner, "Project root", root)
-		abs, err := filepath.Abs(projectPath)
-		if err == nil {
-			projectPath = abs
-		}
-	}
+	projectPath := resolveProjectPath(scanner, root, opts.yes)
+	printDetectedProjectTypes(types)
 
 	// Step 2: Ask to index.
-	shouldIndex := true
-	if !opts.yes {
-		shouldIndex = promptYesNo(scanner, "Index this project?", true)
-	}
-
-	if !shouldIndex {
+	if !decideShouldIndex(scanner, opts.yes) {
 		fmt.Println("\nProject registered. Index later with:")
 		fmt.Printf("  semidx index --project %s\n", projectPath)
 		return nil
@@ -218,16 +274,7 @@ func runInit(cmd *cobra.Command, d *deps, opts initOpts) error {
 
 	// Step 3: Detect nearby git repos and offer to index them too.
 	nearby := findNearbyGitRepos(projectPath)
-	var extraPaths []string
-	if len(nearby) > 0 && !opts.yes {
-		fmt.Println("\nNearby git repositories found:")
-		for _, r := range nearby {
-			fmt.Printf("  - %s\n", r)
-		}
-		if promptYesNo(scanner, "Index these too?", false) {
-			extraPaths = nearby
-		}
-	}
+	extraPaths := collectExtraPaths(scanner, projectPath, nearby, opts.yes)
 
 	// Step 4: Run index on the primary project.
 	fmt.Println()
@@ -250,22 +297,7 @@ func runInit(cmd *cobra.Command, d *deps, opts initOpts) error {
 	}
 
 	// Step 6: Summary.
-	fmt.Println()
-	fmt.Println("╭──────────────────────────────────────────────╮")
-	fmt.Println("│  semidx is ready!                            │")
-	fmt.Println("╰──────────────────────────────────────────────╯")
-	fmt.Println()
-	fmt.Println("Try searching your code:")
-	fmt.Printf("  semidx search --project %s --query \"how is auth handled\"\n", projectPath)
-	fmt.Println()
-	fmt.Println("Or use sgrep for grep-style output:")
-	fmt.Printf("  semidx sgrep --project %s --query \"database pool\"\n", projectPath)
-	fmt.Println()
-	if !keyword {
-		fmt.Println("Configure an embedding provider for better results:")
-		fmt.Println("  semidx config set GEMINI_API_KEY <key>")
-	}
-	fmt.Println("See semidx --help for all commands.")
+	printInitSummary(projectPath, keyword)
 
 	return nil
 }

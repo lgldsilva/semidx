@@ -23,12 +23,13 @@ import (
 // methods remain nil-interface stubs and must not be called by test paths.
 type fakeStore struct {
 	store.Store
-	mu       sync.Mutex // indexing runs concurrently; guards the fields below
-	nextID   int
-	embedded []string
-	textOnly []string
-	status   string
-	upToDate bool // FileUpToDate returns this (simulates unchanged files)
+	mu           sync.Mutex // indexing runs concurrently; guards the fields below
+	nextID       int
+	embedded     []string
+	textOnly     []string
+	status       string
+	upToDate     bool     // FileUpToDate returns this (simulates unchanged files)
+	deletedPaths []string // paths passed to DeleteFileByPath
 }
 
 func (f *fakeStore) FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error) {
@@ -63,6 +64,13 @@ func (f *fakeStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID 
 	}
 	return nil
 }
+func (f *fakeStore) DeleteFileByPath(ctx context.Context, projectID int, path string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deletedPaths = append(f.deletedPaths, path)
+	return nil
+}
+
 func (f *fakeStore) UpdateProjectStatus(ctx context.Context, id int, status string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

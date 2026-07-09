@@ -32,3 +32,4 @@ docs/auditoria-2026-07-06.md
 .slim/worktrees/
 .slim/worktrees.json
 .slim/deepwork/
+coverage*.out

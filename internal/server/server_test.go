@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 // fakeStore implements just the methods the server touches.
 type fakeStore struct {
 	store.Store
+	mu           sync.Mutex // guards concurrent job-worker access
 	pingErr      error
 	token        *store.Token         // TokenByHash result (nil = no active token)
 	project      *store.Project       // GetProject result (nil → ErrNotFound)

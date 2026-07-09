@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -52,56 +53,61 @@ func newSbomGenerateCmd(d *deps) *cobra.Command {
   semidx sbom generate --project myapp --format spdx-json     # SPDX 2.3 JSON
   semidx sbom generate --project . --output sbom.cdx.json     # write to file`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			db, err := d.indexStore(ctx)
-			if err != nil {
-				return err
-			}
-
-			// Resolve project — try identity (path), then name.
-			tgt := resolveTarget(ctx, projectPath, false)
-			proj, err := db.GetProjectByIdentity(ctx, tgt.identity)
-			if err != nil {
-				proj, err = db.GetProject(ctx, tgt.name)
-				if err != nil {
-					return fmt.Errorf("project not found — index it first with `semidx index --project %s`: %w", projectPath, err)
-				}
-			}
-
-			components, err := collectComponents(ctx, db, proj)
-			if err != nil {
-				return fmt.Errorf("collect dependencies: %w", err)
-			}
-
-			var output []byte
-			switch format {
-			case "cyclonedx-json":
-				output, err = generateCycloneDXJSON(proj, components)
-			case "spdx-json":
-				output, err = generateSPDXJSON(proj, components)
-			default:
-				return fmt.Errorf("unsupported format %q (supported: cyclonedx-json, spdx-json)", format)
-			}
-			if err != nil {
-				return fmt.Errorf("generate %s: %w", format, err)
-			}
-
-			if outputPath != "" {
-				if err := os.WriteFile(filepath.Clean(outputPath), output, 0o600); err != nil {
-					return fmt.Errorf("write %s: %w", outputPath, err)
-				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "SBOM written to %s (%s)\n", outputPath, format)
-			} else {
-				_, _ = cmd.OutOrStdout().Write(output)
-				_, _ = fmt.Fprintln(cmd.OutOrStdout())
-			}
-			return nil
+			return runSbomGenerate(cmd.Context(), d, projectPath, format, outputPath, cmd.OutOrStdout())
 		},
 	}
 	c.Flags().StringVar(&projectPath, "project", ".", "Path or name of the indexed project")
 	c.Flags().StringVar(&format, "format", "cyclonedx-json", "Output format (cyclonedx-json, spdx-json)")
 	c.Flags().StringVar(&outputPath, "output", "", "Write output to file instead of stdout")
 	return c
+}
+
+// runSbomGenerate executes the sbom generate logic. It is extracted to keep
+// newSbomGenerateCmd's RunE under the cognitive complexity limit.
+func runSbomGenerate(ctx context.Context, d *deps, projectPath, format, outputPath string, out io.Writer) error {
+	db, err := d.indexStore(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Resolve project — try identity (path), then name.
+	tgt := resolveTarget(ctx, projectPath, false)
+	proj, err := db.GetProjectByIdentity(ctx, tgt.identity)
+	if err != nil {
+		proj, err = db.GetProject(ctx, tgt.name)
+		if err != nil {
+			return fmt.Errorf("project not found — index it first with `semidx index --project %s`: %w", projectPath, err)
+		}
+	}
+
+	components, err := collectComponents(ctx, db, proj)
+	if err != nil {
+		return fmt.Errorf("collect dependencies: %w", err)
+	}
+
+	var output []byte
+	switch format {
+	case "cyclonedx-json":
+		output, err = generateCycloneDXJSON(proj, components)
+	case "spdx-json":
+		output, err = generateSPDXJSON(proj, components)
+	default:
+		return fmt.Errorf("unsupported format %q (supported: cyclonedx-json, spdx-json)", format)
+	}
+	if err != nil {
+		return fmt.Errorf("generate %s: %w", format, err)
+	}
+
+	if outputPath != "" {
+		if err := os.WriteFile(filepath.Clean(outputPath), output, 0o600); err != nil {
+			return fmt.Errorf("write %s: %w", outputPath, err)
+		}
+		_, _ = fmt.Fprintf(out, "SBOM written to %s (%s)\n", outputPath, format)
+	} else {
+		_, _ = out.Write(output)
+		_, _ = fmt.Fprintln(out)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -122,18 +128,7 @@ func collectComponents(ctx context.Context, db store.IndexStore, proj *store.Pro
 		return nil, err
 	}
 
-	depSet := make(map[string]bool)
-	for _, targets := range graph {
-		for _, t := range targets {
-			depSet[t] = true
-		}
-	}
-
-	sortedDeps := make([]string, 0, len(depSet))
-	for d := range depSet {
-		sortedDeps = append(sortedDeps, d)
-	}
-	sort.Strings(sortedDeps)
+	sortedDeps := sortedUniqueDeps(graph)
 
 	components := make([]sbomComponent, 0, len(sortedDeps))
 	seen := make(map[string]bool)
@@ -150,22 +145,47 @@ func collectComponents(ctx context.Context, db store.IndexStore, proj *store.Pro
 
 	// Best-effort: try reading go.mod for version information.
 	modInfo := readGoMod(proj.Path)
-	if modInfo != nil {
-		for i, c := range components {
-			if v, ok := modInfo.versions[c.Name]; ok {
-				components[i].Version = v
-			}
-		}
-		if modInfo.module != "" {
-			components = append(components, sbomComponent{
-				Name:    modInfo.module,
-				Version: modInfo.goVersion,
-				Type:    "module",
-			})
+	components = applyGoModVersions(components, modInfo)
+
+	return components, nil
+}
+
+// sortedUniqueDeps builds a sorted list of unique dependency targets from the graph.
+func sortedUniqueDeps(graph map[string][]string) []string {
+	depSet := make(map[string]bool)
+	for _, targets := range graph {
+		for _, t := range targets {
+			depSet[t] = true
 		}
 	}
 
-	return components, nil
+	sortedDeps := make([]string, 0, len(depSet))
+	for d := range depSet {
+		sortedDeps = append(sortedDeps, d)
+	}
+	sort.Strings(sortedDeps)
+	return sortedDeps
+}
+
+// applyGoModVersions merges version info from go.mod into the components list
+// (and appends the module entry if present). Nil modInfo is a no-op.
+func applyGoModVersions(components []sbomComponent, modInfo *goModInfo) []sbomComponent {
+	if modInfo == nil {
+		return components
+	}
+	for i, c := range components {
+		if v, ok := modInfo.versions[c.Name]; ok {
+			components[i].Version = v
+		}
+	}
+	if modInfo.module != "" {
+		components = append(components, sbomComponent{
+			Name:    modInfo.module,
+			Version: modInfo.goVersion,
+			Type:    "module",
+		})
+	}
+	return components
 }
 
 // goModInfo is a lightweight view of a go.mod file.
@@ -190,35 +210,77 @@ func readGoMod(projectPath string) *goModInfo {
 		if line == "" || strings.HasPrefix(line, "//") {
 			continue
 		}
-		if strings.HasPrefix(line, "module ") {
-			info.module = strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		if parseModuleLine(line, info) {
 			continue
 		}
-		if strings.HasPrefix(line, "go ") {
-			info.goVersion = strings.TrimSpace(strings.TrimPrefix(line, "go "))
+		if parseGoVersionLine(line, info) {
 			continue
 		}
-		if strings.HasPrefix(line, "require (") {
-			inRequire = true
+		if parseRequireBlockStart(line, &inRequire) {
 			continue
 		}
-		if line == ")" {
-			inRequire = false
+		if parseRequireBlockEnd(line, &inRequire) {
 			continue
 		}
 		if inRequire {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				pkg := parts[0]
-				ver := parts[1]
-				dir := strings.TrimPrefix(pkg, info.module+"/") + "/"
-				if dir != "" && dir != "/" {
-					info.versions[dir] = ver
-				}
-			}
+			parseRequireLine(line, info)
 		}
 	}
 	return info
+}
+
+// parseModuleLine sets info.module if the line starts with "module ".
+// Returns true if it handled the line.
+func parseModuleLine(line string, info *goModInfo) bool {
+	if strings.HasPrefix(line, "module ") {
+		info.module = strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		return true
+	}
+	return false
+}
+
+// parseGoVersionLine sets info.goVersion if the line starts with "go ".
+// Returns true if it handled the line.
+func parseGoVersionLine(line string, info *goModInfo) bool {
+	if strings.HasPrefix(line, "go ") {
+		info.goVersion = strings.TrimSpace(strings.TrimPrefix(line, "go "))
+		return true
+	}
+	return false
+}
+
+// parseRequireBlockStart sets inRequire=true if the line starts a require block.
+// Returns true if it handled the line.
+func parseRequireBlockStart(line string, inRequire *bool) bool {
+	if strings.HasPrefix(line, "require (") {
+		*inRequire = true
+		return true
+	}
+	return false
+}
+
+// parseRequireBlockEnd sets inRequire=false on a closing ")" for require block.
+// Returns true if it handled the line.
+func parseRequireBlockEnd(line string, inRequire *bool) bool {
+	if line == ")" {
+		*inRequire = false
+		return true
+	}
+	return false
+}
+
+// parseRequireLine extracts a require entry inside a require block and populates
+// info.versions using the module-relative dir key. It is a no-op for malformed lines.
+func parseRequireLine(line string, info *goModInfo) {
+	parts := strings.Fields(line)
+	if len(parts) >= 2 {
+		pkg := parts[0]
+		ver := parts[1]
+		dir := strings.TrimPrefix(pkg, info.module+"/") + "/"
+		if dir != "" && dir != "/" {
+			info.versions[dir] = ver
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

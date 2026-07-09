@@ -13,16 +13,40 @@ import (
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
+const errJobNotFound = "job not found"
+
 // StartWorkers launches n background workers that drain queued index jobs until
 // ctx is cancelled. Git projects are cloned/pulled into dataDir first.
+//
+// A single shared LISTEN connection is used for all workers. Each worker used
+// to call ListenJobInsert independently, which acquired one pool connection per
+// worker and held it forever — with the default pgxpool size (~4) that exhausted
+// the pool and hung every authenticated API request (TokenByHash could not
+// acquire a connection).
 func (s *Server) StartWorkers(ctx context.Context, n int, dataDir string) {
 	if n < 1 {
 		n = 1
 	}
+	notifyCh := s.openJobNotify(ctx)
 	for i := 0; i < n; i++ {
-		go s.worker(ctx, dataDir)
+		go s.worker(ctx, dataDir, notifyCh)
 	}
 	s.log.Info("job workers started", "count", n)
+}
+
+// openJobNotify starts one shared LISTEN/NOTIFY channel, or returns nil to fall
+// back to polling when the store does not support it / setup fails.
+func (s *Server) openJobNotify(ctx context.Context) <-chan string {
+	jn, ok := s.store.(store.JobNotifier)
+	if !ok {
+		return nil
+	}
+	ch, err := jn.ListenJobInsert(ctx)
+	if err != nil {
+		s.log.Warn("LISTEN/NOTIFY unavailable, falling back to polling", "err", err)
+		return nil
+	}
+	return ch
 }
 
 // waitForJob blocks until a job notification arrives, the poll ticker fires,
@@ -45,18 +69,7 @@ func (s *Server) waitForJob(ctx context.Context, notifyCh <-chan string) {
 	}
 }
 
-func (s *Server) worker(ctx context.Context, dataDir string) {
-	// Try LISTEN/NOTIFY for immediate job dispatch.
-	var notifyCh <-chan string
-	if jn, ok := s.store.(store.JobNotifier); ok {
-		var err error
-		notifyCh, err = jn.ListenJobInsert(ctx)
-		if err != nil {
-			s.log.Warn("LISTEN/NOTIFY unavailable, falling back to polling", "err", err)
-			notifyCh = nil
-		}
-	}
-
+func (s *Server) worker(ctx context.Context, dataDir string, notifyCh <-chan string) {
 	for {
 		// Drain all currently-queued jobs before sleeping again.
 		for s.claimAndRun(ctx, dataDir) {
@@ -256,7 +269,7 @@ func (s *Server) handleGetProjectJob(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeJobForProject(w http.ResponseWriter, r *http.Request, project string, id int) {
 	job, err := s.store.GetJob(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONError(w, http.StatusNotFound, "job not found")
+		writeJSONError(w, http.StatusNotFound, errJobNotFound)
 		return
 	}
 	if err != nil {
@@ -266,14 +279,14 @@ func (s *Server) writeJobForProject(w http.ResponseWriter, r *http.Request, proj
 	proj, err := s.store.GetProjectByID(r.Context(), job.ProjectID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeJSONError(w, http.StatusNotFound, "job not found")
+			writeJSONError(w, http.StatusNotFound, errJobNotFound)
 			return
 		}
 		writeJSONError(w, http.StatusInternalServerError, "could not load job")
 		return
 	}
 	if proj.Name != project {
-		writeJSONError(w, http.StatusNotFound, "job not found")
+		writeJSONError(w, http.StatusNotFound, errJobNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, jobViewFromStore(job))
