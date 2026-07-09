@@ -38,7 +38,7 @@ func (a *Admin) apiProjectFilesBatch(w http.ResponseWriter, r *http.Request, ac 
 	name := r.PathValue("project")
 	proj, err := a.store.GetProject(r.Context(), name)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "project not found")
+		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 		return
 	}
 	if err != nil {
@@ -52,7 +52,7 @@ func (a *Admin) apiProjectFilesBatch(w http.ResponseWriter, r *http.Request, ac 
 
 	var body ingestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid JSON body")
+		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSONBody)
 		return
 	}
 	if len(body.Files) == 0 && len(body.Delete) == 0 {
@@ -114,7 +114,7 @@ func (a *Admin) apiProjectFilesBatch(w http.ResponseWriter, r *http.Request, ac 
 		}
 		if len(f.Content) > adminIngestMaxFileBytes {
 			errs++
-			fileErrors = append(fileErrors, map[string]string{"path": p, "error": "file too large for browser ingest (max 512KiB)"})
+			fileErrors = append(fileErrors, map[string]string{"path": p, "error": spaErrFileTooLargeIngest})
 			continue
 		}
 		n, ierr := idx.IndexContent(ctx, proj.ID, p, model, []byte(f.Content))
@@ -145,7 +145,7 @@ func (a *Admin) apiProjectArchiveBatch(w http.ResponseWriter, r *http.Request, a
 	name := r.PathValue("project")
 	proj, err := a.store.GetProject(r.Context(), name)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "project not found")
+		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 		return
 	}
 	if err != nil {
@@ -226,7 +226,7 @@ func (a *Admin) apiProjectArchiveBatch(w http.ResponseWriter, r *http.Request, a
 		}
 		if zf.UncompressedSize64 > adminIngestMaxFileBytes {
 			errs++
-			fileErrors = append(fileErrors, map[string]string{"path": p, "error": "file too large for browser ingest (max 512KiB)"})
+			fileErrors = append(fileErrors, map[string]string{"path": p, "error": spaErrFileTooLargeIngest})
 			continue
 		}
 		rc, err := zf.Open()
@@ -244,7 +244,7 @@ func (a *Admin) apiProjectArchiveBatch(w http.ResponseWriter, r *http.Request, a
 		}
 		if len(content) > adminIngestMaxFileBytes {
 			errs++
-			fileErrors = append(fileErrors, map[string]string{"path": p, "error": "file too large for browser ingest (max 512KiB)"})
+			fileErrors = append(fileErrors, map[string]string{"path": p, "error": spaErrFileTooLargeIngest})
 			continue
 		}
 		if !utf8.Valid(content) {

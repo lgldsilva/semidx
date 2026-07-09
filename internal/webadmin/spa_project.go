@@ -145,7 +145,7 @@ func (a *Admin) apiProjectDetail(w http.ResponseWriter, r *http.Request, ac *aut
 	name := r.PathValue("project")
 	proj, err := a.store.GetProject(r.Context(), name)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "project not found")
+		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 		return
 	}
 	if err != nil {
@@ -170,7 +170,7 @@ func (a *Admin) apiProjectFiles(w http.ResponseWriter, r *http.Request, ac *auth
 	name := r.PathValue("project")
 	proj, err := a.store.GetProject(r.Context(), name)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "project not found")
+		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 		return
 	}
 	if err != nil {
@@ -241,7 +241,7 @@ func (a *Admin) apiProjectFileContent(w http.ResponseWriter, r *http.Request, ac
 	}
 	proj, err := a.store.GetProject(r.Context(), name)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "project not found")
+		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 		return
 	}
 	if err != nil {
@@ -298,7 +298,7 @@ func (a *Admin) apiProjectJobs(w http.ResponseWriter, r *http.Request, ac *authC
 	name := r.PathValue("project")
 	proj, err := a.store.GetProject(r.Context(), name)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "project not found")
+		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 		return
 	}
 	if err != nil {

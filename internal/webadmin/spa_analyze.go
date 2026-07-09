@@ -25,7 +25,7 @@ func (a *Admin) apiProjectCallers(w http.ResponseWriter, r *http.Request, ac *au
 	proj, err := a.store.GetProject(r.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeJSONErr(w, http.StatusNotFound, "project not found")
+			writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 			return
 		}
 		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
@@ -71,7 +71,7 @@ func (a *Admin) apiProjectDeadCode(w http.ResponseWriter, r *http.Request, ac *a
 	proj, err := a.store.GetProject(r.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeJSONErr(w, http.StatusNotFound, "project not found")
+			writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 			return
 		}
 		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
@@ -125,7 +125,7 @@ func (a *Admin) apiProjectDeps(w http.ResponseWriter, r *http.Request, ac *authC
 	proj, err := a.store.GetProject(r.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeJSONErr(w, http.StatusNotFound, "project not found")
+			writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 			return
 		}
 		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
