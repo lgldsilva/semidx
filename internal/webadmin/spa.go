@@ -40,7 +40,7 @@ func spaFileServer() http.Handler {
 		// Try static file first.
 		f, err := sub.Open(rel)
 		if err == nil {
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 			if st, statErr := f.Stat(); statErr == nil && !st.IsDir() {
 				// http.ServeContent needs a ReadSeeker.
 				if rs, ok := f.(io.ReadSeeker); ok {
@@ -60,7 +60,7 @@ func serveSPAIndex(w http.ResponseWriter, r *http.Request, sub fs.FS) {
 		http.Error(w, "admin SPA index missing — run npm run build in web/", http.StatusInternalServerError)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil {
 		http.Error(w, "admin SPA index stat failed", http.StatusInternalServerError)
