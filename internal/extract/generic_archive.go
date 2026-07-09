@@ -100,51 +100,48 @@ func extractZipEntries(name string, data []byte, depth int) ([]Doc, error) {
 		if f.FileInfo().IsDir() {
 			continue
 		}
-		if len(docs) >= maxArchiveEntries {
-			break
-		}
-		if totalSize >= maxArchiveTotalSize {
+		if len(docs) >= maxArchiveEntries || totalSize >= maxArchiveTotalSize {
 			break
 		}
 
-		entryName := f.Name
-		virtualPath := name + "!" + entryName
-		entryExt := strings.ToLower(path.Ext(entryName))
-
-		// Check if the entry is itself an archive and we're within depth limit.
-		if depth < maxArchiveDepth && isGenericArchive(entryName) {
-			entryData, err := readZipEntryBytes(f)
-			if err != nil {
-				continue
-			}
-			innerDocs, ierr := extractArchiveEntries(virtualPath, entryData, depth+1)
-			if ierr == nil {
-				docs = append(docs, innerDocs...)
-			}
-			continue
-		}
-
-		// Only index text entries.
-		if !isTextEntry(entryExt) {
-			continue
-		}
-
-		raw, err := readZipEntryBytes(f)
-		if err != nil || !utf8.Valid(raw) {
-			continue
-		}
-		text := string(raw)
-		if strings.TrimSpace(text) == "" {
-			continue
-		}
-		if totalSize+len(text) > maxArchiveTotalSize {
-			continue
-		}
-		totalSize += len(text)
-		docs = append(docs, Doc{Path: virtualPath, Text: text})
+		entryDocs := tryProcessZipEntry(f, name, depth, &totalSize)
+		docs = append(docs, entryDocs...)
 	}
 
 	return docs, nil
+}
+
+func tryProcessZipEntry(f *zip.File, name string, depth int, totalSize *int) []Doc {
+	entryName := f.Name
+	virtualPath := name + "!" + entryName
+	entryExt := strings.ToLower(path.Ext(entryName))
+
+	if depth < maxArchiveDepth && isGenericArchive(entryName) {
+		entryData, err := readZipEntryBytes(f)
+		if err != nil {
+			return nil
+		}
+		innerDocs, _ := extractArchiveEntries(virtualPath, entryData, depth+1)
+		return innerDocs
+	}
+
+	if !isTextEntry(entryExt) {
+		return nil
+	}
+
+	raw, err := readZipEntryBytes(f)
+	if err != nil || !utf8.Valid(raw) {
+		return nil
+	}
+	text := string(raw)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	if *totalSize+len(text) > maxArchiveTotalSize {
+		return nil
+	}
+	*totalSize += len(text)
+	return []Doc{{Path: virtualPath, Text: text}}
 }
 
 // extractTarEntries reads entries from a tar archive, optionally wrapped in a
