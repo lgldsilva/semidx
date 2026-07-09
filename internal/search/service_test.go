@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 // fakeStore implements store.Store; only the methods Search uses are overridden.
 type fakeStore struct {
 	store.Store
+	mu           sync.Mutex
 	project      *store.Project
 	getErr       error
 	listErr      error
@@ -55,7 +57,9 @@ func (f *fakeStore) ListProjects(context.Context, int, int) ([]store.Project, er
 	return nil, nil
 }
 func (f *fakeStore) SearchSimilar(ctx context.Context, projectID int, embedding []float32, dims, topK int) ([]store.SearchResult, error) {
+	f.mu.Lock()
 	f.gotTopK = topK
+	f.mu.Unlock()
 	if f.simErr != nil {
 		return nil, f.simErr
 	}
@@ -64,22 +68,28 @@ func (f *fakeStore) SearchSimilar(ctx context.Context, projectID int, embedding 
 	return out, nil
 }
 func (f *fakeStore) SearchSimilarWorktree(ctx context.Context, projectID int, embedding []float32, dims, topK int, worktree string) ([]store.SearchResult, error) {
+	f.mu.Lock()
 	f.usedWorktree = true
 	f.gotTopK = topK
+	f.mu.Unlock()
 	return f.simResults, nil
 }
 func (f *fakeStore) SearchSimilarKeywords(ctx context.Context, projectID int, queryText string, dims, topK int) ([]store.SearchResult, error) {
+	f.mu.Lock()
 	f.usedKW = true
 	f.gotTopK = topK
+	f.mu.Unlock()
 	if f.kwErr != nil {
 		return nil, f.kwErr
 	}
 	return f.kwResults, nil
 }
 func (f *fakeStore) SearchSimilarKeywordsWorktree(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]store.SearchResult, error) {
+	f.mu.Lock()
 	f.usedWorktree = true
 	f.usedKW = true
 	f.gotTopK = topK
+	f.mu.Unlock()
 	if f.kwErr != nil {
 		return nil, f.kwErr
 	}
