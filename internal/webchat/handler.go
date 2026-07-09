@@ -23,6 +23,9 @@ const (
 const hdrContentType = "Content-Type"
 const mimeJSON = "application/json"
 
+const errQuestionRequired = "question is required"
+const sseDataFmt = "data: %s\n\n"
+
 // jsonKey constants used in SSE payloads.
 const (
 	jsonKeyType    = "type"
@@ -88,7 +91,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	if req.Question == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(errorResponse{Error: "question is required"})
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: errQuestionRequired})
 		return
 	}
 
@@ -163,7 +166,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.log.Error("stream ask failed", "err", err)
 		errJSON, _ := json.Marshal(map[string]string{jsonKeyType: sseTypeError, jsonKeyError: publicChatError(err)})
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", errJSON)
+		_, _ = fmt.Fprintf(w, sseDataFmt, errJSON)
 		flusher.Flush()
 		return
 	}
@@ -184,8 +187,8 @@ func (s *Server) validateChatStreamRequest(w http.ResponseWriter, r *http.Reques
 	if req.Question == "" {
 		w.Header().Set(hdrContentType, mimeJSON)
 		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(errorResponse{Error: "question is required"})
-		return chatRequest{}, "", fmt.Errorf("question is required")
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: errQuestionRequired})
+		return chatRequest{}, "", fmt.Errorf(errQuestionRequired)
 	}
 
 	project, err := s.resolveProject(req.Project)
@@ -211,12 +214,8 @@ func (s *Server) streamChatChunks(ctx context.Context, w http.ResponseWriter, fl
 			return resolvedModel
 		case chunk, ok := <-chunks:
 			if !ok {
-				if resolvedModel == "" {
-					resolvedModel = modelName
-				}
-				doneJSON, _ := json.Marshal(map[string]any{jsonKeyType: sseTypeDone, jsonKeyModel: resolvedModel})
-				_, _ = fmt.Fprintf(w, "data: %s\n\n", doneJSON)
-				flusher.Flush()
+				resolvedModel = s.resolveModel(resolvedModel, "", modelName)
+				s.sendSSE(w, flusher, map[string]any{jsonKeyType: sseTypeDone, jsonKeyModel: resolvedModel})
 				return resolvedModel
 			}
 
@@ -224,25 +223,32 @@ func (s *Server) streamChatChunks(ctx context.Context, w http.ResponseWriter, fl
 				if chunk.Model != "" {
 					resolvedModel = chunk.Model
 				}
-				chunkJSON, _ := json.Marshal(map[string]any{jsonKeyType: sseTypeChunk, jsonKeyContent: chunk.Content})
-				_, _ = fmt.Fprintf(w, "data: %s\n\n", chunkJSON)
-				flusher.Flush()
+				s.sendSSE(w, flusher, map[string]any{jsonKeyType: sseTypeChunk, jsonKeyContent: chunk.Content})
 			}
 
 			if chunk.Done {
-				if chunk.Model != "" {
-					resolvedModel = chunk.Model
-				}
-				if resolvedModel == "" {
-					resolvedModel = modelName
-				}
-				doneJSON, _ := json.Marshal(map[string]any{jsonKeyType: sseTypeDone, jsonKeyModel: resolvedModel})
-				_, _ = fmt.Fprintf(w, "data: %s\n\n", doneJSON)
-				flusher.Flush()
+				resolvedModel = s.resolveModel(resolvedModel, chunk.Model, modelName)
+				s.sendSSE(w, flusher, map[string]any{jsonKeyType: sseTypeDone, jsonKeyModel: resolvedModel})
 				return resolvedModel
 			}
 		}
 	}
+}
+
+func (s *Server) sendSSE(w http.ResponseWriter, flusher http.Flusher, payload map[string]any) {
+	data, _ := json.Marshal(payload)
+	_, _ = fmt.Fprintf(w, sseDataFmt, data)
+	flusher.Flush()
+}
+
+func (s *Server) resolveModel(current, chunkModel, defaultModel string) string {
+	if chunkModel != "" {
+		return chunkModel
+	}
+	if current != "" {
+		return current
+	}
+	return defaultModel
 }
 
 func (s *Server) sendChatSources(w http.ResponseWriter, flusher http.Flusher, sources []rag.Source, resolvedModel string, fallback bool) {
@@ -261,9 +267,9 @@ func (s *Server) sendChatSources(w http.ResponseWriter, flusher http.Flusher, so
 		jsonKeyType:    sseTypeSources,
 		jsonKeySources: srcEntries,
 		jsonKeyModel:   resolvedModel,
-		"fallback": fallback,
+		"fallback":     fallback,
 	})
-	_, _ = fmt.Fprintf(w, "data: %s\n\n", sourcesJSON)
+	_, _ = fmt.Fprintf(w, sseDataFmt, sourcesJSON)
 	flusher.Flush()
 }
 

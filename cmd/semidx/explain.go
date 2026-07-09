@@ -17,6 +17,8 @@ import (
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
+const explainIndent = "    %s\n"
+
 // newExplainCmd returns the `semidx explain` command, which shows structured
 // information about a symbol at a given file:line reference.
 func newExplainCmd(d *deps) *cobra.Command {
@@ -148,7 +150,7 @@ func printExplainInfo(displayName string, sym *analyzer.Symbol, fl fileLineArg, 
 	if len(fileImports) > 0 {
 		sort.Strings(fileImports)
 		for _, dep := range fileImports {
-			fmt.Printf("    %s\n", dep)
+			fmt.Printf(explainIndent, dep)
 		}
 	} else {
 		fmt.Println("    (none detected)")
@@ -157,7 +159,7 @@ func printExplainInfo(displayName string, sym *analyzer.Symbol, fl fileLineArg, 
 	fmt.Printf("\n  Imported by (%d files):\n", len(importers))
 	if len(importers) > 0 {
 		for _, imp := range importers {
-			fmt.Printf("    %s\n", imp)
+			fmt.Printf(explainIndent, imp)
 		}
 	} else {
 		fmt.Println("    (none — this package is not imported by any indexed file)")
@@ -167,7 +169,7 @@ func printExplainInfo(displayName string, sym *analyzer.Symbol, fl fileLineArg, 
 	if len(testFiles) > 0 {
 		sort.Strings(testFiles)
 		for _, tf := range testFiles {
-			fmt.Printf("    %s\n", tf)
+			fmt.Printf(explainIndent, tf)
 		}
 	} else {
 		fmt.Println("    (none found)")

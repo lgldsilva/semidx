@@ -121,13 +121,23 @@ func recordEncryptedPending(tgt indexTarget, model, projectPath string, docs boo
 		stats.FilesEncrypted, projectPath, docsFlagHint(docs))
 }
 
+// indexCmdOpts groups flags for `semidx index` (keeps runIndex under the
+// Sonar S107 parameter limit).
+type indexCmdOpts struct {
+	projectPath string
+	model       string
+	gitSince    string
+	branch      string
+	maxFiles    int
+	gitMode     bool
+	verbose     bool
+	privacy     bool
+	watch       bool
+	docs        bool
+}
+
 func newIndexCmd(d *deps) *cobra.Command {
-	var (
-		projectPath, model, gitSince, branch string
-		maxFiles                             int
-		gitMode, verbose, privacy, watch     bool
-		docs                                 bool
-	)
+	var opts indexCmdOpts
 	c := &cobra.Command{
 		Use:   "index",
 		Short: "Index a project directory",
@@ -149,86 +159,92 @@ With no embedding provider configured, add --keyword to index text-only.`,
   semidx index --project . --keyword       # no embeddings, keyword-only
   semidx index --project . --branch develop  # index as "repo@develop"`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			d.applyPrivacy(privacy)
-			if systemDirs[filepath.Clean(projectPath)] {
-				return fmt.Errorf("refusing to index system directory: %s", filepath.Clean(projectPath))
-			}
-
-			ctx := cmd.Context()
-			db, err := d.indexStore(ctx)
-			if err != nil {
-				return err
-			}
-
-			// A git project is one logical index keyed by repo identity; a non-git
-			// dir (or --docs) is a document folder keyed by its absolute path.
-			tgt := resolveTarget(ctx, projectPath, docs)
-
-			// When --branch is set, suffix both the identity and display name so the
-			// branch gets its own project row (separate from the main branch).
-			tgt = applyBranchSuffix(tgt, branch)
-
-			// Keyword-only mode needs no model: dims come from the fixed text bucket.
-			dims, err := d.modelDims(ctx, model)
-			if err != nil {
-				return fmt.Errorf("model info for %s: %w (no embedding provider reachable? re-run with --keyword to index text-only)", model, err)
-			}
-			printIndexHeader(tgt, model, dims, d.keywordOnly)
-
-			if err := db.EnsureChunksTable(ctx, dims); err != nil {
-				return fmt.Errorf("ensure chunks table: %w", err)
-			}
-			projectID, err := db.EnsureProjectIdentity(ctx, tgt.identity, tgt.name, tgt.indexPath, model, tgt.sourceType, dims)
-			if err != nil {
-				return fmt.Errorf("register project: %w", err)
-			}
-
-			indexer := indexing.NewIndexer(db, d.emb, dims, indexing.IndexerOpts{
-				Workers:             d.cfg.IndexWorkers,
-				EmbedBatchSize:      d.cfg.EmbedBatchSize,
-				MaxFileSize:         d.cfg.MaxFileSize,
-				MaxChunksPerFile:    d.cfg.MaxChunksPerFile,
-				MaxChunksPerProject: d.cfg.MaxChunksPerProject,
-				Verbose:             verbose,
-				GitMode:             gitMode,
-				GitSince:            gitSince,
-			}).
-				SetKeywordOnly(d.keywordOnly).
-				SetWorktree(tgt.worktree).
-				SetSecretScan(tgt.indexPath, d.cfg.SecretScan || d.cfg.SecretBlockEmbedding, d.cfg.SecretBlockEmbedding)
-			start := time.Now()
-			stats, err := indexer.IndexProject(ctx, projectID, tgt.indexPath, model, maxFiles)
-			if err != nil {
-				return fmt.Errorf("index project: %w", err)
-			}
-			fmt.Printf("\nDone in %v\nFiles scanned: %d\nFiles indexed: %d\nFiles skipped (unchanged): %d\nChunks created: %d\nErrors: %d\n",
-				time.Since(start), stats.FilesScanned, stats.FilesIndexed, stats.FilesSkipped, stats.ChunksCreated, stats.Errors)
-
-			// Record password-protected files so `semidx unlock` can find them, and
-			// point the user at it.
-			recordEncryptedPending(tgt, model, projectPath, docs, stats)
-
-			// --watch mode: start the filesystem watcher after initial indexing.
-			if watch {
-				watcher := indexing.NewWatcher(projectID, tgt.indexPath, model, indexer)
-				if err := watcher.Watch(ctx); err != nil && err != context.Canceled {
-					return fmt.Errorf("watcher: %w", err)
-				}
-			}
-			return nil
+			return runIndex(cmd, d, opts)
 		},
 	}
-	c.Flags().StringVar(&projectPath, "project", ".", "Path to the project directory (default: current directory)")
-	c.Flags().StringVar(&model, "model", "bge-m3", "Embedding model name")
-	c.Flags().IntVar(&maxFiles, "max-files", 0, "Limit number of files to index (0 = all)")
-	c.Flags().BoolVar(&docs, "docs", false, "Treat the path as a document folder (absolute-path identity), even inside a git repo")
-	c.Flags().BoolVar(&gitMode, "git", false, "Also index git history (git log -p)")
-	c.Flags().StringVar(&gitSince, "git-since", "30.days", "git log --since duration (e.g. 7.days)")
-	c.Flags().StringVar(&branch, "branch", "", "Index as a separate project for this branch (suffixes identity and display name; no git checkout performed)")
-	c.Flags().BoolVar(&verbose, "verbose", false, "Show detailed progress and errors")
-	c.Flags().BoolVar(&privacy, "privacy", false, "Force local-only providers (Ollama)")
-	c.Flags().BoolVar(&watch, "watch", false, "Watch for file changes and re-index automatically")
+	c.Flags().StringVar(&opts.projectPath, "project", ".", "Path to the project directory (default: current directory)")
+	c.Flags().StringVar(&opts.model, "model", "bge-m3", "Embedding model name")
+	c.Flags().IntVar(&opts.maxFiles, "max-files", 0, "Limit number of files to index (0 = all)")
+	c.Flags().BoolVar(&opts.docs, "docs", false, "Treat the path as a document folder (absolute-path identity), even inside a git repo")
+	c.Flags().BoolVar(&opts.gitMode, "git", false, "Also index git history (git log -p)")
+	c.Flags().StringVar(&opts.gitSince, "git-since", "30.days", "git log --since duration (e.g. 7.days)")
+	c.Flags().StringVar(&opts.branch, "branch", "", "Index as a separate project for this branch (suffixes identity and display name; no git checkout performed)")
+	c.Flags().BoolVar(&opts.verbose, "verbose", false, "Show detailed progress and errors")
+	c.Flags().BoolVar(&opts.privacy, "privacy", false, "Force local-only providers (Ollama)")
+	c.Flags().BoolVar(&opts.watch, "watch", false, "Watch for file changes and re-index automatically")
 	return c
+}
+
+// runIndex executes the core logic of `index`. Extracted from the RunE of
+// newIndexCmd to reduce cognitive complexity.
+func runIndex(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
+	d.applyPrivacy(opts.privacy)
+	if systemDirs[filepath.Clean(opts.projectPath)] {
+		return fmt.Errorf("refusing to index system directory: %s", filepath.Clean(opts.projectPath))
+	}
+
+	ctx := cmd.Context()
+	db, err := d.indexStore(ctx)
+	if err != nil {
+		return err
+	}
+
+	// A git project is one logical index keyed by repo identity; a non-git
+	// dir (or --docs) is a document folder keyed by its absolute path.
+	tgt := resolveTarget(ctx, opts.projectPath, opts.docs)
+
+	// When --branch is set, suffix both the identity and display name so the
+	// branch gets its own project row (separate from the main branch).
+	tgt = applyBranchSuffix(tgt, opts.branch)
+
+	// Keyword-only mode needs no model: dims come from the fixed text bucket.
+	dims, err := d.modelDims(ctx, opts.model)
+	if err != nil {
+		return fmt.Errorf("model info for %s: %w (no embedding provider reachable? re-run with --keyword to index text-only)", opts.model, err)
+	}
+	printIndexHeader(tgt, opts.model, dims, d.keywordOnly)
+
+	if err := db.EnsureChunksTable(ctx, dims); err != nil {
+		return fmt.Errorf("ensure chunks table: %w", err)
+	}
+	projectID, err := db.EnsureProjectIdentity(ctx, tgt.identity, tgt.name, tgt.indexPath, opts.model, tgt.sourceType, dims)
+	if err != nil {
+		return fmt.Errorf("register project: %w", err)
+	}
+
+	indexer := indexing.NewIndexer(db, d.emb, dims, indexing.IndexerOpts{
+		Workers:             d.cfg.IndexWorkers,
+		EmbedBatchSize:      d.cfg.EmbedBatchSize,
+		MaxFileSize:         d.cfg.MaxFileSize,
+		MaxChunksPerFile:    d.cfg.MaxChunksPerFile,
+		MaxChunksPerProject: d.cfg.MaxChunksPerProject,
+		Verbose:             opts.verbose,
+		GitMode:             opts.gitMode,
+		GitSince:            opts.gitSince,
+	}).
+		SetKeywordOnly(d.keywordOnly).
+		SetWorktree(tgt.worktree).
+		SetSecretScan(tgt.indexPath, d.cfg.SecretScan || d.cfg.SecretBlockEmbedding, d.cfg.SecretBlockEmbedding)
+	start := time.Now()
+	stats, err := indexer.IndexProject(ctx, projectID, tgt.indexPath, opts.model, opts.maxFiles)
+	if err != nil {
+		return fmt.Errorf("index project: %w", err)
+	}
+	fmt.Printf("\nDone in %v\nFiles scanned: %d\nFiles indexed: %d\nFiles skipped (unchanged): %d\nChunks created: %d\nErrors: %d\n",
+		time.Since(start), stats.FilesScanned, stats.FilesIndexed, stats.FilesSkipped, stats.ChunksCreated, stats.Errors)
+
+	// Record password-protected files so `semidx unlock` can find them, and
+	// point the user at it.
+	recordEncryptedPending(tgt, opts.model, opts.projectPath, opts.docs, stats)
+
+	// --watch mode: start the filesystem watcher after initial indexing.
+	if opts.watch {
+		watcher := indexing.NewWatcher(projectID, tgt.indexPath, opts.model, indexer)
+		if err := watcher.Watch(ctx); err != nil && err != context.Canceled {
+			return fmt.Errorf("watcher: %w", err)
+		}
+	}
+	return nil
 }
 
 func newSearchCmd(d *deps) *cobra.Command {

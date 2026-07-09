@@ -194,31 +194,39 @@ func printTransitiveCallers(graph map[string][]string, directCallers []string, e
 	if len(directCallers) == 0 {
 		return
 	}
-	transitive := make(map[string]bool)
-	for _, dc := range directCallers {
-		for src, targets := range graph {
-			for _, tgt := range targets {
-				if tgt == filepath.Dir(dc)+"/" && src != excludeFile {
-					transitive[src] = true
-				}
-			}
-		}
-	}
-	// Remove direct callers from transitive set.
-	for _, dc := range directCallers {
-		delete(transitive, dc)
-	}
-
-	if len(transitive) == 0 {
+	tcList := collectTransitiveCallers(graph, directCallers, excludeFile)
+	if len(tcList) == 0 {
 		return
 	}
-	var tcList []string
-	for t := range transitive {
-		tcList = append(tcList, t)
-	}
-	sort.Strings(tcList)
 	fmt.Printf("\n  Transitive (%d):\n", len(tcList))
 	for _, t := range tcList {
 		fmt.Printf("    %s\n", t)
 	}
+}
+
+func collectTransitiveCallers(graph map[string][]string, directCallers []string, excludeFile string) []string {
+	transitive := make(map[string]bool)
+	for _, dc := range directCallers {
+		want := filepath.Dir(dc) + "/"
+		for src, targets := range graph {
+			if src == excludeFile {
+				continue
+			}
+			for _, tgt := range targets {
+				if tgt == want {
+					transitive[src] = true
+					break
+				}
+			}
+		}
+	}
+	for _, dc := range directCallers {
+		delete(transitive, dc)
+	}
+	tcList := make([]string, 0, len(transitive))
+	for t := range transitive {
+		tcList = append(tcList, t)
+	}
+	sort.Strings(tcList)
+	return tcList
 }
