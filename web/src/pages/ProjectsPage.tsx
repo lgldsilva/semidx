@@ -259,52 +259,58 @@ export function ProjectsPage() {
                       ? `#${p.last_job.id} ${p.last_job.status}`
                       : '—'}
                   </td>
-                  <td className="row-actions">
-                    <button
-                      type="button"
-                      className="link"
-                      onClick={() =>
-                        navigate(`/projects/${encodeURIComponent(p.name)}`)
-                      }
-                    >
-                      Open
-                    </button>
-                    <button
-                      type="button"
-                      className="link"
-                      onClick={() =>
-                        navigate(
-                          `/projects/${encodeURIComponent(p.name)}?tab=explore`,
-                        )
-                      }
-                    >
-                      Explore
-                    </button>
-                    <button
-                      type="button"
-                      className="link"
-                      onClick={() =>
-                        navigate(
-                          `/projects/${encodeURIComponent(p.name)}?tab=chat`,
-                        )
-                      }
-                    >
-                      Chat
-                    </button>
-                    <button
-                      type="button"
-                      className="link"
-                      onClick={() => void onReindex(p.name)}
-                    >
-                      Reindex
-                    </button>
-                    <button
-                      type="button"
-                      className="link danger-text"
-                      onClick={() => void onDelete(p.name)}
-                    >
-                      Delete
-                    </button>
+                  <td className="table-actions">
+                    <div className="table-actions-row">
+                      <button
+                        type="button"
+                        className="btn-open"
+                        onClick={() =>
+                          navigate(`/projects/${encodeURIComponent(p.name)}`)
+                        }
+                      >
+                        Open
+                      </button>
+                      <span className="act-sep">·</span>
+                      <button
+                        type="button"
+                        className="link"
+                        onClick={() =>
+                          navigate(
+                            `/projects/${encodeURIComponent(p.name)}?tab=explore`,
+                          )
+                        }
+                      >
+                        Explore
+                      </button>
+                      <span className="act-sep">·</span>
+                      <button
+                        type="button"
+                        className="link"
+                        onClick={() =>
+                          navigate(
+                            `/projects/${encodeURIComponent(p.name)}?tab=chat`,
+                          )
+                        }
+                      >
+                        Chat
+                      </button>
+                      <span className="act-sep">·</span>
+                      <button
+                        type="button"
+                        className="link"
+                        onClick={() => void onReindex(p.name)}
+                      >
+                        Reindex
+                      </button>
+                      <span className="act-sep">·</span>
+                      <button
+                        type="button"
+                        className="link danger-text"
+                        onClick={() => void onDelete(p.name)}
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
