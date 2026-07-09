@@ -140,31 +140,25 @@ type createProjectBody struct {
 	Index      bool   `json:"index"`
 }
 
-func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *authCtx) {
-	_ = ac
-	var body createProjectBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSONBody)
-		return
-	}
+// normalizeCreateProjectBody validates and normalizes a create-project payload.
+// On error it returns the HTTP status and message to send.
+func normalizeCreateProjectBody(body *createProjectBody) (name string, status int, msg string) {
 	body.SourceType = strings.TrimSpace(body.SourceType)
 	if body.SourceType == "" {
 		body.SourceType = "git"
 	}
 	if body.SourceType != "git" && body.SourceType != "push" {
-		writeJSONErr(w, http.StatusBadRequest, "source_type must be git or push")
-		return
+		return "", http.StatusBadRequest, "source_type must be git or push"
 	}
 	if body.Model == "" {
 		body.Model = "bge-m3"
 	}
-	name := strings.TrimSpace(body.Name)
+	name = strings.TrimSpace(body.Name)
 	body.GitURL = strings.TrimSpace(body.GitURL)
 	body.Branch = strings.TrimSpace(body.Branch)
 	if body.SourceType == "git" {
 		if body.GitURL == "" {
-			writeJSONErr(w, http.StatusBadRequest, "git_url is required for source_type=git")
-			return
+			return "", http.StatusBadRequest, "git_url is required for source_type=git"
 		}
 		if body.Branch == "" {
 			body.Branch = "main"
@@ -173,17 +167,29 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 			name = strings.TrimSuffix(path.Base(strings.TrimRight(body.GitURL, "/")), ".git")
 		}
 	} else {
-		// push: empty shell project; client fills via semidx push
 		body.GitURL = ""
 		body.Branch = ""
 		if name == "" {
-			writeJSONErr(w, http.StatusBadRequest, "name is required for source_type=push")
-			return
+			return "", http.StatusBadRequest, "name is required for source_type=push"
 		}
-		body.Index = false // no server-side clone for push projects
+		body.Index = false
 	}
 	if name == "" || name == "." || name == "/" {
-		writeJSONErr(w, http.StatusBadRequest, "could not derive project name — set name explicitly")
+		return "", http.StatusBadRequest, "could not derive project name — set name explicitly"
+	}
+	return name, 0, ""
+}
+
+func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	_ = ac
+	var body createProjectBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSONBody)
+		return
+	}
+	name, status, msg := normalizeCreateProjectBody(&body)
+	if msg != "" {
+		writeJSONErr(w, status, msg)
 		return
 	}
 

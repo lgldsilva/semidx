@@ -28,6 +28,27 @@ type embeddedChunk struct {
 	Embedding []float32 `json:"embedding"`
 }
 
+func validatePreEmbeddedChunks(path string, fileChunks []embeddedChunk, dims int, model string) error {
+	if privacy.IsSensitive(path) {
+		return fmt.Errorf("path %q is classified as sensitive; pre-embedded uploads are not allowed", path)
+	}
+	for i, ch := range fileChunks {
+		if len(ch.Embedding) != dims {
+			return fmt.Errorf("embedding dimension mismatch (chunk %d): got %d dims, expected %d for model %q",
+				i, len(ch.Embedding), dims, model)
+		}
+	}
+	if len(fileChunks) > maxPreChunksPerFile {
+		return fmt.Errorf("too many chunks: %d (max %d)", len(fileChunks), maxPreChunksPerFile)
+	}
+	for i, ch := range fileChunks {
+		if len(ch.Content) > maxPreChunkChars {
+			return fmt.Errorf("chunk %d too large: %d chars (max %d)", i, len(ch.Content), maxPreChunkChars)
+		}
+	}
+	return nil
+}
+
 // batchFileInput is one file in a files/batch push: pre-embedded chunks, raw
 // content, or (invalid) neither.
 type batchFileInput struct {
@@ -214,26 +235,8 @@ func (s *Server) indexBatchFile(ctx context.Context, proj *store.Project, idx *i
 // directly. The raw content is still hashed and recorded for file dedup; only
 // chunking and embedding are skipped.
 func (s *Server) indexPreEmbedded(ctx context.Context, proj *store.Project, path, rawContent string, fileChunks []embeddedChunk, dims int) (int, error) {
-	if privacy.IsSensitive(path) {
-		return 0, fmt.Errorf("path %q is classified as sensitive; pre-embedded uploads are not allowed", path)
-	}
-
-	// P0: validate dimensions match the project's model.
-	for i, ch := range fileChunks {
-		if len(ch.Embedding) != dims {
-			return 0, fmt.Errorf("embedding dimension mismatch (chunk %d): got %d dims, expected %d for model %q",
-				i, len(ch.Embedding), dims, proj.Model)
-		}
-	}
-
-	// P0: enforce chunk limits to prevent rogue clients from flooding the DB.
-	if len(fileChunks) > maxPreChunksPerFile {
-		return 0, fmt.Errorf("too many chunks: %d (max %d)", len(fileChunks), maxPreChunksPerFile)
-	}
-	for i, ch := range fileChunks {
-		if len(ch.Content) > maxPreChunkChars {
-			return 0, fmt.Errorf("chunk %d too large: %d chars (max %d)", i, len(ch.Content), maxPreChunkChars)
-		}
+	if err := validatePreEmbeddedChunks(path, fileChunks, dims, proj.Model); err != nil {
+		return 0, err
 	}
 
 	// Content-addressed dedup: same hash → file is unchanged, skip.

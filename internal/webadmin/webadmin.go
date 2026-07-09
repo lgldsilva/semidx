@@ -13,7 +13,6 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -204,52 +203,16 @@ func (a *Admin) protectAPI(role string, fn authedHandler) http.HandlerFunc {
 
 func (a *Admin) protectMode(role string, fn authedHandler, jsonAPI bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(sessionCookie)
-		if err != nil {
-			if jsonAPI {
-				writeJSONErr(w, http.StatusUnauthorized, "unauthorized")
-				return
-			}
-			a.redirectLogin(w, r)
+		ac, ok := a.resolveAuthCtx(w, r, jsonAPI)
+		if !ok {
 			return
 		}
-		user, err := a.store.SessionUser(r.Context(), hashToken(cookie.Value))
-		if errors.Is(err, store.ErrNotFound) {
-			a.clearSession(w)
-			if jsonAPI {
-				writeJSONErr(w, http.StatusUnauthorized, "unauthorized")
-				return
-			}
-			a.redirectLogin(w, r)
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !a.validCSRF(r, ac) {
+			a.writeCSRFError(w, jsonAPI)
 			return
 		}
-		if err != nil {
-			a.log.Error("session lookup failed", "err", err)
-			if jsonAPI {
-				writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
-				return
-			}
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		ac := &authCtx{user: user, session: cookie.Value, csrf: a.csrfToken(cookie.Value)}
-
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			if !a.validCSRF(r, ac) {
-				if jsonAPI {
-					writeJSONErr(w, http.StatusForbidden, "invalid or missing CSRF token")
-					return
-				}
-				http.Error(w, "invalid or missing CSRF token", http.StatusForbidden)
-				return
-			}
-		}
-		if role == "admin" && user.Role != "admin" {
-			if jsonAPI {
-				writeJSONErr(w, http.StatusForbidden, "admin only")
-				return
-			}
-			http.Error(w, "admin only", http.StatusForbidden)
+		if role == "admin" && ac.user.Role != "admin" {
+			a.writeRoleError(w, jsonAPI)
 			return
 		}
 		fn(w, r, ac)
