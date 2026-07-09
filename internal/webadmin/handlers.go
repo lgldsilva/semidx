@@ -176,31 +176,41 @@ func (a *Admin) mergeProjectSearches(ctx context.Context, projects []store.Proje
 		perProject = 100
 	}
 	for _, proj := range projects {
-		req := search.Request{Query: query, TopK: perProject}
-		if proj.Identity != "" {
-			req.Identity = proj.Identity
-		} else {
-			req.Project = proj.Name
-		}
-		resp, serr := a.search.Search(ctx, req)
+		hits, fb, serr := a.searchProjectHits(ctx, proj, query, perProject)
 		if serr != nil {
-			if errors.Is(serr, store.ErrNotFound) {
-				continue
-			}
 			return nil, false, serr
 		}
-		if resp.Fallback {
+		if fb {
 			fallback = true
 		}
-		for _, hit := range resp.Results {
-			merged = append(merged, adminSearchHit{Project: resp.Project.Name, SearchResult: hit})
-		}
+		merged = append(merged, hits...)
 	}
 	sort.Slice(merged, func(i, j int) bool { return merged[i].Score > merged[j].Score })
 	if len(merged) > topK {
 		merged = merged[:topK]
 	}
 	return merged, fallback, nil
+}
+
+func (a *Admin) searchProjectHits(ctx context.Context, proj store.Project, query string, topK int) ([]adminSearchHit, bool, error) {
+	req := search.Request{Query: query, TopK: topK}
+	if proj.Identity != "" {
+		req.Identity = proj.Identity
+	} else {
+		req.Project = proj.Name
+	}
+	resp, err := a.search.Search(ctx, req)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	hits := make([]adminSearchHit, 0, len(resp.Results))
+	for _, hit := range resp.Results {
+		hits = append(hits, adminSearchHit{Project: resp.Project.Name, SearchResult: hit})
+	}
+	return hits, resp.Fallback, nil
 }
 
 // --- API keys ----------------------------------------------------------------

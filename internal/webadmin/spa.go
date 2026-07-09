@@ -37,21 +37,29 @@ func spaFileServer() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		// Try static file first.
-		f, err := sub.Open(rel)
-		if err == nil {
-			defer func() { _ = f.Close() }()
-			if st, statErr := f.Stat(); statErr == nil && !st.IsDir() {
-				// http.ServeContent needs a ReadSeeker.
-				if rs, ok := f.(io.ReadSeeker); ok {
-					http.ServeContent(w, r, path.Base(rel), st.ModTime(), rs)
-					return
-				}
-			}
+		if tryServeSPAAsset(w, r, sub, rel) {
+			return
 		}
-		// Client route → index.html
 		serveSPAIndex(w, r, sub)
 	})
+}
+
+func tryServeSPAAsset(w http.ResponseWriter, r *http.Request, sub fs.FS, rel string) bool {
+	f, err := sub.Open(rel)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	st, statErr := f.Stat()
+	if statErr != nil || st.IsDir() {
+		return false
+	}
+	rs, ok := f.(io.ReadSeeker)
+	if !ok {
+		return false
+	}
+	http.ServeContent(w, r, path.Base(rel), st.ModTime(), rs)
+	return true
 }
 
 func serveSPAIndex(w http.ResponseWriter, r *http.Request, sub fs.FS) {

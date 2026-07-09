@@ -690,19 +690,7 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 			all = append(all, r)
 			continue
 		}
-		if len(top) < topK {
-			top = append(top, r)
-			if len(top) == topK {
-				for j := topK/2 - 1; j >= 0; j-- {
-					siftDown(top, j, topK)
-				}
-			}
-			continue
-		}
-		if r.Score > top[0].Score {
-			top[0] = r
-			siftDown(top, 0, topK)
-		}
+		top = pushSimilarTopK(top, r, topK)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -716,6 +704,24 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 	}
 	sort.SliceStable(top, func(i, j int) bool { return top[i].Score > top[j].Score })
 	return top, nil
+}
+
+// pushSimilarTopK maintains a min-heap of the top-K cosine scores.
+func pushSimilarTopK(top []store.SearchResult, r store.SearchResult, topK int) []store.SearchResult {
+	if len(top) < topK {
+		top = append(top, r)
+		if len(top) == topK {
+			for j := topK/2 - 1; j >= 0; j-- {
+				siftDown(top, j, topK)
+			}
+		}
+		return top
+	}
+	if r.Score > top[0].Score {
+		top[0] = r
+		siftDown(top, 0, topK)
+	}
+	return top
 }
 
 // SearchSimilarKeywords finds chunks whose content matches every query word via
