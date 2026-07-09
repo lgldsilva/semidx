@@ -187,9 +187,16 @@ button.danger,
   margin-left: 0.25rem;
 }
 
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 th,
 td {
@@ -198,10 +205,42 @@ td {
   border-bottom: 1px solid var(--border);
   font-size: 0.9rem;
   vertical-align: top;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 th {
   color: var(--muted);
   font-weight: 600;
+}
+
+/* Column widths for projects table */
+table.projects-table th:nth-child(1),
+table.projects-table td:nth-child(1) {
+  width: 22%;
+}
+table.projects-table th:nth-child(2),
+table.projects-table td:nth-child(2) {
+  width: 16%;
+}
+table.projects-table th:nth-child(3),
+table.projects-table td:nth-child(3) {
+  width: 10%;
+}
+table.projects-table th:nth-child(4),
+table.projects-table td:nth-child(4) {
+  width: 12%;
+}
+table.projects-table th:nth-child(5),
+table.projects-table td:nth-child(5) {
+  width: 8%;
+}
+table.projects-table th:nth-child(6),
+table.projects-table td:nth-child(6) {
+  width: 10%;
+}
+table.projects-table th:nth-child(7),
+table.projects-table td:nth-child(7) {
+  width: 22%;
 }
 
 .row {
@@ -222,41 +261,45 @@ th {
   align-items: center;
 }
 
-/* Project table: keep actions on one horizontal strip */
+/* Actions stay inside the cell: wrap within the cell, never spill out */
 td.table-actions {
-  min-width: 18rem;
-  max-width: 22rem;
-  white-space: nowrap;
   vertical-align: middle;
+  overflow: visible;
+  white-space: normal;
 }
 td.table-actions .table-actions-row {
-  display: inline-flex;
+  display: flex;
   flex-direction: row;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.15rem 0.55rem;
+  gap: 0.2rem 0.35rem;
+  max-width: 100%;
 }
 td.table-actions button.link {
-  display: inline;
+  display: inline-flex;
   width: auto;
-  padding: 0.15rem 0.2rem;
-  font-size: 0.82rem;
+  max-width: 100%;
+  padding: 0.12rem 0.25rem;
+  font-size: 0.78rem;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 td.table-actions .btn-open {
   background: var(--accent);
   color: #fff;
   border: 0;
   border-radius: 6px;
-  padding: 0.25rem 0.55rem;
-  font-size: 0.82rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.78rem;
   cursor: pointer;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 td.table-actions .act-sep {
   color: var(--border);
   user-select: none;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
+  flex: 0 0 auto;
 }
 
 .page-head {
