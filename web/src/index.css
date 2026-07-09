@@ -216,9 +216,47 @@ th {
 }
 .row-actions {
   display: flex;
-  gap: 0.75rem;
-  align-items: center;
+  flex-direction: row;
   flex-wrap: wrap;
+  gap: 0.35rem 0.65rem;
+  align-items: center;
+}
+
+/* Project table: keep actions on one horizontal strip */
+td.table-actions {
+  min-width: 18rem;
+  max-width: 22rem;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+td.table-actions .table-actions-row {
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.15rem 0.55rem;
+}
+td.table-actions button.link {
+  display: inline;
+  width: auto;
+  padding: 0.15rem 0.2rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+td.table-actions .btn-open {
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+td.table-actions .act-sep {
+  color: var(--border);
+  user-select: none;
+  font-size: 0.75rem;
 }
 
 .page-head {
