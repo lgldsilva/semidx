@@ -49,11 +49,15 @@ func (f *fakeStore) GetProjectByID(_ context.Context, id int) (*store.Project, e
 }
 
 func (f *fakeStore) ClaimJob(context.Context) (*store.Job, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	j := f.claimJob
 	f.claimJob = nil // return once
 	return j, f.claimErr
 }
 func (f *fakeStore) FailJob(_ context.Context, _ int, msg string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.failMsg = msg
 	f.failCalled = true
 	if f.failCh != nil {
@@ -62,11 +66,16 @@ func (f *fakeStore) FailJob(_ context.Context, _ int, msg string) error {
 	return nil
 }
 func (f *fakeStore) CompleteJob(_ context.Context, id, files, chunks, deleted, errors int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.compFiles = files
 	f.compChunks = chunks
 	f.compDeleted = deleted
 	f.compErrors = errors
 	f.compCalled = true
+	return nil
+}
+func (f *fakeStore) UpdateJobProgress(context.Context, int, int, int, int, int, int) error {
 	return nil
 }
 func (f *fakeStore) EnqueueBatchJob(context.Context, int, string) (int, error) { return 1, nil }

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 // fakeStore implements just the methods the server touches.
 type fakeStore struct {
 	store.Store
+	mu           sync.Mutex // guards concurrent job-worker access
 	pingErr      error
 	token        *store.Token         // TokenByHash result (nil = no active token)
 	project      *store.Project       // GetProject result (nil → ErrNotFound)
@@ -122,6 +124,12 @@ func (f *fakeStore) GetJob(_ context.Context, id int) (*store.Job, error) {
 		return nil, store.ErrNotFound
 	}
 	return f.job, nil
+}
+func (f *fakeStore) ListRecentJobs(context.Context, int, int) ([]store.Job, error) {
+	if f.job == nil {
+		return nil, nil
+	}
+	return []store.Job{*f.job}, nil
 }
 func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]store.SearchResult, error) {
 	return f.results, nil

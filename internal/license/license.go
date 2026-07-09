@@ -10,6 +10,36 @@ import (
 	"strings"
 )
 
+// Source identifiers for detected licenses.
+const (
+	sourceFilename = "filename"
+	sourceHeader   = "header"
+	sourceDeclared = "declared"
+)
+
+// unknownLicense is the human-readable label for an undetected license.
+const unknownLicense = "unknown"
+
+// SPDX ID constants used across patterns, permissiveness checks, and tests.
+const (
+	spdxApache2    = "Apache-2.0"
+	spdxMIT        = "MIT"
+	spdxGPL2       = "GPL-2.0-only"
+	spdxGPL3       = "GPL-3.0-only"
+	spdxLGPL21     = "LGPL-2.1-only"
+	spdxLGPL3      = "LGPL-3.0-only"
+	spdxBSD2       = "BSD-2-Clause"
+	spdxBSD3       = "BSD-3-Clause"
+	spdxMPL2       = "MPL-2.0"
+	spdxUnlicense  = "Unlicense"
+	spdxZlib       = "Zlib"
+	spdxISC        = "ISC"
+	spdxPostgreSQL = "PostgreSQL"
+	spdxAGPL3      = "AGPL-3.0-only"
+	spdxEUPL12     = "EUPL-1.2"
+	spdx0BSD       = "0BSD"
+)
+
 // Info describes a detected license.
 type Info struct {
 	SPDXID     string  // "MIT", "Apache-2.0", "GPL-3.0", etc.
@@ -32,20 +62,20 @@ func Detect(path, content string) Info {
 	// Priority 1: license file matching (basename heuristic).
 	if isLicenseFileName(basename) {
 		if info := matchLicenseText(content); info.SPDXID != "" {
-			info.Source = "filename"
+			info.Source = sourceFilename
 			return info
 		}
 	}
 
 	// Priority 2: SPDX header in first 30 lines.
 	if info := detectSPDXHeader(content); info.SPDXID != "" {
-		info.Source = "header"
+		info.Source = sourceHeader
 		return info
 	}
 
 	// Priority 3: declared license pattern (e.g. "MIT License" in a comment).
 	if info := detectDeclared(content); info.SPDXID != "" {
-		info.Source = "declared"
+		info.Source = sourceDeclared
 		return info
 	}
 
@@ -56,15 +86,22 @@ func Detect(path, content string) Info {
 // License file names
 // ---------------------------------------------------------------------------
 
+// licenseFileNamePrefixes lists the prefixes that identify a license file when
+// the basename is not an exact match.
+var licenseFileNamePrefixes = []string{
+	"license.", "licence.",
+	"license-", "licence-",
+}
+
 func isLicenseFileName(basename string) bool {
-	if basename == "license" || basename == "copying" || basename == "copying.lib" {
+	switch basename {
+	case "license", "copying", "copying.lib":
 		return true
 	}
-	if strings.HasPrefix(basename, "license.") || strings.HasPrefix(basename, "licence.") {
-		return true
-	}
-	if strings.HasPrefix(basename, "license-") || strings.HasPrefix(basename, "licence-") {
-		return true
+	for _, prefix := range licenseFileNamePrefixes {
+		if strings.HasPrefix(basename, prefix) {
+			return true
+		}
 	}
 	return false
 }
@@ -81,22 +118,22 @@ type licenseSig struct {
 }
 
 var licenseTextPatterns = []licenseSig{
-	{spdxID: "Apache-2.0", text: "apache license, version 2.0"},
-	{spdxID: "MIT", text: "permission is hereby granted, free of charge, to any person obtaining a copy"},
-	{spdxID: "GPL-2.0-only", text: "gnu general public license, version 2"},
-	{spdxID: "GPL-3.0-only", text: "gnu general public license, version 3"},
-	{spdxID: "LGPL-2.1-only", text: "gnu lesser general public license, version 2.1"},
-	{spdxID: "LGPL-3.0-only", text: "gnu lesser general public license, version 3"},
-	{spdxID: "BSD-2-Clause", text: "redistribution and use in source and binary forms, with or without modification"},
-	{spdxID: "BSD-3-Clause", text: "redistribution and use in source and binary forms, with or without"},
-	{spdxID: "MPL-2.0", text: "mozilla public license, version 2.0"},
-	{spdxID: "Unlicense", text: "this is free and unencumbered software released into the public domain"},
-	{spdxID: "Zlib", text: "this software is provided 'as-is', without any express or implied warranty"},
-	{spdxID: "ISC", text: "isc license"},
-	{spdxID: "PostgreSQL", text: "postgresql license"},
-	{spdxID: "AGPL-3.0-only", text: "gnu affero general public license, version 3"},
-	{spdxID: "EUPL-1.2", text: "european union public licence"},
-	{spdxID: "0BSD", text: "zero-clause bsd"},
+	{spdxID: spdxApache2, text: "apache license, version 2.0"},
+	{spdxID: spdxMIT, text: "permission is hereby granted, free of charge, to any person obtaining a copy"},
+	{spdxID: spdxGPL2, text: "gnu general public license, version 2"},
+	{spdxID: spdxGPL3, text: "gnu general public license, version 3"},
+	{spdxID: spdxLGPL21, text: "gnu lesser general public license, version 2.1"},
+	{spdxID: spdxLGPL3, text: "gnu lesser general public license, version 3"},
+	{spdxID: spdxBSD2, text: "redistribution and use in source and binary forms, with or without modification"},
+	{spdxID: spdxBSD3, text: "redistribution and use in source and binary forms, with or without"},
+	{spdxID: spdxMPL2, text: "mozilla public license, version 2.0"},
+	{spdxID: spdxUnlicense, text: "this is free and unencumbered software released into the public domain"},
+	{spdxID: spdxZlib, text: "this software is provided 'as-is', without any express or implied warranty"},
+	{spdxID: spdxISC, text: "isc license"},
+	{spdxID: spdxPostgreSQL, text: "postgresql license"},
+	{spdxID: spdxAGPL3, text: "gnu affero general public license, version 3"},
+	{spdxID: spdxEUPL12, text: "european union public licence"},
+	{spdxID: spdx0BSD, text: "zero-clause bsd"},
 }
 
 func matchLicenseText(content string) Info {
@@ -143,11 +180,22 @@ var declaredPatterns = []struct {
 	spdx  string
 	score float64
 }{
-	{regexp.MustCompile(`(?i)^\s*[#*/\-\s]*MIT\s+License`), "MIT", 0.6},
-	{regexp.MustCompile(`(?i)^\s*[#*/\-\s]*Apache\s+License\b`), "Apache-2.0", 0.6},
-	{regexp.MustCompile(`(?i)^\s*[#*/\-\s]*Licensed under the Apache License, Version 2.0`), "Apache-2.0", 0.7},
-	{regexp.MustCompile(`(?i)^\s*[#*/\-\s]*GNU (Lesser )?General Public License`), "GPL-3.0-only", 0.5},
-	{regexp.MustCompile(`(?i)^\s*[#*/\-\s]*BSD [23]-Clause`), "BSD-3-Clause", 0.6},
+	{regexp.MustCompile(`(?i)^\s*[#*/\-\s]*MIT\s+License`), spdxMIT, 0.6},
+	{regexp.MustCompile(`(?i)^\s*[#*/\-\s]*Apache\s+License\b`), spdxApache2, 0.6},
+	{regexp.MustCompile(`(?i)^\s*[#*/\-\s]*Licensed under the Apache License, Version 2.0`), spdxApache2, 0.7},
+	{regexp.MustCompile(`(?i)^\s*[#*/\-\s]*GNU (Lesser )?General Public License`), spdxGPL3, 0.5},
+	{regexp.MustCompile(`(?i)^\s*[#*/\-\s]*BSD [23]-Clause`), spdxBSD3, 0.6},
+}
+
+// matchDeclaredLine scans declaredPatterns for a match against line and returns
+// the SPDX ID, confidence score, and whether a match was found.
+func matchDeclaredLine(line string) (spdx string, score float64, ok bool) {
+	for _, dp := range declaredPatterns {
+		if dp.re.MatchString(line) {
+			return dp.spdx, dp.score, true
+		}
+	}
+	return "", 0, false
 }
 
 func detectDeclared(content string) Info {
@@ -156,19 +204,8 @@ func detectDeclared(content string) Info {
 	for scanner.Scan() && limit < 30 {
 		line := scanner.Text()
 		limit++
-		for _, dp := range declaredPatterns {
-			if dp.re.MatchString(line) {
-				return Info{SPDXID: dp.spdx, Confidence: dp.score}
-			}
-		}
-		// Also check for "Licensed under the <SPDX>".
-		if strings.Contains(strings.ToLower(line), "licensed under") {
-			for _, dp := range declaredPatterns {
-				if dp.re.MatchString(line) {
-					// Already caught above; just confirming the pattern.
-					return Info{SPDXID: dp.spdx, Confidence: dp.score + 0.1}
-				}
-			}
+		if spdx, score, ok := matchDeclaredLine(line); ok {
+			return Info{SPDXID: spdx, Confidence: score}
 		}
 	}
 	return Info{}
@@ -186,8 +223,8 @@ func NormaliseSPDX(id string) string {
 // license suitable for use as a dependency without viral obligations.
 func IsPermissive(spdxID string) bool {
 	switch spdxID {
-	case "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause",
-		"ISC", "Unlicense", "0BSD", "Zlib", "PostgreSQL",
+	case spdxMIT, spdxApache2, spdxBSD2, spdxBSD3,
+		spdxISC, spdxUnlicense, spdx0BSD, spdxZlib, spdxPostgreSQL,
 		"CC0-1.0", "CC-BY-4.0":
 		return true
 	}
@@ -197,7 +234,7 @@ func IsPermissive(spdxID string) bool {
 // String returns a human-readable summary of the Info.
 func (i Info) String() string {
 	if i.SPDXID == "" {
-		return "unknown"
+		return unknownLicense
 	}
 	conf := fmt.Sprintf("%.0f%%", i.Confidence*100)
 	return fmt.Sprintf("%s (%s, from %s)", i.SPDXID, conf, i.Source)

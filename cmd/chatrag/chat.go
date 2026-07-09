@@ -78,30 +78,8 @@ func runREPL(ctx context.Context, pipeline *rag.Pipeline, project string) error 
 		fmt.Println(answer.Content)
 		fmt.Println()
 
-		// N7: Print sources with proper labeling for keyword matches.
-		if len(answer.Sources) > 0 {
-			fmt.Println("Sources:")
-			for _, src := range answer.Sources {
-				if src.Keyword {
-					fmt.Printf("  %s:%d-%d [keyword match]\n",
-						src.File, src.StartLine, src.EndLine)
-				} else {
-					fmt.Printf("  %s:%d-%d (%.3f)\n",
-						src.File, src.StartLine, src.EndLine, src.Score)
-				}
-			}
-			fmt.Println()
-		}
-
-		// Print model info.
-		modelInfo := answer.Model
-		if modelInfo == "" {
-			modelInfo = "unknown"
-		}
-		if answer.Fallback {
-			modelInfo += " (keyword fallback)"
-		}
-		fmt.Printf("[model: %s]\n\n", modelInfo)
+		printSources(answer.Sources)
+		fmt.Printf("[model: %s]\n\n", formatModelInfo(answer.Model, answer.Fallback))
 	}
 
 	return scanner.Err()
@@ -128,4 +106,35 @@ func formatError(err error) string {
 	// For everything else (chain summary, search errors, etc.) the error
 	// message is already actionable because we wrapped it with context.
 	return err.Error()
+}
+
+// printSources prints the Sources section (if any) with keyword vs scored labeling.
+// Extracted to reduce cognitive complexity of runREPL.
+func printSources(sources []rag.Source) {
+	if len(sources) == 0 {
+		return
+	}
+	fmt.Println("Sources:")
+	for _, src := range sources {
+		if src.Keyword {
+			fmt.Printf("  %s:%d-%d [keyword match]\n",
+				src.File, src.StartLine, src.EndLine)
+		} else {
+			fmt.Printf("  %s:%d-%d (%.3f)\n",
+				src.File, src.StartLine, src.EndLine, src.Score)
+		}
+	}
+	fmt.Println()
+}
+
+// formatModelInfo formats the trailing [model: ...] line, handling empty and fallback.
+// Extracted to reduce cognitive complexity of runREPL.
+func formatModelInfo(model string, fallback bool) string {
+	if model == "" {
+		model = "unknown"
+	}
+	if fallback {
+		model += " (keyword fallback)"
+	}
+	return model
 }

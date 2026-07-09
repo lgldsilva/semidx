@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/lgldsilva/semidx/internal/store"
 )
 
 // Formatter renders a search Response to a writer.
@@ -33,29 +35,48 @@ func (f HumanFormatter) Format(w io.Writer, resp *Response) error {
 		pad = 4
 	}
 	for i, r := range resp.Results {
-		label := matchLabel(resp.Keyword, r.Score)
-		if r.Content == "" && r.FilePath != "" {
-			label = "(graph match)"
-		}
-		if _, err := fmt.Fprintf(w, "--- Result %d (%s) ---\n", i+1, label); err != nil {
+		if err := f.formatResult(w, i, r, resp.Keyword, preview, pad); err != nil {
 			return err
-		}
-		loc := formatLoc(r.FilePath, r.StartLine, r.EndLine)
-		if _, err := fmt.Fprintf(w, "File: %s\n", loc); err != nil {
-			return err
-		}
-		content := truncatePreview(r.Content, preview)
-		if f.NoLineNums || r.StartLine < 1 || r.EndLine < r.StartLine {
-			if _, err := fmt.Fprintf(w, "%s\n\n", content); err != nil {
-				return err
-			}
-		} else {
-			if _, err := fmt.Fprintf(w, "%s\n\n", prefixLineNumbers(content, r.StartLine, pad)); err != nil {
-				return err
-			}
 		}
 	}
 	return nil
+}
+
+// formatResult renders a single result block (header + file:line + content).
+// Extracted from Format to keep cognitive complexity below the SonarQube gate.
+func (f HumanFormatter) formatResult(w io.Writer, i int, r store.SearchResult, keyword bool, preview, pad int) error {
+	label := matchLabel(keyword, r.Score)
+	if r.Content == "" && r.FilePath != "" {
+		label = "(graph match)"
+	}
+	if _, err := fmt.Fprintf(w, "--- Result %d (%s) ---\n", i+1, label); err != nil {
+		return err
+	}
+	loc := formatLoc(r.FilePath, r.StartLine, r.EndLine)
+	if _, err := fmt.Fprintf(w, "File: %s\n", loc); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Score: %s\n", humanScore(keyword, r.Score)); err != nil {
+		return err
+	}
+	content := truncatePreview(r.Content, preview)
+	if f.NoLineNums || r.StartLine < 1 || r.EndLine < r.StartLine {
+		if _, err := fmt.Fprintf(w, "%s\n\n", content); err != nil {
+			return err
+		}
+	} else {
+		if _, err := fmt.Fprintf(w, "%s\n\n", prefixLineNumbers(content, r.StartLine, pad)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func humanScore(keyword bool, score float64) string {
+	if keyword {
+		return "keyword match"
+	}
+	return fmt.Sprintf("%.3f (%.0f%%)", score, score*100)
 }
 
 // prefixLineNumbers prepends padded line numbers to each line of content,

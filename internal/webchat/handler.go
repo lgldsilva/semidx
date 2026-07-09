@@ -9,6 +9,30 @@ import (
 	"time"
 
 	"github.com/lgldsilva/semidx/internal/chat"
+	"github.com/lgldsilva/semidx/internal/rag"
+)
+
+// SSE event type constants.
+const (
+	sseTypeError   = "error"
+	sseTypeDone    = "done"
+	sseTypeChunk   = "chunk"
+	sseTypeSources = "sources"
+)
+
+const hdrContentType = "Content-Type"
+const mimeJSON = "application/json"
+
+const errQuestionRequired = "question is required"
+const sseDataFmt = "data: %s\n\n"
+
+// jsonKey constants used in SSE payloads.
+const (
+	jsonKeyType    = "type"
+	jsonKeyError   = "error"
+	jsonKeyModel   = "model"
+	jsonKeyContent = "content"
+	jsonKeySources = "sources"
 )
 
 // --- Request/response types ---
@@ -56,7 +80,7 @@ func (s *Server) handleChatPage(w http.ResponseWriter, r *http.Request) {
 
 // handleChat handles POST /api/chat requests.
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 
 	req, err := s.decodeChatRequest(w, r)
 	if err != nil {
@@ -67,7 +91,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	if req.Question == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(errorResponse{Error: "question is required"})
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: errQuestionRequired})
 		return
 	}
 
@@ -121,100 +145,113 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 // handleChatStream handles POST /api/chat/stream with SSE streaming.
 func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
-	req, err := s.decodeChatRequest(w, r)
+	req, project, err := s.validateChatStreamRequest(w, r)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(errorResponse{Error: "invalid JSON"})
 		return
 	}
 
-	if req.Question == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(errorResponse{Error: "question is required"})
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		s.handleChat(w, r)
 		return
+	}
+	w.Header().Set(hdrContentType, "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+
+	chunks, sources, modelName, fallback, err := s.pipeline.StreamAsk(ctx, req.Question, project, req.History)
+	if err != nil {
+		s.log.Error("stream ask failed", "err", err)
+		errJSON, _ := json.Marshal(map[string]string{jsonKeyType: sseTypeError, jsonKeyError: publicChatError(err)})
+		_, _ = fmt.Fprintf(w, sseDataFmt, errJSON)
+		flusher.Flush()
+		return
+	}
+
+	resolvedModel := s.streamChatChunks(ctx, w, flusher, chunks, modelName)
+	s.sendChatSources(w, flusher, sources, resolvedModel, fallback)
+}
+
+func (s *Server) validateChatStreamRequest(w http.ResponseWriter, r *http.Request) (chatRequest, string, error) {
+	req, err := s.decodeChatRequest(w, r)
+	if err != nil {
+		w.Header().Set(hdrContentType, mimeJSON)
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: "invalid JSON"})
+		return chatRequest{}, "", err
+	}
+
+	if req.Question == "" {
+		w.Header().Set(hdrContentType, mimeJSON)
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: errQuestionRequired})
+		return chatRequest{}, "", errors.New(errQuestionRequired)
 	}
 
 	project, err := s.resolveProject(req.Project)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(hdrContentType, mimeJSON)
 		status := http.StatusBadRequest
 		if errors.Is(err, errProjectNotAllowed) {
 			status = http.StatusForbidden
 		}
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(errorResponse{Error: publicChatError(err)})
-		return
+		return chatRequest{}, "", err
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
-	defer cancel()
+	return req, project, nil
+}
 
-	// Set SSE headers before calling the pipeline.
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		// If the ResponseWriter doesn't support flushing, fall back to JSON.
-		s.handleChat(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	chunks, sources, modelName, fallback, err := s.pipeline.StreamAsk(ctx, req.Question, project, req.History)
-	if err != nil {
-		s.log.Error("stream ask failed", "err", err)
-		errJSON, _ := json.Marshal(map[string]string{"type": "error", "error": publicChatError(err)})
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", errJSON)
-		flusher.Flush()
-		return
-	}
-
-	// Stream chunks as SSE events.
+func (s *Server) streamChatChunks(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, chunks <-chan chat.StreamChunk, modelName string) string {
 	var resolvedModel string
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return resolvedModel
 		case chunk, ok := <-chunks:
 			if !ok {
-				// Channel closed without Done — treat as done.
-				if resolvedModel == "" {
-					resolvedModel = modelName
-				}
-				doneJSON, _ := json.Marshal(map[string]any{"type": "done", "model": resolvedModel})
-				_, _ = fmt.Fprintf(w, "data: %s\n\n", doneJSON)
-				flusher.Flush()
-				goto sendSources
+				resolvedModel = s.resolveModel(resolvedModel, "", modelName)
+				s.sendSSE(w, flusher, map[string]any{jsonKeyType: sseTypeDone, jsonKeyModel: resolvedModel})
+				return resolvedModel
 			}
 
 			if chunk.Content != "" {
 				if chunk.Model != "" {
 					resolvedModel = chunk.Model
 				}
-				chunkJSON, _ := json.Marshal(map[string]any{"type": "chunk", "content": chunk.Content})
-				_, _ = fmt.Fprintf(w, "data: %s\n\n", chunkJSON)
-				flusher.Flush()
+				s.sendSSE(w, flusher, map[string]any{jsonKeyType: sseTypeChunk, jsonKeyContent: chunk.Content})
 			}
 
 			if chunk.Done {
-				if chunk.Model != "" {
-					resolvedModel = chunk.Model
-				}
-				if resolvedModel == "" {
-					resolvedModel = modelName
-				}
-				doneJSON, _ := json.Marshal(map[string]any{"type": "done", "model": resolvedModel})
-				_, _ = fmt.Fprintf(w, "data: %s\n\n", doneJSON)
-				flusher.Flush()
-				goto sendSources
+				resolvedModel = s.resolveModel(resolvedModel, chunk.Model, modelName)
+				s.sendSSE(w, flusher, map[string]any{jsonKeyType: sseTypeDone, jsonKeyModel: resolvedModel})
+				return resolvedModel
 			}
 		}
 	}
+}
 
-sendSources:
-	// Send sources as a final SSE event.
+func (s *Server) sendSSE(w http.ResponseWriter, flusher http.Flusher, payload map[string]any) {
+	data, _ := json.Marshal(payload)
+	_, _ = fmt.Fprintf(w, sseDataFmt, data)
+	flusher.Flush()
+}
+
+func (s *Server) resolveModel(current, chunkModel, defaultModel string) string {
+	if chunkModel != "" {
+		return chunkModel
+	}
+	if current != "" {
+		return current
+	}
+	return defaultModel
+}
+
+func (s *Server) sendChatSources(w http.ResponseWriter, flusher http.Flusher, sources []rag.Source, resolvedModel string, fallback bool) {
 	srcEntries := make([]sourceEntry, len(sources))
 	for i, src := range sources {
 		srcEntries[i] = sourceEntry{
@@ -227,17 +264,17 @@ sendSources:
 		}
 	}
 	sourcesJSON, _ := json.Marshal(map[string]any{
-		"type":     "sources",
-		"sources":  srcEntries,
-		"model":    resolvedModel,
-		"fallback": fallback,
+		jsonKeyType:    sseTypeSources,
+		jsonKeySources: srcEntries,
+		jsonKeyModel:   resolvedModel,
+		"fallback":     fallback,
 	})
-	_, _ = fmt.Fprintf(w, "data: %s\n\n", sourcesJSON)
+	_, _ = fmt.Fprintf(w, sseDataFmt, sourcesJSON)
 	flusher.Flush()
 }
 
 // handleHealth handles GET /api/health.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }

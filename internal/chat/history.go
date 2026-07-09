@@ -55,22 +55,10 @@ func (h *History) trim() {
 	}
 
 	// Count system messages at the start to preserve them.
-	var systemCount int
-	for _, m := range h.Messages {
-		if m.Role == "system" {
-			systemCount++
-		} else {
-			break
-		}
-	}
+	systemCount := countSystemPrefix(h.Messages)
 
 	// Count user messages (turns) among non-system messages.
-	var userCount int
-	for i := systemCount; i < len(h.Messages); i++ {
-		if h.Messages[i].Role == "user" {
-			userCount++
-		}
-	}
+	userCount := countUsersFrom(h.Messages, systemCount)
 
 	if userCount <= h.MaxTurns {
 		return
@@ -80,23 +68,53 @@ func (h *History) trim() {
 	toRemove := userCount - h.MaxTurns
 
 	// Find the cut point: skip toRemove full user+assistant pairs.
-	cut := systemCount
-	for cut < len(h.Messages) && toRemove > 0 {
-		if h.Messages[cut].Role == "user" {
-			toRemove--
-			cut++ // skip the user
-			// Skip the corresponding assistant if present.
-			if cut < len(h.Messages) && h.Messages[cut].Role == "assistant" {
-				cut++
-			}
-		} else {
-			cut++ // shouldn't normally reach here
-		}
-	}
+	cut := findTurnCutPoint(h.Messages, systemCount, toRemove)
 
 	// Keep system messages + everything from the cut point onward.
 	kept := make([]Message, 0, systemCount+len(h.Messages)-cut)
 	kept = append(kept, h.Messages[:systemCount]...)
 	kept = append(kept, h.Messages[cut:]...)
 	h.Messages = kept
+}
+
+// countSystemPrefix returns the number of leading "system" messages.
+func countSystemPrefix(messages []Message) int {
+	var n int
+	for _, m := range messages {
+		if m.Role != "system" {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// countUsersFrom counts "user" messages from index `from` onward.
+func countUsersFrom(messages []Message, from int) int {
+	var n int
+	for i := from; i < len(messages); i++ {
+		if messages[i].Role == "user" {
+			n++
+		}
+	}
+	return n
+}
+
+// findTurnCutPoint advances past `toRemove` user+assistant pairs starting at
+// `start` and returns the index after the last evicted message.
+func findTurnCutPoint(messages []Message, start int, toRemove int) int {
+	cut := start
+	for cut < len(messages) && toRemove > 0 {
+		if messages[cut].Role == "user" {
+			toRemove--
+			cut++ // skip the user
+			// Skip the corresponding assistant if present.
+			if cut < len(messages) && messages[cut].Role == "assistant" {
+				cut++
+			}
+		} else {
+			cut++ // shouldn't normally reach here
+		}
+	}
+	return cut
 }

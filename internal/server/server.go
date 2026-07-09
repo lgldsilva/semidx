@@ -43,6 +43,13 @@ type Server struct {
 	searchDuration  *prometheus.HistogramVec
 	requestDuration *prometheus.HistogramVec
 	activeRequests  *prometheus.GaugeVec
+	jobsQueued      prometheus.Gauge
+	jobsRunning     prometheus.Gauge
+	jobsTotal       *prometheus.CounterVec
+	dbPoolTotal     prometheus.Gauge
+	dbPoolIdle      prometheus.Gauge
+	dbPoolAcquired  prometheus.Gauge
+	dbPoolMax       prometheus.Gauge
 	admin           http.Handler    // the /admin management UI, nil unless MountAdmin was called
 	jwt             *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
 
@@ -64,14 +71,15 @@ func (s *Server) EnableJWT(secret string) error {
 
 // MountAdmin enables the web management UI at /admin. secureCookies must be true
 // when the server is reached over HTTPS (directly or via a TLS proxy). If JWT is
-// enabled (EnableJWT), the UI can also mint control tokens.
-func (s *Server) MountAdmin(secureCookies bool, csrfKey string) error {
+// enabled (EnableJWT), the UI can also mint control tokens. The returned Admin
+// can be further configured (e.g. SetChat) before the server starts serving.
+func (s *Server) MountAdmin(secureCookies bool, csrfKey string) (*webadmin.Admin, error) {
 	a, err := webadmin.New(s.store, s.emb, s.log, secureCookies, s.jwt, csrfKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	s.admin = a.Handler()
-	return nil
+	return a, nil
 }
 
 // New builds a Server. A nil logger falls back to slog.Default().
@@ -106,7 +114,61 @@ func New(st store.Store, emb embed.Embedder, log *slog.Logger) *Server {
 	}, []string{"method"})
 	reg.MustRegister(activeRequests)
 
-	return &Server{store: st, emb: emb, search: search.NewService(st, emb), log: log, reg: reg, reqs: reqs, searchDuration: searchDuration, requestDuration: requestDuration, activeRequests: activeRequests, apiLimiter: newAPIRateLimiter()}
+	jobsQueued := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "semidx_index_jobs_queued_estimated",
+		Help: "Estimated number of queued index jobs (best-effort in-process counter).",
+	})
+	reg.MustRegister(jobsQueued)
+
+	jobsRunning := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "semidx_index_jobs_running",
+		Help: "Number of index jobs currently running in this server process.",
+	})
+	reg.MustRegister(jobsRunning)
+
+	jobsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "semidx_index_jobs_total",
+		Help: "Total index jobs by type and terminal status.",
+	}, []string{"type", "status"})
+	reg.MustRegister(jobsTotal)
+
+	dbPoolTotal := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "semidx_db_pool_total_connections",
+		Help: "Total PostgreSQL pool connections.",
+	})
+	dbPoolIdle := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "semidx_db_pool_idle_connections",
+		Help: "Idle PostgreSQL pool connections.",
+	})
+	dbPoolAcquired := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "semidx_db_pool_acquired_connections",
+		Help: "Acquired (in-use) PostgreSQL pool connections.",
+	})
+	dbPoolMax := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "semidx_db_pool_max_connections",
+		Help: "Configured max PostgreSQL pool connections.",
+	})
+	reg.MustRegister(dbPoolTotal, dbPoolIdle, dbPoolAcquired, dbPoolMax)
+
+	return &Server{
+		store:           st,
+		emb:             emb,
+		search:          search.NewService(st, emb),
+		log:             log,
+		reg:             reg,
+		reqs:            reqs,
+		searchDuration:  searchDuration,
+		requestDuration: requestDuration,
+		activeRequests:  activeRequests,
+		jobsQueued:      jobsQueued,
+		jobsRunning:     jobsRunning,
+		jobsTotal:       jobsTotal,
+		dbPoolTotal:     dbPoolTotal,
+		dbPoolIdle:      dbPoolIdle,
+		dbPoolAcquired:  dbPoolAcquired,
+		dbPoolMax:       dbPoolMax,
+		apiLimiter:      newAPIRateLimiter(),
+	}
 }
 
 // SetGitAllowFile enables file:// git URLs for server-side git sync.
@@ -249,6 +311,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 // in-flight count, and record request duration.
 func (s *Server) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.observeDBPool()
 		s.activeRequests.WithLabelValues(r.Method).Inc()
 		defer s.activeRequests.WithLabelValues(r.Method).Dec()
 
@@ -258,6 +321,21 @@ func (s *Server) instrument(next http.Handler) http.Handler {
 		s.reqs.WithLabelValues(r.Method, http.StatusText(rec.status)).Inc()
 		s.requestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(time.Since(start).Seconds())
 	})
+}
+
+func (s *Server) observeDBPool() {
+	type poolStatser interface {
+		PoolStats() store.DBPoolStats
+	}
+	ps, ok := s.store.(poolStatser)
+	if !ok {
+		return
+	}
+	st := ps.PoolStats()
+	s.dbPoolTotal.Set(float64(st.TotalConns))
+	s.dbPoolIdle.Set(float64(st.IdleConns))
+	s.dbPoolAcquired.Set(float64(st.AcquiredConns))
+	s.dbPoolMax.Set(float64(st.MaxConns))
 }
 
 // limited wraps a handler so that the request body is capped at maxBytes.

@@ -69,6 +69,7 @@ type Indexer struct {
 	secretDetector       *secrets.Detector
 	secretScanEnabled    bool
 	secretBlockEmbedding bool
+	onProgress           IndexProgressFunc
 
 	// mem throttling for the verbose progress path: ReadMemStats triggers a
 	// stop-the-world, so we cache results and refresh at most once per 10s.
@@ -112,6 +113,9 @@ type fileResult struct {
 	err      error
 }
 
+// IndexProgressFunc is called periodically during IndexProject (done/total files).
+type IndexProgressFunc func(done, total, filesIndexed, chunksCreated, errors int)
+
 // IndexerOpts groups optional tuning parameters for NewIndexer.
 type IndexerOpts struct {
 	Workers             int
@@ -123,6 +127,7 @@ type IndexerOpts struct {
 	GitMode             bool
 	GitSince            string
 	Logger              *slog.Logger
+	OnProgress          IndexProgressFunc
 }
 
 // NewIndexer wires an Indexer. dims is the embedding dimension of the model;
@@ -143,7 +148,7 @@ func NewIndexer(db store.IndexStore, emb embed.Embedder, dims int, opts IndexerO
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	return &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunksPerProject: opts.MaxChunksPerProject, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger}
+	return &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunksPerProject: opts.MaxChunksPerProject, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger, onProgress: opts.OnProgress}
 }
 
 // SetKeywordOnly switches the indexer to keyword-only mode: chunks are stored as
@@ -232,9 +237,11 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 			})
 			processed++
 			done, chunks := processed, stats.ChunksCreated
+			filesIdx, errs := stats.FilesIndexed, stats.Errors
+			total := len(files)
 			mu.Unlock()
 
-			idx.progress(done, len(files), rel, chunks)
+			idx.progress(done, total, rel, chunks, filesIdx, errs)
 			return nil
 		})
 	}
@@ -996,7 +1003,10 @@ func (idx *Indexer) logf(format string, args ...any) {
 	}
 }
 
-func (idx *Indexer) progress(done, total int, rel string, chunks int) {
+func (idx *Indexer) progress(done, total int, rel string, chunks, filesIndexed, errors int) {
+	if idx.onProgress != nil && (done%logEvery == 0 || done == total) {
+		idx.onProgress(done, total, filesIndexed, chunks, errors)
+	}
 	if idx.verbose {
 		heapMB, sysMB := idx.memStats()
 		idx.log.Info("file indexed",

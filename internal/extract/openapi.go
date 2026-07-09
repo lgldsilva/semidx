@@ -48,30 +48,16 @@ func formatOpenAPIDoc(doc map[string]interface{}) string {
 	var b strings.Builder
 
 	if info, ok := doc["info"].(map[string]interface{}); ok {
-		if title, ok := info["title"].(string); ok {
+		if title := getString(info, "title"); title != "" {
 			fmt.Fprintf(&b, "Title: %s\n", title)
 		}
-		if version, ok := info["version"].(string); ok {
+		if version := getString(info, "version"); version != "" {
 			fmt.Fprintf(&b, "Version: %s\n", version)
 		}
 	}
 
 	if paths, ok := doc["paths"].(map[string]interface{}); ok {
-		var endpoints []string
-		pathNames := make([]string, 0, len(paths))
-		for p := range paths {
-			pathNames = append(pathNames, p)
-		}
-		sort.Strings(pathNames)
-		for _, p := range pathNames {
-			if methods, ok := paths[p].(map[string]interface{}); ok {
-				for m := range methods {
-					if isHTTPMethod(m) {
-						endpoints = append(endpoints, strings.ToUpper(m)+" "+p)
-					}
-				}
-			}
-		}
+		endpoints := collectEndpoints(paths)
 		if len(endpoints) > 0 {
 			b.WriteString("Endpoints: ")
 			b.WriteString(strings.Join(endpoints, ", "))
@@ -86,6 +72,36 @@ func formatOpenAPIDoc(doc map[string]interface{}) string {
 	return result
 }
 
+// getString safely extracts a string value from a nested map, returning "" if
+// absent or of the wrong type.
+func getString(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// collectEndpoints walks the paths section of an OpenAPI doc and returns a
+// sorted list of "METHOD /path" strings for known HTTP methods only.
+func collectEndpoints(paths map[string]interface{}) []string {
+	var endpoints []string
+	pathNames := make([]string, 0, len(paths))
+	for p := range paths {
+		pathNames = append(pathNames, p)
+	}
+	sort.Strings(pathNames)
+	for _, p := range pathNames {
+		if methods, ok := paths[p].(map[string]interface{}); ok {
+			for m := range methods {
+				if isHTTPMethod(m) {
+					endpoints = append(endpoints, strings.ToUpper(m)+" "+p)
+				}
+			}
+		}
+	}
+	return endpoints
+}
+
 // extractYAMLOpenAPI does a lightweight, line-by-line extraction of info and
 // paths from a YAML-formatted OpenAPI spec. It tracks indentation to determine
 // when we are inside the info: or paths: section.
@@ -93,65 +109,106 @@ func extractYAMLOpenAPI(text string) string {
 	lines := strings.Split(text, "\n")
 	var title, version string
 	var endpoints []string
-	inInfo := false
-	inPaths := false
-	currentPath := ""
+	state := newOpenAPIState()
 
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
+		processYAMLLine(state, line, &title, &version, &endpoints)
+	}
+
+	return formatOpenAPISummary(title, version, endpoints)
+}
+
+// processYAMLLine handles one raw line for the YAML OpenAPI extractor.
+// It skips blanks/comments, updates state, extracts info fields at indent 2,
+// tracks current path, and collects method endpoints.
+func processYAMLLine(state *openapiState, line string, title, version *string, endpoints *[]string) {
+	trimmed := strings.TrimSpace(line)
+	if shouldSkipLine(trimmed) {
+		return
+	}
+	indent := lineIndent(line)
+	ep := state.processLine(trimmed, indent)
+	if state.inInfo && indent == 2 {
+		info := extractOpenAPIInfoField(trimmed)
+		if info.title != "" {
+			*title = info.title
 		}
-
-		indent := len(line) - len(strings.TrimLeft(line, " "))
-
-		switch {
-		case indent == 0 && strings.HasPrefix(trimmed, "info:"):
-			inInfo = true
-			inPaths = false
-			currentPath = ""
-			continue
-		case indent == 0 && strings.HasPrefix(trimmed, "paths:"):
-			inInfo = false
-			inPaths = true
-			currentPath = ""
-			continue
-		case indent == 0 && !strings.HasPrefix(trimmed, "openapi:") && !strings.HasPrefix(trimmed, "swagger:"):
-			inInfo = false
-			inPaths = false
+		if info.version != "" {
+			*version = info.version
 		}
+	}
+	if state.inPaths && indent == 2 && strings.HasPrefix(trimmed, "/") {
+		state.currentPath = strings.TrimSuffix(trimmed, ":")
+	}
+	if ep != "" {
+		*endpoints = append(*endpoints, ep)
+	}
+}
 
-		if inInfo && indent == 2 {
-			if strings.HasPrefix(trimmed, "title:") {
-				title = strings.TrimSpace(strings.TrimPrefix(trimmed, "title:"))
-				title = strings.Trim(title, `"'`)
-			}
-			if strings.HasPrefix(trimmed, "version:") {
-				version = strings.TrimSpace(strings.TrimPrefix(trimmed, "version:"))
-				version = strings.Trim(version, `"'`)
-			}
-		}
+// shouldSkipLine reports whether a trimmed line should be ignored (blank or comment).
+func shouldSkipLine(trimmed string) bool {
+	return trimmed == "" || strings.HasPrefix(trimmed, "#")
+}
 
-		if inPaths && indent == 2 {
-			if strings.HasPrefix(trimmed, "/") {
-				currentPath = strings.TrimSuffix(trimmed, ":")
-				continue
-			}
-		}
+// lineIndent returns the leading whitespace count (spaces only, as YAML uses spaces).
+func lineIndent(line string) int {
+	return len(line) - len(strings.TrimLeft(line, " "))
+}
 
-		if inPaths && indent == 4 && currentPath != "" {
-			method := strings.TrimSuffix(trimmed, ":")
-			if isHTTPMethod(method) {
-				endpoints = append(endpoints, strings.ToUpper(method)+" "+currentPath)
-			}
-		}
+type openapiState struct {
+	inInfo      bool
+	inPaths     bool
+	currentPath string
+}
 
-		if inPaths && indent > 0 && indent < 2 {
-			inPaths = false
-			currentPath = ""
+func newOpenAPIState() *openapiState { return &openapiState{} }
+
+func (s *openapiState) processLine(trimmed string, indent int) string {
+	switch {
+	case indent == 0 && strings.HasPrefix(trimmed, "info:"):
+		s.inInfo = true
+		s.inPaths = false
+		s.currentPath = ""
+	case indent == 0 && strings.HasPrefix(trimmed, "paths:"):
+		s.inInfo = false
+		s.inPaths = true
+		s.currentPath = ""
+	case indent == 0 && !strings.HasPrefix(trimmed, "openapi:") && !strings.HasPrefix(trimmed, "swagger:"):
+		s.inInfo = false
+		s.inPaths = false
+	}
+
+	if s.inPaths && indent == 4 && s.currentPath != "" {
+		method := strings.TrimSuffix(trimmed, ":")
+		if isHTTPMethod(method) {
+			return strings.ToUpper(method) + " " + s.currentPath
 		}
 	}
 
+	if s.inPaths && indent > 0 && indent < 2 {
+		s.inPaths = false
+		s.currentPath = ""
+	}
+
+	return ""
+}
+
+type infoFields struct{ title, version string }
+
+func extractOpenAPIInfoField(trimmed string) infoFields {
+	var res infoFields
+	if strings.HasPrefix(trimmed, "title:") {
+		t := strings.TrimSpace(strings.TrimPrefix(trimmed, "title:"))
+		res.title = strings.Trim(t, `"'`)
+	}
+	if strings.HasPrefix(trimmed, "version:") {
+		v := strings.TrimSpace(strings.TrimPrefix(trimmed, "version:"))
+		res.version = strings.Trim(v, `"'`)
+	}
+	return res
+}
+
+func formatOpenAPISummary(title, version string, endpoints []string) string {
 	var b strings.Builder
 	if title != "" {
 		fmt.Fprintf(&b, "Title: %s\n", title)

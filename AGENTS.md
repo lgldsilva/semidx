@@ -119,7 +119,7 @@ docs/              architecture.md, api.md, self-hosting.md, CICD.md, ADRs
 Pin the toolchain — several tools need it and `@latest` may require newer Go:
 
 ```sh
-export GOTOOLCHAIN=go1.25.11
+export GOTOOLCHAIN=go1.25.12
 go build ./...
 go test -race -shuffle=on ./...          # testcontainers tests skip w/o Docker
 gofmt -l .                               # must be empty
@@ -174,7 +174,7 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 ## Gotchas (hard-won)
 
-- `GOTOOLCHAIN=go1.25.11` is deliberate (stdlib CVEs fixed vs. 1.25.7). Bump the
+- `GOTOOLCHAIN=go1.25.12` is deliberate (stdlib CVEs fixed vs. 1.25.7). Bump the
   `golang:` builder image too when bumping — the stdlib ships in the binary.
 - SQLite local store: `journal_mode=WAL`, `busy_timeout`, `MaxOpenConns(1)` —
   serialises writers, avoids "database is locked" and corruption. Never mix
@@ -187,6 +187,7 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 ## Docs
 
-`docs/architecture.md` · `docs/api.md` · `docs/self-hosting.md` ·
-`docs/CICD.md` · `docs/design-decisions.md` (ADRs) · `README.md` (quickstart) ·
+`docs/architecture.md` · `docs/requirements.md` (product requirements) ·
+`docs/api.md` · `docs/self-hosting.md` · `docs/CICD.md` ·
+`docs/design-decisions.md` (ADRs) · `README.md` (quickstart) ·
 `deploy/agentics-test/README.md` (MCP harness).

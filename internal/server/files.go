@@ -28,6 +28,27 @@ type embeddedChunk struct {
 	Embedding []float32 `json:"embedding"`
 }
 
+func validatePreEmbeddedChunks(path string, fileChunks []embeddedChunk, dims int, model string) error {
+	if privacy.IsSensitive(path) {
+		return fmt.Errorf("path %q is classified as sensitive; pre-embedded uploads are not allowed", path)
+	}
+	for i, ch := range fileChunks {
+		if len(ch.Embedding) != dims {
+			return fmt.Errorf("embedding dimension mismatch (chunk %d): got %d dims, expected %d for model %q",
+				i, len(ch.Embedding), dims, model)
+		}
+	}
+	if len(fileChunks) > maxPreChunksPerFile {
+		return fmt.Errorf("too many chunks: %d (max %d)", len(fileChunks), maxPreChunksPerFile)
+	}
+	for i, ch := range fileChunks {
+		if len(ch.Content) > maxPreChunkChars {
+			return fmt.Errorf("chunk %d too large: %d chars (max %d)", i, len(ch.Content), maxPreChunkChars)
+		}
+	}
+	return nil
+}
+
 // batchFileInput is one file in a files/batch push: pre-embedded chunks, raw
 // content, or (invalid) neither.
 type batchFileInput struct {
@@ -127,6 +148,7 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "could not enqueue batch job")
 		return
 	}
+	s.jobsQueued.Inc()
 	writeJSON(w, http.StatusAccepted, map[string]any{"job_id": jobID, "status": "queued"})
 }
 
@@ -213,26 +235,8 @@ func (s *Server) indexBatchFile(ctx context.Context, proj *store.Project, idx *i
 // directly. The raw content is still hashed and recorded for file dedup; only
 // chunking and embedding are skipped.
 func (s *Server) indexPreEmbedded(ctx context.Context, proj *store.Project, path, rawContent string, fileChunks []embeddedChunk, dims int) (int, error) {
-	if privacy.IsSensitive(path) {
-		return 0, fmt.Errorf("path %q is classified as sensitive; pre-embedded uploads are not allowed", path)
-	}
-
-	// P0: validate dimensions match the project's model.
-	for i, ch := range fileChunks {
-		if len(ch.Embedding) != dims {
-			return 0, fmt.Errorf("embedding dimension mismatch (chunk %d): got %d dims, expected %d for model %q",
-				i, len(ch.Embedding), dims, proj.Model)
-		}
-	}
-
-	// P0: enforce chunk limits to prevent rogue clients from flooding the DB.
-	if len(fileChunks) > maxPreChunksPerFile {
-		return 0, fmt.Errorf("too many chunks: %d (max %d)", len(fileChunks), maxPreChunksPerFile)
-	}
-	for i, ch := range fileChunks {
-		if len(ch.Content) > maxPreChunkChars {
-			return 0, fmt.Errorf("chunk %d too large: %d chars (max %d)", i, len(ch.Content), maxPreChunkChars)
-		}
+	if err := validatePreEmbeddedChunks(path, fileChunks, dims, proj.Model); err != nil {
+		return 0, err
 	}
 
 	// Content-addressed dedup: same hash → file is unchanged, skip.
@@ -271,6 +275,17 @@ func (s *Server) indexPreEmbedded(ctx context.Context, proj *store.Project, path
 
 	if err := s.store.InsertChunks(ctx, proj.ID, fileID, storeChunks, embeddings, dims); err != nil {
 		return 0, fmt.Errorf("insert chunks: %w", err)
+	}
+
+	// Keep embedding cache warm on pre-embedded pushes too (REQ-EMB-07), so
+	// later reindexes and repeated uploads can reuse content-addressed vectors.
+	hashes := make([]string, len(fileChunks))
+	for i, ch := range fileChunks {
+		h := sha256.Sum256([]byte(ch.Content))
+		hashes[i] = fmt.Sprintf("%x", h)
+	}
+	if err := s.store.InsertEmbeddingCache(ctx, hashes, proj.Model, embeddings, dims); err != nil {
+		s.log.Warn("cache insert pre-embedded chunks", "project", proj.Name, "path", path, "err", err)
 	}
 
 	return len(fileChunks), nil

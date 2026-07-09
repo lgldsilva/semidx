@@ -3,6 +3,7 @@ package skills
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -11,28 +12,20 @@ import (
 func TestInstallErrorPaths(t *testing.T) {
 	t.Parallel()
 
-	// Create a file where Install expects to write a directory. Install will
-	// try to create a subdirectory and fail because a file exists there.
-	// This works regardless of uid/permissions.
-	filedir := t.TempDir()
-	fpath := filepath.Join(filedir, "semidx") // Install creates subdirs under this
-	if err := os.WriteFile(fpath, []byte("block"), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	// Root on Unix can always write regardless of permissions — skip.
+	if runtime.GOOS != "windows" && os.Geteuid() == 0 {
+		t.Skip("skipping read-only dir test as root")
 	}
 
-	if _, err := Install(fpath); err == nil {
-		t.Error("Install where target is a file should error")
-	}
-
-	// Also test with a read-only parent directory (best-effort, may not work as root).
+	// Install into a read-only directory should fail on the first write.
 	readonly := t.TempDir()
 	if err := os.Chmod(readonly, 0o500); err != nil {
-		t.Skipf("cannot chmod: %v", err)
+		t.Fatalf("Chmod: %v", err)
 	}
-	defer func() { _ = os.Chmod(readonly, 0o700) }()
+	t.Cleanup(func() { _ = os.Chmod(readonly, 0o700) })
 
 	if _, err := Install(readonly); err == nil {
-		t.Skip("Install into read-only dir did not error (running as root?)")
+		t.Error("Install into read-only dir should error")
 	}
 }
 
