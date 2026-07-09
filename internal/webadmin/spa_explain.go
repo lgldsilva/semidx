@@ -92,18 +92,11 @@ func (a *Admin) apiProjectExplain(w http.ResponseWriter, r *http.Request, ac *au
 }
 
 func (a *Admin) explainFromIndex(w http.ResponseWriter, r *http.Request, proj *store.Project, filePath string, line int) {
-	dims := proj.Dims
-	if dims <= 0 {
-		dims = 1024
-	}
-	chunks, err := a.store.FetchChunksByPath(r.Context(), proj.ID, filePath, dims, 64)
-	if err != nil || len(chunks) == 0 {
-		for _, d := range []int{store.KeywordDims, 768, 1024, 1536, 3072} {
-			chunks, err = a.store.FetchChunksByPath(r.Context(), proj.ID, filePath, d, 64)
-			if err == nil && len(chunks) > 0 {
-				break
-			}
-		}
+	chunks, err := fetchExplainChunks(r.Context(), a.store, proj, filePath)
+	if err != nil {
+		a.log.Error("explain index chunks failed", "err", err)
+		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
+		return
 	}
 	if len(chunks) == 0 {
 		writeJSONErr(w, http.StatusNotFound, "file not on disk and not in index")
@@ -142,6 +135,24 @@ func (a *Admin) explainFromIndex(w http.ResponseWriter, r *http.Request, proj *s
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func fetchExplainChunks(ctx context.Context, st store.Store, proj *store.Project, filePath string) ([]store.SearchResult, error) {
+	dims := proj.Dims
+	if dims <= 0 {
+		dims = 1024
+	}
+	chunks, err := st.FetchChunksByPath(ctx, proj.ID, filePath, dims, 64)
+	if err == nil && len(chunks) > 0 {
+		return chunks, nil
+	}
+	for _, d := range []int{store.KeywordDims, 768, 1024, 1536, 3072} {
+		chunks, err = st.FetchChunksByPath(ctx, proj.ID, filePath, d, 64)
+		if err == nil && len(chunks) > 0 {
+			return chunks, nil
+		}
+	}
+	return chunks, err
 }
 
 func symbolAtLine(syms []analyzer.Symbol, line int) *analyzer.Symbol {

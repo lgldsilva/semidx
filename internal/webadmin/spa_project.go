@@ -194,17 +194,7 @@ func (a *Admin) apiProjectFiles(w http.ResponseWriter, r *http.Request, ac *auth
 		offset = 0
 	}
 
-	paths := make([]string, 0, len(hashes))
-	for p := range hashes {
-		if prefix != "" && !strings.HasPrefix(p, prefix) {
-			continue
-		}
-		if q != "" && !strings.Contains(strings.ToLower(p), q) {
-			continue
-		}
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
+	paths := filterSortedPaths(hashes, prefix, q)
 	total := len(paths)
 	if offset > total {
 		offset = total
@@ -252,43 +242,18 @@ func (a *Admin) apiProjectFileContent(w http.ResponseWriter, r *http.Request, ac
 	if dims <= 0 {
 		dims = 1024
 	}
-	const maxChunks = 64
-	chunks, err := a.store.FetchChunksByPath(r.Context(), proj.ID, filePath, dims, maxChunks)
+	chunks, dims, err := fetchProjectFileChunks(r.Context(), a.store, proj.ID, filePath, dims)
 	if err != nil {
-		// dims mismatch: try keyword dims then common sizes
-		for _, d := range []int{store.KeywordDims, 768, 1024, 1536, 3072} {
-			if d == dims {
-				continue
-			}
-			chunks, err = a.store.FetchChunksByPath(r.Context(), proj.ID, filePath, d, maxChunks)
-			if err == nil && len(chunks) > 0 {
-				dims = d
-				break
-			}
-		}
-		if err != nil {
-			a.log.Error("fetch chunks failed", "err", err, "path", filePath)
-			writeJSONErr(w, http.StatusInternalServerError, "could not load file content")
-			return
-		}
+		a.log.Error("fetch chunks failed", "err", err, "path", filePath)
+		writeJSONErr(w, http.StatusInternalServerError, "could not load file content")
+		return
 	}
-	outChunks := make([]fileChunk, 0, len(chunks))
-	var b strings.Builder
-	for i, c := range chunks {
-		outChunks = append(outChunks, fileChunk{
-			StartLine: c.StartLine, EndLine: c.EndLine, Content: c.Content,
-		})
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(c.Content)
-	}
-	truncated := len(chunks) >= maxChunks
+	outChunks, content, truncated := buildFileChunkResponse(chunks, 64)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"path":      filePath,
 		"dims":      dims,
 		"chunks":    outChunks,
-		"content":   b.String(),
+		"content":   content,
 		"truncated": truncated,
 	})
 }
@@ -326,4 +291,56 @@ func (a *Admin) apiProjectJobs(w http.ResponseWriter, r *http.Request, ac *authC
 		items = append(items, jobToItem(j))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": items, "limit": limit, "offset": offset})
+}
+
+func filterSortedPaths(hashes map[string]string, prefix, q string) []string {
+	paths := make([]string, 0, len(hashes))
+	for p := range hashes {
+		if prefix != "" && !strings.HasPrefix(p, prefix) {
+			continue
+		}
+		if q != "" && !strings.Contains(strings.ToLower(p), q) {
+			continue
+		}
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+const projectFileMaxChunks = 64
+
+func fetchProjectFileChunks(ctx context.Context, st store.Store, projectID int, filePath string, dims int) ([]store.SearchResult, int, error) {
+	chunks, err := st.FetchChunksByPath(ctx, projectID, filePath, dims, projectFileMaxChunks)
+	if err == nil && len(chunks) > 0 {
+		return chunks, dims, nil
+	}
+	for _, d := range []int{store.KeywordDims, 768, 1024, 1536, 3072} {
+		if d == dims {
+			continue
+		}
+		chunks, err = st.FetchChunksByPath(ctx, projectID, filePath, d, projectFileMaxChunks)
+		if err == nil && len(chunks) > 0 {
+			return chunks, d, nil
+		}
+	}
+	if err != nil {
+		return nil, dims, err
+	}
+	return chunks, dims, nil
+}
+
+func buildFileChunkResponse(chunks []store.SearchResult, maxChunks int) ([]fileChunk, string, bool) {
+	outChunks := make([]fileChunk, 0, len(chunks))
+	var b strings.Builder
+	for i, c := range chunks {
+		outChunks = append(outChunks, fileChunk{
+			StartLine: c.StartLine, EndLine: c.EndLine, Content: c.Content,
+		})
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(c.Content)
+	}
+	return outChunks, b.String(), len(chunks) >= maxChunks
 }

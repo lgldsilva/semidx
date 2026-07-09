@@ -220,40 +220,7 @@ full index job the server runs itself. Requires "semidx login".`,
   semidx repo add https://github.com/org/project.git --branch main --index=false`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !d.remote() {
-				return fmt.Errorf("repo add requires a server: run `semidx login` first")
-			}
-			gitURL := args[0]
-			if name == "" {
-				name = strings.TrimSuffix(projectNameFromPath(gitURL), ".git")
-			}
-			cli := d.apiClient()
-			ctx := cmd.Context()
-			if _, err := cli.CreateProject(ctx, name, model, "git", gitURL, branch); err != nil {
-				return fmt.Errorf("create project: %w", err)
-			}
-			fmt.Printf("Registered git project %q -> %s\n", name, gitURL)
-			if !index {
-				return nil
-			}
-			jobID, err := cli.EnqueueJob(ctx, name, "full")
-			if err != nil {
-				return fmt.Errorf("enqueue index job: %w", err)
-			}
-			if !wait {
-				fmt.Printf("Index job #%d queued. Poll it with: GET /api/v1/projects/%s/jobs/%d\n", jobID, name, jobID)
-				return nil
-			}
-			fmt.Printf("Index job #%d queued — waiting for completion ...\n", jobID)
-			job, err := waitForRemoteJobWithProgress(ctx, cli, name, jobID)
-			if err != nil {
-				return fmt.Errorf("wait for job %d: %w", jobID, err)
-			}
-			if job.Status == client.JobStatusFailed {
-				return fmt.Errorf("job %d failed: %s", jobID, job.Error)
-			}
-			fmt.Printf("Done — indexed: %d, chunks: %d, errors: %d\n", job.FilesIndexed, job.ChunksCreated, job.ErrorCount)
-			return nil
+			return runRepoAdd(cmd, d, args[0], name, branch, model, index, wait)
 		},
 	}
 	c.Flags().StringVar(&name, "name", "", "Project name (default: repo basename)")
@@ -262,6 +229,42 @@ full index job the server runs itself. Requires "semidx login".`,
 	c.Flags().BoolVar(&index, "index", true, "Queue a full index job right away")
 	c.Flags().BoolVar(&wait, "wait", false, "Wait for the queued index job and print live progress")
 	return c
+}
+
+func runRepoAdd(cmd *cobra.Command, d *deps, gitURL, name, branch, model string, index, wait bool) error {
+	if !d.remote() {
+		return fmt.Errorf("repo add requires a server: run `semidx login` first")
+	}
+	if name == "" {
+		name = strings.TrimSuffix(projectNameFromPath(gitURL), ".git")
+	}
+	cli := d.apiClient()
+	ctx := cmd.Context()
+	if _, err := cli.CreateProject(ctx, name, model, "git", gitURL, branch); err != nil {
+		return fmt.Errorf("create project: %w", err)
+	}
+	fmt.Printf("Registered git project %q -> %s\n", name, gitURL)
+	if !index {
+		return nil
+	}
+	jobID, err := cli.EnqueueJob(ctx, name, "full")
+	if err != nil {
+		return fmt.Errorf("enqueue index job: %w", err)
+	}
+	if !wait {
+		fmt.Printf("Index job #%d queued. Poll it with: GET /api/v1/projects/%s/jobs/%d\n", jobID, name, jobID)
+		return nil
+	}
+	fmt.Printf("Index job #%d queued — waiting for completion ...\n", jobID)
+	job, err := waitForRemoteJobWithProgress(ctx, cli, name, jobID)
+	if err != nil {
+		return fmt.Errorf("wait for job %d: %w", jobID, err)
+	}
+	if job.Status == client.JobStatusFailed {
+		return fmt.Errorf("job %d failed: %s", jobID, job.Error)
+	}
+	fmt.Printf("Done — indexed: %d, chunks: %d, errors: %d\n", job.FilesIndexed, job.ChunksCreated, job.ErrorCount)
+	return nil
 }
 
 func waitForRemoteJobWithProgress(ctx context.Context, cli *client.Client, project string, jobID int) (*client.Job, error) {
