@@ -114,7 +114,7 @@ export function ProjectsPage() {
           </p>
         </div>
         <button type="button" onClick={() => setShowCreate(true)}>
-          Add git project
+          Add project
         </button>
       </div>
 
@@ -178,9 +178,13 @@ export function ProjectsPage() {
       {showCreate && (
         <CreateProjectForm
           onClose={() => setShowCreate(false)}
-          onCreated={(jobId) => {
+          onCreated={(jobId, pushHint) => {
             setShowCreate(false)
-            setFlash('Project created')
+            setFlash(
+              pushHint
+                ? `Project created — ingest with: ${pushHint}`
+                : 'Project created',
+            )
             if (jobId) setJobPoll({ id: jobId, type: 'full', status: 'queued' })
             void reload()
           }}
@@ -318,9 +322,10 @@ function CreateProjectForm({
   onError,
 }: {
   onClose: () => void
-  onCreated: (jobId?: number) => void
+  onCreated: (jobId?: number, pushHint?: string) => void
   onError: (msg: string) => void
 }) {
+  const [mode, setMode] = useState<'git' | 'push'>('git')
   const [name, setName] = useState('')
   const [gitURL, setGitURL] = useState('')
   const [branch, setBranch] = useState('main')
@@ -336,12 +341,12 @@ function CreateProjectForm({
       const res = await api.createProject({
         name: name.trim(),
         model,
-        source_type: 'git',
-        git_url: gitURL,
-        branch,
-        index: indexNow,
+        source_type: mode,
+        git_url: mode === 'git' ? gitURL : undefined,
+        branch: mode === 'git' ? branch : undefined,
+        index: mode === 'git' ? indexNow : false,
       })
-      onCreated(res.job_id)
+      onCreated(res.job_id, res.push_hint)
     } catch (ex) {
       onError(ex instanceof ApiError ? ex.message : 'create failed')
     } finally {
@@ -351,48 +356,78 @@ function CreateProjectForm({
 
   return (
     <form className="card create-form" onSubmit={(e) => void onSubmit(e)}>
-      <h2>Add git repository</h2>
-      <p className="muted">
-        Server clones the repo and queues an index job (same as{' '}
-        <code>semidx repo add</code>).
-      </p>
-      <div className="row">
-        <label className="grow">
-          Git URL
-          <input
-            value={gitURL}
-            onChange={(e) => setGitURL(e.target.value)}
-            placeholder="https://github.com/org/repo.git"
-            required
-          />
-        </label>
+      <h2>Add project</h2>
+      <div className="row-actions" style={{ marginBottom: '0.75rem' }}>
+        <button
+          type="button"
+          className={`pill-btn ${mode === 'git' ? 'active' : ''}`}
+          onClick={() => setMode('git')}
+        >
+          Git clone (server)
+        </button>
+        <button
+          type="button"
+          className={`pill-btn ${mode === 'push' ? 'active' : ''}`}
+          onClick={() => setMode('push')}
+        >
+          Push from CLI
+        </button>
       </div>
+      {mode === 'git' ? (
+        <p className="muted">
+          Server clones the repo and queues an index job (same as{' '}
+          <code>semidx repo add</code>).
+        </p>
+      ) : (
+        <p className="muted">
+          Creates an empty project shell. From your laptop:{' '}
+          <code>semidx push --project . --name &lt;name&gt;</code> after login.
+        </p>
+      )}
+      {mode === 'git' && (
+        <div className="row">
+          <label className="grow">
+            Git URL
+            <input
+              value={gitURL}
+              onChange={(e) => setGitURL(e.target.value)}
+              placeholder="https://github.com/org/repo.git"
+              required
+            />
+          </label>
+        </div>
+      )}
       <div className="row">
         <label className="grow">
-          Project name (optional)
+          Project name {mode === 'push' ? '' : '(optional)'}
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="defaults from repo basename"
+            placeholder={mode === 'git' ? 'defaults from repo basename' : 'my-app'}
+            required={mode === 'push'}
           />
         </label>
-        <label>
-          Branch
-          <input value={branch} onChange={(e) => setBranch(e.target.value)} />
-        </label>
+        {mode === 'git' && (
+          <label>
+            Branch
+            <input value={branch} onChange={(e) => setBranch(e.target.value)} />
+          </label>
+        )}
         <label>
           Model
           <input value={model} onChange={(e) => setModel(e.target.value)} />
         </label>
       </div>
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={indexNow}
-          onChange={(e) => setIndexNow(e.target.checked)}
-        />
-        Start full index job now
-      </label>
+      {mode === 'git' && (
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={indexNow}
+            onChange={(e) => setIndexNow(e.target.checked)}
+          />
+          Start full index job now
+        </label>
+      )}
       <div className="row-actions">
         <button type="submit" disabled={busy}>
           {busy ? 'Creating…' : 'Create'}

@@ -335,6 +335,10 @@ func (f *fakeStore) GetJob(_ context.Context, id int) (*store.Job, error) {
 	return &store.Job{ID: id, Status: "queued", Type: "full"}, nil
 }
 
+func (f *fakeStore) FetchGraphNeighbors(context.Context, int) (map[string][]string, error) {
+	return map[string][]string{}, nil
+}
+
 // --- helpers -----------------------------------------------------------------
 
 var csrfRe = regexp.MustCompile(`name="csrf_token" value="([0-9a-f]+)"`)

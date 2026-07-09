@@ -6,6 +6,8 @@ import { ProjectsPage } from './pages/ProjectsPage'
 import { ProjectWorkspace } from './pages/ProjectWorkspace'
 import { SearchPage } from './pages/SearchPage'
 import { CliGuidePage } from './pages/CliGuidePage'
+import { SettingsPage } from './pages/SettingsPage'
+import { JobsPage } from './pages/JobsPage'
 
 function Private({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
@@ -34,6 +36,8 @@ export default function App() {
                   <Route path="/" element={<ProjectsPage />} />
                   <Route path="/projects/:name" element={<ProjectWorkspace />} />
                   <Route path="/search" element={<SearchPage />} />
+                  <Route path="/jobs" element={<JobsPage />} />
+                  <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/cli" element={<CliGuidePage />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
