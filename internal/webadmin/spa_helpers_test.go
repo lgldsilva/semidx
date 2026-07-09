@@ -14,8 +14,8 @@ import (
 
 func TestFilterSortedPaths(t *testing.T) {
 	hashes := map[string]string{
-		"src/a.go": "h1",
-		"src/b.go": "h2",
+		"src/a.go":  "h1",
+		"src/b.go":  "h2",
 		"docs/x.md": "h3",
 	}
 	got := filterSortedPaths(hashes, "src/", "b")
@@ -47,6 +47,20 @@ func TestNormalizeCreateProjectBody(t *testing.T) {
 		body := createProjectBody{SourceType: "svn", Name: "x"}
 		_, status, msg := normalizeCreateProjectBody(&body)
 		if status != http.StatusBadRequest || !strings.Contains(msg, "source_type") {
+			t.Fatalf("status=%d msg=%q", status, msg)
+		}
+	})
+	t.Run("push with name", func(t *testing.T) {
+		body := createProjectBody{SourceType: "push", Name: "docs"}
+		name, status, msg := normalizeCreateProjectBody(&body)
+		if msg != "" || status != 0 || name != "docs" || body.Index {
+			t.Fatalf("push name=%q index=%v", name, body.Index)
+		}
+	})
+	t.Run("invalid derived name", func(t *testing.T) {
+		body := createProjectBody{SourceType: "git", GitURL: "https://example.com/.git", Name: "."}
+		_, status, msg := normalizeCreateProjectBody(&body)
+		if status != http.StatusBadRequest {
 			t.Fatalf("status=%d msg=%q", status, msg)
 		}
 	})
