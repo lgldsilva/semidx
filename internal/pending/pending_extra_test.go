@@ -3,6 +3,7 @@ package pending
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -56,6 +57,11 @@ func TestLoadCorruptedJSON(t *testing.T) {
 // for a reason other than IsNotExist (e.g., permission denied on a locked
 // parent directory). We simulate this by making the pending dir read-only.
 func TestRemoveErrorPath(t *testing.T) {
+	// Root on Unix can always write regardless of permissions — skip.
+	if runtime.GOOS != "windows" && os.Geteuid() == 0 {
+		t.Skip("skipping read-only dir test as root")
+	}
+
 	// Create a read-only pending directory.
 	base := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", base)
