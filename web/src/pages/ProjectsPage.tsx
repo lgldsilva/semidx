@@ -201,121 +201,133 @@ export function ProjectsPage() {
             <code>semidx push --project .</code>
           </p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Source</th>
-                <th>Status</th>
-                <th>Model</th>
-                <th>Files</th>
-                <th>Last job</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((p) => (
-                <tr key={p.name}>
-                  <td>
-                    <Link to={`/projects/${encodeURIComponent(p.name)}`}>
-                      <strong>{p.name}</strong>
-                    </Link>
-                    {p.identity && (
-                      <div className="muted small" title={p.identity}>
-                        {p.identity.length > 48
-                          ? p.identity.slice(0, 48) + '…'
-                          : p.identity}
-                      </div>
-                    )}
-                    {p.license && (
-                      <div className="muted small">license: {p.license}</div>
-                    )}
-                  </td>
-                  <td>
-                    {p.source_type || '—'}
-                    {p.git_url && (
-                      <div className="muted small">{p.git_url}</div>
-                    )}
-                    {p.branch && <div className="muted small">@{p.branch}</div>}
-                    {p.path && !p.git_url && (
-                      <div className="muted small">{p.path}</div>
-                    )}
-                  </td>
-                  <td>
-                    <span className="pill">{p.status}</span>
-                  </td>
-                  <td>
-                    {p.model || '—'}
-                    {p.dims ? (
-                      <div className="muted small">{p.dims}d</div>
-                    ) : null}
-                    {p.last_commit ? (
-                      <div className="muted small">{p.last_commit.slice(0, 8)}</div>
-                    ) : null}
-                  </td>
-                  <td>{p.total_files ?? '—'}</td>
-                  <td className="small">
-                    {p.last_job
-                      ? `#${p.last_job.id} ${p.last_job.status}`
-                      : '—'}
-                  </td>
-                  <td className="table-actions">
-                    <div className="table-actions-row">
-                      <button
-                        type="button"
-                        className="btn-open"
-                        onClick={() =>
-                          navigate(`/projects/${encodeURIComponent(p.name)}`)
-                        }
-                      >
-                        Open
-                      </button>
-                      <span className="act-sep">·</span>
-                      <button
-                        type="button"
-                        className="link"
-                        onClick={() =>
-                          navigate(
-                            `/projects/${encodeURIComponent(p.name)}?tab=explore`,
-                          )
-                        }
-                      >
-                        Explore
-                      </button>
-                      <span className="act-sep">·</span>
-                      <button
-                        type="button"
-                        className="link"
-                        onClick={() =>
-                          navigate(
-                            `/projects/${encodeURIComponent(p.name)}?tab=chat`,
-                          )
-                        }
-                      >
-                        Chat
-                      </button>
-                      <span className="act-sep">·</span>
-                      <button
-                        type="button"
-                        className="link"
-                        onClick={() => void onReindex(p.name)}
-                      >
-                        Reindex
-                      </button>
-                      <span className="act-sep">·</span>
-                      <button
-                        type="button"
-                        className="link danger-text"
-                        onClick={() => void onDelete(p.name)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </td>
+          <div className="table-wrap">
+            <table className="projects-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Source</th>
+                  <th>Status</th>
+                  <th>Model</th>
+                  <th>Files</th>
+                  <th>Last job</th>
+                  <th>Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {filtered.map((p) => (
+                  <tr key={p.name}>
+                    <td>
+                      <Link to={`/projects/${encodeURIComponent(p.name)}`}>
+                        <strong>{p.name}</strong>
+                      </Link>
+                      {p.identity && (
+                        <div className="muted small" title={p.identity}>
+                          {p.identity.length > 40
+                            ? p.identity.slice(0, 40) + '…'
+                            : p.identity}
+                        </div>
+                      )}
+                      {p.license && (
+                        <div className="muted small">license: {p.license}</div>
+                      )}
+                    </td>
+                    <td>
+                      {p.source_type || '—'}
+                      {p.git_url && (
+                        <div className="muted small" title={p.git_url}>
+                          {p.git_url.length > 36
+                            ? p.git_url.slice(0, 36) + '…'
+                            : p.git_url}
+                        </div>
+                      )}
+                      {p.branch && (
+                        <div className="muted small">@{p.branch}</div>
+                      )}
+                      {p.path && !p.git_url && (
+                        <div className="muted small" title={p.path}>
+                          {p.path.length > 36
+                            ? p.path.slice(0, 36) + '…'
+                            : p.path}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <span className="pill">{p.status}</span>
+                    </td>
+                    <td>
+                      {p.model || '—'}
+                      {p.dims ? (
+                        <div className="muted small">{p.dims}d</div>
+                      ) : null}
+                      {p.last_commit ? (
+                        <div className="muted small">
+                          {p.last_commit.slice(0, 8)}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td>{p.total_files ?? '—'}</td>
+                    <td className="small">
+                      {p.last_job
+                        ? `#${p.last_job.id} ${p.last_job.status}`
+                        : '—'}
+                    </td>
+                    <td className="table-actions">
+                      <div className="table-actions-row">
+                        <button
+                          type="button"
+                          className="btn-open"
+                          onClick={() =>
+                            navigate(
+                              `/projects/${encodeURIComponent(p.name)}`,
+                            )
+                          }
+                        >
+                          Open
+                        </button>
+                        <button
+                          type="button"
+                          className="link"
+                          onClick={() =>
+                            navigate(
+                              `/projects/${encodeURIComponent(p.name)}?tab=explore`,
+                            )
+                          }
+                        >
+                          Explore
+                        </button>
+                        <button
+                          type="button"
+                          className="link"
+                          onClick={() =>
+                            navigate(
+                              `/projects/${encodeURIComponent(p.name)}?tab=chat`,
+                            )
+                          }
+                        >
+                          Chat
+                        </button>
+                        <button
+                          type="button"
+                          className="link"
+                          onClick={() => void onReindex(p.name)}
+                        >
+                          Reindex
+                        </button>
+                        <button
+                          type="button"
+                          className="link danger-text"
+                          onClick={() => void onDelete(p.name)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>
