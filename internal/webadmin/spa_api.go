@@ -157,23 +157,35 @@ func normalizeCreateProjectBody(body *createProjectBody) (name string, status in
 	body.GitURL = strings.TrimSpace(body.GitURL)
 	body.Branch = strings.TrimSpace(body.Branch)
 	if body.SourceType == "git" {
-		if body.GitURL == "" {
-			return "", http.StatusBadRequest, "git_url is required for source_type=git"
-		}
-		if body.Branch == "" {
-			body.Branch = "main"
-		}
-		if name == "" {
-			name = strings.TrimSuffix(path.Base(strings.TrimRight(body.GitURL, "/")), ".git")
-		}
-	} else {
-		body.GitURL = ""
-		body.Branch = ""
-		if name == "" {
-			return "", http.StatusBadRequest, "name is required for source_type=push"
-		}
-		body.Index = false
+		return normalizeGitProjectBody(body, name)
 	}
+	return normalizePushProjectBody(body, name)
+}
+
+func normalizeGitProjectBody(body *createProjectBody, name string) (string, int, string) {
+	if body.GitURL == "" {
+		return "", http.StatusBadRequest, "git_url is required for source_type=git"
+	}
+	if body.Branch == "" {
+		body.Branch = "main"
+	}
+	if name == "" {
+		name = strings.TrimSuffix(path.Base(strings.TrimRight(body.GitURL, "/")), ".git")
+	}
+	return validateProjectName(name)
+}
+
+func normalizePushProjectBody(body *createProjectBody, name string) (string, int, string) {
+	body.GitURL = ""
+	body.Branch = ""
+	body.Index = false
+	if name == "" {
+		return "", http.StatusBadRequest, "name is required for source_type=push"
+	}
+	return validateProjectName(name)
+}
+
+func validateProjectName(name string) (string, int, string) {
 	if name == "" || name == "." || name == "/" {
 		return "", http.StatusBadRequest, "could not derive project name — set name explicitly"
 	}
