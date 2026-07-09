@@ -3,6 +3,7 @@ package skills
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -10,6 +11,11 @@ import (
 // TestInstallErrorPaths verifies Install returns errors for write failures.
 func TestInstallErrorPaths(t *testing.T) {
 	t.Parallel()
+
+	// Root on Unix can always write regardless of permissions — skip.
+	if runtime.GOOS != "windows" && os.Geteuid() == 0 {
+		t.Skip("skipping read-only dir test as root")
+	}
 
 	// Install into a read-only directory should fail on the first write.
 	readonly := t.TempDir()
