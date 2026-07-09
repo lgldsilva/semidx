@@ -101,10 +101,24 @@ func Register(ext string, fn extractor) {
 // document can never crash the indexer.
 func Extract(name string, data []byte) (out string, err error) {
 	ext := strings.ToLower(filepath.Ext(name))
+	base := filepath.Base(name)
 	registryMu.RLock()
-	decode, ok := byExt[ext]
+	decode, okExt := byExt[ext]
+	fnName, okName := byName[base]
 	registryMu.RUnlock()
-	if !ok {
+
+	// Name-based registration takes precedence over extension-based, matching
+	// the same precedence in ExtractAll/byExtFunc.
+	if okName {
+		defer func() {
+			if r := recover(); r != nil {
+				out, err = "", fmt.Errorf("extract: %s decoder panicked: %v", name, r)
+			}
+		}()
+		return fnName(data)
+	}
+
+	if !okExt {
 		return "", fmt.Errorf("%w: %q", ErrUnsupported, ext)
 	}
 

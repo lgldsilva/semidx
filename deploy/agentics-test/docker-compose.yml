@@ -35,6 +35,7 @@ services:
       SEMIDX_DB_DSN: postgres://semidx:semidx@postgres:5432/semidx?sslmode=disable
       SEMIDX_BOOTSTRAP_TOKEN: test-admin-token
       SEMIDX_LISTEN_ADDR: ":8080"
+      SEMIDX_INDEX_WORKERS: ${SEMIDX_INDEX_WORKERS:-1}
       SEMIDX_COOKIE_SECURE: "false"
     depends_on:
       postgres:

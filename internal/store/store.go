@@ -308,7 +308,16 @@ func retryPing(ctx context.Context, ping func(context.Context) error, delays []t
 // NewPgStore connects (and pings) a pgxpool at connString and applies any
 // pending schema migrations.
 func NewPgStore(ctx context.Context, connString string) (*PgStore, error) {
-	pool, err := pgxpool.New(ctx, connString)
+	cfg, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		return nil, err
+	}
+	// Default pgxpool MaxConns is ~4 (numCPU). Job workers + LISTEN + API
+	// handlers share this pool; keep headroom so auth lookups never starve.
+	if cfg.MaxConns < 16 {
+		cfg.MaxConns = 16
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

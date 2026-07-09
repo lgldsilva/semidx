@@ -8,8 +8,8 @@ import (
 
 var (
 	mdHeaderRx = regexp.MustCompile(`(?m)^(#{1,6})\s+(.+)$`)
-	mdToolRx   = regexp.MustCompile(`(?:^|\s)-(?:\s+\[)?([\w-]+)` + "`" + `?`)
-	mdSkillRx  = regexp.MustCompile(`(?i)(?:skill|tool|command)[\s:]*[` + "`" + `]?(\w[\w./-]*)[` + "`" + `]?`)
+	mdToolRx   = regexp.MustCompile(`(?m)^\s*-\s*(?:(?:` + "`" + `|\[)\s*)?([\w-]+)\s*(?:` + "`" + `|\])?`)
+	mdSkillRx  = regexp.MustCompile(`(?i)\b(?:skill|tool|command)\b[\s:]*[` + "`" + `]?(\w[\w./-]*)[` + "`" + `]?`)
 )
 
 func init() {

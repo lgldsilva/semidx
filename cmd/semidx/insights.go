@@ -243,24 +243,13 @@ func countMatches(cmd *cobra.Command, d *deps, project, query string) (int, erro
 	return count, nil
 }
 
-// printInsightChart renders an ASCII bar chart of the insight's datapoints.
-func printInsightChart(ins *Insight) {
-	dps := ins.Datapoints
-	// Sort by timestamp.
-	sort.Slice(dps, func(i, j int) bool {
-		return dps[i].Timestamp.Before(dps[j].Timestamp)
-	})
+// monthKey groups datapoints by year+month.
+type monthKey struct {
+	year  int
+	month time.Month
+}
 
-	// Header.
-	title := fmt.Sprintf("%s: %s", ins.Name, ins.Query)
-	fmt.Println(title)
-	fmt.Println(strings.Repeat("─", len(title)))
-
-	if len(dps) == 0 {
-		return
-	}
-
-	// Determine max count for scaling.
+func computeMaxCount(dps []Datapoint) int {
 	maxCount := 0
 	for _, dp := range dps {
 		if dp.MatchCount > maxCount {
@@ -270,16 +259,10 @@ func printInsightChart(ins *Insight) {
 	if maxCount == 0 {
 		maxCount = 1
 	}
+	return maxCount
+}
 
-	// Scale: chart width is ~50 chars.
-	const chartWidth = 50
-	scale := float64(chartWidth) / float64(maxCount)
-
-	// Group datapoints by month for display.
-	type monthKey struct {
-		year  int
-		month time.Month
-	}
+func groupDatapointsByMonth(dps []Datapoint) (map[monthKey][]Datapoint, []monthKey) {
 	monthGroups := make(map[monthKey][]Datapoint)
 	var sortedMonths []monthKey
 	monthSeen := make(map[monthKey]bool)
@@ -299,8 +282,18 @@ func printInsightChart(ins *Insight) {
 		}
 		return sortedMonths[i].month < sortedMonths[j].month
 	})
+	return monthGroups, sortedMonths
+}
 
-	// Bar chart labels.
+func renderBar(avgCount float64, scale float64) string {
+	barLen := int(math.Round(avgCount * scale))
+	if barLen < 1 && avgCount > 0 {
+		barLen = 1
+	}
+	return strings.Repeat("█", barLen)
+}
+
+func printMonthlyBars(monthGroups map[monthKey][]Datapoint, sortedMonths []monthKey, scale float64) {
 	monthAbbrev := map[time.Month]string{
 		time.January: "Jan", time.February: "Feb", time.March: "Mar",
 		time.April: "Apr", time.May: "May", time.June: "Jun",
@@ -310,45 +303,81 @@ func printInsightChart(ins *Insight) {
 
 	for _, mk := range sortedMonths {
 		group := monthGroups[mk]
-		// Average the counts in this month.
 		total := 0
 		for _, dp := range group {
 			total += dp.MatchCount
 		}
 		avgCount := float64(total) / float64(len(group))
-		barLen := int(math.Round(avgCount * scale))
-		if barLen < 1 && avgCount > 0 {
-			barLen = 1
-		}
-		bar := strings.Repeat("█", barLen)
+		bar := renderBar(avgCount, scale)
 		label := fmt.Sprintf("%s %02d", monthAbbrev[mk.month], mk.year%100)
 		fmt.Printf("%s %s %d\n", label, bar, int(math.Round(avgCount)))
 	}
+}
+
+func computeTrend(dps []Datapoint) (diff int, pct float64, duration string) {
+	if len(dps) < 2 {
+		return 0, 0, "N/A"
+	}
+	first, last := dps[0].MatchCount, dps[len(dps)-1].MatchCount
+	diff = last - first
+	if first > 0 {
+		pct = float64(diff) / float64(first) * 100
+	}
+	duration = "N/A"
+	if !dps[0].Timestamp.IsZero() && !dps[len(dps)-1].Timestamp.IsZero() {
+		dur := dps[len(dps)-1].Timestamp.Sub(dps[0].Timestamp)
+		months := int(dur.Hours() / (24 * 30))
+		if months < 1 {
+			months = 1
+		}
+		duration = fmt.Sprintf("%d months", months)
+	}
+	return diff, pct, duration
+}
+
+func printTrend(dps []Datapoint) {
+	if len(dps) < 2 {
+		return
+	}
+	diff, pct, duration := computeTrend(dps)
+	sign := ""
+	if diff > 0 {
+		sign = "+"
+	}
+	fmt.Printf("\n%s %s%d (%s%.1f%%) in %s\n",
+		arrowSymbol(diff), sign, diff, sign, pct, duration)
+}
+
+// printInsightChart renders an ASCII bar chart of the insight's datapoints.
+func printInsightChart(ins *Insight) {
+	dps := ins.Datapoints
+	// Sort by timestamp.
+	sort.Slice(dps, func(i, j int) bool {
+		return dps[i].Timestamp.Before(dps[j].Timestamp)
+	})
+
+	// Header.
+	title := fmt.Sprintf("%s: %s", ins.Name, ins.Query)
+	fmt.Println(title)
+	fmt.Println(strings.Repeat("─", len(title)))
+
+	if len(dps) == 0 {
+		return
+	}
+
+	// Determine max count for scaling.
+	maxCount := computeMaxCount(dps)
+
+	// Scale: chart width is ~50 chars.
+	const chartWidth = 50
+	scale := float64(chartWidth) / float64(maxCount)
+
+	monthGroups, sortedMonths := groupDatapointsByMonth(dps)
+
+	printMonthlyBars(monthGroups, sortedMonths, scale)
 
 	// Show trend info.
-	if len(dps) >= 2 {
-		first, last := dps[0].MatchCount, dps[len(dps)-1].MatchCount
-		diff := last - first
-		sign := ""
-		if diff > 0 {
-			sign = "+"
-		}
-		pct := 0.0
-		if first > 0 {
-			pct = float64(diff) / float64(first) * 100
-		}
-		duration := "N/A"
-		if !dps[0].Timestamp.IsZero() && !dps[len(dps)-1].Timestamp.IsZero() {
-			dur := dps[len(dps)-1].Timestamp.Sub(dps[0].Timestamp)
-			months := int(dur.Hours() / (24 * 30))
-			if months < 1 {
-				months = 1
-			}
-			duration = fmt.Sprintf("%d months", months)
-		}
-		fmt.Printf("\n%s %s%d (%s%.1f%%) in %s\n",
-			arrowSymbol(diff), sign, diff, sign, pct, duration)
-	}
+	printTrend(dps)
 }
 
 // arrowSymbol returns a trend arrow based on the diff.
