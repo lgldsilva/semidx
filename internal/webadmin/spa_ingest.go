@@ -4,15 +4,11 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"path"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/lgldsilva/semidx/internal/indexing"
-	"github.com/lgldsilva/semidx/internal/store"
 )
 
 const (
@@ -36,17 +32,8 @@ type ingestBody struct {
 func (a *Admin) apiProjectFilesBatch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	_ = ac
 	name := r.PathValue("project")
-	proj, err := a.store.GetProject(r.Context(), name)
-	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
-		return
-	}
-	if err != nil {
-		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
-		return
-	}
-	if a.emb == nil {
-		writeJSONErr(w, http.StatusServiceUnavailable, "no embedder configured on server")
+	sess, ok := a.loadIngestSession(r.Context(), w, name)
+	if !ok {
 		return
 	}
 
@@ -65,25 +52,7 @@ func (a *Admin) apiProjectFilesBatch(w http.ResponseWriter, r *http.Request, ac 
 	}
 
 	ctx := r.Context()
-	model := proj.Model
-	if model == "" {
-		model = "bge-m3"
-	}
-	info, err := a.emb.ModelInfo(ctx, model)
-	if err != nil {
-		a.log.Warn("model info for ingest", "err", err)
-		writeJSONErr(w, http.StatusBadGateway, "embedding model unavailable — configure a provider or use keyword mode on CLI")
-		return
-	}
-	dims := info.Dims
-	if dims <= 0 {
-		dims = 1024
-	}
-	if err := a.store.EnsureChunksTable(ctx, dims); err != nil {
-		writeJSONErr(w, http.StatusInternalServerError, "could not prepare storage")
-		return
-	}
-
+	proj := sess.proj
 	deleted := 0
 	for _, p := range body.Delete {
 		p = cleanRelPath(p)
@@ -97,7 +66,7 @@ func (a *Admin) apiProjectFilesBatch(w http.ResponseWriter, r *http.Request, ac 
 		deleted++
 	}
 
-	idx := indexing.NewIndexer(a.store, a.emb, dims, indexing.IndexerOpts{})
+	idx := sess.idx
 	indexed, chunks, errs := 0, 0, 0
 	var fileErrors []map[string]string
 	for _, f := range body.Files {
@@ -117,7 +86,7 @@ func (a *Admin) apiProjectFilesBatch(w http.ResponseWriter, r *http.Request, ac 
 			fileErrors = append(fileErrors, map[string]string{"path": p, "error": spaErrFileTooLargeIngest})
 			continue
 		}
-		n, ierr := idx.IndexContent(ctx, proj.ID, p, model, []byte(f.Content))
+		n, ierr := idx.IndexContent(ctx, proj.ID, p, sess.model, []byte(f.Content))
 		if ierr != nil {
 			errs++
 			fileErrors = append(fileErrors, map[string]string{"path": p, "error": sanitizeIngestIndexError(ierr)})
@@ -143,17 +112,8 @@ func (a *Admin) apiProjectFilesBatch(w http.ResponseWriter, r *http.Request, ac 
 func (a *Admin) apiProjectArchiveBatch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	_ = ac
 	name := r.PathValue("project")
-	proj, err := a.store.GetProject(r.Context(), name)
-	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
-		return
-	}
-	if err != nil {
-		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
-		return
-	}
-	if a.emb == nil {
-		writeJSONErr(w, http.StatusServiceUnavailable, "no embedder configured on server")
+	sess, ok := a.loadIngestSession(r.Context(), w, name)
+	if !ok {
 		return
 	}
 
@@ -191,26 +151,8 @@ func (a *Admin) apiProjectArchiveBatch(w http.ResponseWriter, r *http.Request, a
 	}
 
 	ctx := r.Context()
-	model := proj.Model
-	if model == "" {
-		model = "bge-m3"
-	}
-	info, err := a.emb.ModelInfo(ctx, model)
-	if err != nil {
-		a.log.Warn("model info for ingest archive", "err", err)
-		writeJSONErr(w, http.StatusBadGateway, "embedding model unavailable — configure a provider or use keyword mode on CLI")
-		return
-	}
-	dims := info.Dims
-	if dims <= 0 {
-		dims = 1024
-	}
-	if err := a.store.EnsureChunksTable(ctx, dims); err != nil {
-		writeJSONErr(w, http.StatusInternalServerError, "could not prepare storage")
-		return
-	}
-
-	idx := indexing.NewIndexer(a.store, a.emb, dims, indexing.IndexerOpts{})
+	proj := sess.proj
+	idx := sess.idx
 	indexed, chunks, errs := 0, 0, 0
 	fileErrors := make([]map[string]string, 0)
 
@@ -252,7 +194,7 @@ func (a *Admin) apiProjectArchiveBatch(w http.ResponseWriter, r *http.Request, a
 			fileErrors = append(fileErrors, map[string]string{"path": p, "error": "content is not valid UTF-8 (binary?)"})
 			continue
 		}
-		n, ierr := idx.IndexContent(ctx, proj.ID, p, model, content)
+		n, ierr := idx.IndexContent(ctx, proj.ID, p, sess.model, content)
 		if ierr != nil {
 			errs++
 			fileErrors = append(fileErrors, map[string]string{"path": p, "error": sanitizeIngestIndexError(ierr)})

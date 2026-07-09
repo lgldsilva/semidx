@@ -196,29 +196,34 @@ func runIndex(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 	if systemDirs[filepath.Clean(opts.projectPath)] {
 		return fmt.Errorf("refusing to index system directory: %s", filepath.Clean(opts.projectPath))
 	}
-
-	// Remote mode: either refuse (clear error) or alias to push.
 	if d.remote() {
-		if !opts.toServer {
-			return errIndexInRemoteMode(d.client.ServerURL, opts.projectPath)
-		}
-		if err := validateIndexToServer(opts.watch, opts.gitMode, opts.branch, d.keywordOnly); err != nil {
-			return err
-		}
-		return runPush(cmd, d, &pushOptions{
-			projectPath:  opts.projectPath,
-			model:        opts.model,
-			maxFiles:     opts.maxFiles,
-			docs:         opts.docs,
-			verbose:      opts.verbose,
-			embedLocally: opts.embedLocally,
-			priv:         opts.privacy,
-		})
+		return runIndexWhenRemote(cmd, d, opts)
 	}
 	if opts.toServer {
 		return fmt.Errorf("--to-server requires a logged-in server: run `semidx login <url> --token ...` first")
 	}
+	return runIndexLocal(cmd, d, opts)
+}
 
+func runIndexWhenRemote(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
+	if !opts.toServer {
+		return errIndexInRemoteMode(d.client.ServerURL, opts.projectPath)
+	}
+	if err := validateIndexToServer(opts.watch, opts.gitMode, opts.branch, d.keywordOnly); err != nil {
+		return err
+	}
+	return runPush(cmd, d, &pushOptions{
+		projectPath:  opts.projectPath,
+		model:        opts.model,
+		maxFiles:     opts.maxFiles,
+		docs:         opts.docs,
+		verbose:      opts.verbose,
+		embedLocally: opts.embedLocally,
+		priv:         opts.privacy,
+	})
+}
+
+func runIndexLocal(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 	d.applyPrivacy(opts.privacy)
 	ctx := cmd.Context()
 	db, err := d.indexStore(ctx)
