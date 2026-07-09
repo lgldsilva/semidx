@@ -231,6 +231,8 @@ type JobStore interface {
 	CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated, deletedFiles, errorCount int) error
 	FailJob(ctx context.Context, id int, errMsg string) error
 	GetJob(ctx context.Context, id int) (*Job, error)
+	// ListRecentJobs returns the newest jobs for a project (id DESC), capped by limit.
+	ListRecentJobs(ctx context.Context, projectID, limit int) ([]Job, error)
 }
 
 // JobNotifier is an optional extension for immediate job dispatch via Postgres
@@ -789,6 +791,22 @@ func (s *PgStore) FileUpToDate(ctx context.Context, projectID int, path, hash st
 func (s *PgStore) CountProjectFiles(ctx context.Context, projectID int) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM files WHERE project_id = $1`, projectID).Scan(&n)
+	return n, err
+}
+
+// CountProjectChunks returns how many chunks a project has in the dims table.
+// dims must be resolved by the caller (project.Dims or probe).
+func (s *PgStore) CountProjectChunks(ctx context.Context, projectID, dims int) (int, error) {
+	if dims <= 0 {
+		dims = s.resolveDims(ctx, projectID, dims)
+	}
+	table, err := chunksTable(dims)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	q := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE project_id = $1`, table)
+	err = s.pool.QueryRow(ctx, q, projectID).Scan(&n)
 	return n, err
 }
 

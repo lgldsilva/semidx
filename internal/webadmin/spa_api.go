@@ -106,14 +106,17 @@ func (a *Admin) apiMe(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 
 func (a *Admin) apiSystem(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	_ = ac
+	caps := []string{"search", "projects", "reindex", "jobs", "git_clone", "files", "explore"}
+	if a.chat != nil {
+		caps = append(caps, "chat")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"product": "semidx",
-		"mode":    "server",
-		"storage": "PostgreSQL / pgvector",
-		"version": "embedded-admin",
-		"caps": []string{
-			"search", "projects", "reindex", "jobs", "git_clone",
-		},
+		"product":       "semidx",
+		"mode":          "server",
+		"storage":       "PostgreSQL / pgvector",
+		"version":       "embedded-admin",
+		"caps":          caps,
+		"chat_enabled":  a.chat != nil,
 		"cli_hints": []string{
 			"semidx login <url> --token …",
 			"semidx push --project .",
@@ -182,10 +185,7 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 	}
 
 	out := map[string]any{
-		"project": projectItem{
-			Name: proj.Name, Identity: proj.Identity, Path: proj.Path,
-			Model: proj.Model, Status: proj.Status, SourceType: proj.SourceType,
-		},
+		"project": projectToItem(*proj),
 	}
 	if body.Index {
 		jobID, jerr := a.store.EnqueueJob(r.Context(), proj.ID, "full")

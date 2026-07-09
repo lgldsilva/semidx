@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './auth'
 import { Layout } from './Layout'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectsPage } from './pages/ProjectsPage'
+import { ProjectWorkspace } from './pages/ProjectWorkspace'
 import { SearchPage } from './pages/SearchPage'
 import { CliGuidePage } from './pages/CliGuidePage'
 
@@ -31,6 +32,7 @@ export default function App() {
               <Layout>
                 <Routes>
                   <Route path="/" element={<ProjectsPage />} />
+                  <Route path="/projects/:name" element={<ProjectWorkspace />} />
                   <Route path="/search" element={<SearchPage />} />
                   <Route path="/cli" element={<CliGuidePage />} />
                   <Route path="*" element={<Navigate to="/" replace />} />

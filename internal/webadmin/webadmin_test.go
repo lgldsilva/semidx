@@ -37,6 +37,13 @@ type fakeStore struct {
 	searchErr      error               // injected SearchSimilar/Keywords error
 	hideIdentities map[string]struct{} // test hook: pretend these identities are gone
 
+	// workspace enrichment
+	fileHashes map[string]string // path→hash for ListFileHashes
+	fileCount  int
+	jobs       []store.Job
+	chunks     []store.SearchResult // FetchChunksByPath
+	nextJob    int
+
 	// error-injection fields (all nil = success/normal path)
 	listProjectsErr error
 	listTokensErr   error
@@ -264,6 +271,68 @@ func (f *fakeStore) SearchSimilarKeywords(context.Context, int, string, int, int
 		return nil, f.searchErr
 	}
 	return f.searchResults, nil
+}
+
+func (f *fakeStore) CountProjectFiles(context.Context, int) (int, error) {
+	if f.fileCount > 0 {
+		return f.fileCount, nil
+	}
+	return len(f.fileHashes), nil
+}
+
+func (f *fakeStore) ListFileHashes(context.Context, int) (map[string]string, error) {
+	if f.fileHashes == nil {
+		return map[string]string{}, nil
+	}
+	return f.fileHashes, nil
+}
+
+func (f *fakeStore) GetProjectCommit(context.Context, int) (string, error) {
+	return "", nil
+}
+
+func (f *fakeStore) ListRecentJobs(_ context.Context, _ int, limit int) ([]store.Job, error) {
+	if limit <= 0 || limit > len(f.jobs) {
+		return f.jobs, nil
+	}
+	return f.jobs[:limit], nil
+}
+
+func (f *fakeStore) FetchChunksByPath(context.Context, int, string, int, int) ([]store.SearchResult, error) {
+	return f.chunks, nil
+}
+
+func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gitURL, branch string, dims int) (*store.Project, error) {
+	p := store.Project{
+		ID: len(f.projects) + 1, Name: name, Model: model, SourceType: sourceType,
+		GitURL: gitURL, Branch: branch, Status: "registered", Identity: name, Dims: dims,
+	}
+	f.projects = append(f.projects, p)
+	return &p, nil
+}
+
+func (f *fakeStore) DeleteProject(_ context.Context, name string) error {
+	for i, p := range f.projects {
+		if p.Name == name {
+			f.projects = append(f.projects[:i], f.projects[i+1:]...)
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+func (f *fakeStore) EnqueueJob(context.Context, int, string) (int, error) {
+	f.nextJob++
+	return f.nextJob, nil
+}
+
+func (f *fakeStore) GetJob(_ context.Context, id int) (*store.Job, error) {
+	for i := range f.jobs {
+		if f.jobs[i].ID == id {
+			return &f.jobs[i], nil
+		}
+	}
+	return &store.Job{ID: id, Status: "queued", Type: "full"}, nil
 }
 
 // --- helpers -----------------------------------------------------------------
