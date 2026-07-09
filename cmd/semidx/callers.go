@@ -106,7 +106,6 @@ func resolveCallersProject(ctx context.Context, db store.IndexStore, projectArg 
 // printCallers finds and displays the direct (and transitive) callers of the
 // symbol defined at the given file:line.
 func printCallers(ctx context.Context, db store.IndexStore, proj *store.Project, fl fileLineArg) error {
-	// Read the file to get the symbol at the given line.
 	root := proj.Path
 	if root == "" {
 		root = "."
@@ -126,49 +125,61 @@ func printCallers(ctx context.Context, db store.IndexStore, proj *store.Project,
 		return fmt.Errorf("no symbols found in %s", fl.File)
 	}
 
-	// Find the symbol at or closest to the given line.
-	var targetSym *analyzer.Symbol
-	for _, s := range syms {
-		if fl.Line >= s.StartLine && fl.Line <= s.EndLine {
-			targetSym = &s
-			break
-		}
-	}
-	if targetSym == nil {
-		// No exact match: find the nearest symbol above the line.
-		for _, s := range syms {
-			if fl.Line >= s.StartLine {
-				if targetSym == nil || s.StartLine > targetSym.StartLine {
-					targetSym = &s
-				}
-			}
-		}
-	}
-	if targetSym == nil {
-		targetSym = &syms[0]
-	}
-
+	targetSym := lookupSymbolAtLine(syms, fl.Line)
 	fmt.Printf("\n  Callers of: %s\n", targetSym.Name)
 	fmt.Println("  " + strings.Repeat("─", 60))
 
-	// Get dependency graph and find direct callers (files that import this file's dir).
 	graph, err := db.FetchGraphNeighbors(ctx, proj.ID)
 	if err != nil {
 		return fmt.Errorf("fetch dependency graph: %w", err)
 	}
 
 	fileDir := filepath.Dir(fl.File) + "/"
-	var directCallers []string
+	directCallers := findDirectCallers(graph, fileDir)
+	sort.Strings(directCallers)
+
+	printDirectCallers(directCallers)
+	printTransitiveCallers(graph, directCallers, fl.File)
+
+	return nil
+}
+
+func lookupSymbolAtLine(syms []analyzer.Symbol, line int) *analyzer.Symbol {
+	// Find the symbol at or closest to the given line.
+	for _, s := range syms {
+		if line >= s.StartLine && line <= s.EndLine {
+			return &s
+		}
+	}
+	// No exact match: find the nearest symbol above the line.
+	var nearest *analyzer.Symbol
+	for _, s := range syms {
+		if line >= s.StartLine {
+			if nearest == nil || s.StartLine > nearest.StartLine {
+				nearest = &s
+			}
+		}
+	}
+	if nearest == nil {
+		nearest = &syms[0]
+	}
+	return nearest
+}
+
+func findDirectCallers(graph map[string][]string, fileDir string) []string {
+	var callers []string
 	for src, targets := range graph {
 		for _, tgt := range targets {
 			if tgt == fileDir {
-				directCallers = append(directCallers, src)
+				callers = append(callers, src)
 				break
 			}
 		}
 	}
-	sort.Strings(directCallers)
+	return callers
+}
 
+func printDirectCallers(directCallers []string) {
 	fmt.Printf("  Direct (%d):\n", len(directCallers))
 	if len(directCallers) == 0 {
 		fmt.Println("    (none — no indexed file imports this package)")
@@ -177,36 +188,37 @@ func printCallers(ctx context.Context, db store.IndexStore, proj *store.Project,
 			fmt.Printf("    %s\n", c)
 		}
 	}
+}
 
-	// Transitive callers: callers of the direct callers (depth-2).
-	if len(directCallers) > 0 {
-		transitive := make(map[string]bool)
-		for _, dc := range directCallers {
-			for src, targets := range graph {
-				for _, tgt := range targets {
-					if tgt == filepath.Dir(dc)+"/" && src != fl.File {
-						transitive[src] = true
-					}
+func printTransitiveCallers(graph map[string][]string, directCallers []string, excludeFile string) {
+	if len(directCallers) == 0 {
+		return
+	}
+	transitive := make(map[string]bool)
+	for _, dc := range directCallers {
+		for src, targets := range graph {
+			for _, tgt := range targets {
+				if tgt == filepath.Dir(dc)+"/" && src != excludeFile {
+					transitive[src] = true
 				}
 			}
 		}
-		// Remove direct callers from transitive set.
-		for _, dc := range directCallers {
-			delete(transitive, dc)
-		}
-
-		if len(transitive) > 0 {
-			var tcList []string
-			for t := range transitive {
-				tcList = append(tcList, t)
-			}
-			sort.Strings(tcList)
-			fmt.Printf("\n  Transitive (%d):\n", len(tcList))
-			for _, t := range tcList {
-				fmt.Printf("    %s\n", t)
-			}
-		}
+	}
+	// Remove direct callers from transitive set.
+	for _, dc := range directCallers {
+		delete(transitive, dc)
 	}
 
-	return nil
+	if len(transitive) == 0 {
+		return
+	}
+	var tcList []string
+	for t := range transitive {
+		tcList = append(tcList, t)
+	}
+	sort.Strings(tcList)
+	fmt.Printf("\n  Transitive (%d):\n", len(tcList))
+	for _, t := range tcList {
+		fmt.Printf("    %s\n", t)
+	}
 }

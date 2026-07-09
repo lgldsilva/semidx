@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -231,16 +232,7 @@ func newAlertsCheckCmd(d *deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			toCheck := allAlerts
-			if project != "" {
-				var filtered []Alert
-				for _, a := range allAlerts {
-					if a.Project == project {
-						filtered = append(filtered, a)
-					}
-				}
-				toCheck = filtered
-			}
+			toCheck := filterAlertsByProject(allAlerts, project)
 			if len(toCheck) == 0 {
 				fmt.Println("No alerts to check.")
 				return nil
@@ -251,61 +243,14 @@ func newAlertsCheckCmd(d *deps) *cobra.Command {
 			for _, a := range toCheck {
 				fmt.Printf("Checking alert %q (query: %s)...\n", a.Name, a.Query)
 
-				// Run the search.
-				var resp *search.Response
-				if d.remote() {
-					api := d.apiClient()
-					p, err := searchtargets.ResolveRemoteProject(ctx, api, a.Project)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "[warn] alert %q: resolve project: %v\n", a.Name, err)
-						continue
-					}
-					sr, err := api.Search(ctx, p.Name, a.Query, "", 50, false, 0)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "[warn] alert %q: search: %v\n", a.Name, err)
-						continue
-					}
-					resp = remoteToResponse(sr)
-				} else {
-					db, err := d.indexStore(ctx)
-					if err != nil {
-						return err
-					}
-					targets, err := searchtargets.ResolveProjects(ctx, db, a.Project, "")
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "[warn] alert %q: resolve project: %v\n", a.Name, err)
-						continue
-					}
-					req := search.Request{Query: a.Query, TopK: 50, KeywordOnly: d.keywordOnly}
-					results, err := searchtargets.SearchLocal(ctx, db, d.emb, targets, req, gitmeta.Info{})
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "[warn] alert %q: search error: %v\n", a.Name, err)
-						continue
-					}
-					if len(results) == 0 {
-						fmt.Fprintf(os.Stderr, "[warn] alert %q: no results returned\n", a.Name)
-						continue
-					}
-					resp = results[0].Resp
+				resp, err := runAlertSearch(ctx, d, a)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "[warn] alert %q: %v\n", a.Name, err)
+					continue
 				}
 
-				// Build a single Response slice for hashing.
-				responses := []search.Response{*resp}
-				newHash := resultsHash(responses)
-
-				if a.LastHash == "" {
-					fmt.Printf("  → Initial baseline recorded (%d results).\n", len(resp.Results))
-				} else if newHash != a.LastHash {
-					fmt.Printf("  ⚠ NEW MATCHES! Results have changed since last check.\n")
-					anyNew = true
-					// Show new results.
-					for _, r := range resp.Results {
-						fmt.Printf("    %s:%d %s\n", r.FilePath, r.StartLine, truncateContent(r.Content, 80))
-					}
-				} else {
-					fmt.Printf("  ✓ No new matches (%d results, unchanged).\n", len(resp.Results))
-				}
-
+				newHash := resultsHash([]search.Response{*resp})
+				checkAlertResults(a, resp, newHash, &anyNew)
 				updateAlertHash(allAlerts, a.Name, a.Project, newHash)
 			}
 
@@ -322,6 +267,75 @@ func newAlertsCheckCmd(d *deps) *cobra.Command {
 	}
 	c.Flags().StringVar(&project, "project", "", "Only check alerts for this project")
 	return c
+}
+
+func filterAlertsByProject(allAlerts []Alert, project string) []Alert {
+	if project == "" {
+		return allAlerts
+	}
+	var filtered []Alert
+	for _, a := range allAlerts {
+		if a.Project == project {
+			filtered = append(filtered, a)
+		}
+	}
+	return filtered
+}
+
+func runAlertSearch(ctx context.Context, d *deps, a Alert) (*search.Response, error) {
+	if d.remote() {
+		return searchAlertRemote(ctx, d, a)
+	}
+	return searchAlertLocal(ctx, d, a)
+}
+
+func searchAlertRemote(ctx context.Context, d *deps, a Alert) (*search.Response, error) {
+	api := d.apiClient()
+	p, err := searchtargets.ResolveRemoteProject(ctx, api, a.Project)
+	if err != nil {
+		return nil, fmt.Errorf("resolve project: %w", err)
+	}
+	sr, err := api.Search(ctx, p.Name, a.Query, "", 50, false, 0)
+	if err != nil {
+		return nil, fmt.Errorf("search: %w", err)
+	}
+	resp := remoteToResponse(sr)
+	return resp, nil
+}
+
+func searchAlertLocal(ctx context.Context, d *deps, a Alert) (*search.Response, error) {
+	db, err := d.indexStore(ctx)
+	if err != nil {
+		return nil, err
+	}
+	targets, err := searchtargets.ResolveProjects(ctx, db, a.Project, "")
+	if err != nil {
+		return nil, fmt.Errorf("resolve project: %w", err)
+	}
+	req := search.Request{Query: a.Query, TopK: 50, KeywordOnly: d.keywordOnly}
+	results, err := searchtargets.SearchLocal(ctx, db, d.emb, targets, req, gitmeta.Info{})
+	if err != nil {
+		return nil, fmt.Errorf("search error: %w", err)
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no results returned")
+	}
+	resp := results[0].Resp
+	return resp, nil
+}
+
+func checkAlertResults(a Alert, resp *search.Response, newHash string, anyNew *bool) {
+	if a.LastHash == "" {
+		fmt.Printf("  → Initial baseline recorded (%d results).\n", len(resp.Results))
+	} else if newHash != a.LastHash {
+		fmt.Printf("  ⚠ NEW MATCHES! Results have changed since last check.\n")
+		*anyNew = true
+		for _, r := range resp.Results {
+			fmt.Printf("    %s:%d %s\n", r.FilePath, r.StartLine, truncateContent(r.Content, 80))
+		}
+	} else {
+		fmt.Printf("  ✓ No new matches (%d results, unchanged).\n", len(resp.Results))
+	}
 }
 
 func updateAlertHash(alerts []Alert, name, project, hash string) {
