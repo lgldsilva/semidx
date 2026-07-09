@@ -52,9 +52,8 @@ func TestMintWithEmptyScopes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if claims.Scopes == nil {
-		// Scopes may be nil — that's fine, as long as Verify succeeds.
-		_ = claims.Scopes
+	if claims.Scopes != nil {
+		t.Logf("Scopes: %v", claims.Scopes)
 	}
 }
 

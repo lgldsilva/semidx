@@ -20,6 +20,18 @@ type projSearch struct {
 	took time.Duration
 }
 
+// searchCall groups parameters for runRemoteSearch / runLocalSearch to keep
+// parameter count ≤ 7 (addresses S107).
+type searchCall struct {
+	projectArg string
+	query      string
+	model      string
+	topK       int
+	privacy    bool
+	graph      bool
+	graphDepth int
+}
+
 // runSearchTargets resolves which project(s) to search and runs the query
 // against each. Resolution (local mode):
 //   - a --project PATH resolves by unique identity (git identity or "path:<abs>"),
@@ -32,10 +44,19 @@ type projSearch struct {
 func (d *deps) runSearchTargets(cmd *cobra.Command, projectArg, query, model string, topK int, privacy bool) ([]projSearch, error) {
 	ctx := cmd.Context()
 	graph, graphDepth := searchGraphOpts(cmd)
-	if d.remote() {
-		return d.runRemoteSearch(ctx, projectArg, query, model, topK, graph, graphDepth)
+	call := searchCall{
+		projectArg: projectArg,
+		query:      query,
+		model:      model,
+		topK:       topK,
+		privacy:    privacy,
+		graph:      graph,
+		graphDepth: graphDepth,
 	}
-	return d.runLocalSearch(ctx, projectArg, query, model, topK, privacy, graph, graphDepth)
+	if d.remote() {
+		return d.runRemoteSearch(ctx, call)
+	}
+	return d.runLocalSearch(ctx, call)
 }
 
 func searchGraphOpts(cmd *cobra.Command) (graph bool, graphDepth int) {
@@ -44,26 +65,26 @@ func searchGraphOpts(cmd *cobra.Command) (graph bool, graphDepth int) {
 	return graph, search.ClampGraphDepth(depth)
 }
 
-func (d *deps) runRemoteSearch(ctx context.Context, projectArg, query, model string, topK int, graph bool, graphDepth int) ([]projSearch, error) {
+func (d *deps) runRemoteSearch(ctx context.Context, call searchCall) ([]projSearch, error) {
 	api := d.apiClient()
-	p, err := searchtargets.ResolveRemoteProject(ctx, api, projectArg)
+	p, err := searchtargets.ResolveRemoteProject(ctx, api, call.projectArg)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := api.Search(ctx, p.Name, query, model, topK, graph, graphDepth)
+	resp, err := api.Search(ctx, p.Name, call.query, call.model, call.topK, call.graph, call.graphDepth)
 	if err != nil {
 		return nil, err
 	}
 	return []projSearch{{p.Name, remoteToResponse(resp), time.Duration(resp.TookMS) * time.Millisecond}}, nil
 }
 
-func (d *deps) runLocalSearch(ctx context.Context, projectArg, query, model string, topK int, privacy bool, graph bool, graphDepth int) ([]projSearch, error) {
-	d.applyPrivacy(privacy)
+func (d *deps) runLocalSearch(ctx context.Context, call searchCall) ([]projSearch, error) {
+	d.applyPrivacy(call.privacy)
 	db, err := d.indexStore(ctx)
 	if err != nil {
 		return nil, err
 	}
-	targets, err := searchtargets.ResolveProjects(ctx, db, projectArg, "")
+	targets, err := searchtargets.ResolveProjects(ctx, db, call.projectArg, "")
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +93,8 @@ func (d *deps) runLocalSearch(ctx context.Context, projectArg, query, model stri
 		cwdGit = gi
 	}
 	req := search.Request{
-		Query: query, Model: model, TopK: topK, KeywordOnly: d.keywordOnly,
-		Graph: graph, GraphMaxDepth: graphDepth,
+		Query: call.query, Model: call.model, TopK: call.topK, KeywordOnly: d.keywordOnly,
+		Graph: call.graph, GraphMaxDepth: call.graphDepth,
 	}
 	results, err := searchtargets.SearchLocal(ctx, db, d.emb, targets, req, cwdGit)
 	if err != nil {

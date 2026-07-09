@@ -12,7 +12,7 @@ import (
 )
 
 // setup loads config/client state and constructs the embedder chain for a run.
-func (d *deps) setup(cmd *cobra.Command, forceLocal, keywordOnly bool) error {
+func (d *deps) setup(cmd *cobra.Command, forceLocal, keywordOnly bool, backendFlag string) error {
 	d.cfg = config.Load()
 	d.localIndexPath = d.cfg.LocalIndexPath
 	if forceLocal && d.localIndexPath == "" {
@@ -25,6 +25,15 @@ func (d *deps) setup(cmd *cobra.Command, forceLocal, keywordOnly bool) error {
 		return fmt.Errorf("load client config: %w", err)
 	}
 	d.client = cc
+
+	useRemote, err := resolveUseRemote(cc, forceLocal, backendFlag)
+	if err != nil {
+		return err
+	}
+	d.useRemote = useRemote
+	// --backend local (without --local) still means "do not use the server".
+	// Prefer an existing SEMIDX_LOCAL_INDEX; otherwise fall through to Postgres
+	// (or zero-config SQLite) like a machine that never logged in.
 
 	d.applyZeroConfigDefaults(cmd, forceLocal, keywordOnly)
 	d.emb = embed.NewChainFromConfig(embedChainConfig(d.cfg))

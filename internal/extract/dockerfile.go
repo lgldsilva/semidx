@@ -13,8 +13,9 @@ var dockerInstructions = []string{
 }
 
 var dockerInstrRx = func() *regexp.Regexp {
-	// Build a pattern like: ^(FROM|RUN|CMD|...)\b
-	return regexp.MustCompile(`^\s*(` + strings.Join(dockerInstructions, "|") + `)\b`)
+	// Build a pattern like: ^(FROM|RUN|CMD|...)\b with multi-line mode so ^
+	// matches start of line, not just start of string.
+	return regexp.MustCompile(`(?m)^\s*(` + strings.Join(dockerInstructions, "|") + `)\b`)
 }()
 
 func init() {

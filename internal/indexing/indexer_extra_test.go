@@ -794,8 +794,8 @@ func (e *countingEmbedder) ListModels(ctx context.Context) ([]string, error) { r
 // the embedding cache, the embedder is never called (zero Embed calls) and all
 // chunks are still counted as created via InsertChunks.
 func TestEmbedAndInsertAllCached(t *testing.T) {
-	content := []byte("package a\n\nfunc A() {}\n\nfunc B() {}\n\nfunc C() {}\n")
-	chunks := chunker.ChunkFile("a.go", content, 4000)
+	content := []byte("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau")
+	chunks := chunker.ChunkFile("a.md", content, 20)
 	if len(chunks) < 2 {
 		t.Fatalf("need at least 2 chunks, got %d", len(chunks))
 	}
@@ -827,17 +827,17 @@ func TestEmbedAndInsertAllCached(t *testing.T) {
 // cached, only the uncached inputs are embedded (single Embed call with the
 // correct subset) and InsertEmbeddingCache records only the new hashes.
 func TestEmbedAndInsertPartialCached(t *testing.T) {
-	content := []byte("package a\n\nfunc A() {}\n\nfunc B() {}\n\nfunc C() {}\n")
-	chunks := chunker.ChunkFile("a.go", content, 4000)
-	if len(chunks) < 4 {
-		t.Fatalf("need at least 4 chunks, got %d", len(chunks))
+	content := []byte("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau")
+	chunks := chunker.ChunkFile("a.md", content, 20)
+	if len(chunks) < 3 {
+		t.Fatalf("need at least 3 chunks, got %d", len(chunks))
 	}
-	chunks = chunks[:4]
+	chunks = chunks[:3]
 
 	inputs := buildChunkInputs(chunks, nil)
-	// Pre-warm cache with only the first two hashes.
+	// Pre-warm cache with only the first hash.
 	cache := make(map[string][]float32)
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 1; i++ {
 		h := sha256.Sum256([]byte(inputs[i]))
 		cache[fmt.Sprintf("%x", h)] = []float32{1.0, 2.0, 3.0}
 	}
@@ -869,12 +869,12 @@ func TestEmbedAndInsertPartialCached(t *testing.T) {
 // to a single Embed call with all inputs and InsertEmbeddingCache stores
 // every hash.
 func TestEmbedAndInsertNoneCached(t *testing.T) {
-	content := []byte("package a\n\nfunc A() {}\n\nfunc B() {}\n\nfunc C() {}\n")
-	chunks := chunker.ChunkFile("a.go", content, 4000)
-	if len(chunks) < 4 {
-		t.Fatalf("need at least 4 chunks, got %d", len(chunks))
+	content := []byte("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau")
+	chunks := chunker.ChunkFile("a.md", content, 20)
+	if len(chunks) < 3 {
+		t.Fatalf("need at least 3 chunks, got %d", len(chunks))
 	}
-	chunks = chunks[:4]
+	chunks = chunks[:3]
 
 	cs := &cachingStore{cache: map[string][]float32{}} // empty cache (cold start)
 	emb := &countingEmbedder{dims: 3}

@@ -28,7 +28,8 @@ func extractRST(data []byte) (string, error) {
 
 		if inDirective {
 			// Continuation lines are indented relative to the directive marker.
-			if indent > directiveIndent && trimmed != "" {
+			// Blank lines within a directive (trimmed == "") are also skipped.
+			if trimmed == "" || indent > directiveIndent {
 				continue
 			}
 			inDirective = false

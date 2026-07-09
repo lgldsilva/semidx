@@ -10,7 +10,7 @@ import (
 var (
 	reJSONLockName = regexp.MustCompile(`"name"\s*:\s*"([^"]+)"`)
 	reJSONLockVer  = regexp.MustCompile(`"version"\s*:\s*"([^"]+)"`)
-	reGoSumModule  = regexp.MustCompile(`^(\S+)\s+v?(\S+)`)
+	reGoSumModule  = regexp.MustCompile(`^(\S+)\s+(\S+)`)
 	reTOMLName     = regexp.MustCompile(`^name\s*=\s*"([^"]+)"`)
 	reTOMLVer      = regexp.MustCompile(`^version\s*=\s*"([^"]+)"`)
 	reGemName      = regexp.MustCompile(`^\s{4}(\S+)\s+\(([^)]+)\)`)
@@ -57,14 +57,7 @@ func extractLockfile(data []byte) (string, error) {
 // detectLockFormat samples the first few non-blank lines to determine the
 // lockfile format.
 func detectLockFormat(text string) string {
-	scanner := bufio.NewScanner(strings.NewReader(text))
-	firstLines := make([]string, 0, 5)
-	for scanner.Scan() && len(firstLines) < 5 {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" {
-			firstLines = append(firstLines, line)
-		}
-	}
+	firstLines := sampleFirstLines(text)
 	if len(firstLines) == 0 {
 		return ""
 	}
@@ -76,40 +69,111 @@ func detectLockFormat(text string) string {
 		return "json"
 	}
 
-	// Yarn lockfile: comment header followed by entry, or starts with an entry.
-	if strings.HasPrefix(first, "#") {
-		return "yarn"
-	}
-	if strings.Contains(first, "@") && strings.HasSuffix(first, ":") {
-		return "yarn"
-	}
-
-	// go.sum: lines are "module version hash". Skip lines with = (TOML) or
-	// # (comment).
-	fields := strings.Fields(first)
-	if len(fields) >= 2 && !strings.Contains(first, "=") && !strings.HasPrefix(first, "#") {
-		if strings.HasPrefix(fields[1], "v") || strings.Count(first, " ") >= 2 {
-			return "gosum"
-		}
+	// TOML-based lockfiles (Cargo.lock / poetry.lock). Check before yarn
+	// because poetry.lock may have a comment header ("# Poetry lockfile")
+	// before "[[package]]".
+	if fmt := detectTOMLLockFormat(first, firstLines); fmt != "" {
+		return fmt
 	}
 
-	// TOML-based lockfiles (Cargo.lock / poetry.lock).
-	if strings.HasPrefix(first, "[[package]]") {
-		for _, l := range firstLines {
-			if strings.Contains(l, "poetry") || strings.Contains(l, "Poetry") {
-				return "poetry"
-			}
-		}
-		return "cargo"
+	// Yarn lockfile: scan all sample lines for an entry pattern or a comment
+	// header containing "yarn"/"Yarn".
+	if fmt := detectYarnFormat(firstLines); fmt != "" {
+		return fmt
+	}
+
+	// go.sum: lines are "module version hash".
+	if fmt := detectGoSumFormat(first); fmt != "" {
+		return fmt
 	}
 
 	// Gemfile.lock has section headers like GEM, PATH, PLATFORMS, DEPENDENCIES.
-	switch first {
-	case "GEM", "PATH", "PLATFORMS", "DEPENDENCIES":
+	if isGemfileHeader(first) {
 		return "gemfile"
 	}
 
 	return ""
+}
+
+// sampleFirstLines returns the first up-to-5 non-blank lines of text.
+func sampleFirstLines(text string) []string {
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	firstLines := make([]string, 0, 5)
+	for scanner.Scan() && len(firstLines) < 5 {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
+			firstLines = append(firstLines, line)
+		}
+	}
+	return firstLines
+}
+
+// detectYarnFormat returns "yarn" if any of the sample lines looks like a
+// yarn.lock entry ("name@version:") or a comment header containing "yarn".
+func detectYarnFormat(sample []string) string {
+	for _, line := range sample {
+		if strings.Contains(line, "@") && strings.HasSuffix(line, ":") {
+			return "yarn"
+		}
+	}
+	// Fallback for comment-only headers like "# yarn.lock".
+	for _, line := range sample {
+		if strings.HasPrefix(line, "#") &&
+			(strings.Contains(line, "yarn") || strings.Contains(line, "Yarn")) {
+			return "yarn"
+		}
+	}
+	return ""
+}
+
+// detectGoSumFormat returns "gosum" if the first line looks like a go.sum
+// entry (module version hash), otherwise "".
+// A valid go.sum line has a version starting with "v" (e.g. "mod v1.0.0") or
+// a module-like first field (contains "/") with at least three fields
+// (e.g. "github.com/foo 1.0.0 h1:abc"). The "=" check is intentionally omitted
+// because go.sum hashes may contain "=" (e.g. "h1:abc="); TOML-based lockfiles
+// are checked first, so "name = value" lines never reach this function.
+func detectGoSumFormat(first string) string {
+	fields := strings.Fields(first)
+	if len(fields) >= 2 && !strings.HasPrefix(first, "#") {
+		if strings.HasPrefix(fields[1], "v") {
+			return "gosum"
+		}
+		if len(fields) >= 3 && strings.Contains(fields[0], "/") {
+			return "gosum"
+		}
+	}
+	return ""
+}
+
+// detectTOMLLockFormat returns "poetry" or "cargo" if any of the sample lines
+// contains "[[package]]" (TOML-based lockfile), otherwise "".
+func detectTOMLLockFormat(first string, firstLines []string) string {
+	hasPackage := false
+	for _, l := range firstLines {
+		if strings.HasPrefix(l, "[[package]]") {
+			hasPackage = true
+			break
+		}
+	}
+	if !hasPackage {
+		return ""
+	}
+	for _, l := range firstLines {
+		if strings.Contains(l, "poetry") || strings.Contains(l, "Poetry") {
+			return "poetry"
+		}
+	}
+	return "cargo"
+}
+
+// isGemfileHeader reports whether the line is a Gemfile.lock section header.
+func isGemfileHeader(first string) bool {
+	switch first {
+	case "GEM", "PATH", "PLATFORMS", "DEPENDENCIES":
+		return true
+	}
+	return false
 }
 
 // extractJSONLock scans a JSON lockfile (package-lock.json) line-by-line for
@@ -120,16 +184,7 @@ func extractJSONLock(text string) string {
 	var currentName, currentVer string
 
 	for _, line := range lines {
-		if m := reJSONLockName.FindStringSubmatch(line); m != nil {
-			if currentName != "" && currentVer != "" {
-				entries = append(entries, currentName+"@"+currentVer)
-			}
-			currentName = m[1]
-			currentVer = ""
-		}
-		if m := reJSONLockVer.FindStringSubmatch(line); m != nil {
-			currentVer = m[1]
-		}
+		currentName, currentVer = collectJSONEntry(line, currentName, currentVer, &entries)
 	}
 	if currentName != "" && currentVer != "" {
 		entries = append(entries, currentName+"@"+currentVer)
@@ -139,6 +194,23 @@ func extractJSONLock(text string) string {
 		return strings.TrimSpace(text)
 	}
 	return strings.Join(entries, "\n")
+}
+
+// collectJSONEntry processes a single line of a JSON lockfile, emitting a
+// completed name@version pair when a new "name" key is seen. It returns the
+// updated currentName and currentVer.
+func collectJSONEntry(line, currentName, currentVer string, entries *[]string) (string, string) {
+	if m := reJSONLockName.FindStringSubmatch(line); m != nil {
+		if currentName != "" && currentVer != "" {
+			*entries = append(*entries, currentName+"@"+currentVer)
+		}
+		currentName = m[1]
+		currentVer = ""
+	}
+	if m := reJSONLockVer.FindStringSubmatch(line); m != nil {
+		currentVer = m[1]
+	}
+	return currentName, currentVer
 }
 
 // extractYarnLock extracts package specifiers from a yarn.lock file. Each entry

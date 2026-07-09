@@ -17,6 +17,8 @@ import (
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
+const explainIndent = "    %s\n"
+
 // newExplainCmd returns the `semidx explain` command, which shows structured
 // information about a symbol at a given file:line reference.
 func newExplainCmd(d *deps) *cobra.Command {
@@ -101,98 +103,77 @@ func printExplain(ctx context.Context, db store.IndexStore, proj *store.Project,
 		return fmt.Errorf("read %s: %w", fl.File, err)
 	}
 
-	// Extract symbols via tree-sitter.
 	syms := analyzer.Symbols(fl.File, content)
 	if len(syms) == 0 {
 		return fmt.Errorf("no symbols found in %s", fl.File)
 	}
 
-	// Find the symbol at the given line.
-	var targetSym *analyzer.Symbol
-	for _, s := range syms {
-		if fl.Line >= s.StartLine && fl.Line <= s.EndLine {
-			targetSym = &s
-			break
-		}
-	}
+	targetSym := lookupSymbolAtLine(syms, fl.Line)
 	if targetSym == nil {
 		return fmt.Errorf("no symbol found at %s:%d", fl.File, fl.Line)
 	}
 
-	// Extract file-level imports (for "Dependencies" section).
-	// We discover the module path by looking at go.mod if this is a Go project.
 	modulePath := detectModulePath(root)
 	fileImports := imports.Analyze(fl.File, content, modulePath)
 
-	// Get the dependency graph to find importers.
 	graph, err := db.FetchGraphNeighbors(ctx, proj.ID)
 	if err != nil {
 		return fmt.Errorf("fetch dependency graph: %w", err)
 	}
 
-	fileDir := filepath.Dir(fl.File) + "/"
-	var importers []string
-	importerMap := make(map[string]bool)
-	for src, targets := range graph {
-		for _, tgt := range targets {
-			if tgt == fileDir {
-				if !importerMap[src] {
-					importerMap[src] = true
-					importers = append(importers, src)
-				}
-				break
-			}
-		}
-	}
-	sort.Strings(importers)
-
-	// Find test files referencing this symbol.
+	importers := findImportersInGraph(graph, fl.File)
 	testFiles := findTestFiles(root, fl.File, targetSym.Name)
+	displayName := explainDisplayName(targetSym.Name, content)
 
-	// Build display name: for Go files, prefix the package name.
-	displayName := targetSym.Name
+	printExplainInfo(displayName, targetSym, fl, fileImports, importers, testFiles)
+	return nil
+}
+
+func findImportersInGraph(graph map[string][]string, file string) []string {
+	fileDir := filepath.Dir(file) + "/"
+	return findDirectCallers(graph, fileDir)
+}
+
+func explainDisplayName(name string, content []byte) string {
 	if pkg := goPackageName(content); pkg != "" {
-		displayName = pkg + "." + targetSym.Name
+		return pkg + "." + name
 	}
+	return name
+}
 
-	// Print the output.
+func printExplainInfo(displayName string, sym *analyzer.Symbol, fl fileLineArg, fileImports []string, importers, testFiles []string) {
 	fmt.Println()
-	fmt.Printf("  %s — %s (%s:%d-%d)\n", displayName, targetSym.Kind, fl.File, targetSym.StartLine, targetSym.EndLine)
+	fmt.Printf("  %s — %s (%s:%d-%d)\n", displayName, sym.Kind, fl.File, sym.StartLine, sym.EndLine)
 	fmt.Println("  " + strings.Repeat("─", 80))
 
-	// Dependencies.
 	fmt.Printf("\n  Dependencies (%d):\n", len(fileImports))
 	if len(fileImports) > 0 {
 		sort.Strings(fileImports)
 		for _, dep := range fileImports {
-			fmt.Printf("    %s\n", dep)
+			fmt.Printf(explainIndent, dep)
 		}
 	} else {
 		fmt.Println("    (none detected)")
 	}
 
-	// Importers.
 	fmt.Printf("\n  Imported by (%d files):\n", len(importers))
 	if len(importers) > 0 {
 		for _, imp := range importers {
-			fmt.Printf("    %s\n", imp)
+			fmt.Printf(explainIndent, imp)
 		}
 	} else {
 		fmt.Println("    (none — this package is not imported by any indexed file)")
 	}
 
-	// Tests.
 	fmt.Printf("\n  Tests (%d files):\n", len(testFiles))
 	if len(testFiles) > 0 {
 		sort.Strings(testFiles)
 		for _, tf := range testFiles {
-			fmt.Printf("    %s\n", tf)
+			fmt.Printf(explainIndent, tf)
 		}
 	} else {
 		fmt.Println("    (none found)")
 	}
-
-	return nil
 }
 
 // goPackageName extracts the package name from a Go source file.

@@ -180,6 +180,42 @@ func (c *GoogleClient) SendMessage(ctx context.Context, req Request) (*Response,
 // StreamMessage sends a streaming chat completion request.
 // It returns a channel of StreamChunk that is closed when streaming completes.
 func (c *GoogleClient) StreamMessage(ctx context.Context, req Request) (<-chan StreamChunk, error) {
+	payload, err := c.buildStreamPayload(req)
+	if err != nil {
+		return nil, fmt.Errorf("stream marshal: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+chatEndpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("stream request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("stream do: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+		bodyStr := ""
+		if readErr == nil {
+			bodyStr = string(bodyBytes)
+		}
+		return nil, &HTTPError{StatusCode: resp.StatusCode, Body: bodyStr}
+	}
+
+	ch := make(chan StreamChunk)
+	go streamSSEResponse(resp, ch)
+
+	return ch, nil
+}
+
+func (c *GoogleClient) buildStreamPayload(req Request) ([]byte, error) {
 	model := req.Model
 	if model == "" {
 		model = defaultModel
@@ -209,83 +245,51 @@ func (c *GoogleClient) StreamMessage(ctx context.Context, req Request) (<-chan S
 		Stream:      true,
 	}
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("stream marshal: %w", err)
-	}
+	return json.Marshal(payload)
+}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+chatEndpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("stream request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
+func streamSSEResponse(resp *http.Response, ch chan<- StreamChunk) {
+	defer func() { _ = resp.Body.Close() }()
+	defer close(ch)
 
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("stream do: %w", err)
-	}
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		_ = resp.Body.Close()
-		bodyStr := ""
-		if readErr == nil {
-			bodyStr = string(bodyBytes)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
 		}
-		return nil, &HTTPError{StatusCode: resp.StatusCode, Body: bodyStr}
-	}
-
-	ch := make(chan StreamChunk)
-	go func() {
-		defer func() { _ = resp.Body.Close() }()
-		defer close(ch)
-
-		scanner := bufio.NewScanner(resp.Body)
-		// Increase scanner buffer for safety with long data lines.
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-		for scanner.Scan() {
-			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			data := strings.TrimPrefix(line, "data: ")
-			if data == "[DONE]" {
-				ch <- StreamChunk{Done: true}
-				return
-			}
-
-			var streamResp googleStreamChunk
-			if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
-				continue // skip malformed lines
-			}
-
-			if len(streamResp.Choices) == 0 {
-				continue
-			}
-
-			chunk := streamResp.Choices[0]
-			content := chunk.Delta.Content
-			modelName := streamResp.Model
-
-			if content != "" {
-				ch <- StreamChunk{Content: content, Model: modelName}
-			}
-			if chunk.FinishReason != "" {
-				ch <- StreamChunk{Done: true, Model: modelName}
-				return
-			}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			ch <- StreamChunk{Done: true}
+			return
 		}
 
-		// If the stream ended without a Done signal (e.g., unexpected EOF), send Done.
-		if err := scanner.Err(); err != nil {
-			fmt.Fprintf(os.Stderr, "chat stream scan error: %v\n", err)
+		var streamResp googleStreamChunk
+		if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
+			continue
 		}
-		ch <- StreamChunk{Done: true}
-	}()
 
-	return ch, nil
+		if len(streamResp.Choices) == 0 {
+			continue
+		}
+
+		chunk := streamResp.Choices[0]
+		content := chunk.Delta.Content
+		modelName := streamResp.Model
+
+		if content != "" {
+			ch <- StreamChunk{Content: content, Model: modelName}
+		}
+		if chunk.FinishReason != "" {
+			ch <- StreamChunk{Done: true, Model: modelName}
+			return
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "chat stream scan error: %v\n", err)
+	}
+	ch <- StreamChunk{Done: true}
 }

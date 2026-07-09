@@ -95,7 +95,7 @@ func TestConfigCommandsWiredIntoTree(t *testing.T) {
 	for _, path := range [][]string{
 		{"config", "set"}, {"config", "get"}, {"config", "unset"},
 		{"config", "list"}, {"config", "keys"}, {"config", "path"},
-		{"mcp", "install"},
+		{"mcp", "install"}, {"logout"},
 	} {
 		cmd, _, err := root.Find(path)
 		if err != nil || cmd == nil || cmd.Name() != path[len(path)-1] {
@@ -169,10 +169,20 @@ func TestActiveBackendPrecedence(t *testing.T) {
 		t.Errorf("explicitly forced LocalIndexPath should win over Postgres DSN, got %q", got)
 	}
 
-	// Remote server wins over everything.
-	d := &deps{client: &clientconfig.Config{ServerURL: "http://server:8080"}}
+	// Remote server wins over everything when useRemote is set.
+	d := &deps{client: &clientconfig.Config{ServerURL: "http://server:8080"}, useRemote: true}
 	if got := activeBackend(d); !strings.Contains(got, "remote server") {
 		t.Errorf("remote should win, got %q", got)
+	}
+
+	// Saved login ignored when useRemote is false (e.g. --local).
+	dLocalRemote := &deps{
+		client:         &clientconfig.Config{ServerURL: "http://server:8080"},
+		useRemote:      false,
+		localIndexPath: "/tmp/idx.db",
+	}
+	if got := activeBackend(dLocalRemote); !strings.Contains(got, "SQLite") || !strings.Contains(got, "ignored") {
+		t.Errorf("local override should note ignored login, got %q", got)
 	}
 }
 

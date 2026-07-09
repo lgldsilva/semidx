@@ -33,11 +33,13 @@ func TestHumanFormatterGolden(t *testing.T) {
 	}
 	const want = "--- Result 1 (91%) ---\n" +
 		"File: src/auth.go:12-14\n" +
+		"Score: 0.912 (91%)\n" +
 		"  12│ func Login() {\n" +
 		"  13│   // jwt\n" +
 		"  14│ }\n\n" +
 		"--- Result 2 (50%) ---\n" +
 		"File: README.md:3-5\n" +
+		"Score: 0.500 (50%)\n" +
 		"   3│ # Title\n" +
 		"   4│ body\n\n"
 	if got := buf.String(); got != want {
@@ -63,9 +65,11 @@ func TestHumanFormatterKeywordGolden(t *testing.T) {
 	}
 	const want = "--- Result 1 (keyword match) ---\n" +
 		"File: src/auth.go:7\n" +
+		"Score: keyword match\n" +
 		"   7│ func Login() {}\n\n" +
 		"--- Result 2 (keyword match) ---\n" +
 		"File: notes.txt:1\n" +
+		"Score: keyword match\n" +
 		"todo\n\n"
 	if got := buf.String(); got != want {
 		t.Errorf("keyword human output mismatch:\n--- got ---\n%q\n--- want ---\n%q", got, want)
@@ -137,9 +141,11 @@ func TestHumanFormatterNoLineNumbers(t *testing.T) {
 	// Should match old golden output without line numbers.
 	const want = "--- Result 1 (91%) ---\n" +
 		"File: src/auth.go:12-14\n" +
+		"Score: 0.912 (91%)\n" +
 		"func Login() {\n  // jwt\n}\n\n" +
 		"--- Result 2 (50%) ---\n" +
 		"File: README.md:3-5\n" +
+		"Score: 0.500 (50%)\n" +
 		"# Title\nbody\n\n"
 	if got := buf.String(); got != want {
 		t.Errorf("no-line-numbers output mismatch:\n--- got ---\n%q\n--- want ---\n%q", got, want)

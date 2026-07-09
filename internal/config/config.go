@@ -299,6 +299,7 @@ var KnownKeys = []KeySpec{
 	// Storage backend — pick ONE; precedence at run time is remote > Postgres (configured) > SQLite > Postgres (default).
 	{"SEMIDX_DB_DSN", "PostgreSQL/pgvector DSN — connect the CLI straight to Postgres", true},
 	{"SEMIDX_LOCAL_INDEX", "Standalone SQLite index (a path, or 1/true for the default location)", false},
+	{"SEMIDX_BACKEND", "CLI backend mode: auto (default), local, or remote — same as --backend", false},
 	{"SEMIDX_EMBED_MODE", "Set to \"none\" for keyword-only indexing (no embedding model)", false},
 	// Embedding providers (chain, highest priority first; local Ollama is the fallback).
 	{"GEMINI_API_KEY", "Google Gemini embedding key", true},

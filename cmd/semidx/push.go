@@ -319,7 +319,7 @@ func (p *pusher) pushAsyncSingle(ctx context.Context, batch []client.BatchFile, 
 	pollCtx, cancel := context.WithTimeout(ctx, asyncPollTimeout)
 	defer cancel()
 
-	job, err := p.cli.WaitForJob(pollCtx, p.projectName, jobID, asyncPollInterval)
+	job, err := p.waitForJobWithProgress(pollCtx, jobID)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("timed out after %v waiting for job %d (job is still running on the server — re-run push to check status)", asyncPollTimeout, jobID)
@@ -363,7 +363,7 @@ func (p *pusher) pushAsyncBatched(ctx context.Context, batch []client.BatchFile,
 	var totalIndexed, totalChunks, totalDeleted, totalErrors int
 	for i, jid := range jobIDs {
 		pollCtx, cancel := context.WithTimeout(ctx, asyncPollTimeout)
-		job, err := p.cli.WaitForJob(pollCtx, p.projectName, jid, asyncPollInterval)
+		job, err := p.waitForJobWithProgress(pollCtx, jid)
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
@@ -387,6 +387,75 @@ func (p *pusher) pushAsyncBatched(ctx context.Context, batch []client.BatchFile,
 		time.Since(start).Round(time.Millisecond),
 		totalIndexed, totalChunks, totalDeleted, totalErrors)
 	return nil
+}
+
+// waitForJobWithProgress polls a project-scoped job and prints progress updates
+// when visible counters change, then returns the terminal job state.
+func (p *pusher) waitForJobWithProgress(ctx context.Context, jobID int) (*client.Job, error) {
+	ticker := time.NewTicker(asyncPollInterval)
+	defer ticker.Stop()
+
+	var (
+		lastStatus                                string
+		lastDone, lastTotal, lastFiles, lastChunk int
+		seen                                      bool
+		lastJob                                   *client.Job
+	)
+	for {
+		job, err := p.cli.GetJob(ctx, p.projectName, jobID)
+		if err != nil {
+			return nil, err
+		}
+		lastJob = job
+		if shouldPrintJobProgress(job, seen, lastStatus, lastDone, lastTotal, lastFiles, lastChunk) {
+			fmt.Println(formatJobProgress(job))
+			lastStatus = job.Status
+			lastDone = job.ProgressDone
+			lastTotal = job.ProgressTotal
+			lastFiles = job.FilesIndexed
+			lastChunk = job.ChunksCreated
+			seen = true
+		}
+		if job.Status == client.JobStatusSucceeded || job.Status == client.JobStatusFailed {
+			return job, nil
+		}
+		select {
+		case <-ctx.Done():
+			if lastJob != nil {
+				return lastJob, ctx.Err()
+			}
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func shouldPrintJobProgress(job *client.Job, seen bool, lastStatus string, lastDone, lastTotal, lastFiles, lastChunk int) bool {
+	if !seen {
+		return true
+	}
+	return job.Status != lastStatus ||
+		job.ProgressDone != lastDone ||
+		job.ProgressTotal != lastTotal ||
+		job.FilesIndexed != lastFiles ||
+		job.ChunksCreated != lastChunk
+}
+
+func formatJobProgress(job *client.Job) string {
+	msg := fmt.Sprintf("Job %d: %s", job.ID, job.Status)
+	if job.ProgressTotal > 0 {
+		pct := job.ProgressPercent
+		if pct <= 0 {
+			pct = job.ProgressDone * 100 / job.ProgressTotal
+			if pct > 100 {
+				pct = 100
+			}
+		}
+		msg += fmt.Sprintf(" · %d%% (%d/%d)", pct, job.ProgressDone, job.ProgressTotal)
+	}
+	msg += fmt.Sprintf(" · files: %d · chunks: %d · errors: %d",
+		job.FilesIndexed, job.ChunksCreated, job.ErrorCount)
+	return msg
 }
 
 // splitBatch divides a batch of files into chunks of up to chunkSize elements.

@@ -70,3 +70,16 @@ func Save(c *Config) error {
 	}
 	return os.WriteFile(p, data, 0o600)
 }
+
+// Remove deletes the saved client config (used by `semidx logout`). A missing
+// file is not an error — logout is idempotent.
+func Remove() error {
+	p, err := Path()
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}

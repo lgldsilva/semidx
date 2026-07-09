@@ -52,14 +52,19 @@
 
         var toggle = document.createElement('button');
         toggle.className = 'sources-toggle';
-        toggle.textContent = '📎 ' + sources.length + ' source' + (sources.length > 1 ? 's' : '');
+        var plural = sources.length > 1 ? 's' : '';
+        toggle.textContent = '📎 ' + sources.length + ' source' + plural;
+        var sourceLabel = sources.length + ' source' + plural;
+        var hideLabel = '📎 hide sources';
         toggle.addEventListener('click', function() {
             var list = this.nextElementSibling;
             if (list) {
                 list.classList.toggle('open');
-                this.textContent = list.classList.contains('open')
-                    ? '📎 hide sources'
-                    : '📎 ' + sources.length + ' source' + (sources.length > 1 ? 's' : '');
+                if (list.classList.contains('open')) {
+                    this.textContent = hideLabel;
+                } else {
+                    this.textContent = '📎 ' + sourceLabel;
+                }
             }
         });
         lastMsg.parentNode.insertBefore(toggle, lastMsg.nextSibling);
@@ -161,7 +166,6 @@
             var assistantDiv = null;
             var content = '';
             var model = '';
-            var fallback = false;
 
             // Create an assistant message bubble immediately.
             assistantDiv = document.createElement('div');
@@ -173,9 +177,14 @@
                 if (!line || line.indexOf('data: ') !== 0) return;
                 var jsonStr = line.substring(6);
 
+                var data = null;
                 try {
-                    var data = JSON.parse(jsonStr);
-                } catch(e) {
+                    data = JSON.parse(jsonStr);
+                } catch (parseErr) {
+                    console.debug('skip malformed SSE line', parseErr);
+                    return;
+                }
+                if (!data) {
                     return;
                 }
 
@@ -192,7 +201,6 @@
                     var info = 'Model: ' + (model || data.model || 'unknown');
                     if (data.fallback) {
                         info += ' (keyword fallback)';
-                        fallback = true;
                     }
                     modelInfo.textContent = info;
                 } else if (data.type === 'error') {
@@ -200,36 +208,38 @@
                 }
             }
 
+            function processPart(part) {
+                part.split('\n').forEach(processLine);
+            }
+
+            function processBufferParts() {
+                var parts = buffer.split('\n\n');
+                buffer = parts.pop() || '';
+                parts.forEach(processPart);
+            }
+
+            function finishStream() {
+                var remaining = buffer.trim();
+                if (remaining) {
+                    remaining.split('\n').forEach(processLine);
+                }
+                if (content) {
+                    history.push({role: 'user', content: question}, {role: 'assistant', content: content});
+                }
+            }
+
+            function onReadResult(result) {
+                if (result.done) {
+                    finishStream();
+                    return;
+                }
+                buffer += decoder.decode(result.value, {stream: true});
+                processBufferParts();
+                return pump();
+            }
+
             function pump() {
-                return reader.read().then(function(result) {
-                    if (result.done) {
-                        // Process any remaining data in the buffer.
-                        var remaining = buffer.trim();
-                        if (remaining) {
-                            remaining.split('\n').forEach(processLine);
-                        }
-                        // Save to history.
-                        if (content) {
-                            history.push({role: 'user', content: question});
-                            history.push({role: 'assistant', content: content});
-                        }
-                        return;
-                    }
-
-                    buffer += decoder.decode(result.value, {stream: true});
-
-                    // Process complete SSE events (separated by double newlines).
-                    var parts = buffer.split('\n\n');
-                    // Keep the last (possibly incomplete) part in the buffer.
-                    buffer = parts.pop() || '';
-
-                    parts.forEach(function(part) {
-                        var lines = part.split('\n');
-                        lines.forEach(processLine);
-                    });
-
-                    return pump();
-                });
+                return reader.read().then(onReadResult);
             }
 
             return pump();
@@ -247,8 +257,7 @@
             if (data.error) {
                 throw new Error(data.error);
             }
-            history.push({role: 'user', content: question});
-            history.push({role: 'assistant', content: data.content});
+            history.push({role: 'user', content: question}, {role: 'assistant', content: data.content});
             addMessage('assistant', data.content);
             if (data.sources && data.sources.length > 0) {
                 showSources(data.sources);

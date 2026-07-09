@@ -122,6 +122,11 @@ func isCodeFile(path string) bool {
 // choosing a code- or prose-oriented strategy from the file extension.
 func ChunkFile(path string, content []byte, maxChars int) []Chunk {
 	if isCodeFile(path) {
+		// Prefer symbol/AST-aware chunking when analyzer grammars are available.
+		// Fallback keeps previous blank-line behavior for unsupported languages.
+		if astChunks := ChunkFileAST(path, content, maxChars); len(astChunks) > 0 {
+			return astChunks
+		}
 		return chunkCode(content, maxChars)
 	}
 	return chunkText(content, maxChars)

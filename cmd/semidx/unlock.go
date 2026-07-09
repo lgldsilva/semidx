@@ -103,7 +103,7 @@ func resolveUnlockModel(reg *pending.Registry, model string) string {
 func (d *deps) prepareUnlockIndexer(ctx context.Context, db store.IndexStore, tgt indexTarget, model string, verbose bool) (*indexing.Indexer, int, error) {
 	dims, err := d.modelDims(ctx, model)
 	if err != nil {
-		return nil, 0, fmt.Errorf("model info for %s: %w", model, err)
+		return nil, 0, fmt.Errorf("model info for %s: %w (no provider reachable? re-run with --keyword for keyword-only unlock/indexing)", model, err)
 	}
 	if err := db.EnsureChunksTable(ctx, dims); err != nil {
 		return nil, 0, fmt.Errorf("ensure chunks table: %w", err)

@@ -61,9 +61,7 @@ func (cc *ChainClient) SendMessage(ctx context.Context, req Request) (*Response,
 		})
 
 		// Report fallback to the caller if a callback is configured.
-		if cc.OnFallback != nil {
-			cc.OnFallback(p.Name, err)
-		}
+		cc.reportFallback(p.Name, err)
 
 		// Context cancellation short-circuits.
 		if ctx.Err() != nil {
@@ -79,15 +77,28 @@ func (cc *ChainClient) SendMessage(ctx context.Context, req Request) (*Response,
 		return nil, fmt.Errorf("chain: no chat providers configured — set GEMINI_API_KEY or OPENROUTER_API_KEY")
 	}
 
-	// Build an actionable summary of all provider errors, keeping %w on the
-	// last error so callers can use errors.As to inspect HTTPError etc.
+	return nil, buildChainError(providerErrors, lastErr)
+}
+
+// reportFallback notifies the caller of a provider failure if a callback is
+// configured. Safe to call when OnFallback is nil.
+func (cc *ChainClient) reportFallback(name string, err error) {
+	if cc.OnFallback != nil {
+		cc.OnFallback(name, err)
+	}
+}
+
+// buildChainError assembles an actionable summary of all provider errors,
+// keeping %w on the last error so callers can use errors.As to inspect
+// HTTPError etc.
+func buildChainError(providerErrors []ProviderDiagnostic, lastErr error) error {
 	var b strings.Builder
 	b.WriteString("chain: all chat providers failed.\n")
 	for _, d := range providerErrors {
 		fmt.Fprintf(&b, "- %s: %s\n", d.Name, d.Error)
 	}
 	b.WriteString("Check your API keys: GEMINI_API_KEY and OPENROUTER_API_KEY.")
-	return nil, fmt.Errorf("%s (%w)", strings.TrimSpace(b.String()), lastErr)
+	return fmt.Errorf("%s (%w)", strings.TrimSpace(b.String()), lastErr)
 }
 
 // StreamMessage tries providers in order, falling through on errors.
@@ -101,32 +112,27 @@ func (cc *ChainClient) StreamMessage(ctx context.Context, req Request) (<-chan S
 			return nil, ctx.Err()
 		}
 
-		sc, ok := p.Client.(StreamClient)
-		if !ok {
-			// Provider does not support streaming; fall back to non-streaming.
-			chunks, err := nonStreamingToChannel(ctx, p.Client, req)
-			if err != nil {
-				lastErr = err
-				if cc.OnFallback != nil {
-					cc.OnFallback(p.Name, err)
-				}
-				continue
-			}
+		chunks, err := cc.tryStreamProvider(ctx, p, req)
+		if err == nil {
 			return chunks, nil
 		}
-
-		chunks, err := sc.StreamMessage(ctx, req)
-		if err != nil {
-			lastErr = err
-			if cc.OnFallback != nil {
-				cc.OnFallback(p.Name, err)
-			}
-			continue
-		}
-		return chunks, nil
+		lastErr = err
+		cc.reportFallback(p.Name, err)
 	}
 
 	return nil, fmt.Errorf("chain: all streaming providers failed (%w)", lastErr)
+}
+
+// tryStreamProvider dispatches a single provider's streaming call, falling back
+// to non-streaming SendMessage (wrapped as a channel) when the provider does not
+// implement StreamClient.
+func (cc *ChainClient) tryStreamProvider(ctx context.Context, p NamedClient, req Request) (<-chan StreamChunk, error) {
+	sc, ok := p.Client.(StreamClient)
+	if !ok {
+		// Provider does not support streaming; fall back to non-streaming.
+		return nonStreamingToChannel(ctx, p.Client, req)
+	}
+	return sc.StreamMessage(ctx, req)
 }
 
 // nonStreamingToChannel wraps a non-streaming Client call into a channel.
