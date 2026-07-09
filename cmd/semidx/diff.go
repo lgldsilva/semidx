@@ -83,7 +83,6 @@ func parseRefRange(s string) (ref1, ref2 string, threeDot bool, err error) {
 
 // runDiff performs the semantic diff between two git refs.
 func runDiff(ref1, ref2 string, threeDot bool) error {
-	// Get changed files.
 	changedFiles, err := getChangedFiles(ref1, ref2, threeDot)
 	if err != nil {
 		return fmt.Errorf("get changed files: %w", err)
@@ -95,96 +94,75 @@ func runDiff(ref1, ref2 string, threeDot bool) error {
 		return nil
 	}
 
-	var newSymbols, removedSymbols, changedSymbols []diffResult
+	newSymbols, removedSymbols, changedSymbols := collectDiffSymbols(changedFiles, ref1, ref2)
+	sortDiffResults(newSymbols, removedSymbols, changedSymbols)
+	printDiffResults(ref1, ref2, newSymbols, removedSymbols, changedSymbols)
+	return nil
+}
 
+func collectDiffSymbols(changedFiles []string, ref1, ref2 string) (newSym, removed, changed []diffResult) {
 	for _, filePath := range changedFiles {
-		// Get old content.
-		oldContent, err := getFileAtRef(filePath, ref1)
-		if err != nil {
-			// File may not exist at ref1 (new file).
-			oldContent = ""
-		}
-		// Get new content.
-		newContent, err := getFileAtRef(filePath, ref2)
-		if err != nil {
-			// File may have been deleted.
-			newContent = ""
-		}
+		oldContent, _ := getFileAtRef(filePath, ref1)
+		newContent, _ := getFileAtRef(filePath, ref2)
 
 		oldSymbols := extractSymbols(filePath, oldContent)
 		newSymbolsMap := extractSymbols(filePath, newContent)
 
-		// Find new and changed symbols.
 		for key, ns := range newSymbolsMap {
 			if os, exists := oldSymbols[key]; !exists {
-				newSymbols = append(newSymbols, diffResult{Type: diffNew, Symbol: *ns})
+				newSym = append(newSym, diffResult{Type: diffNew, Symbol: *ns})
 			} else if ns.Signature != os.Signature {
-				changedSymbols = append(changedSymbols, diffResult{
-					Type:      diffChanged,
-					Symbol:    *ns,
-					OldSymbol: os,
-				})
+				changed = append(changed, diffResult{Type: diffChanged, Symbol: *ns, OldSymbol: os})
 			}
 		}
-
-		// Find removed symbols.
 		for key, os := range oldSymbols {
 			if _, exists := newSymbolsMap[key]; !exists {
-				removedSymbols = append(removedSymbols, diffResult{Type: diffRemoved, Symbol: *os})
+				removed = append(removed, diffResult{Type: diffRemoved, Symbol: *os})
 			}
 		}
 	}
+	return
+}
 
-	// Sort output by file path then line.
-	sort.Slice(newSymbols, func(i, j int) bool {
-		if newSymbols[i].Symbol.FilePath != newSymbols[j].Symbol.FilePath {
-			return newSymbols[i].Symbol.FilePath < newSymbols[j].Symbol.FilePath
+func sortDiffResults(newSyms, remSyms, chgSyms []diffResult) {
+	byPathThenLine := func(list []diffResult) func(i, j int) bool {
+		return func(i, j int) bool {
+			if list[i].Symbol.FilePath != list[j].Symbol.FilePath {
+				return list[i].Symbol.FilePath < list[j].Symbol.FilePath
+			}
+			return list[i].Symbol.Line < list[j].Symbol.Line
 		}
-		return newSymbols[i].Symbol.Line < newSymbols[j].Symbol.Line
-	})
-	sort.Slice(removedSymbols, func(i, j int) bool {
-		if removedSymbols[i].Symbol.FilePath != removedSymbols[j].Symbol.FilePath {
-			return removedSymbols[i].Symbol.FilePath < removedSymbols[j].Symbol.FilePath
-		}
-		return removedSymbols[i].Symbol.Line < removedSymbols[j].Symbol.Line
-	})
-	sort.Slice(changedSymbols, func(i, j int) bool {
-		if changedSymbols[i].Symbol.FilePath != changedSymbols[j].Symbol.FilePath {
-			return changedSymbols[i].Symbol.FilePath < changedSymbols[j].Symbol.FilePath
-		}
-		return changedSymbols[i].Symbol.Line < changedSymbols[j].Symbol.Line
-	})
+	}
+	sort.Slice(newSyms, byPathThenLine(newSyms))
+	sort.Slice(remSyms, byPathThenLine(remSyms))
+	sort.Slice(chgSyms, byPathThenLine(chgSyms))
+}
 
-	// Print the diff.
+func printDiffResults(ref1, ref2 string, newSyms, remSyms, chgSyms []diffResult) {
 	fmt.Printf("Semantic Diff: %s → %s\n", ref1, ref2)
 	fmt.Println(strings.Repeat("─", 40))
 
-	if len(newSymbols) > 0 {
-		fmt.Printf("\nNew symbols (%d):\n", len(newSymbols))
-		for _, dr := range newSymbols {
+	if len(newSyms) > 0 {
+		fmt.Printf("\nNew symbols (%d):\n", len(newSyms))
+		for _, dr := range newSyms {
 			fmt.Printf("  + %s (%s:%d)\n", dr.Symbol.Name, dr.Symbol.FilePath, dr.Symbol.Line)
 		}
 	}
-
-	if len(removedSymbols) > 0 {
-		fmt.Printf("\nRemoved symbols (%d):\n", len(removedSymbols))
-		for _, dr := range removedSymbols {
+	if len(remSyms) > 0 {
+		fmt.Printf("\nRemoved symbols (%d):\n", len(remSyms))
+		for _, dr := range remSyms {
 			fmt.Printf("  - %s (%s:%d)\n", dr.Symbol.Name, dr.Symbol.FilePath, dr.Symbol.Line)
 		}
 	}
-
-	if len(changedSymbols) > 0 {
-		fmt.Printf("\nChanged signatures (%d):\n", len(changedSymbols))
-		for _, dr := range changedSymbols {
+	if len(chgSyms) > 0 {
+		fmt.Printf("\nChanged signatures (%d):\n", len(chgSyms))
+		for _, dr := range chgSyms {
 			fmt.Printf("  ~ %s — changed signature\n", dr.Symbol.Name)
 		}
 	}
-
-	if len(newSymbols)+len(removedSymbols)+len(changedSymbols) == 0 {
+	if len(newSyms)+len(remSyms)+len(chgSyms) == 0 {
 		fmt.Println("No semantic differences found.")
 	}
-
-	return nil
 }
 
 // safeGitRef reports whether ref is a plausible git reference (no shell
