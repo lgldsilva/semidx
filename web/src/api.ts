@@ -25,6 +25,9 @@ export type Job = {
   chunks_created?: number
   deleted_files?: number
   error_count?: number
+  progress_done?: number
+  progress_total?: number
+  progress_percent?: number
 }
 
 export type Project = {
@@ -142,7 +145,7 @@ async function parseError(res: Response): Promise<string> {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
-  if (init.body && !headers.has('Content-Type')) {
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
   const method = (init.method || 'GET').toUpperCase()
@@ -303,7 +306,10 @@ export const api = {
         body: JSON.stringify({ type }),
       },
     ),
-  job: (id: number) => request<Job>(`/admin/api/jobs/${id}`),
+  job: (project: string, id: number) =>
+    request<Job>(
+      `/admin/api/projects/${encodeURIComponent(project)}/jobs/${id}`,
+    ),
   search: (body: {
     query: string
     project?: string
@@ -331,6 +337,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ files, delete: del }),
     }),
+  projectIngestArchive: (name: string, archive: File) => {
+    const form = new FormData()
+    form.append('archive', archive)
+    return request<{
+      indexed: number
+      chunks: number
+      deleted: number
+      errors: number
+      file_errors?: { path: string; error: string }[]
+    }>(`/admin/api/projects/${encodeURIComponent(name)}/files/archive`, {
+      method: 'POST',
+      body: form,
+    })
+  },
   projectExplain: (name: string, path: string, line: number) =>
     request<{
       symbol?: string

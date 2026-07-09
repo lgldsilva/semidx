@@ -113,12 +113,12 @@ func (a *Admin) apiSystem(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 		caps = append(caps, "chat")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"product":       "semidx",
-		"mode":          "server",
-		"storage":       "PostgreSQL / pgvector",
-		"version":       "embedded-admin",
-		"caps":          caps,
-		"chat_enabled":  a.chat != nil,
+		"product":      "semidx",
+		"mode":         "server",
+		"storage":      "PostgreSQL / pgvector",
+		"version":      "embedded-admin",
+		"caps":         caps,
+		"chat_enabled": a.chat != nil,
 		"cli_hints": []string{
 			"semidx login <url> --token …",
 			"semidx push --project .",
@@ -218,16 +218,21 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 
 func (a *Admin) apiListAllJobs(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	_ = ac
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
+	limit, offset := parseListParams(r)
+	if limit == 0 {
 		limit = 20
 	}
-	jobs, err := a.store.ListRecentJobs(r.Context(), 0, limit)
+	fetchLimit := limit + offset
+	if fetchLimit < limit {
+		fetchLimit = limit
+	}
+	jobs, err := a.store.ListRecentJobs(r.Context(), 0, fetchLimit)
 	if err != nil {
 		a.log.Error("list all jobs failed", "err", err)
 		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
 		return
 	}
+	jobs = paginateJobs(jobs, limit, offset)
 	// Attach project names when possible.
 	type jobRow struct {
 		jobItem
@@ -246,7 +251,7 @@ func (a *Admin) apiListAllJobs(w http.ResponseWriter, r *http.Request, ac *authC
 			jobItem: jobToItem(j), ProjectID: j.ProjectID, ProjectName: names[j.ProjectID],
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"jobs": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": rows, "limit": limit, "offset": offset})
 }
 
 func (a *Admin) apiDeleteProject(w http.ResponseWriter, r *http.Request, ac *authCtx) {
@@ -331,11 +336,31 @@ func (a *Admin) apiReindex(w http.ResponseWriter, r *http.Request, ac *authCtx) 
 
 func (a *Admin) apiGetJob(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	_ = ac
+	project := strings.TrimSpace(r.URL.Query().Get("project"))
+	if project == "" {
+		writeJSONErr(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil || id < 1 {
 		writeJSONErr(w, http.StatusBadRequest, "invalid job id")
 		return
 	}
+	a.writeScopedJob(w, r, project, id)
+}
+
+func (a *Admin) apiProjectJob(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	_ = ac
+	project := r.PathValue("project")
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || id < 1 {
+		writeJSONErr(w, http.StatusBadRequest, "invalid job id")
+		return
+	}
+	a.writeScopedJob(w, r, project, id)
+}
+
+func (a *Admin) writeScopedJob(w http.ResponseWriter, r *http.Request, project string, id int) {
 	job, err := a.store.GetJob(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		writeJSONErr(w, http.StatusNotFound, "job not found")
@@ -346,11 +371,59 @@ func (a *Admin) apiGetJob(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"id": job.ID, "type": job.Type, "status": job.Status, "error": job.Error,
-		"files_indexed": job.FilesIndexed, "chunks_created": job.ChunksCreated,
-		"deleted_files": job.DeletedFiles, "error_count": job.ErrorCount,
-	})
+	proj, err := a.store.GetProjectByID(r.Context(), job.ProjectID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSONErr(w, http.StatusNotFound, "job not found")
+			return
+		}
+		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
+		return
+	}
+	if proj.Name != project {
+		writeJSONErr(w, http.StatusNotFound, "job not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, jobToJSON(job))
+}
+
+func jobToJSON(j *store.Job) map[string]any {
+	errMsg := j.Error
+	if j.Status == "failed" && errMsg != "" {
+		// Keep UI/API error surfaces generic: detailed failures stay in server logs.
+		errMsg = "index job failed"
+	}
+	out := map[string]any{
+		"id": j.ID, "type": j.Type, "status": j.Status, "error": errMsg,
+		"files_indexed": j.FilesIndexed, "chunks_created": j.ChunksCreated,
+		"deleted_files": j.DeletedFiles, "error_count": j.ErrorCount,
+		"progress_done": j.ProgressDone, "progress_total": j.ProgressTotal,
+	}
+	if j.ProgressTotal > 0 {
+		pct := j.ProgressDone * 100 / j.ProgressTotal
+		if pct > 100 {
+			pct = 100
+		}
+		out["progress_percent"] = pct
+	}
+	return out
+}
+
+func paginateJobs(jobs []store.Job, limit, offset int) []store.Job {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(jobs) {
+		return []store.Job{}
+	}
+	if limit <= 0 {
+		return jobs[offset:]
+	}
+	end := offset + limit
+	if end > len(jobs) {
+		end = len(jobs)
+	}
+	return jobs[offset:end]
 }
 
 type searchJSONBody struct {
@@ -378,6 +451,7 @@ func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	if topK <= 0 || topK > 100 {
 		topK = 10
 	}
+	body.GraphDepth = search.ClampGraphDepth(body.GraphDepth)
 
 	if body.All {
 		d := &searchData{Query: body.Query, AllProjects: true, Top: topK, Ran: true}

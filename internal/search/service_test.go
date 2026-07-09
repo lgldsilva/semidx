@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +59,9 @@ func (f *fakeStore) SearchSimilar(ctx context.Context, projectID int, embedding 
 	if f.simErr != nil {
 		return nil, f.simErr
 	}
-	return f.simResults, nil
+	out := append([]store.SearchResult{}, f.simResults...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out, nil
 }
 func (f *fakeStore) SearchSimilarWorktree(ctx context.Context, projectID int, embedding []float32, dims, topK int, worktree string) ([]store.SearchResult, error) {
 	f.usedWorktree = true
@@ -127,8 +130,8 @@ func TestSearchVectorPath(t *testing.T) {
 	if resp.Fallback {
 		t.Error("Fallback should be false on the vector path")
 	}
-	if st.usedKW {
-		t.Error("keyword search should not run when embedding succeeds")
+	if !st.usedKW {
+		t.Error("hybrid search should also run keyword leg when embedding succeeds")
 	}
 	if len(resp.Results) != 1 || resp.Results[0].FilePath != "a.go" {
 		t.Errorf("results = %+v", resp.Results)

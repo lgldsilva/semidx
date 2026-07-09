@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -240,6 +241,18 @@ func (f *fakeStore) GetProject(_ context.Context, name string) (*store.Project, 
 	return nil, store.ErrNotFound
 }
 
+func (f *fakeStore) GetProjectByID(_ context.Context, id int) (*store.Project, error) {
+	for i := range f.projects {
+		if f.projects[i].ID == id {
+			return &f.projects[i], nil
+		}
+	}
+	if f.searchProject != nil && f.searchProject.ID == id {
+		return f.searchProject, nil
+	}
+	return nil, store.ErrNotFound
+}
+
 func (f *fakeStore) GetProjectByIdentity(_ context.Context, identity string) (*store.Project, error) {
 	if _, hide := f.hideIdentities[identity]; hide {
 		return nil, store.ErrNotFound
@@ -263,14 +276,18 @@ func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]
 	if f.searchErr != nil {
 		return nil, f.searchErr
 	}
-	return f.searchResults, nil
+	out := append([]store.SearchResult{}, f.searchResults...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out, nil
 }
 
 func (f *fakeStore) SearchSimilarKeywords(context.Context, int, string, int, int) ([]store.SearchResult, error) {
 	if f.searchErr != nil {
 		return nil, f.searchErr
 	}
-	return f.searchResults, nil
+	out := append([]store.SearchResult{}, f.searchResults...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out, nil
 }
 
 func (f *fakeStore) CountProjectFiles(context.Context, int) (int, error) {

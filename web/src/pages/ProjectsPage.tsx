@@ -1,15 +1,22 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, ApiError, type Job, type Project } from '../api'
 
 export function ProjectsPage() {
-  const navigate = useNavigate()
   const [projects, setProjects] = useState<Project[]>([])
   const [err, setErr] = useState('')
   const [flash, setFlash] = useState('')
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
   const [jobPoll, setJobPoll] = useState<Job | null>(null)
+  const [jobPollProject, setJobPollProject] = useState('')
   const [filter, setFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [sourceFilter, setSourceFilter] = useState('')
@@ -32,12 +39,12 @@ export function ProjectsPage() {
   }, [reload])
 
   useEffect(() => {
-    if (!jobPoll || jobPoll.status === 'succeeded' || jobPoll.status === 'failed') {
+    if (!jobPoll || !jobPollProject || jobPoll.status === 'succeeded' || jobPoll.status === 'failed') {
       return
     }
     const t = setInterval(() => {
       void api
-        .job(jobPoll.id)
+        .job(jobPollProject, jobPoll.id)
         .then((j) => {
           setJobPoll(j)
           if (j.status === 'succeeded' || j.status === 'failed') {
@@ -47,7 +54,7 @@ export function ProjectsPage() {
         .catch(() => undefined)
     }, 1500)
     return () => clearInterval(t)
-  }, [jobPoll, reload])
+  }, [jobPoll, jobPollProject, reload])
 
   const filtered = useMemo(() => {
     let list = [...projects]
@@ -86,6 +93,7 @@ export function ProjectsPage() {
     try {
       const { job_id } = await api.reindex(name)
       setFlash(`Reindex queued for ${name} (job #${job_id})`)
+      setJobPollProject(name)
       setJobPoll({ id: job_id, type: 'full', status: 'queued' })
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'reindex failed')
@@ -122,9 +130,13 @@ export function ProjectsPage() {
       {flash && <div className="alert ok">{flash}</div>}
       {jobPoll && (
         <div className="alert ok">
-          Job #{jobPoll.id}: <strong>{jobPoll.status}</strong>
+          Job #{jobPoll.id}
+          {jobPollProject ? ` (${jobPollProject})` : ''}: <strong>{jobPoll.status}</strong>
+          {jobPoll.progress_percent != null && jobPoll.status === 'running' && (
+            <span> · {jobPoll.progress_percent}%</span>
+          )}
           {jobPoll.files_indexed != null &&
-            ` · files ${jobPoll.files_indexed} · chunks ${jobPoll.chunks_created ?? 0}`}
+            ` · files ${jobPoll.files_indexed}${jobPoll.progress_total ? `/${jobPoll.progress_total}` : ''} · chunks ${jobPoll.chunks_created ?? 0}`}
           {jobPoll.error && ` · ${jobPoll.error}`}
         </div>
       )}
@@ -178,14 +190,17 @@ export function ProjectsPage() {
       {showCreate && (
         <CreateProjectForm
           onClose={() => setShowCreate(false)}
-          onCreated={(jobId, pushHint) => {
+          onCreated={(jobId, projectName, pushHint) => {
             setShowCreate(false)
             setFlash(
               pushHint
                 ? `Project created — ingest with: ${pushHint}`
                 : 'Project created',
             )
-            if (jobId) setJobPoll({ id: jobId, type: 'full', status: 'queued' })
+            if (jobId && projectName) {
+              setJobPollProject(projectName)
+              setJobPoll({ id: jobId, type: 'full', status: 'queued' })
+            }
             void reload()
           }}
           onError={setErr}
@@ -195,11 +210,31 @@ export function ProjectsPage() {
       <div className="card">
         {loading ? (
           <p className="muted">Loading…</p>
+        ) : filtered.length === 0 && projects.length === 0 ? (
+          <div className="empty-state">
+            <h2>No projects yet</h2>
+            <p className="muted">
+              Add a git-backed project below, or index locally and push with the CLI.
+            </p>
+            <ol className="muted">
+              <li>
+                <strong>Git sync:</strong> Add project → paste repository URL → Reindex
+              </li>
+              <li>
+                <strong>Push files:</strong>{' '}
+                <code>semidx push --project . --name myapp</code>
+              </li>
+              <li>
+                <strong>Local only:</strong>{' '}
+                <code>semidx --local index --project .</code>
+              </li>
+            </ol>
+            <button type="button" onClick={() => setShowCreate(true)}>
+              Add your first project
+            </button>
+          </div>
         ) : filtered.length === 0 ? (
-          <p className="muted">
-            No projects match. Add a git repo or{' '}
-            <code>semidx push --project .</code>
-          </p>
+          <p className="muted">No projects match the current filters.</p>
         ) : (
           <div className="table-wrap">
             <table className="projects-table">
@@ -273,55 +308,11 @@ export function ProjectsPage() {
                         : '—'}
                     </td>
                     <td className="table-actions">
-                      <div className="table-actions-row">
-                        <button
-                          type="button"
-                          className="btn-open"
-                          onClick={() =>
-                            navigate(
-                              `/projects/${encodeURIComponent(p.name)}`,
-                            )
-                          }
-                        >
-                          Open
-                        </button>
-                        <button
-                          type="button"
-                          className="link"
-                          onClick={() =>
-                            navigate(
-                              `/projects/${encodeURIComponent(p.name)}?tab=explore`,
-                            )
-                          }
-                        >
-                          Explore
-                        </button>
-                        <button
-                          type="button"
-                          className="link"
-                          onClick={() =>
-                            navigate(
-                              `/projects/${encodeURIComponent(p.name)}?tab=chat`,
-                            )
-                          }
-                        >
-                          Chat
-                        </button>
-                        <button
-                          type="button"
-                          className="link"
-                          onClick={() => void onReindex(p.name)}
-                        >
-                          Reindex
-                        </button>
-                        <button
-                          type="button"
-                          className="link danger-text"
-                          onClick={() => void onDelete(p.name)}
-                        >
-                          Delete
-                        </button>
-                      </div>
+                      <ProjectRowActions
+                        name={p.name}
+                        onReindex={onReindex}
+                        onDelete={onDelete}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -334,13 +325,115 @@ export function ProjectsPage() {
   )
 }
 
+function ProjectRowActions({
+  name,
+  onReindex,
+  onDelete,
+}: {
+  name: string
+  onReindex: (name: string) => void | Promise<void>
+  onDelete: (name: string) => void | Promise<void>
+}) {
+  const navigate = useNavigate()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const base = `/projects/${encodeURIComponent(name)}`
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDoc = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
+
+  return (
+    <div className="table-actions-row" ref={rootRef}>
+      <button
+        type="button"
+        className="btn-open"
+        onClick={() => navigate(base)}
+      >
+        Open
+      </button>
+      <div className="actions-menu">
+        <button
+          type="button"
+          className="btn-more"
+          aria-expanded={menuOpen}
+          aria-haspopup="menu"
+          aria-label={`More actions for ${name}`}
+          onClick={() => setMenuOpen((v) => !v)}
+        >
+          More
+        </button>
+        {menuOpen ? (
+          <div className="actions-menu-panel" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false)
+                navigate(`${base}?tab=explore`)
+              }}
+            >
+              Explore
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false)
+                navigate(`${base}?tab=chat`)
+              }}
+            >
+              Chat
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false)
+                void onReindex(name)
+              }}
+            >
+              Reindex
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="danger-text"
+              onClick={() => {
+                setMenuOpen(false)
+                void onDelete(name)
+              }}
+            >
+              Delete
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 function CreateProjectForm({
   onClose,
   onCreated,
   onError,
 }: {
   onClose: () => void
-  onCreated: (jobId?: number, pushHint?: string) => void
+  onCreated: (jobId?: number, projectName?: string, pushHint?: string) => void
   onError: (msg: string) => void
 }) {
   const [mode, setMode] = useState<'git' | 'push'>('git')
@@ -364,7 +457,7 @@ function CreateProjectForm({
         branch: mode === 'git' ? branch : undefined,
         index: mode === 'git' ? indexNow : false,
       })
-      onCreated(res.job_id, res.push_hint)
+      onCreated(res.job_id, name.trim(), res.push_hint)
     } catch (ex) {
       onError(ex instanceof ApiError ? ex.message : 'create failed')
     } finally {

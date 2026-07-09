@@ -229,8 +229,15 @@ func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) 
 func (a *Admin) mergeProjectSearches(ctx context.Context, projects []store.Project, query string, topK int) ([]adminSearchHit, bool, error) {
 	var merged []adminSearchHit
 	fallback := false
+	perProject := topK * 3
+	if perProject < 10 {
+		perProject = 10
+	}
+	if perProject > 100 {
+		perProject = 100
+	}
 	for _, proj := range projects {
-		req := search.Request{Query: query, TopK: topK}
+		req := search.Request{Query: query, TopK: perProject}
 		if proj.Identity != "" {
 			req.Identity = proj.Identity
 		} else {

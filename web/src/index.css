@@ -189,8 +189,8 @@ button.danger,
 
 .table-wrap {
   width: 100%;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  /* visible so action menus can open without clipping */
+  overflow: visible;
 }
 
 table {
@@ -213,22 +213,22 @@ th {
   font-weight: 600;
 }
 
-/* Column widths for projects table */
+/* Column widths for projects table — Actions is compact (Open + More) */
 table.projects-table th:nth-child(1),
 table.projects-table td:nth-child(1) {
-  width: 22%;
+  width: 24%;
 }
 table.projects-table th:nth-child(2),
 table.projects-table td:nth-child(2) {
-  width: 16%;
+  width: 18%;
 }
 table.projects-table th:nth-child(3),
 table.projects-table td:nth-child(3) {
-  width: 10%;
+  width: 11%;
 }
 table.projects-table th:nth-child(4),
 table.projects-table td:nth-child(4) {
-  width: 12%;
+  width: 13%;
 }
 table.projects-table th:nth-child(5),
 table.projects-table td:nth-child(5) {
@@ -236,11 +236,11 @@ table.projects-table td:nth-child(5) {
 }
 table.projects-table th:nth-child(6),
 table.projects-table td:nth-child(6) {
-  width: 10%;
+  width: 12%;
 }
 table.projects-table th:nth-child(7),
 table.projects-table td:nth-child(7) {
-  width: 22%;
+  width: 9rem;
 }
 
 .row {
@@ -261,33 +261,35 @@ table.projects-table td:nth-child(7) {
   align-items: center;
 }
 
-/* Actions stay inside the cell: wrap within the cell, never spill out */
+/* Compact in-cell actions: Open + More menu (never overflows the table) */
 td.table-actions {
   vertical-align: middle;
   overflow: visible;
-  white-space: normal;
+  white-space: nowrap;
 }
 td.table-actions .table-actions-row {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.2rem 0.35rem;
-  max-width: 100%;
-}
-td.table-actions button.link {
   display: inline-flex;
-  width: auto;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.35rem;
   max-width: 100%;
-  padding: 0.12rem 0.25rem;
-  font-size: 0.78rem;
-  white-space: nowrap;
-  flex: 0 0 auto;
 }
 td.table-actions .btn-open {
   background: var(--accent);
   color: #fff;
   border: 0;
+  border-radius: 6px;
+  padding: 0.22rem 0.55rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+td.table-actions .btn-more {
+  background: #fff;
+  color: var(--fg);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.2rem 0.5rem;
   font-size: 0.78rem;
@@ -295,11 +297,48 @@ td.table-actions .btn-open {
   white-space: nowrap;
   flex: 0 0 auto;
 }
-td.table-actions .act-sep {
-  color: var(--border);
-  user-select: none;
-  font-size: 0.7rem;
-  flex: 0 0 auto;
+td.table-actions .btn-more:hover {
+  border-color: #c7d2fe;
+  background: #eef2ff;
+}
+.actions-menu {
+  position: relative;
+  display: inline-flex;
+}
+.actions-menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 40;
+  min-width: 9.5rem;
+  padding: 0.3rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.actions-menu-panel button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--fg);
+  border: 0;
+  border-radius: 6px;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+.actions-menu-panel button:hover {
+  background: #f1f5f9;
+}
+.actions-menu-panel button.danger-text {
+  color: var(--err);
+}
+.actions-menu-panel button.danger-text:hover {
+  background: #fef2f2;
 }
 
 .page-head {

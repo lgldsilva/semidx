@@ -316,9 +316,9 @@ func TestConcurrentIndexingIsComplete(t *testing.T) {
 	if stats.Errors != 0 {
 		t.Errorf("Errors = %d, want 0", stats.Errors)
 	}
-	// Blank-line-aware chunking: no blank line between package and func → 1 chunk per .go file.
-	if want := n * 1; len(fs.embedded) != want {
-		t.Errorf("embedded %d chunks, want %d (1 chunk per file)", len(fs.embedded), want)
+	// AST-aware chunking: package header + function symbol per .go file.
+	if want := n * 2; len(fs.embedded) != want {
+		t.Errorf("embedded %d chunks, want %d (2 chunks per file)", len(fs.embedded), want)
 	}
 }
 
@@ -355,16 +355,16 @@ func TestIndexContent(t *testing.T) {
 	fs := &fakeStore{}
 	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
 
-	created, err := idx.IndexContent(context.Background(), 1, "x.go", "bge-m3", []byte("package x\nfunc F() {}\n"))
+	created, err := idx.IndexContent(context.Background(), 1, "x.go", "bge-m3", []byte("package x\n\nfunc F() {}\n"))
 	if err != nil {
 		t.Fatalf("IndexContent: %v", err)
 	}
-	// Blank-line-aware chunking: no blank line between package and func → 1 chunk.
-	if created != 1 {
-		t.Errorf("created = %d, want 1 chunk (blank-line split, no blank line between decls)", created)
+	// Go AST chunking: package decl and func decl are separate chunks.
+	if created != 2 {
+		t.Errorf("created = %d, want 2 AST chunks (package + func)", created)
 	}
-	if len(fs.embedded) != 1 || !strings.Contains(fs.embedded[0], "package x") || !strings.Contains(fs.embedded[0], "func F") {
-		t.Errorf("embedded = %v, want single chunk containing both package and func", fs.embedded)
+	if len(fs.embedded) != 2 {
+		t.Errorf("embedded = %d chunks, want 2", len(fs.embedded))
 	}
 
 	// Empty content is a no-op.
