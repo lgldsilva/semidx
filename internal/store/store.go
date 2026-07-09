@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -229,8 +230,11 @@ type JobStore interface {
 	EnqueueBatchJob(ctx context.Context, projectID int, payload string) (int, error)
 	ClaimJob(ctx context.Context) (*Job, error)
 	CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated, deletedFiles, errorCount int) error
+	UpdateJobProgress(ctx context.Context, id, progressDone, progressTotal, filesIndexed, chunksCreated, errorCount int) error
 	FailJob(ctx context.Context, id int, errMsg string) error
 	GetJob(ctx context.Context, id int) (*Job, error)
+	// ListRecentJobs returns the newest jobs for a project (id DESC), capped by limit.
+	ListRecentJobs(ctx context.Context, projectID, limit int) ([]Job, error)
 }
 
 // JobNotifier is an optional extension for immediate job dispatch via Postgres
@@ -256,6 +260,14 @@ type Store interface {
 // PgStore is the PostgreSQL/pgvector implementation of Store.
 type PgStore struct {
 	pool *pgxpool.Pool
+}
+
+// DBPoolStats is a read-only snapshot of pgxpool counters used for metrics.
+type DBPoolStats struct {
+	TotalConns    int32
+	IdleConns     int32
+	AcquiredConns int32
+	MaxConns      int32
 }
 
 // compile-time assertion that PgStore satisfies Store.
@@ -338,6 +350,17 @@ func NewPgStore(ctx context.Context, connString string) (*PgStore, error) {
 
 func (s *PgStore) Close() {
 	s.pool.Close()
+}
+
+// PoolStats returns current pgxpool connection counters for observability.
+func (s *PgStore) PoolStats() DBPoolStats {
+	st := s.pool.Stat()
+	return DBPoolStats{
+		TotalConns:    st.TotalConns(),
+		IdleConns:     st.IdleConns(),
+		AcquiredConns: st.AcquiredConns(),
+		MaxConns:      st.MaxConns(),
+	}
 }
 
 // Ping verifies the database connection (used by /readyz).
@@ -613,20 +636,20 @@ func (s *PgStore) SetWorktreeFiles(ctx context.Context, projectID int, worktree 
 		return tx.Commit(ctx)
 	}
 
-	batch := &pgx.Batch{}
-	for path, hash := range files {
-		batch.Queue(`INSERT INTO worktree_files (project_id, worktree, path, hash) VALUES ($1, $2, $3, $4)`,
-			projectID, worktree, path, hash)
+	paths := make([]string, 0, len(files))
+	for p := range files {
+		paths = append(paths, p)
 	}
-	br := tx.SendBatch(ctx, batch)
-	defer func() { _ = br.Close() }()
-
-	for range files {
-		if _, err := br.Exec(); err != nil {
-			return err
-		}
+	slices.Sort(paths)
+	rows := make([][]any, len(paths))
+	for i, p := range paths {
+		rows[i] = []any{projectID, worktree, p, files[p]}
 	}
-	if err := br.Close(); err != nil {
+	if _, err := tx.CopyFrom(ctx,
+		pgx.Identifier{"worktree_files"},
+		[]string{"project_id", "worktree", "path", "hash"},
+		pgx.CopyFromRows(rows),
+	); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -789,6 +812,22 @@ func (s *PgStore) FileUpToDate(ctx context.Context, projectID int, path, hash st
 func (s *PgStore) CountProjectFiles(ctx context.Context, projectID int) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM files WHERE project_id = $1`, projectID).Scan(&n)
+	return n, err
+}
+
+// CountProjectChunks returns how many chunks a project has in the dims table.
+// dims must be resolved by the caller (project.Dims or probe).
+func (s *PgStore) CountProjectChunks(ctx context.Context, projectID, dims int) (int, error) {
+	if dims <= 0 {
+		dims = s.resolveDims(ctx, projectID, dims)
+	}
+	table, err := chunksTable(dims)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	q := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE project_id = $1`, table)
+	err = s.pool.QueryRow(ctx, q, projectID).Scan(&n)
 	return n, err
 }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -124,27 +125,37 @@ func recordEncryptedPending(tgt indexTarget, model, projectPath string, docs boo
 // indexCmdOpts groups flags for `semidx index` (keeps runIndex under the
 // Sonar S107 parameter limit).
 type indexCmdOpts struct {
-	projectPath string
-	model       string
-	gitSince    string
-	branch      string
-	maxFiles    int
-	gitMode     bool
-	verbose     bool
-	privacy     bool
-	watch       bool
-	docs        bool
+	projectPath  string
+	model        string
+	gitSince     string
+	branch       string
+	maxFiles     int
+	gitMode      bool
+	verbose      bool
+	privacy      bool
+	watch        bool
+	docs         bool
+	toServer     bool
+	embedLocally bool
 }
 
 func newIndexCmd(d *deps) *cobra.Command {
 	var opts indexCmdOpts
 	c := &cobra.Command{
 		Use:   "index",
-		Short: "Index a project directory",
-		Long: `Index a project so it can be searched. A git repo becomes one logical index
-keyed by its identity (shared across worktrees/clones); any other folder — or
-one passed with --docs — is keyed by its absolute path. Oversized and
-password-protected files are skipped; run "semidx unlock" for the latter.
+		Short: "Index a project directory (local store; use --to-server or push for a server)",
+		Long: `Index a project so it can be searched. By default this writes to a *local*
+store (SQLite with --local / SEMIDX_LOCAL_INDEX, otherwise Postgres via
+SEMIDX_DB_DSN). It does not upload to a server after "semidx login".
+
+A git repo becomes one logical index keyed by its identity (shared across
+worktrees/clones); any other folder — or one passed with --docs — is keyed by
+its absolute path. Oversized and password-protected files are skipped; run
+"semidx unlock" for the latter.
+
+When remote mode is active (after login), plain "index" errors with next steps.
+Use --to-server to push files to the server (same as "semidx push"), or
+"--local index" to write a local index while keeping the login saved.
 
 With --branch <name>, the project is registered as a separate index entry with
 "name@branch" as the display name and "#branch" appended to the identity, so
@@ -153,11 +164,13 @@ git checkout is performed; the currently checked-out content is indexed under
 the branch label.
 
 With no embedding provider configured, add --keyword to index text-only.`,
-		Example: `  semidx index --project .                 # index the current repo
+		Example: `  semidx index --project .                 # index the current repo locally
   semidx index --project ./docs --docs     # a plain document folder
   semidx index --project . --git           # also index recent git history
   semidx index --project . --keyword       # no embeddings, keyword-only
-  semidx index --project . --branch develop  # index as "repo@develop"`,
+  semidx index --project . --branch develop  # index as "repo@develop"
+  semidx index --to-server --project .     # push to the logged-in server
+  semidx --local index --project .         # local index despite saved login`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runIndex(cmd, d, opts)
 		},
@@ -172,17 +185,41 @@ With no embedding provider configured, add --keyword to index text-only.`,
 	c.Flags().BoolVar(&opts.verbose, "verbose", false, "Show detailed progress and errors")
 	c.Flags().BoolVar(&opts.privacy, "privacy", false, "Force local-only providers (Ollama)")
 	c.Flags().BoolVar(&opts.watch, "watch", false, "Watch for file changes and re-index automatically")
+	c.Flags().BoolVar(&opts.toServer, "to-server", false, "Push files to the logged-in server instead of writing a local index (alias of push)")
+	c.Flags().BoolVar(&opts.embedLocally, "embed-locally", false, "With --to-server: chunk and embed on this machine before upload")
 	return c
 }
 
 // runIndex executes the core logic of `index`. Extracted from the RunE of
 // newIndexCmd to reduce cognitive complexity.
 func runIndex(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
-	d.applyPrivacy(opts.privacy)
 	if systemDirs[filepath.Clean(opts.projectPath)] {
 		return fmt.Errorf("refusing to index system directory: %s", filepath.Clean(opts.projectPath))
 	}
 
+	// Remote mode: either refuse (clear error) or alias to push.
+	if d.remote() {
+		if !opts.toServer {
+			return errIndexInRemoteMode(d.client.ServerURL, opts.projectPath)
+		}
+		if err := validateIndexToServer(opts.watch, opts.gitMode, opts.branch, d.keywordOnly); err != nil {
+			return err
+		}
+		return runPush(cmd, d, &pushOptions{
+			projectPath:  opts.projectPath,
+			model:        opts.model,
+			maxFiles:     opts.maxFiles,
+			docs:         opts.docs,
+			verbose:      opts.verbose,
+			embedLocally: opts.embedLocally,
+			priv:         opts.privacy,
+		})
+	}
+	if opts.toServer {
+		return fmt.Errorf("--to-server requires a logged-in server: run `semidx login <url> --token ...` first")
+	}
+
+	d.applyPrivacy(opts.privacy)
 	ctx := cmd.Context()
 	db, err := d.indexStore(ctx)
 	if err != nil {
@@ -221,6 +258,7 @@ func runIndex(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 		Verbose:             opts.verbose,
 		GitMode:             opts.gitMode,
 		GitSince:            opts.gitSince,
+		OnProgress:          cliProgressHook(opts.verbose),
 	}).
 		SetKeywordOnly(d.keywordOnly).
 		SetWorktree(tgt.worktree).
@@ -243,6 +281,49 @@ func runIndex(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 		if err := watcher.Watch(ctx); err != nil && err != context.Canceled {
 			return fmt.Errorf("watcher: %w", err)
 		}
+	}
+	return nil
+}
+
+// cliProgressHook returns an indexer progress callback that prints throttled
+// live updates to stderr when --verbose is set, or nil to disable progress.
+func cliProgressHook(enabled bool) func(done, total, filesIndexed, chunksCreated, errorCount int) {
+	if !enabled {
+		return nil
+	}
+	var lastShown atomic.Int64
+	return func(done, total, filesIndexed, chunksCreated, errorCount int) {
+		// Throttle noisy updates while still printing the final state.
+		now := time.Now().UnixMilli()
+		if total > 0 && done < total && now-lastShown.Load() < 400 {
+			return
+		}
+		lastShown.Store(now)
+		if total > 0 {
+			pct := done * 100 / total
+			if pct > 100 {
+				pct = 100
+			}
+			fmt.Fprintf(os.Stderr, "[progress] %d%% (%d/%d files) indexed=%d chunks=%d errors=%d\n",
+				pct, done, total, filesIndexed, chunksCreated, errorCount)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "[progress] done=%d indexed=%d chunks=%d errors=%d\n",
+			done, filesIndexed, chunksCreated, errorCount)
+	}
+}
+
+// validateIndexToServer rejects local-only index flags when aliasing to push.
+func validateIndexToServer(watch, gitMode bool, branch string, keywordOnly bool) error {
+	switch {
+	case watch:
+		return fmt.Errorf("index --to-server does not support --watch; use a local index or re-run push")
+	case gitMode:
+		return fmt.Errorf("index --to-server does not support --git; use `semidx repo add` for server-side git history")
+	case branch != "":
+		return fmt.Errorf("index --to-server does not support --branch; use `semidx repo add --branch` or push with a project --name")
+	case keywordOnly:
+		return fmt.Errorf("index --to-server does not support --keyword; keyword-only is a local indexing mode")
 	}
 	return nil
 }
@@ -453,10 +534,12 @@ func newStatusCmd(d *deps) *cobra.Command {
 		Use:   "status",
 		Short: "Show indexing status of a project",
 		Long: `Show the indexing status of a project: whether it is ready, how many files
-are indexed, and what embedding model is in use.`,
+are indexed, and what embedding model is in use. Uses the active backend
+(remote after login, or local with --local / --backend local).`,
 		Example: `  semidx status                          # show status for the current project
   semidx status --project ./my-repo      # show status for a specific project
-  semidx status --project . --branch develop  # match index --branch develop`,
+  semidx status --project . --branch develop  # match index --branch develop
+  semidx --local status                  # local index even if logged in`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			if d.remote() {
@@ -592,20 +675,24 @@ func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server, showBoot
 		}
 		fmt.Fprintf(os.Stderr, "bootstrap admin token saved to %s (use --show-bootstrap-token to display it)\n", tokenFile)
 	}
-	admin, err := srv.EnsureBootstrapAdmin(ctx, d.cfg.BootstrapAdminUser, d.cfg.BootstrapAdminPassword)
+	adminUser, err := srv.EnsureBootstrapAdmin(ctx, d.cfg.BootstrapAdminUser, d.cfg.BootstrapAdminPassword)
 	if err != nil {
 		return fmt.Errorf("bootstrap admin: %w", err)
 	}
-	if admin != "" {
-		fmt.Fprintf(os.Stderr, "bootstrap web admin user created: %s\n", admin)
+	if adminUser != "" {
+		fmt.Fprintf(os.Stderr, "bootstrap web admin user created: %s\n", adminUser)
 	}
 	if d.cfg.JWTSecret != "" {
 		if err := srv.EnableJWT(d.cfg.JWTSecret); err != nil {
 			return fmt.Errorf("enable JWT control tokens: %w", err)
 		}
 	}
-	if err := srv.MountAdmin(d.cfg.CookieSecure, d.cfg.CSRFKey); err != nil {
+	adminUI, err := srv.MountAdmin(d.cfg.CookieSecure, d.cfg.CSRFKey)
+	if err != nil {
 		return fmt.Errorf("mount admin UI: %w", err)
+	}
+	if pipeline := d.buildAdminChatPipeline(); pipeline != nil {
+		adminUI.SetChat(pipeline)
 	}
 	return nil
 }

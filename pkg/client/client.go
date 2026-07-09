@@ -92,10 +92,14 @@ type Job struct {
 	Type          string `json:"type"`
 	Status        string `json:"status"`
 	Error         string `json:"error,omitempty"`
-	FilesIndexed  int    `json:"files_indexed"`
-	ChunksCreated int    `json:"chunks_created"`
-	DeletedFiles  int    `json:"deleted_files"`
-	ErrorCount    int    `json:"error_count"`
+	ProgressDone  int    `json:"progress_done,omitempty"`
+	ProgressTotal int    `json:"progress_total,omitempty"`
+	// ProgressPercent is optional and may be omitted by older servers.
+	ProgressPercent int `json:"progress_percent,omitempty"`
+	FilesIndexed    int `json:"files_indexed"`
+	ChunksCreated   int `json:"chunks_created"`
+	DeletedFiles    int `json:"deleted_files"`
+	ErrorCount      int `json:"error_count"`
 }
 
 // Job status values returned by the server.

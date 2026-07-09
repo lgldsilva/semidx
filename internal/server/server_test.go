@@ -125,6 +125,12 @@ func (f *fakeStore) GetJob(_ context.Context, id int) (*store.Job, error) {
 	}
 	return f.job, nil
 }
+func (f *fakeStore) ListRecentJobs(context.Context, int, int) ([]store.Job, error) {
+	if f.job == nil {
+		return nil, nil
+	}
+	return []store.Job{*f.job}, nil
+}
 func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]store.SearchResult, error) {
 	return f.results, nil
 }

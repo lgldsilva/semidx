@@ -19,10 +19,12 @@ func newConfigCmd(d *deps) *cobra.Command {
 		Use:   "config",
 		Short: "Configure providers and the storage backend (SQLite, Postgres, or a remote server)",
 		Long: "Manage semidx's persistent settings without hand-editing a .env.\n\n" +
-			"Storage backends (choose one; run-time precedence is remote > Postgres (configured) > SQLite > Postgres (default)):\n" +
-			"  • Remote server  — `semidx login <url> --token ...`\n" +
-			"  • Local SQLite   — `semidx config set SEMIDX_LOCAL_INDEX 1` (or a path)\n" +
+			"Storage backends (run-time precedence for search: remote when logged in, unless --local / --backend local):\n" +
+			"  • Remote server  — `semidx login <url> --token ...` (SEMIDX_BACKEND=remote|auto)\n" +
+			"  • Local SQLite   — `semidx config set SEMIDX_LOCAL_INDEX 1` or `--local`\n" +
 			"  • Postgres       — `semidx config set SEMIDX_DB_DSN postgres://...`\n\n" +
+			"Note: `semidx index` always writes to a local store; use `semidx push` or\n" +
+			"`semidx index --to-server` to send files to a logged-in server.\n\n" +
 			"Values are stored in the user config file and layered below a project .env\n" +
 			"and the real environment. Run `semidx config keys` for the full key reference.",
 		Example: `  semidx config set GEMINI_API_KEY <key>
@@ -162,7 +164,8 @@ func newConfigPathCmd() *cobra.Command {
 }
 
 // activeBackend reports which storage backend the CLI will use, honoring the
-// remote > Postgres (configured) > SQLite > Postgres (default) precedence.
+// remote (when useRemote) > Postgres (configured) > SQLite > Postgres (default)
+// precedence. When a login is saved but this run forced local, that is noted.
 func activeBackend(d *deps) string {
 	if d != nil && d.remote() {
 		return "remote server (" + d.client.ServerURL + ")"
@@ -194,19 +197,23 @@ func activeBackend(d *deps) string {
 		keywordOnly = true
 	}
 
-	if keywordOnly {
-		if localPath != "" {
-			return "local SQLite, keyword-only"
-		}
-		return "keyword-only"
+	var label string
+	switch {
+	case keywordOnly && localPath != "":
+		label = "local SQLite, keyword-only"
+	case keywordOnly:
+		label = "keyword-only"
+	case localPath != "":
+		label = "local SQLite (" + localPath + ")"
+	case config.EffectiveValue("SEMIDX_DB_DSN") != "":
+		label = "Postgres (" + mask(config.EffectiveValue("SEMIDX_DB_DSN")) + ")"
+	default:
+		label = "Postgres (default localhost DSN — set SEMIDX_DB_DSN, or use --local)"
 	}
-	if localPath != "" {
-		return "local SQLite (" + localPath + ")"
+	if d != nil && d.hasServerConfig() && !d.remote() {
+		label += " (saved login " + d.client.ServerURL + " ignored; --local/--backend=local)"
 	}
-	if dsn := config.EffectiveValue("SEMIDX_DB_DSN"); dsn != "" {
-		return "Postgres (" + mask(dsn) + ")"
-	}
-	return "Postgres (default localhost DSN — set SEMIDX_DB_DSN, or use --local)"
+	return label
 }
 
 func isKnownKey(key string) bool {

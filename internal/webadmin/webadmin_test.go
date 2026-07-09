@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,6 +37,13 @@ type fakeStore struct {
 	searchResults  []store.SearchResult
 	searchErr      error               // injected SearchSimilar/Keywords error
 	hideIdentities map[string]struct{} // test hook: pretend these identities are gone
+
+	// workspace enrichment
+	fileHashes map[string]string // path→hash for ListFileHashes
+	fileCount  int
+	jobs       []store.Job
+	chunks     []store.SearchResult // FetchChunksByPath
+	nextJob    int
 
 	// error-injection fields (all nil = success/normal path)
 	listProjectsErr error
@@ -233,6 +241,18 @@ func (f *fakeStore) GetProject(_ context.Context, name string) (*store.Project, 
 	return nil, store.ErrNotFound
 }
 
+func (f *fakeStore) GetProjectByID(_ context.Context, id int) (*store.Project, error) {
+	for i := range f.projects {
+		if f.projects[i].ID == id {
+			return &f.projects[i], nil
+		}
+	}
+	if f.searchProject != nil && f.searchProject.ID == id {
+		return f.searchProject, nil
+	}
+	return nil, store.ErrNotFound
+}
+
 func (f *fakeStore) GetProjectByIdentity(_ context.Context, identity string) (*store.Project, error) {
 	if _, hide := f.hideIdentities[identity]; hide {
 		return nil, store.ErrNotFound
@@ -256,14 +276,84 @@ func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]
 	if f.searchErr != nil {
 		return nil, f.searchErr
 	}
-	return f.searchResults, nil
+	out := append([]store.SearchResult{}, f.searchResults...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out, nil
 }
 
 func (f *fakeStore) SearchSimilarKeywords(context.Context, int, string, int, int) ([]store.SearchResult, error) {
 	if f.searchErr != nil {
 		return nil, f.searchErr
 	}
-	return f.searchResults, nil
+	out := append([]store.SearchResult{}, f.searchResults...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out, nil
+}
+
+func (f *fakeStore) CountProjectFiles(context.Context, int) (int, error) {
+	if f.fileCount > 0 {
+		return f.fileCount, nil
+	}
+	return len(f.fileHashes), nil
+}
+
+func (f *fakeStore) ListFileHashes(context.Context, int) (map[string]string, error) {
+	if f.fileHashes == nil {
+		return map[string]string{}, nil
+	}
+	return f.fileHashes, nil
+}
+
+func (f *fakeStore) GetProjectCommit(context.Context, int) (string, error) {
+	return "", nil
+}
+
+func (f *fakeStore) ListRecentJobs(_ context.Context, _ int, limit int) ([]store.Job, error) {
+	if limit <= 0 || limit > len(f.jobs) {
+		return f.jobs, nil
+	}
+	return f.jobs[:limit], nil
+}
+
+func (f *fakeStore) FetchChunksByPath(context.Context, int, string, int, int) ([]store.SearchResult, error) {
+	return f.chunks, nil
+}
+
+func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gitURL, branch string, dims int) (*store.Project, error) {
+	p := store.Project{
+		ID: len(f.projects) + 1, Name: name, Model: model, SourceType: sourceType,
+		GitURL: gitURL, Branch: branch, Status: "registered", Identity: name, Dims: dims,
+	}
+	f.projects = append(f.projects, p)
+	return &p, nil
+}
+
+func (f *fakeStore) DeleteProject(_ context.Context, name string) error {
+	for i, p := range f.projects {
+		if p.Name == name {
+			f.projects = append(f.projects[:i], f.projects[i+1:]...)
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+func (f *fakeStore) EnqueueJob(context.Context, int, string) (int, error) {
+	f.nextJob++
+	return f.nextJob, nil
+}
+
+func (f *fakeStore) GetJob(_ context.Context, id int) (*store.Job, error) {
+	for i := range f.jobs {
+		if f.jobs[i].ID == id {
+			return &f.jobs[i], nil
+		}
+	}
+	return &store.Job{ID: id, Status: "queued", Type: "full"}, nil
+}
+
+func (f *fakeStore) FetchGraphNeighbors(context.Context, int) (map[string][]string, error) {
+	return map[string][]string{}, nil
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -334,20 +424,23 @@ func TestLoginFlowAndSession(t *testing.T) {
 	fs.addUser("admin", "supersecret", "admin")
 	c := newClient(t, srv)
 
-	// Unauthenticated dashboard redirects to login.
-	if code, _ := getBody(t, c, srv.URL+"/admin/"); code != http.StatusSeeOther {
-		t.Errorf("unauth dashboard = %d; want 303 redirect", code)
+	// Unauthenticated /admin serves the SPA shell (client-side auth gate).
+	if code, body := getBody(t, c, srv.URL+"/admin/"); code != http.StatusOK || !strings.Contains(body, "root") {
+		t.Errorf("unauth SPA shell = %d; want 200 with #root", code)
 	}
-	// Bad password does not create a session.
+	// Bad password does not create a session (legacy form POST still supported).
 	resp, _ := c.PostForm(srv.URL+"/admin/login", url.Values{"username": {"admin"}, "password": {"wrong"}})
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("bad login = %d; want 200 (form re-render)", resp.StatusCode)
 	}
-	// Correct login → session → dashboard reachable.
+	// Correct login → session → SPA + keys page still work.
 	login(t, c, srv.URL, "admin", "supersecret")
-	if code, body := getBody(t, c, srv.URL+"/admin/"); code != http.StatusOK || !strings.Contains(body, "Projects") {
-		t.Errorf("dashboard after login = %d", code)
+	if code, body := getBody(t, c, srv.URL+"/admin/"); code != http.StatusOK || !strings.Contains(body, "root") {
+		t.Errorf("SPA after login = %d body has root? %v", code, strings.Contains(body, "root"))
+	}
+	if code, body := getBody(t, c, srv.URL+"/admin/keys"); code != http.StatusOK || !strings.Contains(body, "API") {
+		t.Errorf("keys page after login = %d", code)
 	}
 }
 
