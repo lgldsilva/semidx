@@ -434,6 +434,18 @@ pre.snippet {
   max-height: 60vh;
   font-size: 0.78rem;
 }
+.file-body .ln {
+  display: inline-block;
+  width: 3.2rem;
+  color: var(--muted);
+  user-select: none;
+  text-align: right;
+  margin-right: 0.75rem;
+}
+.file-body .line-hi {
+  background: #fef08a;
+  display: block;
+}
 .chat-layout {
   display: flex;
   flex-direction: column;

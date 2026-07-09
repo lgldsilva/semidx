@@ -12,7 +12,7 @@ import {
 } from '../api'
 import { buildFileTree, type TreeNode } from '../features/project/buildFileTree'
 
-type Tab = 'overview' | 'files' | 'explore' | 'analyze' | 'chat'
+type Tab = 'overview' | 'files' | 'explore' | 'analyze' | 'chat' | 'ingest'
 
 export function ProjectWorkspace() {
   const { name = '' } = useParams()
@@ -141,7 +141,7 @@ export function ProjectWorkspace() {
       )}
 
       <nav className="tab-nav">
-        {(['overview', 'files', 'explore', 'analyze', 'chat'] as Tab[]).map((t) => (
+        {(['overview', 'files', 'ingest', 'explore', 'analyze', 'chat'] as Tab[]).map((t) => (
           <button
             key={t}
             type="button"
@@ -175,6 +175,7 @@ export function ProjectWorkspace() {
           }}
         />
       )}
+      {tab === 'ingest' && <IngestPanel project={name} onDone={() => void reload()} />}
       {tab === 'explore' && (
         <ExplorePanel
           project={name}
@@ -360,6 +361,9 @@ function FilesPanel({
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState(initialPath)
   const [content, setContent] = useState('')
+  const [chunks, setChunks] = useState<
+    { start_line: number; end_line: number; content: string }[]
+  >([])
   const [truncated, setTruncated] = useState(false)
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(true)
@@ -379,6 +383,7 @@ function FilesPanel({
   useEffect(() => {
     if (!selected) {
       setContent('')
+      setChunks([])
       return
     }
     setErr('')
@@ -386,15 +391,51 @@ function FilesPanel({
       .projectFileContent(project, selected)
       .then((r) => {
         setContent(r.content)
+        setChunks(r.chunks || [])
         setTruncated(r.truncated)
       })
       .catch((e) => setErr(e instanceof ApiError ? e.message : 'load content failed'))
   }, [project, selected])
 
+  useEffect(() => {
+    if (initialPath) setSelected(initialPath)
+  }, [initialPath])
+
+  useEffect(() => {
+    if (!line || !content) return
+    const el = document.getElementById(`L${line}`)
+    el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [line, content, selected])
+
   const tree = useMemo(
     () => buildFileTree(files.map((f) => f.path)),
     [files],
   )
+
+  const numbered = useMemo(() => {
+    if (!content) return [] as { n: number; text: string; hi: boolean }[]
+    // Reconstruct approximate line numbers from chunk metadata when available.
+    const lines = content.split('\n')
+    const out: { n: number; text: string; hi: boolean }[] = []
+    if (chunks.length > 0) {
+      let i = 0
+      for (const ch of chunks) {
+        const part = ch.content.split('\n')
+        for (let j = 0; j < part.length; j++) {
+          const n = ch.start_line + j
+          out.push({ n, text: part[j], hi: !!line && n === line })
+          i++
+        }
+      }
+      // if rebuild shorter than raw content lines, fall back
+      if (out.length >= lines.length * 0.5) return out
+    }
+    return lines.map((text, idx) => ({
+      n: idx + 1,
+      text,
+      hi: !!line && idx + 1 === line,
+    }))
+  }, [content, chunks, line])
 
   return (
     <div className="files-layout">
@@ -436,13 +477,112 @@ function FilesPanel({
             {truncated && (
               <div className="alert error">Showing first chunks only (truncated).</div>
             )}
-            {line ? (
-              <p className="muted small">Hint: jump target line {line}</p>
-            ) : null}
-            <pre className="snippet file-body">{content || '(empty or not in index)'}</pre>
+            {chunks.length > 0 && (
+              <p className="muted small">
+                Chunks:{' '}
+                {chunks
+                  .map((c) => `${c.start_line}-${c.end_line}`)
+                  .slice(0, 12)
+                  .join(', ')}
+                {chunks.length > 12 ? '…' : ''}
+              </p>
+            )}
+            <pre className="snippet file-body">
+              {numbered.length === 0
+                ? '(empty or not in index)'
+                : numbered.map((row) => (
+                    <div
+                      key={row.n + row.text.slice(0, 8)}
+                      id={`L${row.n}`}
+                      className={row.hi ? 'line-hi' : undefined}
+                    >
+                      <span className="ln">{row.n}</span>
+                      {row.text}
+                    </div>
+                  ))}
+            </pre>
           </>
         )}
       </section>
+    </div>
+  )
+}
+
+function IngestPanel({
+  project,
+  onDone,
+}: {
+  project: string
+  onDone: () => void
+}) {
+  const [status, setStatus] = useState('')
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function onPick(e: { target: HTMLInputElement }) {
+    const list = e.target.files
+    if (!list || list.length === 0) return
+    setBusy(true)
+    setErr('')
+    setStatus(`Reading ${list.length} file(s)…`)
+    try {
+      const files: { path: string; content: string }[] = []
+      for (let i = 0; i < list.length && i < 50; i++) {
+        const f = list[i]
+        const path =
+          // webkitRelativePath for folder pick
+          (f as File & { webkitRelativePath?: string }).webkitRelativePath ||
+          f.name
+        const text = await f.text()
+        files.push({ path: path.replace(/^\/+/, ''), content: text })
+      }
+      setStatus(`Indexing ${files.length} file(s)…`)
+      const res = await api.projectIngest(project, files)
+      setStatus(
+        `Done — indexed ${res.indexed}, chunks ${res.chunks}, errors ${res.errors}`,
+      )
+      if (res.file_errors?.length) {
+        setErr(
+          res.file_errors
+            .slice(0, 5)
+            .map((x) => `${x.path}: ${x.error}`)
+            .join('\n'),
+        )
+      }
+      onDone()
+    } catch (ex) {
+      setErr(ex instanceof ApiError ? ex.message : 'ingest failed')
+    } finally {
+      setBusy(false)
+      e.target.value = ''
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2>Ingest files</h2>
+      <p className="muted">
+        Upload up to 50 text files (≤512KiB each) into this project index. For large
+        trees use CLI: <code>semidx push --project . --name {project}</code>
+      </p>
+      {status && <div className="alert ok">{status}</div>}
+      {err && (
+        <pre className="alert error" style={{ whiteSpace: 'pre-wrap' }}>
+          {err}
+        </pre>
+      )}
+      <label className="row-actions">
+        <input
+          type="file"
+          multiple
+          disabled={busy}
+          onChange={(e) => void onPick(e)}
+        />
+      </label>
+      <p className="muted small">
+        Tip: in Chrome/Edge you can also pick a folder via the file dialog
+        (enable folder upload if offered).
+      </p>
     </div>
   )
 }
@@ -499,8 +639,10 @@ function AnalyzePanel({
   onOpenFile: (path: string, line?: number) => void
 }) {
   const [path, setPath] = useState(seedPath)
+  const [line, setLine] = useState(1)
   const [callers, setCallers] = useState<string[]>([])
   const [deps, setDeps] = useState<string[]>([])
+  const [explain, setExplain] = useState<Record<string, unknown> | null>(null)
   const [dead, setDead] = useState<
     { symbol: string; kind: string; file: string; start_line: number; confidence: string }[]
   >([])
@@ -530,6 +672,19 @@ function AnalyzePanel({
     }
   }
 
+  async function runExplain() {
+    if (!path.trim()) return
+    setBusy('explain')
+    setErr('')
+    try {
+      setExplain(await api.projectExplain(project, path, line))
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'explain failed')
+    } finally {
+      setBusy('')
+    }
+  }
+
   async function runDead() {
     setBusy('dead')
     setErr('')
@@ -547,9 +702,9 @@ function AnalyzePanel({
   return (
     <div className="workspace-grid">
       <div className="card full">
-        <h2>Dependency graph (file-level)</h2>
+        <h2>Dependency graph & explain</h2>
         <p className="muted">
-          Uses indexed <code>file_dependencies</code> (same as CLI callers). Path relative to project root.
+          Graph uses <code>file_dependencies</code>. Explain uses disk when available, else index chunks.
         </p>
         {err && <div className="alert error">{err}</div>}
         <div className="row">
@@ -561,6 +716,19 @@ function AnalyzePanel({
               placeholder="internal/auth/token.go"
             />
           </label>
+          <label>
+            Line
+            <input
+              type="number"
+              min={1}
+              value={line}
+              onChange={(e) => setLine(Number(e.target.value) || 1)}
+              style={{ width: '5rem' }}
+            />
+          </label>
+          <button type="button" disabled={!!busy} onClick={() => void runExplain()}>
+            {busy === 'explain' ? '…' : 'Explain'}
+          </button>
           <button type="button" disabled={!!busy} onClick={() => void runGraph()}>
             {busy === 'graph' ? '…' : 'Callers + deps'}
           </button>
@@ -568,6 +736,51 @@ function AnalyzePanel({
             {busy === 'dead' ? '…' : 'Dead code scan'}
           </button>
         </div>
+        {explain && (
+          <div className="card" style={{ marginTop: '0.75rem' }}>
+            <h3>
+              {(explain.symbol as string) || path}
+              {explain.kind ? ` — ${String(explain.kind)}` : ''}
+            </h3>
+            <p className="muted small">
+              source: {String(explain.source || '—')} · lines{' '}
+              {String(explain.start_line ?? '?')}–{String(explain.end_line ?? '?')}
+            </p>
+            {Array.isArray(explain.dependencies) && (
+              <p>
+                <strong>Dependencies:</strong>{' '}
+                {(explain.dependencies as string[]).join(', ') || '(none)'}
+              </p>
+            )}
+            {Array.isArray(explain.importers) && (
+              <p>
+                <strong>Imported by:</strong>{' '}
+                {(explain.importers as string[]).length
+                  ? (explain.importers as string[]).map((imp) => (
+                      <button
+                        key={imp}
+                        type="button"
+                        className="link"
+                        style={{ marginRight: '0.5rem' }}
+                        onClick={() => onOpenFile(imp)}
+                      >
+                        {imp}
+                      </button>
+                    ))
+                  : '(none)'}
+              </p>
+            )}
+            {Array.isArray(explain.tests) && (
+              <p>
+                <strong>Tests:</strong>{' '}
+                {(explain.tests as string[]).join(', ') || '(none)'}
+              </p>
+            )}
+            {typeof explain.snippet === 'string' && (
+              <pre className="snippet">{explain.snippet as string}</pre>
+            )}
+          </div>
+        )}
       </div>
       <div className="card">
         <h2>Callers ({callers.length})</h2>
@@ -664,6 +877,8 @@ function ExplorePanel({
 }) {
   const [query, setQuery] = useState(seedQuery)
   const [top, setTop] = useState(15)
+  const [graph, setGraph] = useState(false)
+  const [graphDepth, setGraphDepth] = useState(2)
   const [results, setResults] = useState<SearchHit[]>([])
   const [fallback, setFallback] = useState(false)
   const [err, setErr] = useState('')
@@ -679,7 +894,13 @@ function ExplorePanel({
     setBusy(true)
     setErr('')
     try {
-      const res = await api.search({ query, project, top })
+      const res = await api.search({
+        query,
+        project,
+        top,
+        graph,
+        graph_depth: graphDepth,
+      })
       setResults(res.results ?? [])
       setFallback(!!res.fallback)
     } catch (ex) {
@@ -717,6 +938,27 @@ function ExplorePanel({
               {n}
             </button>
           ))}
+          <label className="checkbox" style={{ marginLeft: '0.75rem' }}>
+            <input
+              type="checkbox"
+              checked={graph}
+              onChange={(e) => setGraph(e.target.checked)}
+            />
+            Graph-RAG
+          </label>
+          {graph && (
+            <label className="muted small">
+              depth
+              <input
+                type="number"
+                min={1}
+                max={5}
+                value={graphDepth}
+                onChange={(e) => setGraphDepth(Number(e.target.value) || 2)}
+                style={{ width: '3.5rem', marginLeft: '0.35rem' }}
+              />
+            </label>
+          )}
         </div>
       </form>
       {err && <div className="alert error">{err}</div>}
