@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom'
 import { api, type SystemInfo } from './api'
 import { useAuth } from './auth'
 
-export function Layout({ children }: { children: React.ReactNode }) {
+export function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
   const { user, logout } = useAuth()
   const [sys, setSys] = useState<SystemInfo | null>(null)
 

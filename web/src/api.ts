@@ -286,8 +286,9 @@ export const api = {
     if (opts?.limit) qs.set('limit', String(opts.limit))
     if (opts?.offset) qs.set('offset', String(opts.offset))
     const q = qs.toString()
+    const suffix = q ? '?' + q : ''
     return request<{ files: FileEntry[]; total: number }>(
-      `/admin/api/projects/${encodeURIComponent(name)}/files${q ? `?${q}` : ''}`,
+      '/admin/api/projects/' + encodeURIComponent(name) + '/files' + suffix,
     )
   },
   projectFileContent: (name: string, path: string) =>

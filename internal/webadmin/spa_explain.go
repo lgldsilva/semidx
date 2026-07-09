@@ -33,7 +33,7 @@ func (a *Admin) apiProjectExplain(w http.ResponseWriter, r *http.Request, ac *au
 	}
 	proj, err := a.store.GetProject(r.Context(), name)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "project not found")
+		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 		return
 	}
 	if err != nil {

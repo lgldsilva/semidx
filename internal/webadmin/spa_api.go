@@ -42,7 +42,7 @@ func (a *Admin) apiLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	var body loginJSONBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid JSON body")
+		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSONBody)
 		return
 	}
 	username := strings.TrimSpace(body.Username)
@@ -144,7 +144,7 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 	_ = ac
 	var body createProjectBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid JSON body")
+		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSONBody)
 		return
 	}
 	body.SourceType = strings.TrimSpace(body.SourceType)
@@ -263,7 +263,7 @@ func (a *Admin) apiDeleteProject(w http.ResponseWriter, r *http.Request, ac *aut
 	}
 	if err := a.store.DeleteProject(r.Context(), name); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeJSONErr(w, http.StatusNotFound, "project not found")
+			writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 			return
 		}
 		a.log.Error("delete project failed", "err", err)
@@ -278,7 +278,7 @@ func (a *Admin) apiProjectStatus(w http.ResponseWriter, r *http.Request, ac *aut
 	name := r.PathValue("project")
 	proj, err := a.store.GetProject(r.Context(), name)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "project not found")
+		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 		return
 	}
 	if err != nil {
@@ -317,7 +317,7 @@ func (a *Admin) apiReindex(w http.ResponseWriter, r *http.Request, ac *authCtx) 
 	}
 	proj, err := a.store.GetProject(r.Context(), name)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "project not found")
+		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 		return
 	}
 	if err != nil {
@@ -363,7 +363,7 @@ func (a *Admin) apiProjectJob(w http.ResponseWriter, r *http.Request, ac *authCt
 func (a *Admin) writeScopedJob(w http.ResponseWriter, r *http.Request, project string, id int) {
 	job, err := a.store.GetJob(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "job not found")
+		writeJSONErr(w, http.StatusNotFound, spaErrJobNotFound)
 		return
 	}
 	if err != nil {
@@ -374,14 +374,14 @@ func (a *Admin) writeScopedJob(w http.ResponseWriter, r *http.Request, project s
 	proj, err := a.store.GetProjectByID(r.Context(), job.ProjectID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeJSONErr(w, http.StatusNotFound, "job not found")
+			writeJSONErr(w, http.StatusNotFound, spaErrJobNotFound)
 			return
 		}
 		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
 		return
 	}
 	if proj.Name != project {
-		writeJSONErr(w, http.StatusNotFound, "job not found")
+		writeJSONErr(w, http.StatusNotFound, spaErrJobNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, jobToJSON(job))
@@ -439,7 +439,7 @@ func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	_ = ac
 	var body searchJSONBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid JSON body")
+		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSONBody)
 		return
 	}
 	body.Query = strings.TrimSpace(body.Query)
@@ -478,7 +478,7 @@ func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	}
 	resp, err := a.search.Search(r.Context(), req)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "project not found")
+		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 		return
 	}
 	if err != nil {

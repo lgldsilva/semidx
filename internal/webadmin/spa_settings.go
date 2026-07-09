@@ -51,7 +51,7 @@ type createKeyBody struct {
 func (a *Admin) apiCreateKey(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	var body createKeyBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid JSON")
+		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSON)
 		return
 	}
 	name := strings.TrimSpace(body.Name)
@@ -125,7 +125,7 @@ func (a *Admin) apiCreateToken(w http.ResponseWriter, r *http.Request, ac *authC
 	}
 	var body createTokenBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid JSON")
+		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSON)
 		return
 	}
 	name := strings.TrimSpace(body.Name)
@@ -184,7 +184,7 @@ func (a *Admin) apiChangePassword(w http.ResponseWriter, r *http.Request, ac *au
 		New     string `json:"new"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid JSON")
+		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSON)
 		return
 	}
 	if ok, _ := passwd.Verify(body.Current, ac.user.PasswordHash); !ok {
@@ -234,7 +234,7 @@ func (a *Admin) apiCreateUser(w http.ResponseWriter, r *http.Request, ac *authCt
 		Role     string `json:"role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid JSON")
+		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSON)
 		return
 	}
 	role := body.Role
@@ -276,7 +276,7 @@ func (a *Admin) apiSetUserDisabled(w http.ResponseWriter, r *http.Request, ac *a
 		Disabled bool `json:"disabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid JSON")
+		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSON)
 		return
 	}
 	switch err := a.store.SetUserDisabled(r.Context(), id, body.Disabled); {

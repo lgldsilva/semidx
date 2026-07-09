@@ -9,7 +9,7 @@ import { CliGuidePage } from './pages/CliGuidePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { JobsPage } from './pages/JobsPage'
 
-function Private({ children }: { children: React.ReactNode }) {
+function Private({ children }: Readonly<{ children: React.ReactNode }>) {
   const { user, loading } = useAuth()
   if (loading) {
     return (
