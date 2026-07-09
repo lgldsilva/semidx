@@ -7,5 +7,6 @@ const (
 	spaErrInvalidJSON        = "invalid JSON"
 	spaErrJobNotFound        = "job not found"
 	spaErrFileTooLargeIngest = "file too large for browser ingest (max 512KiB)"
+	// #nosec G101 -- SSE wire format string, not a credential.
 	spaSSEDataFmt            = "data: %s\n\n"
 )
