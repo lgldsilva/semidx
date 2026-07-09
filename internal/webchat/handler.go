@@ -188,7 +188,7 @@ func (s *Server) validateChatStreamRequest(w http.ResponseWriter, r *http.Reques
 		w.Header().Set(hdrContentType, mimeJSON)
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(errorResponse{Error: errQuestionRequired})
-		return chatRequest{}, "", fmt.Errorf(errQuestionRequired)
+		return chatRequest{}, "", errors.New(errQuestionRequired)
 	}
 
 	project, err := s.resolveProject(req.Project)

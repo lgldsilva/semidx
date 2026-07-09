@@ -370,7 +370,7 @@ func TestPasswordExtractionEdgeCases(t *testing.T) {
 	}
 
 	// Unknown extension falls through.
-	docs, err = ExtractAllWithPassword("binary.bin", []byte{0, 1, 2}, "password")
+	_, err = ExtractAllWithPassword("binary.bin", []byte{0, 1, 2}, "password")
 	if err == nil || !errors.Is(err, ErrUnsupported) {
 		t.Errorf("ExtractAllWithPassword(bin) err = %v, want ErrUnsupported", err)
 	}
