@@ -6,6 +6,7 @@
 package webadmin
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -20,8 +21,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lgldsilva/semidx/internal/chat"
 	embedpkg "github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/jwtauth"
+	"github.com/lgldsilva/semidx/internal/rag"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -37,6 +40,13 @@ const (
 	loginMaxTries = 5
 )
 
+// ChatPipeline is the optional RAG chat backend for the project workspace.
+// Implemented by rag.Pipeline; nil disables chat in the SPA.
+type ChatPipeline interface {
+	Ask(ctx context.Context, question, project string, history []chat.Message) (*rag.Answer, error)
+	StreamAsk(ctx context.Context, question, project string, history []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error)
+}
+
 // Admin renders and serves the management UI.
 type Admin struct {
 	store   store.Store
@@ -47,6 +57,7 @@ type Admin struct {
 	csrfKey []byte
 	limiter *loginLimiter
 	jwt     *jwtauth.Issuer // nil when control tokens are disabled
+	chat    ChatPipeline    // nil when no chat LLM is configured
 }
 
 // New builds the admin UI. secureCookies must be true when the server is reached
@@ -94,6 +105,9 @@ func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies 
 	}, nil
 }
 
+// SetChat enables project workspace chat (RAG). Safe to call with nil to disable.
+func (a *Admin) SetChat(p ChatPipeline) { a.chat = p }
+
 // Handler returns a mux serving the /admin/* routes: JSON SPA APIs, legacy
 // HTML admin pages (keys/tokens/users), and the embedded React SPA for the
 // product surfaces (projects, search, CLI guide).
@@ -107,9 +121,15 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/api/system", a.protectAPI("", a.apiSystem))
 	mux.HandleFunc("GET /admin/api/projects", a.protectAPI("", a.projectsAPI))
 	mux.HandleFunc("POST /admin/api/projects", a.protectAPI("", a.apiCreateProject))
+	mux.HandleFunc("GET /admin/api/projects/{project}", a.protectAPI("", a.apiProjectDetail))
 	mux.HandleFunc("DELETE /admin/api/projects/{project}", a.protectAPI("", a.apiDeleteProject))
 	mux.HandleFunc("GET /admin/api/projects/{project}/status", a.protectAPI("", a.apiProjectStatus))
+	mux.HandleFunc("GET /admin/api/projects/{project}/files", a.protectAPI("", a.apiProjectFiles))
+	mux.HandleFunc("GET /admin/api/projects/{project}/files/content", a.protectAPI("", a.apiProjectFileContent))
+	mux.HandleFunc("GET /admin/api/projects/{project}/jobs", a.protectAPI("", a.apiProjectJobs))
 	mux.HandleFunc("POST /admin/api/projects/{project}/reindex", a.protectAPI("", a.apiReindex))
+	mux.HandleFunc("POST /admin/api/projects/{project}/chat", a.protectAPI("", a.apiProjectChat))
+	mux.HandleFunc("POST /admin/api/projects/{project}/chat/stream", a.protectAPI("", a.apiProjectChatStream))
 	mux.HandleFunc("GET /admin/api/jobs/{id}", a.protectAPI("", a.apiGetJob))
 	mux.HandleFunc("POST /admin/api/search", a.protectAPI("", a.apiSearch))
 

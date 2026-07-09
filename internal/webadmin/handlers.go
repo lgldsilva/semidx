@@ -2,7 +2,6 @@ package webadmin
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -256,39 +255,6 @@ func (a *Admin) mergeProjectSearches(ctx context.Context, projects []store.Proje
 		merged = merged[:topK]
 	}
 	return merged, fallback, nil
-}
-
-type projectItem struct {
-	Name       string `json:"name"`
-	Identity   string `json:"identity,omitempty"`
-	Path       string `json:"path,omitempty"`
-	Model      string `json:"model"`
-	Status     string `json:"status"`
-	SourceType string `json:"source_type,omitempty"`
-}
-
-func (a *Admin) projectsAPI(w http.ResponseWriter, r *http.Request, ac *authCtx) {
-	limit, offset := parseListParams(r)
-	projects, err := a.store.ListProjects(r.Context(), limit, offset)
-	if err != nil {
-		a.log.Error("list projects (api) failed", "err", err)
-		w.Header().Set(headerContentType, "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal error"})
-		return
-	}
-	items := make([]projectItem, 0, len(projects))
-	for _, p := range projects {
-		items = append(items, projectItem{
-			Name: p.Name, Identity: p.Identity, Path: p.Path,
-			Model: p.Model, Status: p.Status, SourceType: p.SourceType,
-		})
-	}
-	if items == nil {
-		items = []projectItem{}
-	}
-	w.Header().Set(headerContentType, "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"projects": items})
 }
 
 // --- API keys ----------------------------------------------------------------

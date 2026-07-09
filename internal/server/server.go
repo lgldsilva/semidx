@@ -64,14 +64,15 @@ func (s *Server) EnableJWT(secret string) error {
 
 // MountAdmin enables the web management UI at /admin. secureCookies must be true
 // when the server is reached over HTTPS (directly or via a TLS proxy). If JWT is
-// enabled (EnableJWT), the UI can also mint control tokens.
-func (s *Server) MountAdmin(secureCookies bool, csrfKey string) error {
+// enabled (EnableJWT), the UI can also mint control tokens. The returned Admin
+// can be further configured (e.g. SetChat) before the server starts serving.
+func (s *Server) MountAdmin(secureCookies bool, csrfKey string) (*webadmin.Admin, error) {
 	a, err := webadmin.New(s.store, s.emb, s.log, secureCookies, s.jwt, csrfKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	s.admin = a.Handler()
-	return nil
+	return a, nil
 }
 
 // New builds a Server. A nil logger falls back to slog.Default().

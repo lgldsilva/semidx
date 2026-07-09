@@ -645,20 +645,24 @@ func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server, showBoot
 		}
 		fmt.Fprintf(os.Stderr, "bootstrap admin token saved to %s (use --show-bootstrap-token to display it)\n", tokenFile)
 	}
-	admin, err := srv.EnsureBootstrapAdmin(ctx, d.cfg.BootstrapAdminUser, d.cfg.BootstrapAdminPassword)
+	adminUser, err := srv.EnsureBootstrapAdmin(ctx, d.cfg.BootstrapAdminUser, d.cfg.BootstrapAdminPassword)
 	if err != nil {
 		return fmt.Errorf("bootstrap admin: %w", err)
 	}
-	if admin != "" {
-		fmt.Fprintf(os.Stderr, "bootstrap web admin user created: %s\n", admin)
+	if adminUser != "" {
+		fmt.Fprintf(os.Stderr, "bootstrap web admin user created: %s\n", adminUser)
 	}
 	if d.cfg.JWTSecret != "" {
 		if err := srv.EnableJWT(d.cfg.JWTSecret); err != nil {
 			return fmt.Errorf("enable JWT control tokens: %w", err)
 		}
 	}
-	if err := srv.MountAdmin(d.cfg.CookieSecure, d.cfg.CSRFKey); err != nil {
+	adminUI, err := srv.MountAdmin(d.cfg.CookieSecure, d.cfg.CSRFKey)
+	if err != nil {
 		return fmt.Errorf("mount admin UI: %w", err)
+	}
+	if pipeline := d.buildAdminChatPipeline(); pipeline != nil {
+		adminUI.SetChat(pipeline)
 	}
 	return nil
 }

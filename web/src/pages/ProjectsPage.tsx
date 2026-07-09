@@ -1,13 +1,19 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, ApiError, type Job, type Project } from '../api'
 
 export function ProjectsPage() {
+  const navigate = useNavigate()
   const [projects, setProjects] = useState<Project[]>([])
   const [err, setErr] = useState('')
   const [flash, setFlash] = useState('')
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
   const [jobPoll, setJobPoll] = useState<Job | null>(null)
+  const [filter, setFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('')
+  const [sort, setSort] = useState<'name' | 'files' | 'status'>('name')
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -43,6 +49,37 @@ export function ProjectsPage() {
     return () => clearInterval(t)
   }, [jobPoll, reload])
 
+  const filtered = useMemo(() => {
+    let list = [...projects]
+    const q = filter.toLowerCase().trim()
+    if (q) {
+      list = list.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.identity || '').toLowerCase().includes(q) ||
+          (p.path || '').toLowerCase().includes(q) ||
+          (p.git_url || '').toLowerCase().includes(q),
+      )
+    }
+    if (statusFilter) list = list.filter((p) => p.status === statusFilter)
+    if (sourceFilter) list = list.filter((p) => p.source_type === sourceFilter)
+    list.sort((a, b) => {
+      if (sort === 'files') return (b.total_files || 0) - (a.total_files || 0)
+      if (sort === 'status') return (a.status || '').localeCompare(b.status || '')
+      return a.name.localeCompare(b.name)
+    })
+    return list
+  }, [projects, filter, statusFilter, sourceFilter, sort])
+
+  const statuses = useMemo(
+    () => [...new Set(projects.map((p) => p.status).filter(Boolean))].sort(),
+    [projects],
+  )
+  const sources = useMemo(
+    () => [...new Set(projects.map((p) => p.source_type).filter(Boolean))].sort() as string[],
+    [projects],
+  )
+
   async function onReindex(name: string) {
     setErr('')
     setFlash('')
@@ -73,8 +110,7 @@ export function ProjectsPage() {
         <div>
           <h1>Projects</h1>
           <p className="muted">
-            Server-side index. From the CLI: <code>semidx push</code>,{' '}
-            <code>semidx repo add</code>, or <code>semidx index --to-server</code>.
+            Server index workbench — open a project to browse files, explore, and chat.
           </p>
         </div>
         <button type="button" onClick={() => setShowCreate(true)}>
@@ -93,6 +129,52 @@ export function ProjectsPage() {
         </div>
       )}
 
+      <div className="filters card">
+        <div className="row">
+          <label className="grow">
+            Filter
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="name, identity, path, git url…"
+            />
+          </label>
+          <label>
+            Status
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">all</option>
+              {statuses.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Source
+            <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
+              <option value="">all</option>
+              {sources.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Sort
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as 'name' | 'files' | 'status')}
+            >
+              <option value="name">name</option>
+              <option value="files">files</option>
+              <option value="status">status</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
       {showCreate && (
         <CreateProjectForm
           onClose={() => setShowCreate(false)}
@@ -109,10 +191,9 @@ export function ProjectsPage() {
       <div className="card">
         {loading ? (
           <p className="muted">Loading…</p>
-        ) : projects.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <p className="muted">
-            No projects yet. Add a git repo here, or from the CLI:{' '}
-            <code>semidx repo add &lt;url&gt;</code> /{' '}
+            No projects match. Add a git repo or{' '}
             <code>semidx push --project .</code>
           </p>
         ) : (
@@ -123,16 +204,27 @@ export function ProjectsPage() {
                 <th>Source</th>
                 <th>Status</th>
                 <th>Model</th>
+                <th>Files</th>
+                <th>Last job</th>
                 <th />
               </tr>
             </thead>
             <tbody>
-              {projects.map((p) => (
+              {filtered.map((p) => (
                 <tr key={p.name}>
                   <td>
-                    <strong>{p.name}</strong>
+                    <Link to={`/projects/${encodeURIComponent(p.name)}`}>
+                      <strong>{p.name}</strong>
+                    </Link>
                     {p.identity && (
-                      <div className="muted small">{p.identity}</div>
+                      <div className="muted small" title={p.identity}>
+                        {p.identity.length > 48
+                          ? p.identity.slice(0, 48) + '…'
+                          : p.identity}
+                      </div>
+                    )}
+                    {p.license && (
+                      <div className="muted small">license: {p.license}</div>
                     )}
                   </td>
                   <td>
@@ -140,13 +232,66 @@ export function ProjectsPage() {
                     {p.git_url && (
                       <div className="muted small">{p.git_url}</div>
                     )}
+                    {p.branch && <div className="muted small">@{p.branch}</div>}
+                    {p.path && !p.git_url && (
+                      <div className="muted small">{p.path}</div>
+                    )}
                   </td>
                   <td>
                     <span className="pill">{p.status}</span>
                   </td>
-                  <td>{p.model || '—'}</td>
+                  <td>
+                    {p.model || '—'}
+                    {p.dims ? (
+                      <div className="muted small">{p.dims}d</div>
+                    ) : null}
+                    {p.last_commit ? (
+                      <div className="muted small">{p.last_commit.slice(0, 8)}</div>
+                    ) : null}
+                  </td>
+                  <td>{p.total_files ?? '—'}</td>
+                  <td className="small">
+                    {p.last_job
+                      ? `#${p.last_job.id} ${p.last_job.status}`
+                      : '—'}
+                  </td>
                   <td className="row-actions">
-                    <button type="button" className="link" onClick={() => void onReindex(p.name)}>
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() =>
+                        navigate(`/projects/${encodeURIComponent(p.name)}`)
+                      }
+                    >
+                      Open
+                    </button>
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() =>
+                        navigate(
+                          `/projects/${encodeURIComponent(p.name)}?tab=explore`,
+                        )
+                      }
+                    >
+                      Explore
+                    </button>
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() =>
+                        navigate(
+                          `/projects/${encodeURIComponent(p.name)}?tab=chat`,
+                        )
+                      }
+                    >
+                      Chat
+                    </button>
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() => void onReindex(p.name)}
+                    >
                       Reindex
                     </button>
                     <button
