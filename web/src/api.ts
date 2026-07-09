@@ -96,6 +96,22 @@ export type MeResponse = {
   csrf: string
 }
 
+export type TokenRow = {
+  id: number
+  name: string
+  scopes: string[]
+  kind: string
+  created_at?: string
+  expires_at?: string
+}
+
+export type UserRow = {
+  id: number
+  username: string
+  role: string
+  disabled: boolean
+}
+
 class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -180,10 +196,74 @@ export const api = {
     branch?: string
     index?: boolean
   }) =>
-    request<{ project: Project; job_id?: number }>('/admin/api/projects', {
+    request<{ project: Project; job_id?: number; push_hint?: string }>(
+      '/admin/api/projects',
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+    ),
+  listJobs: (limit = 20) =>
+    request<{
+      jobs: (Job & { project_id: number; project_name?: string })[]
+    }>(`/admin/api/jobs?limit=${limit}`).then((r) => r.jobs ?? []),
+  listKeys: () =>
+    request<{ keys: TokenRow[] }>('/admin/api/keys').then((r) => r.keys ?? []),
+  createKey: (name: string, scopes: string[]) =>
+    request<{ token: string; id: number; message: string }>('/admin/api/keys', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify({ name, scopes }),
     }),
+  revokeKey: (id: number) =>
+    request<{ ok: boolean }>(`/admin/api/keys/${id}`, { method: 'DELETE' }),
+  listTokens: () =>
+    request<{ enabled: boolean; tokens: TokenRow[] }>('/admin/api/tokens'),
+  createToken: (name: string, scopes: string[], ttl_days: number) =>
+    request<{ token: string; id: number; message: string }>('/admin/api/tokens', {
+      method: 'POST',
+      body: JSON.stringify({ name, scopes, ttl_days }),
+    }),
+  revokeToken: (id: number) =>
+    request<{ ok: boolean }>(`/admin/api/tokens/${id}`, { method: 'DELETE' }),
+  changePassword: (current: string, next: string) =>
+    request<{ ok: boolean }>('/admin/api/account/password', {
+      method: 'POST',
+      body: JSON.stringify({ current, new: next }),
+    }),
+  listUsers: () =>
+    request<{ users: UserRow[] }>('/admin/api/users').then((r) => r.users ?? []),
+  createUser: (username: string, password: string, role: string) =>
+    request<{ ok: boolean }>('/admin/api/users', {
+      method: 'POST',
+      body: JSON.stringify({ username, password, role }),
+    }),
+  setUserDisabled: (id: number, disabled: boolean) =>
+    request<{ ok: boolean }>(`/admin/api/users/${id}/disabled`, {
+      method: 'POST',
+      body: JSON.stringify({ disabled }),
+    }),
+  projectCallers: (name: string, path: string) =>
+    request<{ callers: string[]; count: number; package: string }>(
+      `/admin/api/projects/${encodeURIComponent(name)}/callers?path=${encodeURIComponent(path)}`,
+    ),
+  projectDeps: (name: string, path: string) =>
+    request<{ dependencies: string[]; count: number }>(
+      `/admin/api/projects/${encodeURIComponent(name)}/deps?path=${encodeURIComponent(path)}`,
+    ),
+  projectDeadCode: (name: string, limit = 100) =>
+    request<{
+      findings: {
+        symbol: string
+        kind: string
+        file: string
+        start_line: number
+        confidence: string
+      }[]
+      stats: { total: number; confirmed: number; public_api: number }
+      truncated: boolean
+    }>(
+      `/admin/api/projects/${encodeURIComponent(name)}/dead-code?limit=${limit}`,
+    ),
   deleteProject: (name: string) =>
     request<{ ok: boolean }>(
       `/admin/api/projects/${encodeURIComponent(name)}`,

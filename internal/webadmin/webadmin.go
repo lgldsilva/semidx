@@ -130,8 +130,26 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/api/projects/{project}/reindex", a.protectAPI("", a.apiReindex))
 	mux.HandleFunc("POST /admin/api/projects/{project}/chat", a.protectAPI("", a.apiProjectChat))
 	mux.HandleFunc("POST /admin/api/projects/{project}/chat/stream", a.protectAPI("", a.apiProjectChatStream))
+	mux.HandleFunc("GET /admin/api/jobs", a.protectAPI("", a.apiListAllJobs))
 	mux.HandleFunc("GET /admin/api/jobs/{id}", a.protectAPI("", a.apiGetJob))
 	mux.HandleFunc("POST /admin/api/search", a.protectAPI("", a.apiSearch))
+
+	// Settings
+	mux.HandleFunc("GET /admin/api/keys", a.protectAPI("", a.apiListKeys))
+	mux.HandleFunc("POST /admin/api/keys", a.protectAPI("", a.apiCreateKey))
+	mux.HandleFunc("DELETE /admin/api/keys/{id}", a.protectAPI("", a.apiRevokeKey))
+	mux.HandleFunc("GET /admin/api/tokens", a.protectAPI("", a.apiListTokens))
+	mux.HandleFunc("POST /admin/api/tokens", a.protectAPI("", a.apiCreateToken))
+	mux.HandleFunc("DELETE /admin/api/tokens/{id}", a.protectAPI("", a.apiRevokeToken))
+	mux.HandleFunc("POST /admin/api/account/password", a.protectAPI("", a.apiChangePassword))
+	mux.HandleFunc("GET /admin/api/users", a.protectAPI("admin", a.apiListUsers))
+	mux.HandleFunc("POST /admin/api/users", a.protectAPI("admin", a.apiCreateUser))
+	mux.HandleFunc("POST /admin/api/users/{id}/disabled", a.protectAPI("admin", a.apiSetUserDisabled))
+
+	// Analyze
+	mux.HandleFunc("GET /admin/api/projects/{project}/callers", a.protectAPI("", a.apiProjectCallers))
+	mux.HandleFunc("GET /admin/api/projects/{project}/deps", a.protectAPI("", a.apiProjectDeps))
+	mux.HandleFunc("GET /admin/api/projects/{project}/dead-code", a.protectAPI("", a.apiProjectDeadCode))
 
 	// --- Legacy form auth (POST) for older HTML pages; SPA uses /admin/api/* ---
 	// GET /admin/login is served by the SPA (client route), not the HTML form.

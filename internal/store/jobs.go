@@ -133,7 +133,7 @@ func (s *PgStore) GetJob(ctx context.Context, id int) (*Job, error) {
 }
 
 // ListRecentJobs returns the newest jobs for a project (highest id first).
-// limit defaults to 10 and is capped at 50.
+// limit defaults to 10 and is capped at 50. projectID 0 lists across all projects.
 func (s *PgStore) ListRecentJobs(ctx context.Context, projectID, limit int) ([]Job, error) {
 	if limit <= 0 {
 		limit = 10
@@ -141,14 +141,17 @@ func (s *PgStore) ListRecentJobs(ctx context.Context, projectID, limit int) ([]J
 	if limit > 50 {
 		limit = 50
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, project_id, type, status, COALESCE(error, ''), files_indexed, chunks_created,
-			COALESCE(payload, ''), deleted_files, error_count
-		FROM index_jobs
-		WHERE project_id = $1
-		ORDER BY id DESC
-		LIMIT $2
-	`, projectID, limit)
+	const cols = `id, project_id, type, status, COALESCE(error, ''), files_indexed, chunks_created,
+			COALESCE(payload, ''), deleted_files, error_count`
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if projectID > 0 {
+		rows, err = s.pool.Query(ctx, `SELECT `+cols+` FROM index_jobs WHERE project_id = $1 ORDER BY id DESC LIMIT $2`, projectID, limit)
+	} else {
+		rows, err = s.pool.Query(ctx, `SELECT `+cols+` FROM index_jobs ORDER BY id DESC LIMIT $1`, limit)
+	}
 	if err != nil {
 		return nil, err
 	}

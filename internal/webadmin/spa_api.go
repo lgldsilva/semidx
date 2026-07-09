@@ -14,6 +14,8 @@ import (
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
+// ensure strconv used in this file (apiListAllJobs).
+
 // writeJSON writes a JSON body with the given status.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set(headerContentType, "application/json; charset=utf-8")
@@ -149,24 +151,36 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 	if body.SourceType == "" {
 		body.SourceType = "git"
 	}
-	if body.SourceType != "git" {
-		writeJSONErr(w, http.StatusBadRequest, "only source_type=git is supported in the admin UI (use semidx push for file uploads)")
-		return
-	}
-	body.GitURL = strings.TrimSpace(body.GitURL)
-	if body.GitURL == "" {
-		writeJSONErr(w, http.StatusBadRequest, "git_url is required")
+	if body.SourceType != "git" && body.SourceType != "push" {
+		writeJSONErr(w, http.StatusBadRequest, "source_type must be git or push")
 		return
 	}
 	if body.Model == "" {
 		body.Model = "bge-m3"
 	}
-	if body.Branch == "" {
-		body.Branch = "main"
-	}
 	name := strings.TrimSpace(body.Name)
-	if name == "" {
-		name = strings.TrimSuffix(path.Base(strings.TrimRight(body.GitURL, "/")), ".git")
+	body.GitURL = strings.TrimSpace(body.GitURL)
+	body.Branch = strings.TrimSpace(body.Branch)
+	if body.SourceType == "git" {
+		if body.GitURL == "" {
+			writeJSONErr(w, http.StatusBadRequest, "git_url is required for source_type=git")
+			return
+		}
+		if body.Branch == "" {
+			body.Branch = "main"
+		}
+		if name == "" {
+			name = strings.TrimSuffix(path.Base(strings.TrimRight(body.GitURL, "/")), ".git")
+		}
+	} else {
+		// push: empty shell project; client fills via semidx push
+		body.GitURL = ""
+		body.Branch = ""
+		if name == "" {
+			writeJSONErr(w, http.StatusBadRequest, "name is required for source_type=push")
+			return
+		}
+		body.Index = false // no server-side clone for push projects
 	}
 	if name == "" || name == "." || name == "/" {
 		writeJSONErr(w, http.StatusBadRequest, "could not derive project name — set name explicitly")
@@ -187,7 +201,7 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 	out := map[string]any{
 		"project": projectToItem(*proj),
 	}
-	if body.Index {
+	if body.Index && body.SourceType == "git" {
 		jobID, jerr := a.store.EnqueueJob(r.Context(), proj.ID, "full")
 		if jerr != nil {
 			a.log.Error("enqueue job failed", "err", jerr)
@@ -196,7 +210,43 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 		}
 		out["job_id"] = jobID
 	}
+	if body.SourceType == "push" {
+		out["push_hint"] = "semidx login <url> --token <key> && semidx push --project . --name " + name
+	}
 	writeJSON(w, http.StatusCreated, out)
+}
+
+func (a *Admin) apiListAllJobs(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	_ = ac
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 20
+	}
+	jobs, err := a.store.ListRecentJobs(r.Context(), 0, limit)
+	if err != nil {
+		a.log.Error("list all jobs failed", "err", err)
+		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
+		return
+	}
+	// Attach project names when possible.
+	type jobRow struct {
+		jobItem
+		ProjectID   int    `json:"project_id"`
+		ProjectName string `json:"project_name,omitempty"`
+	}
+	// Build id→name map once.
+	projects, _ := a.store.ListProjects(r.Context(), 0, 0)
+	names := map[int]string{}
+	for _, p := range projects {
+		names[p.ID] = p.Name
+	}
+	rows := make([]jobRow, 0, len(jobs))
+	for _, j := range jobs {
+		rows = append(rows, jobRow{
+			jobItem: jobToItem(j), ProjectID: j.ProjectID, ProjectName: names[j.ProjectID],
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": rows})
 }
 
 func (a *Admin) apiDeleteProject(w http.ResponseWriter, r *http.Request, ac *authCtx) {
