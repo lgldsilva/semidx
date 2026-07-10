@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/zricethezav/gitleaks/v8/detect"
 	"github.com/zricethezav/gitleaks/v8/report"
@@ -31,9 +32,13 @@ const ignoreFile = ".semidx-secrets-ignore"
 const inlineAnnotation = "semidx:ignore-secret"
 
 // Detector wraps a gitleaks detector for project-level secret scanning.
+//
+// Scan (hence isIgnored) is called concurrently by the indexer's file workers,
+// so the ignoreSet memoisation cache is guarded by mu.
 type Detector struct {
 	gitleaks  *detect.Detector
 	ignores   []string        // glob patterns from .semidx-secrets-ignore
+	mu        sync.Mutex      // guards ignoreSet
 	ignoreSet map[string]bool // resolved paths cached during a scan
 }
 
@@ -114,19 +119,20 @@ func (d *Detector) AddGitleaksIgnore(path string) error {
 	return d.gitleaks.AddGitleaksIgnore(path)
 }
 
-// Close releases any resources held by the detector.
-func (d *Detector) Close() {
-	if d.gitleaks != nil {
-		_ = d.gitleaks.Sema // not owned — no-op for safety
-	}
-}
+// Close releases any resources held by the detector. The underlying gitleaks
+// detector owns no closable resources here, so this is a nil-safe no-op kept
+// for symmetry with callers that defer Close.
+func (d *Detector) Close() {}
 
 // ---------------------------------------------------------------------------
 // Ignore machinery
 // ---------------------------------------------------------------------------
 
 // isIgnored reports whether path matches any pattern in the ignore file.
+// Safe for concurrent use: the memoisation cache is guarded by d.mu.
 func (d *Detector) isIgnored(path string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.ignoreSet[path] {
 		return true
 	}
