@@ -110,7 +110,7 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-SRCH-05 | Hard upper bound on `graph_depth` and BFS cost | **done** | Clamp + max expanded paths |
 | REQ-SRCH-06 | Project resolution: path, name, CWD enclosing project, or all projects with labels | **done** | |
 | REQ-SRCH-07 | Worktree filter for git projects; ignored for docs/push projects | **done** | Gotcha documented in AGENTS.md |
-| REQ-SRCH-08 | User-safe error messages (no raw DB/provider strings to clients) | **partial** | Search API + admin job/ingest surfaces now sanitize raw internal errors |
+| REQ-SRCH-08 | User-safe error messages (no raw DB/provider strings to clients) | **done** | HTTP search API, admin job/ingest, admin all-projects search, and the standalone MCP backend all sanitize raw internal errors; CLI-local keeps raw errors on stderr (operator on their own index, no trust boundary) |
 | REQ-SRCH-09 | Human and grep-friendly formatters with `file:line` and understandable scores | **done** | Human formatter shows explicit raw+percent score; sgrep `file:line:content` contract preserved |
 | REQ-SRCH-10 | Relevance benchmark suite (gold queries + scoring), not only latency benches | **done** | `semidx bench` + `docs/bench-queries.json` |
 | REQ-SRCH-11 | Optional re-ranker (e.g. local cross-encoder) on top-K | **todo** | |
