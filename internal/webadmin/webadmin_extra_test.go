@@ -19,13 +19,23 @@ import (
 )
 
 // fakeEmbedder is a minimal Embedder for search-page tests.
-type fakeEmbedder struct{ embedpkg.Embedder }
+type fakeEmbedder struct{}
 
 func (fakeEmbedder) ModelInfo(_ context.Context, m string) (*embedpkg.ModelInfo, error) {
 	return &embedpkg.ModelInfo{Name: m, Dims: 3}, nil
 }
 func (fakeEmbedder) EmbedSingle(context.Context, string, string) ([]float32, error) {
 	return []float32{1, 0, 0}, nil
+}
+func (fakeEmbedder) Embed(_ context.Context, _ string, inputs ...string) ([][]float32, error) {
+	out := make([][]float32, len(inputs))
+	for i := range inputs {
+		out[i] = []float32{1, 0, 0}
+	}
+	return out, nil
+}
+func (fakeEmbedder) ListModels(context.Context) ([]string, error) {
+	return []string{"bge-m3"}, nil
 }
 
 // newAdminWith builds an admin backed by a fresh store with the given embedder

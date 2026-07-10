@@ -418,3 +418,75 @@ func TestSearchKeywordsEmptyQuery(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectCommitRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newTestStore(t)
+
+	projectID, _ := s.UpsertProject(ctx, "commit", "/tmp/cmt", "bge-m3", 0)
+	if sha, err := s.GetProjectCommit(ctx, projectID); err != nil || sha != "" {
+		t.Fatalf("initial commit = %q err=%v", sha, err)
+	}
+	if err := s.UpdateProjectCommit(ctx, projectID, "deadbeef"); err != nil {
+		t.Fatalf("UpdateProjectCommit: %v", err)
+	}
+	if sha, err := s.GetProjectCommit(ctx, projectID); err != nil || sha != "deadbeef" {
+		t.Fatalf("commit = %q err=%v", sha, err)
+	}
+}
+
+func TestFetchGraphPathsBFS(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newTestStore(t)
+
+	projectID, _ := s.UpsertProject(ctx, "bfs", "/tmp/bfs", "bge-m3", 0)
+	if err := s.InsertFileDependencies(ctx, projectID, "main.go", []string{"util.go"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertFileDependencies(ctx, projectID, "util.go", []string{"config.go"}); err != nil {
+		t.Fatal(err)
+	}
+
+	paths, err := s.FetchGraphPathsBFS(ctx, projectID, []string{"main.go"}, 2)
+	if err != nil {
+		t.Fatalf("FetchGraphPathsBFS: %v", err)
+	}
+	if len(paths) < 2 {
+		t.Fatalf("paths = %+v, want neighbors at depth 1+", paths)
+	}
+	if paths["util.go"] != 1 {
+		t.Errorf("util.go depth = %d, want 1", paths["util.go"])
+	}
+
+	if got, err := s.FetchGraphPathsBFS(ctx, projectID, nil, 2); err != nil || got != nil {
+		t.Fatalf("empty seeds = %+v err=%v", got, err)
+	}
+}
+
+func TestEmbeddingCacheRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newTestStore(t)
+
+	if err := s.EnsureEmbeddingCacheTable(ctx, 3); err != nil {
+		t.Fatal(err)
+	}
+	hashes := []string{"hash-a", "hash-b"}
+	embs := [][]float32{{1, 0, 0}, {0, 1, 0}}
+	if err := s.InsertEmbeddingCache(ctx, hashes, "bge-m3", embs, 3); err != nil {
+		t.Fatalf("InsertEmbeddingCache: %v", err)
+	}
+	got, err := s.LookupEmbeddingCache(ctx, hashes, "bge-m3", 3)
+	if err != nil {
+		t.Fatalf("LookupEmbeddingCache: %v", err)
+	}
+	if len(got) != 2 || len(got["hash-a"]) != 3 {
+		t.Fatalf("cache = %+v", got)
+	}
+	n, err := s.PruneEmbeddingCache(ctx, 3)
+	if err != nil || n != 2 {
+		t.Fatalf("PruneEmbeddingCache = %d err=%v", n, err)
+	}
+}
