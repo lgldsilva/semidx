@@ -60,15 +60,25 @@ func (c *QueryCache) Set(key string, results []store.SearchResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	entry := &cacheEntry{
+		results:   results,
+		expiresAt: time.Now().Add(c.ttl),
+	}
+
+	// Updating an existing key must not append to the FIFO list again: doing so
+	// grew c.keys unboundedly and let evictOne drop a still-live entry whose
+	// key had a duplicate later in the list.
+	if _, exists := c.entries[key]; exists {
+		c.entries[key] = entry
+		return
+	}
+
 	// Evict oldest if at capacity.
 	if len(c.entries) >= c.maxSize {
 		c.evictOne()
 	}
 
-	c.entries[key] = &cacheEntry{
-		results:   results,
-		expiresAt: time.Now().Add(c.ttl),
-	}
+	c.entries[key] = entry
 	c.keys = append(c.keys, key)
 }
 

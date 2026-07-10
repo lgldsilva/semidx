@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 const (
@@ -15,6 +16,9 @@ const (
 )
 
 var (
+	// profileMu guards activeProfile, which may be read by server handlers
+	// while the CLI sets it.
+	profileMu sync.RWMutex
 	// activeProfile holds the currently selected config profile, if any.
 	activeProfile string
 
@@ -31,18 +35,26 @@ var (
 func SetProfile(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" || name == "default" {
+		profileMu.Lock()
 		activeProfile = ""
+		profileMu.Unlock()
 		return nil
 	}
 	if !profileNameRe.MatchString(name) {
 		return ErrInvalidProfile
 	}
+	profileMu.Lock()
 	activeProfile = name
+	profileMu.Unlock()
 	return nil
 }
 
 // Profile returns the active profile name, or "" if no profile is selected.
-func Profile() string { return activeProfile }
+func Profile() string {
+	profileMu.RLock()
+	defer profileMu.RUnlock()
+	return activeProfile
+}
 
 // semidxConfigDir returns the directory containing semidx config files.
 // When SEMIDX_CONFIG_DIR is set that directory is used directly; otherwise
@@ -84,8 +96,8 @@ func UserEnvPath() (string, error) {
 		return "", err
 	}
 	name := "semidx.env"
-	if activeProfile != "" {
-		name = "semidx-" + activeProfile + ".env"
+	if p := Profile(); p != "" {
+		name = "semidx-" + p + ".env"
 	}
 	return filepath.Join(dir, name), nil
 }
@@ -98,8 +110,8 @@ func ClientConfigPath() (string, error) {
 		return "", err
 	}
 	name := "config.yaml"
-	if activeProfile != "" {
-		name = "config-" + activeProfile + ".yaml"
+	if p := Profile(); p != "" {
+		name = "config-" + p + ".yaml"
 	}
 	return filepath.Join(dir, name), nil
 }
