@@ -78,6 +78,45 @@ This document records the main architectural decisions made during the evolution
 
 ---
 
+## 7. Global Embedding De-duplication (Relational Dictionary)
+
+- **Context**: The same file across worktrees/subprojects (monorepos, shared
+  libraries) embeds the same text repeatedly. The **`embedding_cache_<dims>`**
+  table (Postgres) / **`embedding_cache`** table (SQLite), keyed by
+  `(input_hash, model)`, already **skips the redundant embedding API call** on a
+  hit — so RF04 (bypass) and RF01/RF02 (dictionary keyed by content-hash+model)
+  are effectively met. What remains (RF03, storage efficiency) is that
+  `chunks_<dims>` still stores the **embedding vector redundantly** per project.
+- **Decision**: `chunks_<dims>` stops storing the `embedding` column and instead
+  references the dictionary by `input_hash`. Vector search joins
+  `chunks → embedding_cache` on `(input_hash, model)` to fetch the vector.
+- **Key subtlety** (`input_hash` ≠ `hash(content)`): the dictionary is keyed by
+  the hash of the **embedder input** (symbol-enriched, see the indexer), not the
+  raw chunk content. So the chunk must carry the **embed-input hash**, and the
+  raw `content` **stays in `chunks_<dims>`** (needed for display and for the
+  keyword/FTS path — moving it would force an FTS5/trigram rework for marginal
+  gain). Only the vector is de-duplicated.
+- **SQLite** (validated without Docker): brute-force cosine already scans the
+  project's chunks in Go, so it just joins to the dictionary for the vector.
+  No ANN, no recall concern — implemented and unit-tested first as the reference.
+- **Postgres — open decision (needs Docker + benchmark, RNF01 ≤5 ms/batch)**:
+  moving the vector to the shared dictionary means the **HNSW ANN index lives on
+  the dictionary**, and per-project search becomes *ANN-over-global-dictionary +
+  join-to-chunks-filtered-by-project*. A **global** ANN returns the top-K across
+  **all** projects, which can miss a project's best local matches (recall
+  regression for multi-project servers). Options to benchmark before cutover:
+  (a) keep a per-project HNSW (partial index / filtered), (b) over-fetch then
+  re-rank after the project join, (c) keep the per-project `embedding` column on
+  Postgres until (a)/(b) proves out. **Until benchmarked, Postgres retains the
+  current per-project embedding**; the storage win lands first on SQLite.
+- **Migration & GC**: additive — add `input_hash` to `chunks_<dims>`, backfill,
+  switch reads, then drop the `embedding` column in a later step (no big-bang).
+  RF05 GC: a dictionary row is orphaned when no chunk references its
+  `(input_hash, model)`; prune via `semidx cache` (LRU/TTL or orphan sweep).
+  RNF02: project/file delete cascades chunk rows only — never the dictionary.
+
+---
+
 ## 🚫 What we will NOT do (for now)
 
 - **`models` table in the database**: `InferDims` (name→dimension map) is already the single source in `internal/embed`; moving it to a database table would couple `embed`→`store` for marginal benefit. Re-evaluate if/when per-model config (provider/local) without recompilation is needed.
