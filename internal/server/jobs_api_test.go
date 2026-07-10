@@ -28,8 +28,8 @@ func TestWriteJobForProjectMismatch(t *testing.T) {
 	t.Parallel()
 	readTok := &store.Token{Scopes: []string{"read"}}
 	fs := &fakeStore{
-		token: readTok,
-		job:   &store.Job{ID: 5, ProjectID: 1, Status: "done", Type: "full"},
+		token:    readTok,
+		job:      &store.Job{ID: 5, ProjectID: 1, Status: "done", Type: "full"},
 		projByID: &store.Project{ID: 1, Name: "real"},
 	}
 	srv := New(fs, fakeEmbedder{}, nil)
@@ -43,8 +43,8 @@ func TestWriteJobForProjectFailedJob(t *testing.T) {
 	t.Parallel()
 	readTok := &store.Token{Scopes: []string{"read"}}
 	fs := &fakeStore{
-		token: readTok,
-		job:   &store.Job{ID: 6, ProjectID: 1, Status: "failed", Type: "full", Error: "boom"},
+		token:    readTok,
+		job:      &store.Job{ID: 6, ProjectID: 1, Status: "failed", Type: "full", Error: "boom"},
 		projByID: &store.Project{ID: 1, Name: "p"},
 	}
 	srv := New(fs, fakeEmbedder{}, nil)

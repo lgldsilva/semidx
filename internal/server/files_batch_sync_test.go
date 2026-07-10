@@ -75,7 +75,7 @@ func TestHandleFilesDiff(t *testing.T) {
 	t.Parallel()
 	writeTok := &store.Token{Scopes: []string{"write"}}
 	srv := New(&fakeStore{
-		token: writeTok,
+		token:   writeTok,
 		project: &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
 		fileHashes: map[string]string{
 			"keep.go": "aaa",

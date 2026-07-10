@@ -38,14 +38,14 @@ type fakeStore struct {
 	created      *store.User          // last CreateUser call
 
 	// error-injection fields (all nil/zero = success path)
-	listErr     error // ListProjects error
-	getErr      error // GetProject generic (non-NotFound) error
-	tokenErr    error // TokenByHash error
-	fileHashErr error // ListFileHashes error
+	listErr         error // ListProjects error
+	getErr          error // GetProject generic (non-NotFound) error
+	tokenErr        error // TokenByHash error
+	fileHashErr     error // ListFileHashes error
 	enqueueErr      error // EnqueueJob error
 	enqueueBatchErr error // EnqueueBatchJob error
 	jobErr          error // GetJob generic (non-NotFound) error
-	ensureErr   error // EnsureChunksTable error
+	ensureErr       error // EnsureChunksTable error
 
 	// bootstrap-token fields
 	tokenCount    int    // CountTokens result

@@ -356,7 +356,7 @@ func TestPipelineDefaultConfig(t *testing.T) {
 
 type streamChatClient struct {
 	fakeChatClient
-	chunks <-chan chat.StreamChunk
+	chunks    <-chan chat.StreamChunk
 	streamErr error
 }
 

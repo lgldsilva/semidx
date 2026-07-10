@@ -153,9 +153,3 @@ func extractJSONField(t *testing.T, body, key string) string {
 	}
 	return ""
 }
-
-func getJSON(t *testing.T, c *http.Client, url string) string {
-	t.Helper()
-	_, body := getBody(t, c, url)
-	return body
-}
