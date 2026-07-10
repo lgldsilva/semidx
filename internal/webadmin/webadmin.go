@@ -177,7 +177,31 @@ func (a *Admin) Handler() http.Handler {
 	spa := spaFileServer()
 	mux.Handle("GET /admin/{$}", spa)
 	mux.Handle("GET /admin/", spa)
-	return mux
+	return securityHeaders(mux)
+}
+
+// securityHeaders wraps the admin/SPA handler with defence-in-depth response
+// headers. The CSP matches the Vite build: scripts and styles are served from
+// /admin/assets (self); React sets inline style attributes, so styles also need
+// 'unsafe-inline'. frame-ancestors 'none' blocks clickjacking.
+func securityHeaders(next http.Handler) http.Handler {
+	const csp = "default-src 'self'; " +
+		"script-src 'self'; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data:; " +
+		"font-src 'self'; " +
+		"connect-src 'self'; " +
+		"frame-ancestors 'none'; " +
+		"base-uri 'self'; " +
+		"form-action 'self'"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", csp)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // authCtx carries the resolved session for a request.
