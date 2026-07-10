@@ -61,6 +61,9 @@ func TestSymbolAtLine(t *testing.T) {
 	if got := symbolAtLine(syms, 3); got == nil || got.Name != "Foo" {
 		t.Fatalf("symbolAtLine = %#v", got)
 	}
+	if got := symbolAtLine(syms, 15); got == nil || got.Name != "Foo" {
+		t.Fatalf("symbolAtLine fallback = %#v", got)
+	}
 }
 
 func TestGoPackageName(t *testing.T) {

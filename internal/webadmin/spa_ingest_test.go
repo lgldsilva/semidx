@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -55,6 +57,29 @@ func TestReadZipUpload(t *testing.T) {
 	if msg != "" {
 		t.Fatalf("zip read = %d %q", status, msg)
 	}
+}
+
+func TestIngestIndexZipEntries(t *testing.T) {
+	fs := newFakeStore()
+	fs.projects = []store.Project{{ID: 1, Name: "demo", Model: "bge-m3"}}
+	idx := indexing.NewIndexer(fs, fakeEmbedder{}, 3, indexing.IndexerOpts{})
+	data := makeTestZip(t, map[string]string{
+		"src/a.go": "package main\n",
+		"../x":     "skip",
+	})
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := ingestIndexZipEntries(context.Background(), testLogger(t), idx, 1, "m", zr)
+	if res.indexed != 1 || res.errs == 0 {
+		t.Fatalf("indexed=%d errs=%d errors=%v", res.indexed, res.errs, res.fileErrors)
+	}
+}
+
+func testLogger(t *testing.T) *slog.Logger {
+	t.Helper()
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 func TestIngestBatchAPI(t *testing.T) {

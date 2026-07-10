@@ -108,6 +108,73 @@ func TestFormatSearch(t *testing.T) {
 	}
 }
 
+func TestFormatSearchStructuredAndMinimal(t *testing.T) {
+	t.Parallel()
+	empty := formatSearchStructured(&SearchOutput{Project: "p"})
+	if !strings.Contains(empty, `"total_results":0`) {
+		t.Fatalf("structured empty=%s", empty)
+	}
+	out := &SearchOutput{
+		Project: "demo",
+		Results: []Hit{{Path: "main.go", StartLine: 3, EndLine: 5, Score: 0.8, Content: "func main() {}"}},
+		TookMS:  12,
+	}
+	structured := formatSearchStructured(out)
+	if !strings.Contains(structured, `"language":"go"`) || !strings.Contains(structured, `"file":"main.go"`) {
+		t.Fatalf("structured=%s", structured)
+	}
+	minimal := formatSearchMinimal(out)
+	if !strings.Contains(minimal, `"f":"main.go"`) || !strings.Contains(minimal, `"l":"3-5"`) {
+		t.Fatalf("minimal=%s", minimal)
+	}
+}
+
+func TestDetectLanguage(t *testing.T) {
+	t.Parallel()
+	if got := detectLanguage("x.go"); got != "go" {
+		t.Fatalf("go=%q", got)
+	}
+	if got := detectLanguage("app.tsx"); got != "tsx" {
+		t.Fatalf("tsx=%q", got)
+	}
+	if got := detectLanguage("README"); got != "" {
+		t.Fatalf("unknown=%q", got)
+	}
+}
+
+func TestSearchHandlerFormats(t *testing.T) {
+	t.Parallel()
+	b := &stubBackend{
+		searchFunc: func(_ context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchOutput, error) {
+			return &SearchOutput{
+				Project: project,
+				Results: []Hit{{Path: "a.go", StartLine: 1, EndLine: 2, Score: 0.9, Content: "code"}},
+			}, nil
+		},
+	}
+	server := New(b)
+	serverT, clientT := mcp.NewInMemoryTransports()
+	ctx := context.Background()
+	if _, err := server.Connect(ctx, serverT, nil); err != nil {
+		t.Fatal(err)
+	}
+	cli := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	sess, err := cli.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	for _, format := range []string{"structured", "minimal"} {
+		text, isErr := callText(t, sess, "semantic_search", map[string]any{
+			"project": "app", "query": "x", "format": format,
+		})
+		if isErr || !strings.Contains(text, `"`) {
+			t.Fatalf("format=%s isErr=%v text=%q", format, isErr, text)
+		}
+	}
+}
+
 func TestFormatProjects(t *testing.T) {
 	t.Parallel()
 

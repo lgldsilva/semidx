@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,6 +88,29 @@ func TestEnsureBootstrapAdmin(t *testing.T) {
 		name, err := New(fs, fakeEmbedder{}, nil).EnsureBootstrapAdmin(context.Background(), "admin", "pw")
 		if err != nil || name != "" || fs.created != nil {
 			t.Errorf("expected skip; got name=%q err=%v created=%+v", name, err, fs.created)
+		}
+	})
+}
+
+func TestEnsureBootstrapTokenSuccess(t *testing.T) {
+	t.Run("uses env token when provided", func(t *testing.T) {
+		fs := &fakeStore{tokenCount: 0}
+		srv := New(fs, fakeEmbedder{}, nil)
+		got, err := srv.EnsureBootstrapToken(context.Background(), "semidx_custom_token")
+		if err != nil || got != "semidx_custom_token" {
+			t.Fatalf("got=%q err=%v", got, err)
+		}
+		if fs.lastTokName != "bootstrap-admin" || fs.lastTokHash != HashToken("semidx_custom_token") {
+			t.Fatalf("CreateToken args name=%q hash=%q", fs.lastTokName, fs.lastTokHash)
+		}
+	})
+
+	t.Run("generates random token when env empty", func(t *testing.T) {
+		fs := &fakeStore{tokenCount: 0}
+		srv := New(fs, fakeEmbedder{}, nil)
+		got, err := srv.EnsureBootstrapToken(context.Background(), "")
+		if err != nil || got == "" || !strings.HasPrefix(got, "semidx_") {
+			t.Fatalf("got=%q err=%v", got, err)
 		}
 	})
 }

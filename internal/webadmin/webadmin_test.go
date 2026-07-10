@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/passwd"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -43,7 +44,11 @@ type fakeStore struct {
 	fileCount  int
 	jobs       []store.Job
 	chunks     []store.SearchResult // FetchChunksByPath
+	graph      map[string][]string  // FetchGraphNeighbors
 	nextJob    int
+
+	projectCommit string // GetProjectCommit
+	chunkCount    int    // CountProjectChunks
 
 	// error-injection fields (all nil = success/normal path)
 	listProjectsErr error
@@ -51,6 +56,7 @@ type fakeStore struct {
 	createTokErr    error
 	createJWTErr    error
 	revokeErr       error // generic RevokeUserToken error
+	createErr       error // CreateProject error
 	listUsersErr    error
 	createUserErr   error // generic CreateUser error (distinct from ErrUserExists)
 	setPwErr        error
@@ -305,7 +311,11 @@ func (f *fakeStore) ListFileHashes(context.Context, int) (map[string]string, err
 }
 
 func (f *fakeStore) GetProjectCommit(context.Context, int) (string, error) {
-	return "", nil
+	return f.projectCommit, nil
+}
+
+func (f *fakeStore) CountProjectChunks(context.Context, int, int) (int, error) {
+	return f.chunkCount, nil
 }
 
 func (f *fakeStore) ListRecentJobs(_ context.Context, _ int, limit int) ([]store.Job, error) {
@@ -320,6 +330,9 @@ func (f *fakeStore) FetchChunksByPath(context.Context, int, string, int, int) ([
 }
 
 func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gitURL, branch string, dims int) (*store.Project, error) {
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	p := store.Project{
 		ID: len(f.projects) + 1, Name: name, Model: model, SourceType: sourceType,
 		GitURL: gitURL, Branch: branch, Status: "registered", Identity: name, Dims: dims,
@@ -353,6 +366,9 @@ func (f *fakeStore) GetJob(_ context.Context, id int) (*store.Job, error) {
 }
 
 func (f *fakeStore) FetchGraphNeighbors(context.Context, int) (map[string][]string, error) {
+	if f.graph != nil {
+		return f.graph, nil
+	}
 	return map[string][]string{}, nil
 }
 
