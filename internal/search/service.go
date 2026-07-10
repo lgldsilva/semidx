@@ -23,8 +23,9 @@ import (
 
 // Service runs semantic searches against an IndexStore using an Embedder.
 type Service struct {
-	store store.IndexStore
-	emb   embed.Embedder
+	store    store.IndexStore
+	emb      embed.Embedder
+	reranker Reranker // optional top-K reranker (REQ-SRCH-11); nil = disabled
 }
 
 // NewService wires a search Service.
@@ -120,6 +121,12 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+
+	// Optional top-K rerank (REQ-SRCH-11), applied to the base results before
+	// graph expansion so the strongest matches seed the BFS. No-op when disabled.
+	if s.reranker != nil && len(resp.Results) > 1 {
+		resp.Results = s.reranker.Rerank(ctx, req.Query, resp.Results)
 	}
 
 	if req.Graph {
