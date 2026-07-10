@@ -808,8 +808,9 @@ func sleepBackoff(ctx context.Context, attempt int) error {
 }
 
 // runGitLog executes git log -p with an optional --since window and returns the
-// raw output. The projectPath is validated with safeGitDir first.
-func runGitLog(projectPath, gitSince string) ([]byte, error) {
+// raw output. The projectPath is validated with safeGitDir first. ctx cancels a
+// long-running log when the job or server shuts down.
+func runGitLog(ctx context.Context, projectPath, gitSince string) ([]byte, error) {
 	if !safeGitDir(projectPath) {
 		return nil, fmt.Errorf("unsafe git project path: %q", projectPath)
 	}
@@ -820,14 +821,14 @@ func runGitLog(projectPath, gitSince string) ([]byte, error) {
 		}
 		args = append(args, "--since="+gitSince)
 	}
-	cmd := exec.Command("git")
+	cmd := exec.CommandContext(ctx, "git")
 	cmd.Args = append([]string{"git"}, args...)
 	cmd.Env = gitenv.Clean(cmd.Environ())
 	return cmd.Output()
 }
 
 func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectPath, model string) error {
-	out, err := runGitLog(projectPath, idx.gitSince)
+	out, err := runGitLog(ctx, projectPath, idx.gitSince)
 	if err != nil {
 		return fmt.Errorf("git log -p: %w", err)
 	}
