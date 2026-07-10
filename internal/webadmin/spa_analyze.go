@@ -12,6 +12,10 @@ import (
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
+// msgGraphLoadFailed is the sanitized error returned when the dependency graph
+// cannot be loaded (shared by the callers/deps/graph-stats handlers).
+const msgGraphLoadFailed = "could not load dependency graph"
+
 // apiProjectCallers returns files that import the package directory of the given file.
 // Query: path=internal/auth/token.go
 func (a *Admin) apiProjectCallers(w http.ResponseWriter, r *http.Request, ac *authCtx) {
@@ -34,7 +38,7 @@ func (a *Admin) apiProjectCallers(w http.ResponseWriter, r *http.Request, ac *au
 	graph, err := a.store.FetchGraphNeighbors(r.Context(), proj.ID)
 	if err != nil {
 		a.log.Error("fetch graph failed", "err", err)
-		writeJSONErr(w, http.StatusInternalServerError, "could not load dependency graph")
+		writeJSONErr(w, http.StatusInternalServerError, msgGraphLoadFailed)
 		return
 	}
 	fileDir := filepath.ToSlash(filepath.Dir(filePath))
@@ -135,7 +139,7 @@ func (a *Admin) apiProjectDeps(w http.ResponseWriter, r *http.Request, ac *authC
 	}
 	graph, err := a.store.FetchGraphNeighbors(r.Context(), proj.ID)
 	if err != nil {
-		writeJSONErr(w, http.StatusInternalServerError, "could not load dependency graph")
+		writeJSONErr(w, http.StatusInternalServerError, msgGraphLoadFailed)
 		return
 	}
 	deps := graph[filePath]
@@ -181,7 +185,7 @@ func (a *Admin) apiProjectGraphStats(w http.ResponseWriter, r *http.Request, ac 
 	graph, err := a.store.FetchGraphNeighbors(r.Context(), proj.ID)
 	if err != nil {
 		a.log.Error("fetch graph failed", "project", name, "err", err)
-		writeJSONErr(w, http.StatusInternalServerError, "could not load dependency graph")
+		writeJSONErr(w, http.StatusInternalServerError, msgGraphLoadFailed)
 		return
 	}
 
