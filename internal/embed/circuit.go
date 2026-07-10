@@ -29,6 +29,7 @@ type circuitBreaker struct {
 	mu        sync.Mutex
 	failures  int
 	openUntil time.Time
+	probing   bool // a half-open probe is in flight
 	threshold int
 	cooldown  time.Duration
 }
@@ -56,8 +57,13 @@ func (cb *circuitBreaker) allow() (bool, time.Duration) {
 	if remaining := time.Until(cb.openUntil); remaining > 0 {
 		return false, remaining
 	}
-	// Half-open: allow one probe, reset timer.
+	// Half-open: let a single probe through and hold everyone else back until it
+	// resolves (recordSuccess closes the circuit; recordFailure re-opens it).
 	if cb.failures >= cb.threshold {
+		if cb.probing {
+			return false, cb.cooldown
+		}
+		cb.probing = true
 		cb.openUntil = time.Time{}
 	}
 	return true, 0
@@ -68,12 +74,14 @@ func (cb *circuitBreaker) recordSuccess() {
 	defer cb.mu.Unlock()
 	cb.failures = 0
 	cb.openUntil = time.Time{}
+	cb.probing = false
 }
 
 func (cb *circuitBreaker) recordFailure() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	cb.failures++
+	cb.probing = false
 	if cb.failures >= cb.threshold {
 		cb.openUntil = time.Now().Add(cb.cooldown)
 	}

@@ -111,8 +111,16 @@ func extractZipEntries(name string, data []byte, depth int) ([]Doc, error) {
 	return docs, nil
 }
 
+// cleanEntryName normalises an archive entry name for use in a virtual-path
+// identifier, stripping leading separators and ".." traversal. Entries are
+// never written to disk (the result is only a chunk identifier), so this is
+// defence-in-depth and consistency rather than a zip-slip fix.
+func cleanEntryName(entryName string) string {
+	return strings.TrimPrefix(path.Clean("/"+entryName), "/")
+}
+
 func tryProcessZipEntry(f *zip.File, name string, depth int, totalSize *int) []Doc {
-	entryName := f.Name
+	entryName := cleanEntryName(f.Name)
 	virtualPath := name + "!" + entryName
 	entryExt := strings.ToLower(path.Ext(entryName))
 
@@ -165,7 +173,10 @@ func extractTarEntries(name string, data []byte, decompress io.Reader, depth int
 			break
 		}
 		if err != nil {
-			continue
+			// tar.Reader memoises its error: after a non-EOF failure every
+			// subsequent Next returns the same error, so "continue" would spin
+			// forever on a corrupt archive (CPU 100%). Stop reading instead.
+			break
 		}
 		if hdr.Typeflag == tar.TypeDir {
 			continue
@@ -187,7 +198,7 @@ func extractTarEntries(name string, data []byte, decompress io.Reader, depth int
 }
 
 func tryProcessTarEntry(tr *tar.Reader, hdr *tar.Header, name string, depth int, totalSize *int) []Doc {
-	entryName := hdr.Name
+	entryName := cleanEntryName(hdr.Name)
 	virtualPath := name + "!" + entryName
 	entryExt := strings.ToLower(path.Ext(entryName))
 
