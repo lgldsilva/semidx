@@ -19,6 +19,12 @@ export function AnalyzePanel({
     { symbol: string; kind: string; file: string; start_line: number; confidence: string }[]
   >([])
   const [deadStats, setDeadStats] = useState<{ total: number; confirmed: number; public_api: number } | null>(null)
+  const [graphStats, setGraphStats] = useState<{
+    nodes: number
+    edges: number
+    top_depends: { node: string; degree: number }[]
+    top_depended: { node: string; degree: number }[]
+  } | null>(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState('')
 
@@ -52,6 +58,18 @@ export function AnalyzePanel({
       setExplain(await api.projectExplain(project, path, line))
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'explain failed')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function runGraphStats() {
+    setBusy('graphstats')
+    setErr('')
+    try {
+      setGraphStats(await api.projectGraphStats(project))
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'graph stats failed')
     } finally {
       setBusy('')
     }
@@ -106,6 +124,9 @@ export function AnalyzePanel({
           </button>
           <button type="button" disabled={!!busy} onClick={() => void runDead()}>
             {busy === 'dead' ? '…' : 'Dead code scan'}
+          </button>
+          <button type="button" disabled={!!busy} onClick={() => void runGraphStats()}>
+            {busy === 'graphstats' ? '…' : 'Graph overview'}
           </button>
         </div>
         {explain && (
@@ -184,6 +205,53 @@ export function AnalyzePanel({
           </ul>
         )}
       </div>
+      {graphStats && (
+        <div className="card full">
+          <h2>
+            Graph overview — {graphStats.nodes} nodes · {graphStats.edges} edges
+          </h2>
+          <p className="muted small">
+            Progressive-disclosure summary of the dependency graph (no external
+            viz library, CSP-safe). Click a node to open it.
+          </p>
+          <div className="workspace-grid">
+            <div className="card">
+              <h3>Most dependencies (out-degree)</h3>
+              {graphStats.top_depends.length === 0 ? (
+                <p className="muted">No edges.</p>
+              ) : (
+                <ul>
+                  {graphStats.top_depends.map((e) => (
+                    <li key={e.node}>
+                      <button type="button" className="link" onClick={() => onOpenFile(e.node)}>
+                        {e.node}
+                      </button>{' '}
+                      <span className="pill">{e.degree}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="card">
+              <h3>Most depended-upon (in-degree)</h3>
+              {graphStats.top_depended.length === 0 ? (
+                <p className="muted">No edges.</p>
+              ) : (
+                <ul>
+                  {graphStats.top_depended.map((e) => (
+                    <li key={e.node}>
+                      <button type="button" className="link" onClick={() => onOpenFile(e.node)}>
+                        {e.node}
+                      </button>{' '}
+                      <span className="pill">{e.degree}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       <div className="card full">
         <h2>
           Dead code
