@@ -11,6 +11,7 @@ package localstore
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
@@ -91,12 +92,22 @@ CREATE TABLE IF NOT EXISTS chunks (
     file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     chunk_index INTEGER NOT NULL,
     content     TEXT NOT NULL,
+    -- Storage de-duplication (ADR-7): new rows reference unique_embeddings by
+    -- emb_hash and leave embedding NULL; legacy rows keep the inline embedding.
     embedding   BLOB,
+    emb_hash    TEXT,
     dims        INTEGER NOT NULL DEFAULT 0,
     model       TEXT NOT NULL DEFAULT '',
     start_line  INTEGER,
     end_line    INTEGER,
     UNIQUE(project_id, file_id, chunk_index)
+);
+-- unique_embeddings de-duplicates identical vectors (same content across
+-- worktrees/subprojects embeds to the same vector) so each is stored once.
+-- Keyed by the SHA-256 of the encoded vector, so no interface change is needed.
+CREATE TABLE IF NOT EXISTS unique_embeddings (
+    emb_hash   TEXT PRIMARY KEY,
+    embedding  BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS embedding_cache (
     input_hash  TEXT NOT NULL,
@@ -213,8 +224,20 @@ func ensureSchema(db *sql.DB) error {
 			}
 		}
 	}
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	// Add the emb_hash column to a pre-ADR-7 chunks table (CREATE TABLE IF NOT
+	// EXISTS won't alter an existing one). SQLite has no ADD COLUMN IF NOT
+	// EXISTS, so guard on pragma_table_info.
+	var hasEmbHash int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('chunks') WHERE name='emb_hash'`).Scan(&hasEmbHash)
+	if hasEmbHash == 0 {
+		if _, err := db.Exec(`ALTER TABLE chunks ADD COLUMN emb_hash TEXT`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *SQLiteStore) Close() { _ = s.db.Close() }
@@ -313,6 +336,20 @@ func (s *SQLiteStore) InsertEmbeddingCache(ctx context.Context, inputHashes []st
 // PruneEmbeddingCache removes all cache entries for the given dimension.
 func (s *SQLiteStore) PruneEmbeddingCache(ctx context.Context, dims int) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM embedding_cache WHERE dims = ?`, dims)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// PruneOrphanEmbeddings garbage-collects unique_embeddings rows that no chunk
+// references (ADR-7 RF05). Rows are orphaned when a project or file (and its
+// chunks) is deleted; the shared dictionary is never cascade-deleted (RNF02),
+// so orphans accumulate until swept here. Returns the number of rows removed.
+func (s *SQLiteStore) PruneOrphanEmbeddings(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM unique_embeddings
+		WHERE emb_hash NOT IN (SELECT emb_hash FROM chunks WHERE emb_hash IS NOT NULL)`)
 	if err != nil {
 		return 0, err
 	}
@@ -609,10 +646,10 @@ func (s *SQLiteStore) insertChunks(ctx context.Context, projectID, fileID int, c
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO chunks (project_id, file_id, chunk_index, content, embedding, dims, model, start_line, end_line)
+		INSERT INTO chunks (project_id, file_id, chunk_index, content, emb_hash, dims, model, start_line, end_line)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project_id, file_id, chunk_index) DO UPDATE
-		SET content = excluded.content, embedding = excluded.embedding, dims = excluded.dims,
+		SET content = excluded.content, embedding = NULL, emb_hash = excluded.emb_hash, dims = excluded.dims,
 		    model = excluded.model, start_line = excluded.start_line, end_line = excluded.end_line
 	`)
 	if err != nil {
@@ -620,12 +657,25 @@ func (s *SQLiteStore) insertChunks(ctx context.Context, projectID, fileID int, c
 	}
 	defer func() { _ = stmt.Close() }()
 
+	dictStmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO unique_embeddings (emb_hash, embedding) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dictStmt.Close() }()
+
 	for i, chunk := range chunks {
-		var blob any // NULL when text-only
+		var embHash any // NULL when text-only
 		if embeddings != nil {
-			blob = encodeEmbedding(embeddings[i])
+			// De-duplicate by the vector's own content hash: identical content
+			// embeds to an identical vector, so it is stored once (ADR-7).
+			blob := encodeEmbedding(embeddings[i])
+			h := fmt.Sprintf("%x", sha256.Sum256(blob))
+			if _, err := dictStmt.ExecContext(ctx, h, blob); err != nil {
+				return err
+			}
+			embHash = h
 		}
-		if _, err := stmt.ExecContext(ctx, projectID, fileID, i, chunk.Content, blob, dims, model, chunk.StartLine, chunk.EndLine); err != nil {
+		if _, err := stmt.ExecContext(ctx, projectID, fileID, i, chunk.Content, embHash, dims, model, chunk.StartLine, chunk.EndLine); err != nil {
 			return err
 		}
 	}
@@ -660,10 +710,14 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 		join = "JOIN files f ON f.id = c.file_id JOIN worktree_files w ON w.project_id = c.project_id AND w.path = f.path AND w.hash = f.hash AND w.worktree = ?"
 		args = []any{worktree, projectID}
 	}
+	// COALESCE resolves the vector from the de-dup dictionary (new rows) or the
+	// legacy inline column (pre-ADR-7 rows); rows with neither are text-only and
+	// excluded so they surface via keyword search instead.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT f.path, c.content, c.start_line, c.end_line, c.embedding
+		SELECT f.path, c.content, c.start_line, c.end_line, COALESCE(ue.embedding, c.embedding)
 		FROM chunks c `+join+`
-		WHERE c.project_id = ? AND c.embedding IS NOT NULL
+		LEFT JOIN unique_embeddings ue ON ue.emb_hash = c.emb_hash
+		WHERE c.project_id = ? AND COALESCE(ue.embedding, c.embedding) IS NOT NULL
 	`, args...)
 	if err != nil {
 		return nil, err
@@ -953,8 +1007,10 @@ type ExportedChunk struct {
 // copy the index into Postgres without recomputing embeddings.
 func (s *SQLiteStore) ExportChunks(ctx context.Context, projectID int) ([]ExportedChunk, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT f.path, f.hash, f.size_bytes, c.content, c.embedding, c.dims, c.start_line, c.end_line
+		SELECT f.path, f.hash, f.size_bytes, c.content,
+		       COALESCE(ue.embedding, c.embedding), c.dims, c.start_line, c.end_line
 		FROM chunks c JOIN files f ON f.id = c.file_id
+		LEFT JOIN unique_embeddings ue ON ue.emb_hash = c.emb_hash
 		WHERE c.project_id = ?
 		ORDER BY f.path, c.dims, c.chunk_index
 	`, projectID)
