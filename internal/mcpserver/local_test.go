@@ -112,6 +112,14 @@ func TestLocalBackendProjects(t *testing.T) {
 	}
 }
 
+func TestLocalBackendStatus(t *testing.T) {
+	sess := connectLocal(t)
+	text, isErr := callText(t, sess, "semantic_status", map[string]any{"project": "proj"})
+	if isErr || !strings.Contains(text, "Total indexed:") || !strings.Contains(text, "proj") {
+		t.Errorf("local status text = %q (isErr=%v)", text, isErr)
+	}
+}
+
 // TestLocalBackendReindexDegradesGracefully: reindex is a CLI operation locally,
 // so the tool returns a clear in-band error pointing at `semidx index`.
 func TestLocalBackendReindexDegradesGracefully(t *testing.T) {

@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS projects (
     branch          TEXT NOT NULL DEFAULT '',
     identity        TEXT,
     dims            INTEGER NOT NULL DEFAULT 0,
-    license_spdx_id TEXT NOT NULL DEFAULT ''
+    license_spdx_id TEXT NOT NULL DEFAULT '',
+    last_indexed_commit TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_identity ON projects(identity);
 CREATE TABLE IF NOT EXISTS files (
@@ -196,12 +197,15 @@ func ensureSchema(db *sql.DB) error {
 	if cols > 0 {
 		var hasIdentity int
 		_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='identity'`).Scan(&hasIdentity)
+		var hasLastIndexedCommit int
+		_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='last_indexed_commit'`).Scan(&hasLastIndexedCommit)
 		var ddl string
 		_ = db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='projects'`).Scan(&ddl)
-		// Rebuild an older DB: missing the 'identity' column (pre-F11), OR still
-		// enforcing UNIQUE on the projects table — i.e. UNIQUE(name) (pre-F14),
-		// which wrongly blocks two projects that share a basename.
-		if hasIdentity == 0 || strings.Contains(strings.ToUpper(ddl), "UNIQUE") {
+		// Rebuild an older DB: missing the 'identity' column (pre-F11), missing the
+		// 'last_indexed_commit' column (recent), OR still enforcing UNIQUE on the
+		// projects table — i.e. UNIQUE(name) (pre-F14), which wrongly blocks two
+		// projects that share a basename.
+		if hasIdentity == 0 || hasLastIndexedCommit == 0 || strings.Contains(strings.ToUpper(ddl), "UNIQUE") {
 			for _, tbl := range []string{"chunks_fts", "chunks", "worktree_files", "files", "projects"} {
 				if _, err := db.Exec("DROP TABLE IF EXISTS " + tbl); err != nil {
 					return err

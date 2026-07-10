@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/passwd"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -43,7 +44,11 @@ type fakeStore struct {
 	fileCount  int
 	jobs       []store.Job
 	chunks     []store.SearchResult // FetchChunksByPath
+	graph      map[string][]string  // FetchGraphNeighbors
 	nextJob    int
+
+	projectCommit string // GetProjectCommit
+	chunkCount    int    // CountProjectChunks
 
 	// error-injection fields (all nil = success/normal path)
 	listProjectsErr error
@@ -51,6 +56,7 @@ type fakeStore struct {
 	createTokErr    error
 	createJWTErr    error
 	revokeErr       error // generic RevokeUserToken error
+	createErr       error // CreateProject error
 	listUsersErr    error
 	createUserErr   error // generic CreateUser error (distinct from ErrUserExists)
 	setPwErr        error
@@ -305,7 +311,11 @@ func (f *fakeStore) ListFileHashes(context.Context, int) (map[string]string, err
 }
 
 func (f *fakeStore) GetProjectCommit(context.Context, int) (string, error) {
-	return "", nil
+	return f.projectCommit, nil
+}
+
+func (f *fakeStore) CountProjectChunks(context.Context, int, int) (int, error) {
+	return f.chunkCount, nil
 }
 
 func (f *fakeStore) ListRecentJobs(_ context.Context, _ int, limit int) ([]store.Job, error) {
@@ -320,6 +330,9 @@ func (f *fakeStore) FetchChunksByPath(context.Context, int, string, int, int) ([
 }
 
 func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gitURL, branch string, dims int) (*store.Project, error) {
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	p := store.Project{
 		ID: len(f.projects) + 1, Name: name, Model: model, SourceType: sourceType,
 		GitURL: gitURL, Branch: branch, Status: "registered", Identity: name, Dims: dims,
@@ -353,7 +366,64 @@ func (f *fakeStore) GetJob(_ context.Context, id int) (*store.Job, error) {
 }
 
 func (f *fakeStore) FetchGraphNeighbors(context.Context, int) (map[string][]string, error) {
+	if f.graph != nil {
+		return f.graph, nil
+	}
 	return map[string][]string{}, nil
+}
+
+func (f *fakeStore) Close()                                       {}
+func (f *fakeStore) Ping(context.Context) error                   { return nil }
+func (f *fakeStore) EnsureChunksTable(context.Context, int) error { return nil }
+func (f *fakeStore) UpsertProject(context.Context, string, string, string, int) (int, error) {
+	return 1, nil
+}
+func (f *fakeStore) EnsureProjectIdentity(context.Context, string, string, string, string, string, int) (int, error) {
+	return 1, nil
+}
+func (f *fakeStore) SetWorktreeFiles(context.Context, int, string, map[string]string) error {
+	return nil
+}
+func (f *fakeStore) PruneUnreferencedFiles(context.Context, int) (int64, error) { return 0, nil }
+func (f *fakeStore) UpdateProjectStatus(_ context.Context, id int, status string) error {
+	for i := range f.projects {
+		if f.projects[i].ID == id {
+			f.projects[i].Status = status
+		}
+	}
+	return nil
+}
+func (f *fakeStore) UpsertFile(context.Context, int, string, string, int) (int, error) { return 1, nil }
+func (f *fakeStore) FileUpToDate(context.Context, int, string, string, int) (bool, error) {
+	return false, nil
+}
+func (f *fakeStore) DeleteFileByPath(_ context.Context, _ int, p string) error {
+	delete(f.fileHashes, p)
+	return nil
+}
+func (f *fakeStore) DeleteChunksForFile(context.Context, int, int, int) error { return nil }
+func (f *fakeStore) InsertChunks(context.Context, int, int, []chunker.Chunk, [][]float32, int) error {
+	return nil
+}
+func (f *fakeStore) InsertChunksTextOnly(context.Context, int, int, []chunker.Chunk, int) error {
+	return nil
+}
+func (f *fakeStore) SearchSimilarWorktree(ctx context.Context, projectID int, embedding []float32, dims, topK int, worktree string) ([]store.SearchResult, error) {
+	return f.SearchSimilar(ctx, projectID, embedding, dims, topK)
+}
+func (f *fakeStore) SearchSimilarKeywordsWorktree(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]store.SearchResult, error) {
+	return f.SearchSimilarKeywords(ctx, projectID, queryText, dims, topK)
+}
+func (f *fakeStore) UpdateProjectCommit(context.Context, int, string) error { return nil }
+func (f *fakeStore) FetchGraphPathsBFS(context.Context, int, []string, int) (map[string]int, error) {
+	return map[string]int{}, nil
+}
+func (f *fakeStore) EnsureEmbeddingCacheTable(context.Context, int) error { return nil }
+func (f *fakeStore) LookupEmbeddingCache(context.Context, []string, string, int) (map[string][]float32, error) {
+	return map[string][]float32{}, nil
+}
+func (f *fakeStore) InsertEmbeddingCache(context.Context, []string, string, [][]float32, int) error {
+	return nil
 }
 
 // --- helpers -----------------------------------------------------------------

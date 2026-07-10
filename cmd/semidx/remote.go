@@ -220,7 +220,9 @@ full index job the server runs itself. Requires "semidx login".`,
   semidx repo add https://github.com/org/project.git --branch main --index=false`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRepoAdd(cmd, d, args[0], name, branch, model, index, wait)
+			return runRepoAdd(cmd, d, repoAddOpts{
+				gitURL: args[0], name: name, branch: branch, model: model, index: index, wait: wait,
+			})
 		},
 	}
 	c.Flags().StringVar(&name, "name", "", "Project name (default: repo basename)")
@@ -231,32 +233,37 @@ full index job the server runs itself. Requires "semidx login".`,
 	return c
 }
 
-func runRepoAdd(cmd *cobra.Command, d *deps, gitURL, name, branch, model string, index, wait bool) error {
+type repoAddOpts struct {
+	gitURL, name, branch, model string
+	index, wait                 bool
+}
+
+func runRepoAdd(cmd *cobra.Command, d *deps, o repoAddOpts) error {
 	if !d.remote() {
 		return fmt.Errorf("repo add requires a server: run `semidx login` first")
 	}
-	if name == "" {
-		name = strings.TrimSuffix(projectNameFromPath(gitURL), ".git")
+	if o.name == "" {
+		o.name = strings.TrimSuffix(projectNameFromPath(o.gitURL), ".git")
 	}
 	cli := d.apiClient()
 	ctx := cmd.Context()
-	if _, err := cli.CreateProject(ctx, name, model, "git", gitURL, branch); err != nil {
+	if _, err := cli.CreateProject(ctx, o.name, o.model, "git", o.gitURL, o.branch); err != nil {
 		return fmt.Errorf("create project: %w", err)
 	}
-	fmt.Printf("Registered git project %q -> %s\n", name, gitURL)
-	if !index {
+	fmt.Printf("Registered git project %q -> %s\n", o.name, o.gitURL)
+	if !o.index {
 		return nil
 	}
-	jobID, err := cli.EnqueueJob(ctx, name, "full")
+	jobID, err := cli.EnqueueJob(ctx, o.name, "full")
 	if err != nil {
 		return fmt.Errorf("enqueue index job: %w", err)
 	}
-	if !wait {
-		fmt.Printf("Index job #%d queued. Poll it with: GET /api/v1/projects/%s/jobs/%d\n", jobID, name, jobID)
+	if !o.wait {
+		fmt.Printf("Index job #%d queued. Poll it with: GET /api/v1/projects/%s/jobs/%d\n", jobID, o.name, jobID)
 		return nil
 	}
 	fmt.Printf("Index job #%d queued — waiting for completion ...\n", jobID)
-	job, err := waitForRemoteJobWithProgress(ctx, cli, name, jobID)
+	job, err := waitForRemoteJobWithProgress(ctx, cli, o.name, jobID)
 	if err != nil {
 		return fmt.Errorf("wait for job %d: %w", jobID, err)
 	}

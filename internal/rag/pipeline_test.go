@@ -354,6 +354,62 @@ func TestPipelineDefaultConfig(t *testing.T) {
 	}
 }
 
+type streamChatClient struct {
+	fakeChatClient
+	chunks    <-chan chat.StreamChunk
+	streamErr error
+}
+
+func (s *streamChatClient) StreamMessage(context.Context, chat.Request) (<-chan chat.StreamChunk, error) {
+	if s.streamErr != nil {
+		return nil, s.streamErr
+	}
+	return s.chunks, nil
+}
+
+func TestPipelineStreamAskStreaming(t *testing.T) {
+	t.Parallel()
+	search := &fakeSearchService{
+		results: []SearchResult{{FilePath: "a.go", Content: "code", Score: 0.9, StartLine: 1, EndLine: 1}},
+	}
+	ch := make(chan chat.StreamChunk, 2)
+	ch <- chat.StreamChunk{Content: "hi"}
+	ch <- chat.StreamChunk{Done: true}
+	chatClient := &streamChatClient{
+		fakeChatClient: fakeChatClient{model: "stream-model"},
+		chunks:         ch,
+	}
+	pipe := NewPipeline(search, chatClient, PipelineConfig{TopK: 5, MaxTokens: 4096, Model: "stream-model"})
+	out, sources, model, _, err := pipe.StreamAsk(context.Background(), "q", "proj", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "stream-model" || len(sources) != 1 {
+		t.Fatalf("model=%q sources=%d", model, len(sources))
+	}
+	chunk := <-out
+	if chunk.Content != "hi" {
+		t.Fatalf("chunk=%+v", chunk)
+	}
+}
+
+func TestPipelineStreamAskFallback(t *testing.T) {
+	t.Parallel()
+	search := &fakeSearchService{
+		results: []SearchResult{{FilePath: "a.go", Content: "code", Score: 0.9, StartLine: 1, EndLine: 1}},
+	}
+	chatClient := &fakeChatClient{content: "fallback answer", model: "m"}
+	pipe := NewPipeline(search, chatClient, PipelineConfig{TopK: 5, MaxTokens: 4096, Model: "m"})
+	out, _, model, _, err := pipe.StreamAsk(context.Background(), "q", "proj", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := <-out
+	if chunk.Content != "fallback answer" || model != "m" {
+		t.Fatalf("chunk=%+v model=%q", chunk, model)
+	}
+}
+
 func TestAssemblePrompt(t *testing.T) {
 	t.Parallel()
 
