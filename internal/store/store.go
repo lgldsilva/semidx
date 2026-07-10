@@ -1332,34 +1332,27 @@ func (s *PgStore) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPat
 		return nil, nil
 	}
 
+	// Postgres allows a recursive CTE to reference itself exactly ONCE, and only
+	// in the recursive term (never in the non-recursive anchor). So both the
+	// anchor and the recursion traverse edges in either direction with a single
+	// self-reference each, using CASE to pick the far endpoint of each edge.
 	query := `
 		WITH RECURSIVE graph_bfs AS (
-			-- Forward: files imported by seeds
-			SELECT fd.target_file AS file_path, 1 AS depth
+			-- Anchor: direct neighbours of the seeds, in either direction, depth 1.
+			SELECT CASE WHEN fd.source_file = ANY($1) THEN fd.target_file
+			            ELSE fd.source_file END AS file_path, 1 AS depth
 			FROM file_dependencies fd
-			WHERE fd.source_file = ANY($1) AND fd.project_id = $2
+			WHERE (fd.source_file = ANY($1) OR fd.target_file = ANY($1))
+			  AND fd.project_id = $2
 
 			UNION
 
-			-- Backward: files that import seeds
-			SELECT fd.source_file, 1
+			-- Recursion: follow edges in either direction (single self-reference).
+			SELECT CASE WHEN fd.source_file = g.file_path THEN fd.target_file
+			            ELSE fd.source_file END AS file_path, g.depth + 1
 			FROM file_dependencies fd
-			WHERE fd.target_file = ANY($1) AND fd.project_id = $2
-
-			UNION
-
-			-- Forward recursion: follow imports
-			SELECT fd.target_file, g.depth + 1
-			FROM file_dependencies fd
-			JOIN graph_bfs g ON fd.source_file = g.file_path
-			WHERE fd.project_id = $2 AND g.depth < $3
-
-			UNION
-
-			-- Backward recursion: follow imported-by
-			SELECT fd.source_file, g.depth + 1
-			FROM file_dependencies fd
-			JOIN graph_bfs g ON fd.target_file = g.file_path
+			JOIN graph_bfs g
+			  ON fd.source_file = g.file_path OR fd.target_file = g.file_path
 			WHERE fd.project_id = $2 AND g.depth < $3
 		)
 		SELECT file_path, MIN(depth) AS depth
