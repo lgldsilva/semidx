@@ -7,7 +7,9 @@ import {
   type FormEvent,
 } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, ApiError, type Job, type Project } from '../api'
+import { api, ApiError, type Project } from '../api'
+import { JobAlert } from '../features/jobs/JobAlert'
+import { useJobPoll } from '../features/jobs/useJobPoll'
 
 export function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -15,8 +17,6 @@ export function ProjectsPage() {
   const [flash, setFlash] = useState('')
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
-  const [jobPoll, setJobPoll] = useState<Job | null>(null)
-  const [jobPollProject, setJobPollProject] = useState('')
   const [filter, setFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [sourceFilter, setSourceFilter] = useState('')
@@ -34,27 +34,11 @@ export function ProjectsPage() {
     }
   }, [])
 
+  const { job, project: jobProject, start: startJob } = useJobPoll(reload)
+
   useEffect(() => {
     void reload()
   }, [reload])
-
-  useEffect(() => {
-    if (!jobPoll || !jobPollProject || jobPoll.status === 'succeeded' || jobPoll.status === 'failed') {
-      return
-    }
-    const t = setInterval(() => {
-      void api
-        .job(jobPollProject, jobPoll.id)
-        .then((j) => {
-          setJobPoll(j)
-          if (j.status === 'succeeded' || j.status === 'failed') {
-            void reload()
-          }
-        })
-        .catch(() => undefined)
-    }, 1500)
-    return () => clearInterval(t)
-  }, [jobPoll, jobPollProject, reload])
 
   const filtered = useMemo(() => {
     let list = [...projects]
@@ -93,8 +77,7 @@ export function ProjectsPage() {
     try {
       const { job_id } = await api.reindex(name)
       setFlash(`Reindex queued for ${name} (job #${job_id})`)
-      setJobPollProject(name)
-      setJobPoll({ id: job_id, type: 'full', status: 'queued' })
+      startJob(name, { id: job_id, type: 'full', status: 'queued' })
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'reindex failed')
     }
@@ -128,18 +111,7 @@ export function ProjectsPage() {
 
       {err && <div className="alert error">{err}</div>}
       {flash && <div className="alert ok">{flash}</div>}
-      {jobPoll && (
-        <div className="alert ok">
-          Job #{jobPoll.id}
-          {jobPollProject ? ` (${jobPollProject})` : ''}: <strong>{jobPoll.status}</strong>
-          {jobPoll.progress_percent != null && jobPoll.status === 'running' && (
-            <span> · {jobPoll.progress_percent}%</span>
-          )}
-          {jobPoll.files_indexed != null &&
-            ` · files ${jobPoll.files_indexed}${jobPoll.progress_total ? `/${jobPoll.progress_total}` : ''} · chunks ${jobPoll.chunks_created ?? 0}`}
-          {jobPoll.error && ` · ${jobPoll.error}`}
-        </div>
-      )}
+      {job && <JobAlert job={job} project={jobProject} />}
 
       <div className="filters card">
         <div className="row">
@@ -198,8 +170,7 @@ export function ProjectsPage() {
                 : 'Project created',
             )
             if (jobId && projectName) {
-              setJobPollProject(projectName)
-              setJobPoll({ id: jobId, type: 'full', status: 'queued' })
+              startJob(projectName, { id: jobId, type: 'full', status: 'queued' })
             }
             void reload()
           }}
