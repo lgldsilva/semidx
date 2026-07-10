@@ -12,7 +12,7 @@ export function SettingsPage() {
       <p className="muted">
         API keys for <code>semidx login</code>, control tokens, account, and users.
       </p>
-      <nav className="tab-nav">
+      <div className="tab-nav" role="tablist" aria-label="Settings sections">
         {(
           [
             ['keys', 'API keys'],
@@ -24,13 +24,15 @@ export function SettingsPage() {
           <button
             key={id}
             type="button"
+            role="tab"
+            aria-selected={tab === id}
             className={`tab-btn ${tab === id ? 'active' : ''}`}
             onClick={() => setTab(id)}
           >
             {label}
           </button>
         ))}
-      </nav>
+      </div>
       {tab === 'keys' && <KeysPanel />}
       {tab === 'tokens' && <TokensPanel />}
       {tab === 'account' && <AccountPanel />}
@@ -135,7 +137,7 @@ function KeysPanel() {
           <tr>
             <th>Name</th>
             <th>Scopes</th>
-            <th />
+            <th aria-label="Actions" />
           </tr>
         </thead>
         <tbody>
@@ -246,7 +248,7 @@ function TokensPanel() {
           <tr>
             <th>Name</th>
             <th>Scopes</th>
-            <th />
+            <th aria-label="Actions" />
           </tr>
         </thead>
         <tbody>
@@ -388,7 +390,7 @@ function UsersPanel() {
             <th>User</th>
             <th>Role</th>
             <th>Status</th>
-            <th />
+            <th aria-label="Actions" />
           </tr>
         </thead>
         <tbody>
