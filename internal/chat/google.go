@@ -65,30 +65,6 @@ func (e *HTTPError) Error() string {
 	}
 }
 
-// googleChatRequest is the wire format for the OpenAI-compatible chat endpoint.
-type googleChatRequest struct {
-	Model       string          `json:"model"`
-	Messages    []googleMessage `json:"messages"`
-	Temperature float64         `json:"temperature"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	Stream      bool            `json:"stream,omitempty"`
-}
-
-type googleMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// googleChatResponse is the wire format for the chat completion response.
-type googleChatResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-	Model string `json:"model,omitempty"`
-}
-
 // googleStreamChunk is a single streaming chunk from the OpenAI-compatible SSE.
 type googleStreamChunk struct {
 	Choices []struct {
@@ -102,79 +78,7 @@ type googleStreamChunk struct {
 
 // SendMessage sends a chat completion request to Google AI Studio.
 func (c *GoogleClient) SendMessage(ctx context.Context, req Request) (*Response, error) {
-	model := req.Model
-	if model == "" {
-		model = defaultModel
-	}
-
-	// Temperature: -1 means "use default", 0 is a valid explicit value.
-	temp := req.Temperature
-	if temp == -1 {
-		temp = defaultTemp
-	}
-
-	// MaxTokens: -1 means "use default", 0 means "model default" (omit from wire).
-	maxTok := req.MaxTokens
-	if maxTok == -1 {
-		maxTok = defaultMaxTok
-	}
-
-	messages := make([]googleMessage, len(req.Messages))
-	for i, m := range req.Messages {
-		//nolint:staticcheck // struct literal intentional (different json tags)
-		messages[i] = googleMessage{Role: m.Role, Content: m.Content}
-	}
-
-	payload := googleChatRequest{
-		Model:       model,
-		Messages:    messages,
-		Temperature: temp,
-		MaxTokens:   maxTok,
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("chat marshal: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+chatEndpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("chat request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("chat do: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		// Bounded read to prevent OOM from malicious/large error bodies.
-		bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		bodyStr := ""
-		if readErr == nil {
-			bodyStr = string(bodyBytes)
-		}
-		return nil, &HTTPError{StatusCode: resp.StatusCode, Body: bodyStr}
-	}
-
-	var result googleChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("chat decode: %w", err)
-	}
-
-	if len(result.Choices) == 0 {
-		return nil, fmt.Errorf("chat: no choices in response")
-	}
-
-	return &Response{
-		Content: result.Choices[0].Message.Content,
-		Model:   result.Model,
-	}, nil
+	return sendOpenAIChat(ctx, c.client, c.baseURL+chatEndpoint, c.apiKey, nil, req)
 }
 
 // StreamMessage sends a streaming chat completion request.
@@ -216,36 +120,7 @@ func (c *GoogleClient) StreamMessage(ctx context.Context, req Request) (<-chan S
 }
 
 func (c *GoogleClient) buildStreamPayload(req Request) ([]byte, error) {
-	model := req.Model
-	if model == "" {
-		model = defaultModel
-	}
-
-	temp := req.Temperature
-	if temp == -1 {
-		temp = defaultTemp
-	}
-
-	maxTok := req.MaxTokens
-	if maxTok == -1 {
-		maxTok = defaultMaxTok
-	}
-
-	messages := make([]googleMessage, len(req.Messages))
-	for i, m := range req.Messages {
-		//nolint:staticcheck // struct literal intentional (different json tags)
-		messages[i] = googleMessage{Role: m.Role, Content: m.Content}
-	}
-
-	payload := googleChatRequest{
-		Model:       model,
-		Messages:    messages,
-		Temperature: temp,
-		MaxTokens:   maxTok,
-		Stream:      true,
-	}
-
-	return json.Marshal(payload)
+	return json.Marshal(buildOpenAIChatRequest(req, true))
 }
 
 func streamSSEResponse(resp *http.Response, ch chan<- StreamChunk) {

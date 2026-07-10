@@ -133,7 +133,9 @@ func extractEmailMultipartBody(body io.Reader, boundary string) (string, error) 
 			break
 		}
 		if err != nil {
-			continue
+			// A malformed part can leave the reader in an error state where
+			// NextPart keeps returning the same error; stop rather than spin.
+			break
 		}
 		processEmailMultipartPart(part, &plainText, &htmlText)
 	}
