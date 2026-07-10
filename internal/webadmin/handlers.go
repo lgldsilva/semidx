@@ -22,6 +22,11 @@ const (
 	headerContentType = "Content-Type"
 )
 
+// errSearchFailed is the sanitized, user-safe error surfaced when a search hits
+// an infrastructure failure (REQ-SRCH-08). The real cause is logged server-side;
+// this is what reaches the client so DB/provider internals never leak.
+var errSearchFailed = errors.New("search failed")
+
 // page is the data every rendered template receives.
 type page struct {
 	User   *store.User
@@ -204,7 +209,10 @@ func (a *Admin) searchProjectHits(ctx context.Context, proj store.Project, query
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, false, nil
 		}
-		return nil, false, err
+		// Never propagate the raw error to the all-projects response body
+		// (REQ-SRCH-08): log the detail, return the sanitized sentinel.
+		a.log.Error("search failed", "project", proj.Name, "err", err)
+		return nil, false, errSearchFailed
 	}
 	hits := make([]adminSearchHit, 0, len(resp.Results))
 	for _, hit := range resp.Results {
