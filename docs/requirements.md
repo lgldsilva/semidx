@@ -191,7 +191,7 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 |----|-------------|--------|-------|
 | REQ-OPS-01 | Health endpoints (`/healthz`, `/readyz`) | **done** | |
 | REQ-OPS-02 | Prometheus metrics for request volume | **done** | |
-| REQ-OPS-03 | Latency histograms (search, embed) and gauges (queue, DB pool) | **partial** | Search latency + job queue/running + DB pool gauges added; embed-specific histogram still pending |
+| REQ-OPS-03 | Latency histograms (search, embed) and gauges (queue, DB pool) | **done** | Search + embed (`semidx_embed_duration_seconds`, `semidx_embed_inputs_total` by model/outcome) histograms; job queue/running + DB pool gauges |
 | REQ-OPS-04 | Structured logging (`slog`) across indexer, search, embed chain | **partial** | |
 | REQ-OPS-05 | Pull-based deploy (Watchtower); CI never SSHes into hosts | **done** | Homelab model |
 | REQ-OPS-06 | CI gates: build, race tests, lint, gitleaks, govulncheck, gosec, image scan | **done** | |
