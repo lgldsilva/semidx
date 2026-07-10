@@ -133,6 +133,15 @@ export function getCsrf() {
   return csrfToken
 }
 
+// onUnauthorized is invoked whenever any request gets a 401, so the auth layer
+// can clear the session and the router can redirect to /login. Without this a
+// mid-session expiry left each page showing a generic error and stranded.
+let onUnauthorized: (() => void) | null = null
+
+export function setUnauthorizedHandler(fn: (() => void) | null) {
+  onUnauthorized = fn
+}
+
 async function parseError(res: Response): Promise<string> {
   try {
     const body = await res.json()
@@ -158,6 +167,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     credentials: 'same-origin',
   })
   if (res.status === 401) {
+    if (onUnauthorized) onUnauthorized()
     throw new ApiError(401, 'unauthorized')
   }
   if (!res.ok) {

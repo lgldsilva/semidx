@@ -8,7 +8,9 @@ export default defineConfig({
   build: {
     outDir: '../internal/webui/dist',
     emptyOutDir: true,
-    sourcemap: true,
+    // No production source map: it is embedded and served from /admin, exposing
+    // the full TypeScript source (~1.4 MB). Not needed for an internal admin UI.
+    sourcemap: false,
   },
   server: {
     port: 5173,
