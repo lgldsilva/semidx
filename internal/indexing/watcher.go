@@ -54,7 +54,7 @@ func (w *Watcher) Watch(ctx context.Context) error {
 		return fmt.Errorf("add watch dirs: %w", err)
 	}
 
-	fmt.Printf("Watching for changes in %s...\n", w.projectPath)
+	w.log.Info("watching for changes", "path", w.projectPath)
 
 	// debounceTimers tracks per-path timers for WRITE event debouncing.
 	debounceTimers := make(map[string]*time.Timer)
