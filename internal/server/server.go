@@ -50,6 +50,8 @@ type Server struct {
 	dbPoolIdle      prometheus.Gauge
 	dbPoolAcquired  prometheus.Gauge
 	dbPoolMax       prometheus.Gauge
+	embedDuration   *prometheus.HistogramVec
+	embedInputs     *prometheus.CounterVec
 	admin           http.Handler    // the /admin management UI, nil unless MountAdmin was called
 	jwt             *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
 
@@ -150,6 +152,22 @@ func New(st store.Store, emb embed.Embedder, log *slog.Logger) *Server {
 	})
 	reg.MustRegister(dbPoolTotal, dbPoolIdle, dbPoolAcquired, dbPoolMax)
 
+	// REQ-OPS-03: embedding-call observability. The embed package stays
+	// metrics-library-agnostic; the server wraps the embedder with an observer
+	// that feeds these Prometheus series (model × ok/error), so every server
+	// embed call — search query embedding included — is timed and counted.
+	embedDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "semidx_embed_duration_seconds",
+		Help:    "Embedding provider call duration in seconds by model and outcome.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"model", "outcome"})
+	embedInputs := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "semidx_embed_inputs_total",
+		Help: "Total number of texts submitted to the embedder by model.",
+	}, []string{"model"})
+	reg.MustRegister(embedDuration, embedInputs)
+	emb = embed.Instrument(emb, &embedObserver{dur: embedDuration, inputs: embedInputs})
+
 	return &Server{
 		store:           st,
 		emb:             emb,
@@ -167,8 +185,25 @@ func New(st store.Store, emb embed.Embedder, log *slog.Logger) *Server {
 		dbPoolIdle:      dbPoolIdle,
 		dbPoolAcquired:  dbPoolAcquired,
 		dbPoolMax:       dbPoolMax,
+		embedDuration:   embedDuration,
+		embedInputs:     embedInputs,
 		apiLimiter:      newAPIRateLimiter(),
 	}
+}
+
+// embedObserver adapts embed.Observer to the server's Prometheus series.
+type embedObserver struct {
+	dur    *prometheus.HistogramVec
+	inputs *prometheus.CounterVec
+}
+
+func (o *embedObserver) ObserveEmbed(model string, inputs int, d time.Duration, err error) {
+	outcome := "ok"
+	if err != nil {
+		outcome = "error"
+	}
+	o.dur.WithLabelValues(model, outcome).Observe(d.Seconds())
+	o.inputs.WithLabelValues(model).Add(float64(inputs))
 }
 
 // SetGitAllowFile enables file:// git URLs for server-side git sync.
