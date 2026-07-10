@@ -191,9 +191,12 @@ func getChangedFiles(ref1, ref2 string, threeDot bool) ([]string, error) {
 	if threeDot {
 		sep = "..."
 	}
-	// #nosec G204 -- git arguments are validated via safeGitRef and '--' boundary separator
+	// The revision range must come BEFORE '--'; anything after '--' is a
+	// pathspec, so the old order made git treat "ref1..ref2" as a (missing)
+	// path and always return nothing.
+	// #nosec G204 -- refs validated via safeGitRef; '--' ends options so no pathspec is injected
 	cmd := exec.Command("git")
-	cmd.Args = append([]string{"git", "diff", "--name-only", "--diff-filter=ACMR", "--"}, ref1+sep+ref2)
+	cmd.Args = []string{"git", "diff", "--name-only", "--diff-filter=ACMR", ref1 + sep + ref2, "--"}
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
@@ -220,9 +223,11 @@ func getFileAtRef(filePath, ref string) (string, error) {
 	if !safeGitRef(ref) || !safeGitFilepath(filePath) {
 		return "", fmt.Errorf("invalid git ref or file path: %q:%q", ref, filePath)
 	}
-	// #nosec G204 -- git show arguments are validated via safeGitRef and safeGitFilepath
+	// "git show <ref>:<path>" takes an object spec, not a pathspec, so the
+	// leading '--' (which forces pathspec interpretation) made it read nothing.
+	// #nosec G204 -- ref/path validated via safeGitRef and safeGitFilepath
 	cmd := exec.Command("git")
-	cmd.Args = append([]string{"git", "show", "--"}, ref+":"+filePath)
+	cmd.Args = []string{"git", "show", ref + ":" + filePath}
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
