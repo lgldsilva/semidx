@@ -113,7 +113,7 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-SRCH-08 | User-safe error messages (no raw DB/provider strings to clients) | **done** | HTTP search API, admin job/ingest, admin all-projects search, and the standalone MCP backend all sanitize raw internal errors; CLI-local keeps raw errors on stderr (operator on their own index, no trust boundary) |
 | REQ-SRCH-09 | Human and grep-friendly formatters with `file:line` and understandable scores | **done** | Human formatter shows explicit raw+percent score; sgrep `file:line:content` contract preserved |
 | REQ-SRCH-10 | Relevance benchmark suite (gold queries + scoring), not only latency benches | **done** | `semidx bench` + `docs/bench-queries.json` |
-| REQ-SRCH-11 | Optional re-ranker (e.g. local cross-encoder) on top-K | **todo** | |
+| REQ-SRCH-11 | Optional re-ranker (e.g. local cross-encoder) on top-K | **done** | Pluggable `search.Reranker` seam + dependency-free `LexicalReranker` (blends score with query-term overlap); off unless `SEMIDX_RERANK_WEIGHT` ∈ (0,1]. A cross-encoder can implement the same interface later |
 | REQ-SRCH-12 | Language-aware / AST-aware chunking for major languages | **partial** | AST/symbol-aware chunking when analyzer symbols are available |
 
 ### 3.4 Storage backends

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -168,10 +169,17 @@ func New(st store.Store, emb embed.Embedder, log *slog.Logger) *Server {
 	reg.MustRegister(embedDuration, embedInputs)
 	emb = embed.Instrument(emb, &embedObserver{dur: embedDuration, inputs: embedInputs})
 
+	svc := search.NewService(st, emb)
+	// Optional top-K reranker (REQ-SRCH-11), off unless SEMIDX_RERANK_WEIGHT is a
+	// value in (0,1]. Kept env-gated so the default search path is unchanged.
+	if r := rerankerFromEnv(log); r != nil {
+		svc.SetReranker(r)
+	}
+
 	return &Server{
 		store:           st,
 		emb:             emb,
-		search:          search.NewService(st, emb),
+		search:          svc,
 		log:             log,
 		reg:             reg,
 		reqs:            reqs,
@@ -204,6 +212,23 @@ func (o *embedObserver) ObserveEmbed(model string, inputs int, d time.Duration, 
 	}
 	o.dur.WithLabelValues(model, outcome).Observe(d.Seconds())
 	o.inputs.WithLabelValues(model).Add(float64(inputs))
+}
+
+// rerankerFromEnv returns a LexicalReranker when SEMIDX_RERANK_WEIGHT parses to
+// a value in (0,1], else nil (reranking disabled). An unparseable or
+// out-of-range value logs a warning and disables reranking rather than guessing.
+func rerankerFromEnv(log *slog.Logger) search.Reranker {
+	raw := strings.TrimSpace(os.Getenv("SEMIDX_RERANK_WEIGHT"))
+	if raw == "" {
+		return nil
+	}
+	w, err := strconv.ParseFloat(raw, 64)
+	if err != nil || w <= 0 || w > 1 {
+		log.Warn("ignoring SEMIDX_RERANK_WEIGHT (want a float in (0,1])", "value", raw)
+		return nil
+	}
+	log.Info("top-K reranker enabled", "weight", w)
+	return search.NewLexicalReranker(w)
 }
 
 // SetGitAllowFile enables file:// git URLs for server-side git sync.
