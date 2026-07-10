@@ -297,8 +297,13 @@ func TestSearchAllProjectsMergeError(t *testing.T) {
 	login(t, c, srv.URL, "admin", "supersecret")
 	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
 	code, body := postSearchJSON(t, c, srv.URL, csrf, map[string]any{"all": true, "query": "hello"})
-	if code != 400 || !strings.Contains(body, context.Canceled.Error()) {
+	// REQ-SRCH-08: infra failures return a sanitized 500 and must NOT echo the
+	// raw error back to the client.
+	if code != 500 || !strings.Contains(body, "search failed") {
 		t.Errorf("search all merge error = %d, body=%q", code, body)
+	}
+	if strings.Contains(body, context.Canceled.Error()) {
+		t.Errorf("raw error leaked to client: %q", body)
 	}
 }
 
