@@ -147,18 +147,20 @@ export function ProjectWorkspace() {
         </div>
       )}
 
-      <nav className="tab-nav">
+      <div className="tab-nav" role="tablist" aria-label="Project sections">
         {(['overview', 'files', 'ingest', 'explore', 'analyze', 'chat'] as Tab[]).map((t) => (
           <button
             key={t}
             type="button"
+            role="tab"
+            aria-selected={tab === t}
             className={`tab-btn ${tab === t ? 'active' : ''}`}
             onClick={() => setTab(t)}
           >
             {t[0].toUpperCase() + t.slice(1)}
           </button>
         ))}
-      </nav>
+      </div>
 
       {tab === 'overview' && (
         <OverviewPanel
@@ -1222,7 +1224,7 @@ function ChatPanel({
 
   return (
     <div className="chat-layout">
-      <div className="chat-log card">
+      <div className="chat-log card" role="log" aria-live="polite" aria-atomic="false">
         {messages.length === 0 && (
           <p className="muted">
             Ask anything about <strong>{project}</strong>. Answers use RAG over the
