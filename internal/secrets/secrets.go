@@ -122,7 +122,9 @@ func (d *Detector) AddGitleaksIgnore(path string) error {
 // Close releases any resources held by the detector. The underlying gitleaks
 // detector owns no closable resources here, so this is a nil-safe no-op kept
 // for symmetry with callers that defer Close.
-func (d *Detector) Close() {}
+func (d *Detector) Close() {
+	// No-op: the underlying gitleaks detector owns no closable resources.
+}
 
 // ---------------------------------------------------------------------------
 // Ignore machinery
