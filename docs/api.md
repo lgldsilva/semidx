@@ -140,12 +140,16 @@ chunks cascade). `404` if unknown.
 `POST /api/v1/projects/{project}/search` (scope `read`)
 
 ```json
-{ "query": "verify auth token", "top_k": 5, "model": "" }
+{ "query": "verify auth token", "top_k": 5, "model": "", "graph": false, "graph_depth": 2 }
 ```
 
 - `query` is required.
 - `top_k` defaults to 5 when `<= 0`.
 - `model` optionally overrides the project's stored model.
+- `graph` (default `false`) enables Graph-RAG expansion along the
+  import/dependency graph.
+- `graph_depth` bounds the expansion BFS depth when `graph` is true; it is
+  clamped to the server maximum (5) and `<= 0` uses the default.
 
 `200 OK`:
 

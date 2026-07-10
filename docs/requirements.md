@@ -13,7 +13,7 @@ what is already satisfied, and what remains. It complements:
 | [api.md](./api.md) · [openapi.yaml](./openapi.yaml) | Public HTTP contract |
 | [self-hosting.md](./self-hosting.md) · [CICD.md](./CICD.md) | Ops and release |
 | [design-decisions.md](./design-decisions.md) | ADRs (why) |
-| [../ANALISE-PRODUTO.md](../ANALISE-PRODUTO.md) | Historical audit findings (2026-07-03) |
+| [ANALISE-PRODUTO.md](./ANALISE-PRODUTO.md) | Historical audit findings (2026-07-03) |
 | [auditoria-2026-07-07.md](./auditoria-2026-07-07.md) | Snapshot audit vs roadmap |
 
 **Status legend**

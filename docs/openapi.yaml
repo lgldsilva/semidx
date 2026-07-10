@@ -569,6 +569,19 @@ components:
           description: >
             Optional model override. If empty or omitted, the project's stored
             model is used.
+        graph:
+          type: boolean
+          description: >
+            Enable Graph-RAG expansion: seed hits are expanded along the
+            import/dependency graph so related files surface even without a
+            direct match. Defaults to `false`.
+          default: false
+        graph_depth:
+          type: integer
+          description: >
+            Maximum BFS depth for Graph-RAG expansion when `graph` is true.
+            Clamped to the server's hard maximum (5); `<= 0` uses the default.
+          default: 2
       required:
         - query
 

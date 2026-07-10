@@ -24,7 +24,7 @@
 ## 2. Metodologia
 
 - Diff `git diff 7ef5333..origin/main`
-- Requisitos: [`ANALISE-PRODUTO.md`](../ANALISE-PRODUTO.md) + pilares em `.slim/worktrees/essential-plan/docs/planning/pillars/`
+- Requisitos: [`ANALISE-PRODUTO.md`](./ANALISE-PRODUTO.md) + pilares em `.slim/worktrees/essential-plan/docs/planning/pillars/`
 - Ferramentas: `go test -race -shuffle=on`, `go test -coverprofile`, golangci-lint, gosec, harness MCP (`deploy/agentics-test/run.sh keyword`)
 - Subagentes: Security Review, Bugbot (parcial), mapeamento de requisitos, arquitetura
 - Benchmarks: `internal/localstore`, `internal/chunker`, `internal/search` (500ms benchtime)
