@@ -1,6 +1,7 @@
 package webadmin
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -102,6 +103,34 @@ func TestAPISearchAndListProjects(t *testing.T) {
 	code, body = postAdminJSON(t, c, srv.URL+"/admin/api/search", csrf, map[string]any{"query": ""})
 	if code != 400 {
 		t.Fatalf("empty search = %d body=%s", code, body)
+	}
+}
+
+// TestAPISearchAllProjectsSanitizesInfraError locks REQ-SRCH-08: an
+// infrastructure failure during an all-projects search must return a generic
+// 500 without leaking the raw error (DSNs, pgx/provider internals) to the client.
+func TestAPISearchAllProjectsSanitizesInfraError(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.projects = []store.Project{{ID: 1, Name: "demo", Model: "bge-m3", Dims: 3}}
+	fs.searchProject = &store.Project{ID: 1, Name: "demo", Model: "bge-m3", Dims: 3}
+	const leak = "dial tcp 10.0.0.5:5432: connect: connection refused (dsn=postgres://user:pw@db)"
+	fs.searchErr = errors.New(leak)
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+
+	code, body := postAdminJSON(t, c, srv.URL+"/admin/api/search", csrf, map[string]any{
+		"query": "anything", "all": true, "top": 5,
+	})
+	if code != http.StatusInternalServerError {
+		t.Fatalf("all-projects infra error status = %d body=%s (want 500)", code, body)
+	}
+	if !strings.Contains(body, "search failed") {
+		t.Fatalf("body = %q, want it to contain the safe message", body)
+	}
+	if strings.Contains(body, "5432") || strings.Contains(body, "dsn=") || strings.Contains(body, "connection refused") {
+		t.Fatalf("REQ-SRCH-08 leak: raw error reached the client: %s", body)
 	}
 }
 

@@ -2,7 +2,9 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -40,13 +42,26 @@ func (b *localBackend) Search(ctx context.Context, project, query, model string,
 		Graph: graph, GraphMaxDepth: graphDepth,
 	})
 	if err != nil {
-		return nil, err
+		return nil, safeSearchErr(err)
 	}
 	out := &SearchOutput{Project: resp.Project.Name, Fallback: resp.Fallback}
 	for _, r := range resp.Results {
 		out.Results = append(out.Results, Hit{Path: r.FilePath, StartLine: r.StartLine, EndLine: r.EndLine, Score: r.Score, Content: r.Content})
 	}
 	return out, nil
+}
+
+// safeSearchErr maps a raw search error to one safe to surface to the agent
+// (REQ-SRCH-08). "project not found" stays actionable; anything else carries
+// database/provider internals (DSNs, pgx errors, provider response bodies), so
+// it is logged to stderr and collapsed to a generic message. The remote backend
+// needs no such guard — the server already sanitizes before the wire.
+func safeSearchErr(err error) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return errors.New("project not found")
+	}
+	slog.Error("mcp search failed", "err", err)
+	return errors.New("search failed")
 }
 
 func (b *localBackend) Projects(ctx context.Context) ([]ProjectInfo, error) {

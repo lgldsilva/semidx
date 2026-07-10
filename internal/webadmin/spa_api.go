@@ -474,6 +474,13 @@ func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	if body.All {
 		d := &searchData{Query: body.Query, AllProjects: true, Top: topK, Ran: true}
 		if err := a.searchAllProjects(r.Context(), d, topK); err != nil {
+			// Infra failures are collapsed to a safe sentinel upstream
+			// (REQ-SRCH-08) and reported as 500; the remaining errors are
+			// intentional, safe user messages (e.g. "no indexed projects").
+			if errors.Is(err, errSearchFailed) {
+				writeJSONErr(w, http.StatusInternalServerError, errSearchFailed.Error())
+				return
+			}
 			writeJSONErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
