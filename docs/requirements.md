@@ -159,7 +159,7 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-UI-06 | Table actions stay inside the grid (Open + overflow menu) | **partial** | UX polish in progress |
 | REQ-UI-07 | Bulk folder / archive upload for push projects | **done** | Folder batching + `.zip` ingest in Admin UI/API |
 | REQ-UI-08 | File detail panel: chunks, dependency fan-out, caller fan-in, deep links | **partial** | Chunks + fan-in/fan-out delivered; deeper graph UX pending |
-| REQ-UI-09 | Graph visualization (or progressive disclosure of graph stats) | **todo** | |
+| REQ-UI-09 | Graph visualization (or progressive disclosure of graph stats) | **done** | Graph overview in Analyze: node/edge counts + top out-/in-degree nodes (`/graph-stats`); CSP-safe, no external viz lib |
 | REQ-UI-10 | Dead-code, SBOM, secrets, diff, alerts, insights surfaces where CLI has them | **todo** | Or link out to CLI guide with status |
 | REQ-UI-11 | First-run / empty-state guidance (no projects → how to add) | **done** | Projects empty-state onboarding flow |
 

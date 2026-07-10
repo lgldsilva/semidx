@@ -263,6 +263,13 @@ export const api = {
     request<{ dependencies: string[]; count: number }>(
       `/admin/api/projects/${encodeURIComponent(name)}/deps?path=${encodeURIComponent(path)}`,
     ),
+  projectGraphStats: (name: string) =>
+    request<{
+      nodes: number
+      edges: number
+      top_depends: { node: string; degree: number }[]
+      top_depended: { node: string; degree: number }[]
+    }>(`/admin/api/projects/${encodeURIComponent(name)}/graph-stats`),
   projectDeadCode: (name: string, limit = 100) =>
     request<{
       findings: {
