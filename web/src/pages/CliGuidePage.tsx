@@ -53,10 +53,11 @@ semidx logout`}</pre>
           <li>List / create git projects / delete</li>
           <li>Queue reindex jobs and watch status</li>
           <li>Semantic search (one project or all)</li>
+          <li>Ingest files, folders and .zip archives into push projects</li>
         </ul>
         <p className="muted">
-          Bulk file upload from the browser is not in this slice — use{' '}
-          <code>semidx push</code> or <code>repo add</code>. More screens
+          For large repositories the CLI (<code>semidx push</code> or{' '}
+          <code>repo add</code>) is still the fastest path. More screens
           (keys, alerts, analyze) come next on the same SPA shell.
         </p>
       </div>

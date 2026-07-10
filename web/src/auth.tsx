@@ -6,7 +6,7 @@ import {
   useMemo,
   useState,
 } from 'react'
-import { api, ApiError, setCsrf, type User } from './api'
+import { api, ApiError, setCsrf, setUnauthorizedHandler, type User } from './api'
 
 type AuthState = {
   user: User | null
@@ -42,6 +42,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  // Any 401 mid-session clears the user; the Private route then redirects to
+  // /login instead of stranding the page on a generic error.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setUser(null)
+      setCsrf('')
+    })
+    return () => setUnauthorizedHandler(null)
+  }, [])
 
   const login = useCallback(async (username: string, password: string, remember: boolean) => {
     const me = await api.login(username, password, remember)
