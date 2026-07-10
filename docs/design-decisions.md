@@ -99,21 +99,39 @@ This document records the main architectural decisions made during the evolution
 - **SQLite** (validated without Docker): brute-force cosine already scans the
   project's chunks in Go, so it just joins to the dictionary for the vector.
   No ANN, no recall concern — implemented and unit-tested first as the reference.
-- **Postgres — open decision (needs Docker + benchmark, RNF01 ≤5 ms/batch)**:
-  moving the vector to the shared dictionary means the **HNSW ANN index lives on
-  the dictionary**, and per-project search becomes *ANN-over-global-dictionary +
-  join-to-chunks-filtered-by-project*. A **global** ANN returns the top-K across
-  **all** projects, which can miss a project's best local matches (recall
-  regression for multi-project servers). Options to benchmark before cutover:
-  (a) keep a per-project HNSW (partial index / filtered), (b) over-fetch then
-  re-rank after the project join, (c) keep the per-project `embedding` column on
-  Postgres until (a)/(b) proves out. **Until benchmarked, Postgres retains the
-  current per-project embedding**; the storage win lands first on SQLite.
-- **Migration & GC**: additive — add `input_hash` to `chunks_<dims>`, backfill,
-  switch reads, then drop the `embedding` column in a later step (no big-bang).
-  RF05 GC: a dictionary row is orphaned when no chunk references its
-  `(input_hash, model)`; prune via `semidx cache` (LRU/TTL or orphan sweep).
-  RNF02: project/file delete cascades chunk rows only — never the dictionary.
+- **Postgres — BENCHMARKED, decision: keep the per-project `embedding` (option
+  c).** Moving the vector to the shared dictionary would put the HNSW ANN index
+  on the dictionary, forcing per-project search into one of two losing shapes.
+  `TestDedupRecallBenchmark` (`internal/store/dedup_bench_test.go`, pgvector
+  testcontainer, 16 projects × ~240 chunks, dims 256, `hnsw.ef_search=100`)
+  measured, against Go-computed exact ground truth:
+  | search | recall@10 | p50 |
+  |---|---|---|
+  | baseline (inline vector, ANN + project filter) | **1.000** | 0.47 ms |
+  | dedup global-ANN over-fetch ×1 / ×4 / ×8 / ×16 | 0.099 / 0.398 / 0.769 / 0.993 | ~2 ms |
+  | dedup project-first (exact rank, no dict ANN) | 1.000 | 1.11 ms (buffers 725 vs 38) |
+  - **Option (b) global-ANN + over-fetch**: severe recall regression — needs
+    ~16× over-fetch just to match baseline, and the required factor grows with
+    the project count (the global top-K is dominated by *other* projects'
+    vectors), so it does not scale to a multi-project server.
+  - **Option (a)/project-first exact**: recall-correct but abandons the ANN — the
+    `EXPLAIN` shows a per-row dictionary lookup (240 loops, 19× the buffer I/O)
+    and, crucially, **cannot use the dictionary HNSW**, degenerating to a
+    sequential scan for large projects — the exact failure the HNSW was added to
+    fix (§6).
+  - Baseline lets Postgres pick the optimal plan per project size (exact filter
+    for small projects, HNSW for large) at recall 1.000 / ~0.5 ms. The storage
+    saving (1.66× here) does not justify breaking that. **RF04 (skip the
+    redundant embedding *API call*) and RF01/RF02 (dictionary keyed by
+    content-hash + model) are already met on Postgres by `embedding_cache_<dims>`**
+    — only redundant vector *storage* remains, an acceptable trade. The storage
+    win therefore lands on SQLite (brute-force scan, no ANN, no recall concern),
+    shipped here; Postgres keeps its per-project `embedding` unchanged.
+  - Reproduce: `SEMIDX_BENCH_DEDUP=1 go test ./internal/store -run
+    TestDedupRecallBenchmark -v` (skipped in normal `go test ./...`).
+- **GC (RF05 / RNF02)** on SQLite: a dictionary row is orphaned when no chunk
+  references its `emb_hash`; `PruneOrphanEmbeddings` sweeps them. Project/file
+  delete cascades chunk rows only — never the dictionary (RNF02).
 
 ---
 
