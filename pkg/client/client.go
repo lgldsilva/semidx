@@ -159,12 +159,24 @@ func (c *Client) Healthz(ctx context.Context) error {
 	return c.do(ctx, http.MethodGet, "/healthz", nil, nil)
 }
 
-// Search runs a search over a project. When keyword is true the server searches
+// SearchParams carries the optional knobs for Client.Search. Grouping them in a
+// struct keeps Search under the parameter-count limit (S107) and lets callers
+// set only what they need (zero values mean: default model/top-k, semantic
+// search, no graph expansion).
+type SearchParams struct {
+	Model      string // optional model override; "" uses the project's stored model
+	TopK       int    // <= 0 lets the server default it
+	Keyword    bool   // keyword-only search; never contacts the embedding provider
+	Graph      bool   // expand results via the dependency graph (Graph-RAG)
+	GraphDepth int    // max BFS depth for graph expansion
+}
+
+// Search runs a search over a project. With Params.Keyword the server searches
 // by keyword only and never contacts the embedding provider (the remote-mode
 // equivalent of the CLI's --keyword); otherwise it runs a semantic search that
 // transparently falls back to keyword when embeddings are unavailable.
-func (c *Client) Search(ctx context.Context, project, query, model string, topK int, keyword, graph bool, graphDepth int) (*SearchResponse, error) {
-	body := map[string]any{"query": query, "top_k": topK, "model": model, "keyword": keyword, "graph": graph, "graph_depth": graphDepth}
+func (c *Client) Search(ctx context.Context, project, query string, p SearchParams) (*SearchResponse, error) {
+	body := map[string]any{"query": query, "top_k": p.TopK, "model": p.Model, "keyword": p.Keyword, "graph": p.Graph, "graph_depth": p.GraphDepth}
 	var out SearchResponse
 	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/search", body, &out); err != nil {
 		return nil, err

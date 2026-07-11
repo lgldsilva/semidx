@@ -10,6 +10,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/searchtargets"
+	"github.com/lgldsilva/semidx/pkg/client"
 )
 
 // projSearch is one project's search outcome (used to render single- and
@@ -73,7 +74,10 @@ func (d *deps) runRemoteSearch(ctx context.Context, call searchCall) ([]projSear
 	if err != nil {
 		return nil, err
 	}
-	resp, err := api.Search(ctx, p.Name, call.query, call.model, call.topK, call.keywordOnly, call.graph, call.graphDepth)
+	resp, err := api.Search(ctx, p.Name, call.query, client.SearchParams{
+		Model: call.model, TopK: call.topK, Keyword: call.keywordOnly,
+		Graph: call.graph, GraphDepth: call.graphDepth,
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/searchtargets"
 	"github.com/lgldsilva/semidx/internal/xdg"
+	"github.com/lgldsilva/semidx/pkg/client"
 )
 
 // Alert represents a saved search alert.
@@ -303,7 +304,7 @@ func searchAlertRemote(ctx context.Context, d *deps, a Alert) (*search.Response,
 	if err != nil {
 		return nil, fmt.Errorf("resolve project: %w", err)
 	}
-	sr, err := api.Search(ctx, p.Name, a.Query, "", 50, false, false, 0)
+	sr, err := api.Search(ctx, p.Name, a.Query, client.SearchParams{TopK: 50})
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
