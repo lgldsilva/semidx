@@ -7,9 +7,35 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// defaultEmbedTimeout bounds a single embedding HTTP call. It is generous
+// because the provider may be a wake-on-demand proxy (e.g. llamacpp-proxy) whose
+// first call after idle pays a container cold-start of tens of seconds; a 30s
+// ceiling tripped the circuit breaker on every cold host. Override per-deploy
+// with SEMIDX_EMBED_TIMEOUT.
+const defaultEmbedTimeout = 90 * time.Second
+
+// embedTimeout resolves the embedding HTTP client timeout, honoring
+// SEMIDX_EMBED_TIMEOUT (a Go duration like "90s" or a bare seconds count).
+// Invalid or non-positive values fall back to the default.
+func embedTimeout() time.Duration {
+	v := strings.TrimSpace(os.Getenv("SEMIDX_EMBED_TIMEOUT"))
+	if v == "" {
+		return defaultEmbedTimeout
+	}
+	if d, err := time.ParseDuration(v); err == nil && d > 0 {
+		return d
+	}
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return time.Duration(n) * time.Second
+	}
+	return defaultEmbedTimeout
+}
 
 // OllamaClient talks to a local Ollama server's native embedding API.
 type OllamaClient struct {
@@ -46,7 +72,7 @@ func NewOllamaClient(baseURL string) *OllamaClient {
 	return &OllamaClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: embedTimeout(),
 			Transport: &http.Transport{
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 10,
