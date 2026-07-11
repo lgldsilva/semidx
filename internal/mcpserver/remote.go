@@ -14,7 +14,9 @@ type clientBackend struct{ c *client.Client }
 func NewClientBackend(c *client.Client) Backend { return &clientBackend{c: c} }
 
 func (b *clientBackend) Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchOutput, error) {
-	resp, err := b.c.Search(ctx, project, query, model, topK, false, graph, graphDepth)
+	resp, err := b.c.Search(ctx, project, query, client.SearchParams{
+		Model: model, TopK: topK, Graph: graph, GraphDepth: graphDepth,
+	})
 	if err != nil {
 		return nil, err
 	}

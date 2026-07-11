@@ -16,6 +16,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/searchtargets"
 	"github.com/lgldsilva/semidx/internal/xdg"
+	"github.com/lgldsilva/semidx/pkg/client"
 )
 
 // Insight holds the trend data for a tracked query.
@@ -221,7 +222,7 @@ func countMatches(cmd *cobra.Command, d *deps, project, query string) (int, erro
 		if err != nil {
 			return 0, err
 		}
-		sr, err := api.Search(ctx, p.Name, query, "", 500, false, false, 0)
+		sr, err := api.Search(ctx, p.Name, query, client.SearchParams{TopK: 500})
 		if err != nil {
 			return 0, err
 		}

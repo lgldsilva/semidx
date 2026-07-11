@@ -48,7 +48,7 @@ func TestSearch(t *testing.T) {
 	})
 	defer done()
 
-	resp, err := c.Search(context.Background(), "proj", "auth", "", 5, false, false, 0)
+	resp, err := c.Search(context.Background(), "proj", "auth", SearchParams{TopK: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestSearchKeywordForwarded(t *testing.T) {
 	})
 	defer done()
 
-	if _, err := c.Search(context.Background(), "proj", "auth", "", 5, true, false, 0); err != nil {
+	if _, err := c.Search(context.Background(), "proj", "auth", SearchParams{TopK: 5, Keyword: true}); err != nil {
 		t.Fatal(err)
 	}
 }
