@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // --- OpenAIClient -----------------------------------------------------------
@@ -472,5 +473,38 @@ func TestChainListModelsSkipsFailingProvider(t *testing.T) {
 	}
 	if len(models) != 1 || models[0] != "good-model" {
 		t.Errorf("models = %v, want [good-model]", models)
+	}
+}
+
+// --- embedTimeout -----------------------------------------------------------
+
+func TestEmbedTimeout(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		want time.Duration
+	}{
+		{"unset uses default", "", defaultEmbedTimeout},
+		{"duration string", "45s", 45 * time.Second},
+		{"bare seconds", "120", 120 * time.Second},
+		{"invalid falls back", "nonsense", defaultEmbedTimeout},
+		{"zero falls back", "0", defaultEmbedTimeout},
+		{"negative falls back", "-5s", defaultEmbedTimeout},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SEMIDX_EMBED_TIMEOUT", tc.env)
+			if got := embedTimeout(); got != tc.want {
+				t.Errorf("embedTimeout() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewOllamaClientUsesConfiguredTimeout(t *testing.T) {
+	t.Setenv("SEMIDX_EMBED_TIMEOUT", "50s")
+	c := NewOllamaClient("http://x")
+	if c.client.Timeout != 50*time.Second {
+		t.Errorf("client timeout = %v, want 50s", c.client.Timeout)
 	}
 }
