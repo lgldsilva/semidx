@@ -184,6 +184,13 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 - The worktree filter applies to **git** projects only; document/push projects
   ignore it (else searching them from inside an unrelated repo returns nothing).
 - MCP stdio: keep the server's stdout for the protocol (logs go to stderr).
+- CI: `setup-go` runs with `cache: false` on purpose. semidx's Go cache balloons
+  to ~3.5 GB (many `go run …@version` tool builds + `-race` + testcontainers),
+  and the act_runner artifactcache times out / EOFs uploading it over the
+  WireGuard link — intermittently failing whichever job's cache-save loses the
+  race. Re-downloading modules each run is slower but reliable. Do **not**
+  re-enable the cache without first shrinking it or moving to a host-persistent
+  cache on the runners.
 
 ## Docs
 
