@@ -123,25 +123,37 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		return nil, err
 	}
 
-	// Optional top-K rerank (REQ-SRCH-11), applied to the base results before
-	// graph expansion so the strongest matches seed the BFS. No-op when disabled.
-	if s.reranker != nil && len(resp.Results) > 1 {
-		resp.Results = s.reranker.Rerank(ctx, req.Query, resp.Results)
-	}
-
-	if req.Graph {
-		expanded, gerr := s.expandByGraph(ctx, &req, resp.Results, project.ID, dims)
-		if gerr != nil {
-			slog.Warn("graph expansion failed (continuing with original results)",
-				"project", project.Name,
-				"error", gerr,
-			)
-		} else if len(expanded) > 0 {
-			resp.Results = mergeGraphResults(resp.Results, expanded)
-		}
-	}
-
+	s.applyRerank(ctx, req.Query, resp)
+	s.applyGraphExpansion(ctx, &req, resp, project.ID, dims)
 	return resp, nil
+}
+
+// applyRerank reorders the top-K with the configured reranker (REQ-SRCH-11),
+// before graph expansion so the strongest matches seed the BFS. No-op when no
+// reranker is set or there is nothing to reorder.
+func (s *Service) applyRerank(ctx context.Context, query string, resp *Response) {
+	if s.reranker != nil && len(resp.Results) > 1 {
+		resp.Results = s.reranker.Rerank(ctx, query, resp.Results)
+	}
+}
+
+// applyGraphExpansion expands the results via the dependency graph when
+// req.Graph is set, logging and continuing with the original results on failure.
+func (s *Service) applyGraphExpansion(ctx context.Context, req *Request, resp *Response, projectID, dims int) {
+	if !req.Graph {
+		return
+	}
+	expanded, gerr := s.expandByGraph(ctx, req, resp.Results, projectID, dims)
+	if gerr != nil {
+		slog.Warn("graph expansion failed (continuing with original results)",
+			"project", resp.Project.Name,
+			"error", gerr,
+		)
+		return
+	}
+	if len(expanded) > 0 {
+		resp.Results = mergeGraphResults(resp.Results, expanded)
+	}
 }
 
 func worktreeFilter(project *store.Project, reqWorktree string) string {
