@@ -221,7 +221,7 @@ func countMatches(cmd *cobra.Command, d *deps, project, query string) (int, erro
 		if err != nil {
 			return 0, err
 		}
-		sr, err := api.Search(ctx, p.Name, query, "", 500, false, 0)
+		sr, err := api.Search(ctx, p.Name, query, "", 500, false, false, 0)
 		if err != nil {
 			return 0, err
 		}

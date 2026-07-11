@@ -159,9 +159,12 @@ func (c *Client) Healthz(ctx context.Context) error {
 	return c.do(ctx, http.MethodGet, "/healthz", nil, nil)
 }
 
-// Search runs a semantic search over a project.
-func (c *Client) Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchResponse, error) {
-	body := map[string]any{"query": query, "top_k": topK, "model": model, "graph": graph, "graph_depth": graphDepth}
+// Search runs a search over a project. When keyword is true the server searches
+// by keyword only and never contacts the embedding provider (the remote-mode
+// equivalent of the CLI's --keyword); otherwise it runs a semantic search that
+// transparently falls back to keyword when embeddings are unavailable.
+func (c *Client) Search(ctx context.Context, project, query, model string, topK int, keyword, graph bool, graphDepth int) (*SearchResponse, error) {
+	body := map[string]any{"query": query, "top_k": topK, "model": model, "keyword": keyword, "graph": graph, "graph_depth": graphDepth}
 	var out SearchResponse
 	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/search", body, &out); err != nil {
 		return nil, err

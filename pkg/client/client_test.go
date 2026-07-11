@@ -38,6 +38,9 @@ func TestSearch(t *testing.T) {
 		if body["query"] != "auth" {
 			t.Errorf("query = %v", body["query"])
 		}
+		if body["keyword"] != false {
+			t.Errorf("keyword = %v, want false (semantic search)", body["keyword"])
+		}
 		_ = json.NewEncoder(w).Encode(SearchResponse{
 			Project: "proj", Model: "bge-m3",
 			Results: []SearchHit{{Path: "a.go", StartLine: 3, Score: 0.9, Content: "x"}},
@@ -45,12 +48,32 @@ func TestSearch(t *testing.T) {
 	})
 	defer done()
 
-	resp, err := c.Search(context.Background(), "proj", "auth", "", 5, false, 0)
+	resp, err := c.Search(context.Background(), "proj", "auth", "", 5, false, false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp.Project != "proj" || len(resp.Results) != 1 || resp.Results[0].StartLine != 3 {
 		t.Errorf("resp = %+v", resp)
+	}
+}
+
+// TestSearchKeywordForwarded verifies the client forwards keyword-only mode to
+// the server (the remote-mode --keyword path), so an embedding outage never
+// blocks a keyword search.
+func TestSearchKeywordForwarded(t *testing.T) {
+	c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requireAuth(t, r)
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["keyword"] != true {
+			t.Errorf("keyword = %v, want true", body["keyword"])
+		}
+		_ = json.NewEncoder(w).Encode(SearchResponse{Project: "proj", Model: "bge-m3"})
+	})
+	defer done()
+
+	if _, err := c.Search(context.Background(), "proj", "auth", "", 5, true, false, 0); err != nil {
+		t.Fatal(err)
 	}
 }
 
