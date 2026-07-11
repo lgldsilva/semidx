@@ -23,13 +23,14 @@ type projSearch struct {
 // searchCall groups parameters for runRemoteSearch / runLocalSearch to keep
 // parameter count ≤ 7 (addresses S107).
 type searchCall struct {
-	projectArg string
-	query      string
-	model      string
-	topK       int
-	privacy    bool
-	graph      bool
-	graphDepth int
+	projectArg  string
+	query       string
+	model       string
+	topK        int
+	privacy     bool
+	keywordOnly bool
+	graph       bool
+	graphDepth  int
 }
 
 // runSearchTargets resolves which project(s) to search and runs the query
@@ -45,13 +46,14 @@ func (d *deps) runSearchTargets(cmd *cobra.Command, projectArg, query, model str
 	ctx := cmd.Context()
 	graph, graphDepth := searchGraphOpts(cmd)
 	call := searchCall{
-		projectArg: projectArg,
-		query:      query,
-		model:      model,
-		topK:       topK,
-		privacy:    privacy,
-		graph:      graph,
-		graphDepth: graphDepth,
+		projectArg:  projectArg,
+		query:       query,
+		model:       model,
+		topK:        topK,
+		privacy:     privacy,
+		keywordOnly: d.keywordOnly,
+		graph:       graph,
+		graphDepth:  graphDepth,
 	}
 	if d.remote() {
 		return d.runRemoteSearch(ctx, call)
@@ -71,7 +73,7 @@ func (d *deps) runRemoteSearch(ctx context.Context, call searchCall) ([]projSear
 	if err != nil {
 		return nil, err
 	}
-	resp, err := api.Search(ctx, p.Name, call.query, call.model, call.topK, call.graph, call.graphDepth)
+	resp, err := api.Search(ctx, p.Name, call.query, call.model, call.topK, call.keywordOnly, call.graph, call.graphDepth)
 	if err != nil {
 		return nil, err
 	}

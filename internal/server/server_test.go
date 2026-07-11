@@ -506,6 +506,27 @@ func TestSearchRetryableError(t *testing.T) {
 	}
 }
 
+// TestSearchKeywordBypassesEmbedder verifies that keyword:true makes the server
+// run a keyword-only search that never touches the embedding provider — so a
+// request succeeds even when the embedder would return a retryable error (an
+// open circuit breaker). This is the remote-mode escape hatch for --keyword.
+func TestSearchKeywordBypassesEmbedder(t *testing.T) {
+	emb := &retryableEmbedder{after: time.Second}
+	srv := New(&fakeStore{
+		token:   &store.Token{Scopes: []string{"read"}},
+		project: &store.Project{ID: 1, Name: "proj", Model: "m"},
+		results: []store.SearchResult{{FilePath: "a.go", StartLine: 1, Content: "x"}},
+	}, emb, nil)
+
+	rec := do(t, srv, "POST", "/api/v1/projects/proj/search", "tok", `{"query":"test","keyword":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("keyword search should succeed despite a failing embedder; got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "a.go") {
+		t.Errorf("expected keyword results in body; got %s", rec.Body.String())
+	}
+}
+
 func TestTokenGenerationAndHash(t *testing.T) {
 	p1, h1, err := GenerateToken()
 	if err != nil {

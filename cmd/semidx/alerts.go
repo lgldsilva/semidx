@@ -303,7 +303,7 @@ func searchAlertRemote(ctx context.Context, d *deps, a Alert) (*search.Response,
 	if err != nil {
 		return nil, fmt.Errorf("resolve project: %w", err)
 	}
-	sr, err := api.Search(ctx, p.Name, a.Query, "", 50, false, 0)
+	sr, err := api.Search(ctx, p.Name, a.Query, "", 50, false, false, 0)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}

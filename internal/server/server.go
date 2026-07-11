@@ -313,6 +313,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Query      string `json:"query"`
 		TopK       int    `json:"top_k"`
 		Model      string `json:"model"`
+		Keyword    bool   `json:"keyword"`
 		Graph      bool   `json:"graph"`
 		GraphDepth int    `json:"graph_depth"`
 	}
@@ -332,7 +333,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	resp, err := s.search.Search(r.Context(), search.Request{
 		Project: project, Query: body.Query, Model: body.Model, TopK: body.TopK,
-		Graph: body.Graph, GraphMaxDepth: body.GraphDepth,
+		KeywordOnly: body.Keyword, Graph: body.Graph, GraphMaxDepth: body.GraphDepth,
 	})
 	if err != nil {
 		s.log.Warn("search failed", "project", project, "err", err)
