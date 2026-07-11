@@ -115,7 +115,12 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	worktree := worktreeFilter(project, req.Worktree)
 
 	if req.KeywordOnly {
-		resp, err = s.searchKeywordOnly(ctx, project.ID, req, dims, worktree, resp)
+		// Keyword-only search must target the table where the project's chunks
+		// actually live. Pass the project's recorded dims (0 lets the store
+		// resolve/probe) rather than a fixed KeywordDims bucket, which only
+		// exists for keyword-only-indexed projects and 500s ("relation chunks_1
+		// does not exist") on a project indexed with embeddings.
+		resp, err = s.searchKeywordOnly(ctx, project.ID, req, project.Dims, worktree, resp)
 	} else {
 		resp, err = s.searchSemantic(ctx, project.ID, req, model, dims, worktree, resp)
 	}
@@ -164,7 +169,7 @@ func worktreeFilter(project *store.Project, reqWorktree string) string {
 }
 
 func (s *Service) searchKeywordOnly(ctx context.Context, projectID int, req Request, dims int, worktree string, resp *Response) (*Response, error) {
-	results, err := s.keywordSearch(ctx, projectID, req.Query, store.KeywordDims, req.TopK, worktree)
+	results, err := s.keywordSearch(ctx, projectID, req.Query, dims, req.TopK, worktree)
 	if err != nil {
 		return nil, err
 	}

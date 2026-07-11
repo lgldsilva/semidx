@@ -27,6 +27,7 @@ type fakeStore struct {
 	usedKW       bool
 	usedWorktree bool
 	gotTopK      int
+	gotKWDims    int
 }
 
 func (f *fakeStore) GetProject(ctx context.Context, name string) (*store.Project, error) {
@@ -78,6 +79,7 @@ func (f *fakeStore) SearchSimilarKeywords(ctx context.Context, projectID int, qu
 	f.mu.Lock()
 	f.usedKW = true
 	f.gotTopK = topK
+	f.gotKWDims = dims
 	f.mu.Unlock()
 	if f.kwErr != nil {
 		return nil, f.kwErr
@@ -207,7 +209,7 @@ func TestSearchModelOverride(t *testing.T) {
 // a broken embedder is never called) and does not flag the result as a fallback.
 func TestSearchKeywordOnly(t *testing.T) {
 	fs := &fakeStore{
-		project:   &store.Project{ID: 7, Name: "p", Model: "bge-m3"},
+		project:   &store.Project{ID: 7, Name: "p", Model: "bge-m3", Dims: 1024},
 		kwResults: []store.SearchResult{{FilePath: "a.go", Content: "x", StartLine: 1}},
 	}
 	// A failing embedder: if Search touched it, we'd see a fallback or an error.
@@ -219,6 +221,11 @@ func TestSearchKeywordOnly(t *testing.T) {
 	}
 	if !fs.usedKW {
 		t.Error("KeywordOnly did not use keyword search")
+	}
+	// Must search the table where the project's chunks live (project.Dims), not
+	// the fixed KeywordDims bucket — else an embedding-indexed project 500s.
+	if fs.gotKWDims != 1024 {
+		t.Errorf("keyword search dims = %d, want the project's 1024 (not KeywordDims)", fs.gotKWDims)
 	}
 	if resp.Fallback {
 		t.Error("KeywordOnly should not set Fallback (it's intentional, not a fallback)")
