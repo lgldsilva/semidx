@@ -1,9 +1,0 @@
--- +goose Up
-ALTER TABLE index_jobs ADD COLUMN IF NOT EXISTS payload TEXT;
-ALTER TABLE index_jobs ADD COLUMN IF NOT EXISTS deleted_files INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE index_jobs ADD COLUMN IF NOT EXISTS error_count INTEGER NOT NULL DEFAULT 0;
-
--- +goose Down
-ALTER TABLE index_jobs DROP COLUMN IF EXISTS error_count;
-ALTER TABLE index_jobs DROP COLUMN IF EXISTS deleted_files;
-ALTER TABLE index_jobs DROP COLUMN IF EXISTS payload;
