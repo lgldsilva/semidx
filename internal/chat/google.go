@@ -69,12 +69,16 @@ func (e *HTTPError) Error() string {
 type googleStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string                `json:"content"`
+			ToolCalls []openAIDeltaToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Model string `json:"model,omitempty"`
 }
+
+// SupportsTools reports whether Google AI Studio supports tool calling.
+func (c *GoogleClient) SupportsTools() bool { return true }
 
 // SendMessage sends a chat completion request to Google AI Studio.
 func (c *GoogleClient) SendMessage(ctx context.Context, req Request) (*Response, error) {
@@ -114,7 +118,7 @@ func (c *GoogleClient) StreamMessage(ctx context.Context, req Request) (<-chan S
 	}
 
 	ch := make(chan StreamChunk)
-	go streamSSEResponse(resp, ch)
+	go streamSSEResponse(ctx, resp, ch)
 
 	return ch, nil
 }
@@ -123,42 +127,18 @@ func (c *GoogleClient) buildStreamPayload(req Request) ([]byte, error) {
 	return json.Marshal(buildOpenAIChatRequest(req, true))
 }
 
-func streamSSEResponse(resp *http.Response, ch chan<- StreamChunk) {
-	defer func() { _ = resp.Body.Close() }()
+func streamSSEResponse(ctx context.Context, resp *http.Response, ch chan<- StreamChunk) {
 	defer close(ch)
+	defer func() { _ = resp.Body.Close() }()
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
+	// Accumulator for streaming tool calls, keyed by index.
+	toolAcc := make(map[int]*ToolCall)
+
 	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			ch <- StreamChunk{Done: true}
-			return
-		}
-
-		var streamResp googleStreamChunk
-		if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
-			continue
-		}
-
-		if len(streamResp.Choices) == 0 {
-			continue
-		}
-
-		chunk := streamResp.Choices[0]
-		content := chunk.Delta.Content
-		modelName := streamResp.Model
-
-		if content != "" {
-			ch <- StreamChunk{Content: content, Model: modelName}
-		}
-		if chunk.FinishReason != "" {
-			ch <- StreamChunk{Done: true, Model: modelName}
+		if processStreamLine(ctx, scanner.Text(), toolAcc, ch) {
 			return
 		}
 	}
@@ -166,5 +146,118 @@ func streamSSEResponse(resp *http.Response, ch chan<- StreamChunk) {
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "chat stream scan error: %v\n", err)
 	}
-	ch <- StreamChunk{Done: true}
+	if len(toolAcc) > 0 {
+		select {
+		case ch <- StreamChunk{ToolCalls: finalizeToolCalls(toolAcc), Done: true}:
+		case <-ctx.Done():
+		}
+		return
+	}
+	select {
+	case ch <- StreamChunk{Done: true}:
+	case <-ctx.Done():
+	}
+}
+
+// processStreamLine handles one SSE data line. Returns true when streaming is
+// complete (either [DONE] or a finish_reason was received).
+func processStreamLine(ctx context.Context, line string, toolAcc map[int]*ToolCall, ch chan<- StreamChunk) bool {
+	if !strings.HasPrefix(line, "data: ") {
+		return false
+	}
+	data := strings.TrimPrefix(line, "data: ")
+	if data == "[DONE]" {
+		if len(toolAcc) > 0 {
+			select {
+			case ch <- StreamChunk{ToolCalls: finalizeToolCalls(toolAcc), Done: true}:
+			case <-ctx.Done():
+			}
+		} else {
+			select {
+			case ch <- StreamChunk{Done: true}:
+			case <-ctx.Done():
+			}
+		}
+		return true
+	}
+
+	var streamResp googleStreamChunk
+	if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
+		return false
+	}
+
+	if len(streamResp.Choices) == 0 {
+		return false
+	}
+
+	chunk := streamResp.Choices[0]
+	content := chunk.Delta.Content
+	modelName := streamResp.Model
+
+	handleToolCallDelta(chunk.Delta.ToolCalls, toolAcc)
+
+	if content != "" {
+		select {
+		case ch <- StreamChunk{Content: content, Model: modelName}:
+		case <-ctx.Done():
+		}
+	}
+
+	if chunk.FinishReason != "" {
+		if len(toolAcc) > 0 {
+			select {
+			case ch <- StreamChunk{ToolCalls: finalizeToolCalls(toolAcc), Done: true, Model: modelName}:
+			case <-ctx.Done():
+			}
+		} else {
+			select {
+			case ch <- StreamChunk{Done: true, Model: modelName}:
+			case <-ctx.Done():
+			}
+		}
+		return true
+	}
+
+	return false
+}
+
+// handleToolCallDelta accumulates streaming tool call deltas into the
+// accumulator map, keyed by the delta's index.
+func handleToolCallDelta(deltas []openAIDeltaToolCall, toolAcc map[int]*ToolCall) {
+	for _, dtc := range deltas {
+		tc, ok := toolAcc[dtc.Index]
+		if !ok {
+			tc = &ToolCall{ID: dtc.ID, Name: ""}
+			toolAcc[dtc.Index] = tc
+		}
+		if dtc.ID != "" {
+			tc.ID = dtc.ID
+		}
+		if dtc.Function != nil {
+			if dtc.Function.Name != "" {
+				tc.Name = dtc.Function.Name
+			}
+			tc.Args += dtc.Function.Arguments
+		}
+	}
+}
+
+// finalizeToolCalls converts the accumulated tool call map into a sorted slice.
+func finalizeToolCalls(acc map[int]*ToolCall) []ToolCall {
+	if len(acc) == 0 {
+		return nil
+	}
+	maxIdx := 0
+	for idx := range acc {
+		if idx > maxIdx {
+			maxIdx = idx
+		}
+	}
+	out := make([]ToolCall, 0, len(acc))
+	for i := 0; i <= maxIdx; i++ {
+		if tc, ok := acc[i]; ok {
+			out = append(out, *tc)
+		}
+	}
+	return out
 }

@@ -17,6 +17,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/repotools"
 	"github.com/lgldsilva/semidx/internal/search"
 )
 
@@ -70,6 +72,25 @@ type Backend interface {
 	Reindex(ctx context.Context, project, jobType string) (string, error)
 	// Status returns the indexing status of a registered project.
 	Status(ctx context.Context, project string) (*StatusInfo, error)
+	// Capabilities reports what the current runtime backend can do (local git,
+	// chat LLM, etc.). Used for tool gating and agent introspection.
+	Capabilities() agent.Capabilities
+}
+
+// GitBackend extends Backend with read-only git workspace tools. Only
+// implemented by the local backend (remote clients cannot see worktrees).
+type GitBackend interface {
+	Backend
+	Worktrees(ctx context.Context, project string) ([]repotools.Worktree, error)
+	Branches(ctx context.Context, project string, remote bool) ([]repotools.Branch, error)
+	GitStatus(ctx context.Context, project string) (*repotools.RepoStatus, error)
+}
+
+// MultiSearchBackend extends Backend with cross-project search. Implemented
+// by the local backend; the remote backends may support it later.
+type MultiSearchBackend interface {
+	Backend
+	SearchMulti(ctx context.Context, req search.MultiScopeRequest) (*search.MultiResponse, error)
 }
 
 // New builds an MCP server whose tools call the given backend.
@@ -95,6 +116,32 @@ func New(b Backend) *mcp.Server {
 		Name:        "semantic_status",
 		Description: "Get the indexing status of a registered project. Reports file count, status, and model.",
 	}, statusHandler(b))
+
+	// Register git tools when the backend also implements GitBackend.
+	if gitB, ok := b.(GitBackend); ok {
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        "repo_worktrees",
+			Description: "List all worktrees of a repository (requires local git access). On server mode, returns unsupported.",
+		}, gitWorktreesHandler(gitB))
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        "repo_branches",
+			Description: "List branches of a repository. Includes remote branches when --remote is true.",
+		}, gitBranchesHandler(gitB))
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        "repo_status",
+			Description: "Show the repository working tree status (dirty, current branch, HEAD SHA).",
+		}, gitStatusHandler(gitB))
+	}
+
+	// Register multi-scope search when the backend implements MultiSearchBackend.
+	if msB, ok := b.(MultiSearchBackend); ok {
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        "semantic_search_multi",
+			Description: "Search across multiple projects in one query, with fused results and project labels.",
+		}, multiSearchHandler(msB))
+	}
 
 	// Register the semantic_ask tool only when the backend also implements AskBackend.
 	if askBackend, ok := b.(AskBackend); ok {
@@ -261,6 +308,89 @@ func statusHandler(b Backend) mcp.ToolHandlerFor[statusInput, any] {
 			return errorResult(err), nil, nil
 		}
 		return textResult(formatStatus(info)), nil, nil
+	}
+}
+
+// ---- Git tool handlers ----
+
+type gitWorktreesInput struct {
+	Project string `json:"project" jsonschema:"the registered project name"`
+}
+
+func gitWorktreesHandler(b GitBackend) mcp.ToolHandlerFor[gitWorktreesInput, any] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in gitWorktreesInput) (*mcp.CallToolResult, any, error) {
+		wts, err := b.Worktrees(ctx, in.Project)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		data, _ := json.Marshal(wts)
+		return textResult(string(data)), nil, nil
+	}
+}
+
+type gitBranchesInput struct {
+	Project string `json:"project" jsonschema:"the registered project name"`
+	Remote  bool   `json:"remote,omitempty" jsonschema:"include remote branches (default false)"`
+}
+
+func gitBranchesHandler(b GitBackend) mcp.ToolHandlerFor[gitBranchesInput, any] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in gitBranchesInput) (*mcp.CallToolResult, any, error) {
+		branches, err := b.Branches(ctx, in.Project, in.Remote)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		data, _ := json.Marshal(branches)
+		return textResult(string(data)), nil, nil
+	}
+}
+
+type gitStatusInput struct {
+	Project string `json:"project" jsonschema:"the registered project name"`
+}
+
+func gitStatusHandler(b GitBackend) mcp.ToolHandlerFor[gitStatusInput, any] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in gitStatusInput) (*mcp.CallToolResult, any, error) {
+		status, err := b.GitStatus(ctx, in.Project)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		data, _ := json.Marshal(status)
+		return textResult(string(data)), nil, nil
+	}
+}
+
+// ---- Multi-search handler ----
+
+type multiSearchInput struct {
+	Identities    []string `json:"identities" jsonschema:"project identities to search (git identity or path:identity)"`
+	Query         string   `json:"query" jsonschema:"the natural-language search query"`
+	TopK          int      `json:"top_k,omitempty" jsonschema:"number of results to return (default 5)"`
+	Graph         bool     `json:"graph,omitempty" jsonschema:"expand results via dependency graph (Graph-RAG)"`
+	GraphDepth    int      `json:"graph_depth,omitempty" jsonschema:"max BFS depth for graph expansion (default 2)"`
+	MaxPerFile    int      `json:"max_per_file,omitempty" jsonschema:"cap chunks per file for diversity (default 3)"`
+	MaxPerProject int      `json:"max_per_project,omitempty" jsonschema:"cap results per project for diversity (default 10)"`
+}
+
+func multiSearchHandler(b MultiSearchBackend) mcp.ToolHandlerFor[multiSearchInput, any] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in multiSearchInput) (*mcp.CallToolResult, any, error) {
+		req := search.MultiScopeRequest{
+			Identities:    in.Identities,
+			Query:         in.Query,
+			TopK:          in.TopK,
+			Graph:         in.Graph,
+			GraphMaxDepth: search.ClampGraphDepth(in.GraphDepth),
+			MaxPerFile:    in.MaxPerFile,
+			MaxPerProject: in.MaxPerProject,
+		}
+		if req.TopK <= 0 {
+			req.TopK = 5
+		}
+		out, err := b.SearchMulti(ctx, req)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		data, _ := json.Marshal(out)
+		return textResult(string(data)), nil, nil
 	}
 }
 

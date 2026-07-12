@@ -357,7 +357,7 @@ func ScanFiles(projectPath string, maxFiles int) ([]string, error) {
 			return nil
 		}
 		rel, _ := filepath.Rel(projectPath, path)
-		if chunker.ShouldIndex(rel) || extract.Supported(rel) {
+		if Eligible(rel) {
 			files = append(files, path)
 		}
 		return nil

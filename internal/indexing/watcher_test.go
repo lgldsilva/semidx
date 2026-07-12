@@ -242,7 +242,8 @@ func TestHandleCreateSkipped(t *testing.T) {
 	})
 	w := NewWatcher(1, root, "m", idx)
 
-	// Write a file that ShouldIndex returns false for (binary extension).
+	// Write a file that is neither a code/text file nor a supported extract
+	// format — both ShouldIndex and Eligible return false (.png).
 	filePath := filepath.Join(root, "image.png")
 	if err := os.WriteFile(filePath, []byte{0x89, 'P', 'N', 'G', 0, 0, 0}, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -256,7 +257,50 @@ func TestHandleCreateSkipped(t *testing.T) {
 	fs.mu.Unlock()
 
 	if embeddedLen != 0 || textOnlyLen != 0 {
-		t.Error("ShouldIndex=false file should produce no chunks")
+		t.Error("unindexable file (binary) should produce no chunks")
+	}
+}
+
+// TestHandleCreateExtractSupported verifies the watcher bugfix: a file that
+// chunker.ShouldIndex rejects but extract.Supported accepts IS re-indexed.
+// Previously handleCreate only checked chunker.ShouldIndex, so PDFs, EMLs,
+// Office documents, etc. were silently dropped on write events.
+func TestHandleCreateExtractSupported(t *testing.T) {
+	if testing.Short() {
+		t.Skip("creates temp files")
+	}
+	root := t.TempDir()
+
+	fs := &fakeStore{}
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{
+		Workers:        1,
+		EmbedBatchSize: 8,
+	})
+	w := NewWatcher(1, root, "m", idx)
+
+	// Write a .eml file — chunker.ShouldIndex rejects .eml (not in codeExts or
+	// textExts) but extract.Supported returns true (registered extractor).
+	emlContent := []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Hello\n\nThis is the email body content.\n")
+	emlFile := filepath.Join(root, "message.eml")
+	if err := os.WriteFile(emlFile, emlContent, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	w.handleCreate(context.Background(), emlFile)
+
+	fs.mu.Lock()
+	chunkCount := len(fs.embedded) + len(fs.textOnly)
+	allText := append(append([]string{}, fs.embedded...), fs.textOnly...)
+	fs.mu.Unlock()
+
+	if chunkCount == 0 {
+		t.Error("Eligible file (.eml) should produce chunks, but none found; " +
+			"watcher likely skipped it — this is the bug Eligible() fixes")
+	}
+
+	combined := strings.Join(allText, " ")
+	if !strings.Contains(combined, "email body") {
+		t.Errorf("extracted text should contain 'email body', got: %q", combined)
 	}
 }
 

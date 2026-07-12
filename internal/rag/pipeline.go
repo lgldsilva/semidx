@@ -36,11 +36,14 @@ func NewPipeline(search SearchService, chatClient chat.Client, config PipelineCo
 func (p *Pipeline) Ask(ctx context.Context, question, project string, history []chat.Message) (*Answer, error) {
 	// 1. Retrieve relevant chunks.
 	searchResp, err := p.search.Search(ctx, SearchRequest{
-		Project:  project,
-		Query:    question,
-		TopK:     p.config.TopK,
-		Identity: p.config.Identity,
-		Worktree: p.config.Worktree,
+		Project:       project,
+		Query:         question,
+		TopK:          p.config.TopK,
+		Identity:      p.config.Identity,
+		Worktree:      p.config.Worktree,
+		Graph:         p.config.Graph,
+		GraphMaxDepth: p.config.GraphMaxDepth,
+		PathPrefix:    p.config.PathPrefix,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w — is the project indexed? Run: semidx index --project <path>", err)
@@ -48,6 +51,10 @@ func (p *Pipeline) Ask(ctx context.Context, question, project string, history []
 
 	// 2. Convert results to sources (skip sensitive paths).
 	sources := filterSensitiveSources(searchResp.Results)
+
+	// 2b. Diversify sources: cap per-file and per-project hits so one file
+	// or project does not dominate the context window.
+	sources = diversify(sources, 3, 15) // max 3 chunks/file, 15/project
 
 	// 3. Build context string with token-budget awareness.
 	contextStr := assembleContext(sources, 8000)
@@ -82,11 +89,14 @@ func (p *Pipeline) Ask(ctx context.Context, question, project string, history []
 func (p *Pipeline) StreamAsk(ctx context.Context, question, project string, history []chat.Message) (<-chan chat.StreamChunk, []Source, string, bool, error) {
 	// 1. Retrieve relevant chunks (synchronous).
 	searchResp, err := p.search.Search(ctx, SearchRequest{
-		Project:  project,
-		Query:    question,
-		TopK:     p.config.TopK,
-		Identity: p.config.Identity,
-		Worktree: p.config.Worktree,
+		Project:       project,
+		Query:         question,
+		TopK:          p.config.TopK,
+		Identity:      p.config.Identity,
+		Worktree:      p.config.Worktree,
+		Graph:         p.config.Graph,
+		GraphMaxDepth: p.config.GraphMaxDepth,
+		PathPrefix:    p.config.PathPrefix,
 	})
 	if err != nil {
 		return nil, nil, "", false, fmt.Errorf("search failed: %w — is the project indexed? Run: semidx index --project <path>", err)
@@ -94,6 +104,9 @@ func (p *Pipeline) StreamAsk(ctx context.Context, question, project string, hist
 
 	// 2. Convert results to sources (skip sensitive paths).
 	sources := filterSensitiveSources(searchResp.Results)
+
+	// 2b. Diversify sources (same caps as Ask).
+	sources = diversify(sources, 3, 15)
 
 	// 3. Build context string.
 	contextStr := assembleContext(sources, 8000)

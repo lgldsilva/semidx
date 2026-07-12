@@ -14,6 +14,11 @@ If the context doesn't contain enough information, say so — don't make things 
 When citing information, reference the file path and line numbers from the context.
 Be concise and precise.`
 
+// AgentPrompt is the system prompt fragment for the workspace agent.
+// It instructs the model to propose actions for confirmation rather than
+// executing them directly. Included when the agent has tool-calling capability.
+const AgentPrompt = `You are a workspace agent with tools for searching code, checking git state, and proposing index/reindex actions. When you have enough information to answer, respond directly. Cite whether facts came from git (live) or the semidx index. For actions: propose what you would do and ask for confirmation before proceeding.`
+
 // assemblePrompt builds the full chat messages for the LLM.
 // It returns: [system_msg (instructions + context combined), history..., user_question].
 // Instructions and context are combined into a single system message to avoid

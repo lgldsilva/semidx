@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/rag"
@@ -20,69 +21,153 @@ const defaultChatModel = "gemini-2.5-flash"
 // It accepts a cobra command's context and the parsed flag values.
 func runChat(ctx context.Context, localIndex, project, model string) error {
 	cfg := config.Load()
-	pipeline, ls, resolvedProject, err := buildPipeline(ctx, cfg, localIndex, project, model)
+	pipeline, agt, ls, resolvedProject, err := buildPipeline(ctx, cfg, localIndex, project, model)
 	if err != nil {
 		return err
 	}
 	defer ls.Close()
 
 	// Run the interactive REPL.
-	return runREPL(ctx, pipeline, resolvedProject)
+	return runREPL(ctx, pipeline, agt, resolvedProject)
 }
 
 // runREPL is the interactive chat loop.
-func runREPL(ctx context.Context, pipeline *rag.Pipeline, project string) error {
+// When agt is non-nil, the agent loop is used (supports tool calling).
+func runREPL(ctx context.Context, pipeline *rag.Pipeline, agt *agent.Agent, project string) error {
 	history := chat.NewHistory(10) // keep up to 10 turns
 	scanner := bufio.NewScanner(os.Stdin)
 
-	fmt.Println("ChatRAG — ask questions about your codebase. Type /exit to quit, /clear to reset.")
+	mode := "RAG"
+	if agt != nil {
+		mode = "agent"
+	}
+	fmt.Printf("ChatRAG [%s mode] — ask questions about your codebase. Type /exit to quit, /clear to reset.\n", mode)
 	if project != "" {
 		fmt.Printf("Project: %s\n", project)
 	}
 	fmt.Println()
 
 	for {
-		fmt.Print("> ")
+		fmt.Printf("[%s] > ", mode)
 		if !scanner.Scan() {
 			break
 		}
 		line := strings.TrimSpace(scanner.Text())
 
-		// Handle commands.
-		switch line {
-		case "":
-			continue
-		case "/exit", "/quit":
-			fmt.Println("Goodbye!")
+		if handled, cont := handleREPLCommand(line, history, &mode, agt != nil); handled {
+			if cont {
+				continue
+			}
 			return nil
-		case "/clear":
-			history.Clear()
-			fmt.Println("History cleared.")
+		}
+		if handleREPLTurn(ctx, pipeline, agt, project, line, history, mode) {
 			continue
 		}
-
-		// B1: Run the RAG pipeline first. Only add to history on success.
-		answer, err := pipeline.Ask(ctx, line, project, history.GetMessages())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", formatError(err))
-			// Failed turn is NOT committed to history.
-			continue
-		}
-
-		// B1: Now commit the turn to history.
-		history.AddUser(line)
-		history.AddAssistant(answer.Content)
-
-		// Print the answer.
-		fmt.Println()
-		fmt.Println(answer.Content)
-		fmt.Println()
-
-		printSources(answer.Sources)
-		fmt.Printf("[model: %s]\n\n", formatModelInfo(answer.Model, answer.Fallback))
 	}
 
 	return scanner.Err()
+}
+
+// handleREPLCommand processes meta-commands (empty, exit, clear, mode).
+// handled=true when line matched a command; cont=false means stop the REPL.
+func handleREPLCommand(line string, history *chat.History, mode *string, hasAgent bool) (handled, cont bool) {
+	if line == "" {
+		return true, true
+	}
+	switch line {
+	case "/exit", "/quit":
+		fmt.Println("Goodbye!")
+		return true, false
+	case "/clear":
+		history.Clear()
+		fmt.Println("History cleared.")
+		return true, true
+	case "/mode":
+		if *mode == "agent" {
+			*mode = "RAG"
+		} else if hasAgent {
+			*mode = "agent"
+		} else {
+			*mode = "RAG"
+		}
+		fmt.Printf("Switched to %s mode.\n", *mode)
+		return true, true
+	}
+	return false, false
+}
+
+// handleREPLTurn dispatches a question to agent or RAG. Returns true on error.
+func handleREPLTurn(ctx context.Context, pipeline *rag.Pipeline, agt *agent.Agent, project, line string, history *chat.History, mode string) bool {
+	if agt != nil && mode == "agent" {
+		if handleAgentReply(ctx, agt, line, history) {
+			return true
+		}
+	} else {
+		if handleRAGReply(ctx, pipeline, line, project, history) {
+			return true
+		}
+	}
+	return false
+}
+
+// handleAgentReply processes an agent-mode answer: calls the agent, updates
+// history, and prints the answer and tool trace. Returns true on error (caller
+// should continue the REPL loop).
+func handleAgentReply(ctx context.Context, agt *agent.Agent, line string, history *chat.History) bool {
+	answer, err := agt.Ask(ctx, line, history.GetMessages())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", formatError(err))
+		return true
+	}
+
+	history.AddUser(line)
+	history.AddAssistant(answer.Content)
+
+	fmt.Println()
+	fmt.Println(answer.Content)
+	fmt.Println()
+
+	printAgentTrace(answer.Trace)
+	fmt.Printf("[agent mode | model: %s]\n\n", answer.Model)
+	return false
+}
+
+// handleRAGReply processes a RAG-mode answer: calls the pipeline, updates
+// history, and prints the answer and sources. Returns true on error (caller
+// should continue the REPL loop).
+func handleRAGReply(ctx context.Context, pipeline *rag.Pipeline, line, project string, history *chat.History) bool {
+	answer, err := pipeline.Ask(ctx, line, project, history.GetMessages())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", formatError(err))
+		return true
+	}
+
+	history.AddUser(line)
+	history.AddAssistant(answer.Content)
+
+	fmt.Println()
+	fmt.Println(answer.Content)
+	fmt.Println()
+
+	printSources(answer.Sources)
+	fmt.Printf("[model: %s]\n\n", formatModelInfo(answer.Model, answer.Fallback))
+	return false
+}
+
+// printAgentTrace prints the tool call trace (if any) from an agent answer.
+func printAgentTrace(trace []agent.ToolCallRecord) {
+	if len(trace) == 0 {
+		return
+	}
+	fmt.Println("Tool calls:")
+	for _, tc := range trace {
+		errInfo := ""
+		if tc.Error != "" {
+			errInfo = fmt.Sprintf(" error=%s", tc.Error)
+		}
+		fmt.Printf("  • %s(%s)%s\n", tc.Tool, tc.Args, errInfo)
+	}
+	fmt.Println()
 }
 
 // formatError returns a clean, actionable error message for the REPL.

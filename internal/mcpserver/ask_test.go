@@ -7,6 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
@@ -32,6 +33,10 @@ func (f *fakeAskBackend) Status(_ context.Context, _ string) (*StatusInfo, error
 	return &StatusInfo{Name: "test", TotalFiles: 0, Status: "ready", Model: "test"}, nil
 }
 
+func (f *fakeAskBackend) Capabilities() agent.Capabilities {
+	return agent.Capabilities{}
+}
+
 func (f *fakeAskBackend) Ask(_ context.Context, _, _ string, _ int) (*AskOutput, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -39,7 +44,7 @@ func (f *fakeAskBackend) Ask(_ context.Context, _, _ string, _ int) (*AskOutput,
 	return f.answer, nil
 }
 
-// compile-time check: *fakeAskBackend satisfies AskBackend.
+// compile-time checks.
 var _ AskBackend = (*fakeAskBackend)(nil)
 
 // connectAskBackend wires an in-memory MCP session for the given Backend.

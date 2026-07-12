@@ -2,6 +2,55 @@ package rag
 
 import "strings"
 
+// diversify caps the number of chunks from each file and each project to
+// ensure a balanced context. Works on Source slice (pre-assembleContext).
+// maxPerFile <= 0 means no per-file cap; maxPerProject <= 0 means no per-project
+// cap. The sources slice is modified in place and returned.
+func diversify(sources []Source, maxPerFile, maxPerProject int) []Source {
+	if maxPerFile <= 0 && maxPerProject <= 0 {
+		return sources
+	}
+	if maxPerFile <= 0 {
+		maxPerFile = len(sources) + 1 // effectively unlimited
+	}
+	if maxPerProject <= 0 {
+		maxPerProject = len(sources) + 1
+	}
+
+	fileCount := make(map[string]int, len(sources)/2)
+	projectCount := make(map[string]int, len(sources)/2)
+	out := make([]Source, 0, len(sources))
+
+	for _, s := range sources {
+		proj := extractProject(s.File)
+		if projectCount[proj] >= maxPerProject {
+			continue
+		}
+		if fileCount[s.File] >= maxPerFile {
+			continue
+		}
+		projectCount[proj]++
+		fileCount[s.File]++
+		out = append(out, s)
+	}
+	return out
+}
+
+// extractProject extracts a project label from a file path.
+// Simple heuristic: everything before the first '/' or ':',
+// skipping a leading slash.
+func extractProject(fp string) string {
+	for i := 0; i < len(fp); i++ {
+		if fp[i] == '/' || fp[i] == ':' {
+			if i == 0 {
+				continue // leading /absolute/path → skip to next separator
+			}
+			return fp[:i]
+		}
+	}
+	return "default"
+}
+
 // assembleContext formats sources into a context string, respecting a token
 // budget. Sources are assumed pre-sorted by relevance (highest score first).
 // Token estimation uses a rough heuristic: ~4 chars per token.

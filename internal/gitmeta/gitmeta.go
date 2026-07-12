@@ -7,12 +7,9 @@ package gitmeta
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 
-	"github.com/lgldsilva/semidx/internal/gitenv"
+	"github.com/lgldsilva/semidx/internal/gitexec"
 )
 
 // Info describes the git context of a directory.
@@ -27,18 +24,18 @@ type Info struct {
 // exists (so clones over https and ssh collapse to one key), otherwise the
 // repository's common git dir (which all local worktrees of a clone share).
 func Resolve(ctx context.Context, dir string) Info {
-	top, err := run(ctx, dir, "rev-parse", "--show-toplevel")
+	top, err := gitexec.Run(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil || top == "" {
 		return Info{}
 	}
 	info := Info{IsGit: true, Toplevel: top}
 
-	if remote, err := run(ctx, dir, "config", "--get", "remote.origin.url"); err == nil && remote != "" {
+	if remote, err := gitexec.Run(ctx, dir, "config", "--get", "remote.origin.url"); err == nil && remote != "" {
 		info.Identity = "remote:" + NormalizeRemote(remote)
 		return info
 	}
 	// No remote (a local-only repo): all worktrees share the common git dir.
-	if common, err := run(ctx, dir, "rev-parse", "--git-common-dir"); err == nil && common != "" {
+	if common, err := gitexec.Run(ctx, dir, "rev-parse", "--git-common-dir"); err == nil && common != "" {
 		info.Identity = "local:" + common
 	} else {
 		info.Identity = "local:" + top
@@ -72,26 +69,4 @@ func NormalizeRemote(url string) string {
 		s = s[at+1:]
 	}
 	return strings.ToLower(s)
-}
-
-// run executes a git subcommand in dir with hermetic config (no global/system
-// config, so tests and odd environments behave predictably) and returns trimmed
-// stdout.
-func run(ctx context.Context, dir string, args ...string) (string, error) {
-	if strings.Contains(dir, "..") || strings.HasPrefix(dir, "-") || strings.HasPrefix(dir, "~") {
-		return "", fmt.Errorf("unsafe git directory: %q", dir)
-	}
-	fullArgs := append([]string{"git", "-C", dir}, args...)
-	cmd := exec.CommandContext(ctx, "git")
-	cmd.Args = fullArgs
-	// Strip any inherited GIT_DIR/GIT_WORK_TREE so `git -C dir` resolves the repo
-	// from dir (not an ambient repo leaked by a hook or bare-repo worktree).
-	// os.DevNull is "/dev/null" on Unix and "NUL" on Windows, so hermetic config
-	// works cross-platform.
-	cmd.Env = append(gitenv.Clean(cmd.Environ()), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }

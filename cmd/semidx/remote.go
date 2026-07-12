@@ -135,6 +135,9 @@ indexing). Requires "semidx login". See "semidx repo add".`,
 		Example: "  semidx repo add https://github.com/org/project.git",
 	}
 	c.AddCommand(newRepoAddCmd(d))
+	c.AddCommand(newRepoWorktreesCmd(d))
+	c.AddCommand(newRepoBranchesCmd(d))
+	c.AddCommand(newRepoInfoCmd(d))
 	return c
 }
 

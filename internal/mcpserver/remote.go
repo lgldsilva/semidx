@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
@@ -62,4 +63,8 @@ func (b *clientBackend) Reindex(ctx context.Context, project, jobType string) (s
 		return "", err
 	}
 	return fmt.Sprintf("Queued %s re-index job #%d for project %q.", jobType, id, project), nil
+}
+
+func (b *clientBackend) Capabilities() agent.Capabilities {
+	return agent.Capabilities{Flags: agent.CapRemoteIndex}
 }

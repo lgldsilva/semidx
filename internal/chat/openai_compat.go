@@ -15,8 +15,45 @@ import (
 // instead of being copy-pasted per provider.
 
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+}
+
+type openAIToolDef struct {
+	Type     string             `json:"type"`
+	Function openAIToolFunction `json:"function"`
+}
+
+type openAIToolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
+type openAIToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function openAIToolCallFn `json:"function"`
+}
+
+type openAIToolCallFn struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// openAIDeltaToolCall is a tool call delta in a streaming chunk.
+type openAIDeltaToolCall struct {
+	Index    int              `json:"index"`
+	ID       string           `json:"id,omitempty"`
+	Type     string           `json:"type,omitempty"`
+	Function *openAIDeltaFunc `json:"function,omitempty"`
+}
+
+type openAIDeltaFunc struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 type openAIChatRequest struct {
@@ -25,12 +62,14 @@ type openAIChatRequest struct {
 	Temperature float64         `json:"temperature"`
 	MaxTokens   int             `json:"max_tokens,omitempty"`
 	Stream      bool            `json:"stream,omitempty"`
+	Tools       []openAIToolDef `json:"tools,omitempty"`
 }
 
 type openAIChatResponse struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content   string           `json:"content"`
+			ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 	} `json:"choices"`
 	Model string `json:"model,omitempty"`
@@ -54,12 +93,44 @@ func resolveChatDefaults(req Request) (model string, temp float64, maxTok int) {
 	return model, temp, maxTok
 }
 
+// toOpenAIMessage maps a chat.Message onto the wire shape, translating
+// ToolCalls into the OpenAI tool_calls array. A plain type conversion no longer
+// works because chat.Message carries []ToolCall (not []openAIToolCall).
+func toOpenAIMessage(m Message) openAIMessage {
+	om := openAIMessage{
+		Role:       m.Role,
+		Content:    m.Content,
+		ToolCallID: m.ToolCallID,
+	}
+	if len(m.ToolCalls) > 0 {
+		om.ToolCalls = make([]openAIToolCall, len(m.ToolCalls))
+		for i, tc := range m.ToolCalls {
+			om.ToolCalls[i] = openAIToolCall{
+				ID:       tc.ID,
+				Type:     "function",
+				Function: openAIToolCallFn{Name: tc.Name, Arguments: tc.Args},
+			}
+		}
+	}
+	return om
+}
+
 // buildOpenAIChatRequest assembles the shared payload for req.
 func buildOpenAIChatRequest(req Request, stream bool) openAIChatRequest {
 	model, temp, maxTok := resolveChatDefaults(req)
 	messages := make([]openAIMessage, len(req.Messages))
 	for i, m := range req.Messages {
-		messages[i] = openAIMessage(m)
+		messages[i] = toOpenAIMessage(m)
+	}
+	var tools []openAIToolDef
+	if len(req.Tools) > 0 {
+		tools = make([]openAIToolDef, len(req.Tools))
+		for i, t := range req.Tools {
+			tools[i] = openAIToolDef{
+				Type:     "function",
+				Function: openAIToolFunction(t),
+			}
+		}
 	}
 	return openAIChatRequest{
 		Model:       model,
@@ -67,6 +138,7 @@ func buildOpenAIChatRequest(req Request, stream bool) openAIChatRequest {
 		Temperature: temp,
 		MaxTokens:   maxTok,
 		Stream:      stream,
+		Tools:       tools,
 	}
 }
 
@@ -114,8 +186,19 @@ func sendOpenAIChat(ctx context.Context, hc *http.Client, url, apiKey string, ex
 		return nil, fmt.Errorf("chat: no choices in response")
 	}
 
+	msg := result.Choices[0].Message
+	toolCalls := make([]ToolCall, len(msg.ToolCalls))
+	for i, tc := range msg.ToolCalls {
+		toolCalls[i] = ToolCall{
+			ID:   tc.ID,
+			Name: tc.Function.Name,
+			Args: tc.Function.Arguments,
+		}
+	}
+
 	return &Response{
-		Content: result.Choices[0].Message.Content,
-		Model:   result.Model,
+		Content:   msg.Content,
+		ToolCalls: toolCalls,
+		Model:     result.Model,
 	}, nil
 }
