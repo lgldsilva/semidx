@@ -8,9 +8,12 @@ import (
 	"os"
 	"strings"
 
+	"charm.land/fantasy"
+
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/config"
+	"github.com/lgldsilva/semidx/internal/permission"
 	"github.com/lgldsilva/semidx/internal/rag"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -21,24 +24,41 @@ const defaultChatModel = "gemini-2.5-flash"
 // It accepts a cobra command's context and the parsed flag values.
 func runChat(ctx context.Context, localIndex, project, model string) error {
 	cfg := config.Load()
-	pipeline, agt, ls, resolvedProject, err := buildPipeline(ctx, cfg, localIndex, project, model)
+	// One stdin scanner is shared by the REPL loop and the action-tool approval
+	// prompt so their reads don't fight over buffered input.
+	scanner := bufio.NewScanner(os.Stdin)
+	approve := makePromptApprover(scanner)
+	pipeline, runner, ls, resolvedProject, err := buildPipeline(ctx, cfg, localIndex, project, model, approve)
 	if err != nil {
 		return err
 	}
 	defer ls.Close()
 
 	// Run the interactive REPL.
-	return runREPL(ctx, pipeline, agt, resolvedProject)
+	return runREPL(ctx, pipeline, runner, resolvedProject, scanner)
+}
+
+// makePromptApprover returns an approval gate that asks the user y/N on the
+// shared stdin scanner before an action tool executes.
+func makePromptApprover(scanner *bufio.Scanner) permission.Approver {
+	return func(_ context.Context, req permission.Request) (bool, error) {
+		fmt.Printf("\n⚠  The agent wants to run %s\n   %s\n   Approve? [y/N] ", req.Tool, req.Detail)
+		if !scanner.Scan() {
+			return false, nil
+		}
+		ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		fmt.Println()
+		return ans == "y" || ans == "yes", nil
+	}
 }
 
 // runREPL is the interactive chat loop.
-// When agt is non-nil, the agent loop is used (supports tool calling).
-func runREPL(ctx context.Context, pipeline *rag.Pipeline, agt *agent.Agent, project string) error {
+// When runner is non-nil, the agent loop is used (supports tool calling).
+func runREPL(ctx context.Context, pipeline *rag.Pipeline, runner *agent.Runner, project string, scanner *bufio.Scanner) error {
 	history := chat.NewHistory(10) // keep up to 10 turns
-	scanner := bufio.NewScanner(os.Stdin)
 
 	mode := "RAG"
-	if agt != nil {
+	if runner != nil {
 		mode = "agent"
 	}
 	fmt.Printf("ChatRAG [%s mode] — ask questions about your codebase. Type /exit to quit, /clear to reset.\n", mode)
@@ -54,13 +74,13 @@ func runREPL(ctx context.Context, pipeline *rag.Pipeline, agt *agent.Agent, proj
 		}
 		line := strings.TrimSpace(scanner.Text())
 
-		if handled, cont := handleREPLCommand(line, history, &mode, agt != nil); handled {
+		if handled, cont := handleREPLCommand(line, history, &mode, runner != nil); handled {
 			if cont {
 				continue
 			}
 			return nil
 		}
-		if handleREPLTurn(ctx, pipeline, agt, project, line, history, mode) {
+		if handleREPLTurn(ctx, pipeline, runner, project, line, history, mode) {
 			continue
 		}
 	}
@@ -97,9 +117,9 @@ func handleREPLCommand(line string, history *chat.History, mode *string, hasAgen
 }
 
 // handleREPLTurn dispatches a question to agent or RAG. Returns true on error.
-func handleREPLTurn(ctx context.Context, pipeline *rag.Pipeline, agt *agent.Agent, project, line string, history *chat.History, mode string) bool {
-	if agt != nil && mode == "agent" {
-		if handleAgentReply(ctx, agt, line, history) {
+func handleREPLTurn(ctx context.Context, pipeline *rag.Pipeline, runner *agent.Runner, project, line string, history *chat.History, mode string) bool {
+	if runner != nil && mode == "agent" {
+		if handleAgentReply(ctx, runner, line, history) {
 			return true
 		}
 	} else {
@@ -113,8 +133,8 @@ func handleREPLTurn(ctx context.Context, pipeline *rag.Pipeline, agt *agent.Agen
 // handleAgentReply processes an agent-mode answer: calls the agent, updates
 // history, and prints the answer and tool trace. Returns true on error (caller
 // should continue the REPL loop).
-func handleAgentReply(ctx context.Context, agt *agent.Agent, line string, history *chat.History) bool {
-	answer, err := agt.Ask(ctx, line, history.GetMessages())
+func handleAgentReply(ctx context.Context, runner *agent.Runner, line string, history *chat.History) bool {
+	answer, err := runner.Ask(ctx, line, historyToMessages(history.GetMessages()))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", formatError(err))
 		return true
@@ -152,6 +172,28 @@ func handleRAGReply(ctx context.Context, pipeline *rag.Pipeline, line, project s
 	printSources(answer.Sources)
 	fmt.Printf("[model: %s]\n\n", formatModelInfo(answer.Model, answer.Fallback))
 	return false
+}
+
+// historyToMessages converts the REPL's chat.History (text-only turns) into
+// fantasy messages for the Runner. The legacy history keeps only user/assistant
+// text, so this is a plain text mapping; full tool_call/tool-result history is
+// Phase 5.
+func historyToMessages(msgs []chat.Message) []fantasy.Message {
+	out := make([]fantasy.Message, 0, len(msgs))
+	for _, m := range msgs {
+		switch m.Role {
+		case "user":
+			out = append(out, fantasy.NewUserMessage(m.Content))
+		case "system":
+			out = append(out, fantasy.NewSystemMessage(m.Content))
+		case "assistant":
+			out = append(out, fantasy.Message{
+				Role:    fantasy.MessageRoleAssistant,
+				Content: []fantasy.MessagePart{fantasy.TextPart{Text: m.Content}},
+			})
+		}
+	}
+	return out
 }
 
 // printAgentTrace prints the tool call trace (if any) from an agent answer.

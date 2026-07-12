@@ -83,7 +83,9 @@ func parseRefRange(s string) (ref1, ref2 string, threeDot bool, err error) {
 
 // runDiff performs the semantic diff between two git refs.
 func runDiff(ref1, ref2 string, threeDot bool) error {
-	changedFiles, err := getChangedFiles(ref1, ref2, threeDot)
+	// "" = the process working directory, i.e. the repo the user runs `semidx
+	// diff` in. Tests call getChangedFiles/getFileAtRef directly with a temp dir.
+	changedFiles, err := getChangedFiles("", ref1, ref2, threeDot)
 	if err != nil {
 		return fmt.Errorf("get changed files: %w", err)
 	}
@@ -102,8 +104,8 @@ func runDiff(ref1, ref2 string, threeDot bool) error {
 
 func collectDiffSymbols(changedFiles []string, ref1, ref2 string) (newSym, removed, changed []diffResult) {
 	for _, filePath := range changedFiles {
-		oldContent, _ := getFileAtRef(filePath, ref1)
-		newContent, _ := getFileAtRef(filePath, ref2)
+		oldContent, _ := getFileAtRef("", filePath, ref1)
+		newContent, _ := getFileAtRef("", filePath, ref2)
 
 		oldSymbols := extractSymbols(filePath, oldContent)
 		newSymbolsMap := extractSymbols(filePath, newContent)
@@ -182,8 +184,11 @@ func safeGitRef(ref string) bool {
 	return true
 }
 
-// getChangedFiles returns the list of files changed between two refs using git diff.
-func getChangedFiles(ref1, ref2 string, threeDot bool) ([]string, error) {
+// getChangedFiles returns files changed between two refs. dir is the git
+// working directory ("" means the current process working directory — the
+// normal case for the `semidx diff` command; tests pass a temp repo so they
+// never touch the process CWD).
+func getChangedFiles(dir, ref1, ref2 string, threeDot bool) ([]string, error) {
 	if !safeGitRef(ref1) || !safeGitRef(ref2) {
 		return nil, fmt.Errorf("invalid git ref: %q..%q contains unsafe characters", ref1, ref2)
 	}
@@ -197,6 +202,7 @@ func getChangedFiles(ref1, ref2 string, threeDot bool) ([]string, error) {
 	// #nosec G204 -- refs validated via safeGitRef; '--' ends options so no pathspec is injected
 	cmd := exec.Command("git")
 	cmd.Args = []string{"git", "diff", "--name-only", "--diff-filter=ACMR", ref1 + sep + ref2, "--"}
+	cmd.Dir = dir
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
@@ -218,8 +224,9 @@ func safeGitFilepath(path string) bool {
 	return !strings.Contains(path, ":") && !strings.HasPrefix(path, "-") && !strings.Contains(path, "..")
 }
 
-// getFileAtRef reads a file's content at a given git ref.
-func getFileAtRef(filePath, ref string) (string, error) {
+// getFileAtRef reads a file's content at a given git ref. dir is the git
+// working directory ("" = process CWD; tests pass a temp repo).
+func getFileAtRef(dir, filePath, ref string) (string, error) {
 	if !safeGitRef(ref) || !safeGitFilepath(filePath) {
 		return "", fmt.Errorf("invalid git ref or file path: %q:%q", ref, filePath)
 	}
@@ -228,6 +235,7 @@ func getFileAtRef(filePath, ref string) (string, error) {
 	// #nosec G204 -- ref/path validated via safeGitRef and safeGitFilepath
 	cmd := exec.Command("git")
 	cmd.Args = []string{"git", "show", ref + ":" + filePath}
+	cmd.Dir = dir
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {

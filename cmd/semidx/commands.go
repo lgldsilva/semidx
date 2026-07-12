@@ -13,10 +13,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lgldsilva/semidx/internal/agent"
-	"github.com/lgldsilva/semidx/internal/chat"
+	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/indexing"
+	"github.com/lgldsilva/semidx/internal/llm"
 	"github.com/lgldsilva/semidx/internal/mcpinstall"
 	"github.com/lgldsilva/semidx/internal/mcpserver"
 	"github.com/lgldsilva/semidx/internal/pending"
@@ -727,30 +728,38 @@ into an agent client. (stdout carries the protocol — logs go to stderr.)`,
 			}
 			svc := search.NewService(db, d.emb)
 
+			var sel config.ChatLLM
+			chatOK := false
+			if d.cfg != nil {
+				sel, chatOK = d.cfg.ResolveChatLLM()
+			}
+
 			caps := agent.Capabilities{Flags: agent.CapLocalGit | agent.CapIndexLocal}
-			if d.cfg != nil && d.cfg.GeminiAPIKey != "" {
+			if chatOK {
 				caps.Flags |= agent.CapChatLLM | agent.CapToolCalling
 			}
 			backend := mcpserver.NewLocalBackend(svc, db, d.keywordOnly, caps)
 
-			// If a chat LLM with tool calling is available, wrap the backend with
-			// an agent to enable the semantic_ask tool.
-			if d.cfg != nil && d.cfg.GeminiAPIKey != "" {
-				chatClient := chat.NewChain(chat.NamedClient{
-					Name:   "gemini",
-					Client: chat.NewGoogleClient(d.cfg.GeminiBaseURL, d.cfg.GeminiAPIKey),
-				})
-				resolver := agent.NewScopeResolver(db)
-				tools := []agent.Tool{
-					agent.NewSearchTool(svc),
-					agent.NewIndexStatusTool(db),
-					agent.NewListProjectsTool(db),
-					agent.NewRepoWorktreesTool(resolver),
-					agent.NewRepoBranchesTool(resolver),
-					agent.NewRepoStatusTool(resolver),
+			// If a chat LLM is configured, wrap the backend with an agent Runner
+			// to enable the semantic_ask tool.
+			if chatOK {
+				model, err := llm.ResolveModel(ctx, llm.ProviderConfig{
+					Type:    llm.ProviderType(sel.Provider),
+					APIKey:  sel.APIKey,
+					BaseURL: sel.BaseURL,
+				}, sel.Model)
+				if err != nil {
+					slog.Warn("agentic ask disabled: could not resolve chat model", "error", err)
+				} else {
+					resolver := agent.NewScopeResolver(db)
+					tools := agent.ReadTools(svc, db, resolver)
+					temp := sel.Temperature
+					runner := agent.NewRunner(model, tools, agent.RunnerConfig{
+						SystemPrompt: agent.SystemPrompt,
+						Temperature:  &temp,
+					})
+					backend = mcpserver.NewAgenticAskBackend(backend, runner)
 				}
-				agt := agent.NewAgent(chatClient, tools, resolver)
-				backend = mcpserver.NewAgenticAskBackend(backend, agt)
 			}
 
 			return mcpserver.Run(ctx, backend)
