@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/localstore"
@@ -68,7 +69,7 @@ func connectLocal(t *testing.T) *mcp.ClientSession {
 		t.Fatalf("IndexProject: %v", err)
 	}
 
-	server := New(NewLocalBackend(search.NewService(st, emb), st, false))
+	server := New(NewLocalBackend(search.NewService(st, emb), st, false, agent.Capabilities{Flags: agent.CapLocalGit | agent.CapIndexLocal}))
 	serverT, clientT := mcp.NewInMemoryTransports()
 	if _, err := server.Connect(ctx, serverT, nil); err != nil {
 		t.Fatal(err)
@@ -143,7 +144,10 @@ func TestLocalBackendListToolsExposesAll(t *testing.T) {
 	for _, tool := range res.Tools {
 		got[tool.Name] = true
 	}
-	for _, want := range []string{"semantic_search", "semantic_projects", "semantic_reindex", "semantic_status"} {
+	for _, want := range []string{
+		"semantic_search", "semantic_projects", "semantic_reindex", "semantic_status",
+		"repo_worktrees", "repo_branches", "repo_status", "semantic_search_multi",
+	} {
 		if !got[want] {
 			t.Errorf("missing tool %q (have %v)", want, got)
 		}

@@ -12,14 +12,18 @@ func TestNamesIncludesSemanticSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
-	for _, n := range names {
-		if n == "semantic-search" {
-			found = true
+	required := []string{"semantic-search", "auto-index", "workspace-agent"}
+	for _, want := range required {
+		found := false
+		for _, n := range names {
+			if n == want {
+				found = true
+				break
+			}
 		}
-	}
-	if !found {
-		t.Errorf("semantic-search not among skills: %v", names)
+		if !found {
+			t.Errorf("%s not among skills: %v", want, names)
+		}
 	}
 }
 

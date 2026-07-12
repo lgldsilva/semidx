@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
+	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/localstore"
 	"github.com/lgldsilva/semidx/internal/projectref"
 	"github.com/lgldsilva/semidx/internal/rag"
@@ -97,10 +99,20 @@ func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, 
 		resolver := agent.NewScopeResolver(ls)
 		svc := search.NewService(ls, emb)
 
+		// Build the Indexer for local action tools.
+		indexer := indexing.NewIndexer(ls, emb, 0, indexing.IndexerOpts{
+			Logger:  slog.Default(),
+			Workers: 2,
+			Verbose: false,
+		})
+
 		tools := []agent.Tool{
 			agent.NewSearchTool(svc),
 			agent.NewIndexStatusTool(ls),
 			agent.NewListProjectsTool(ls),
+			// Action tools in propose mode (Phase 5 — propose only).
+			agent.NewIndexWorktreeTool(ls, indexer, agent.PolicyPropose),
+			agent.NewReindexProjectTool(ls, indexer, agent.PolicyPropose),
 		}
 		// repotools need a path resolver; only add when the resolver is available.
 		tools = append(tools,

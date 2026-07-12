@@ -220,9 +220,9 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-GIT-01 | Tools `repo_worktrees`, `repo_branches`, `repo_status` (git read-only). Hermetic, secured, locale-stable (`git for-each-ref`, `git worktree list --porcelain`) | **todo** | `internal/repotools` package; `internal/gitexec` shared git runner |
 | REQ-GIT-02 | Capability gating: local CLI exposes git tools + local index tools; remote/server exposes index/reindex tools only (no client worktrees) | **todo** | `agent.Capabilities` bitmask + capability-based MCP tool registration |
 | REQ-MCP-06 | MCP tools repotools (local) + semantic_search multi-scope + semantic_ask agentic (gated on CapToolCalling). Remote MCP omits git tools, returns "unsupported on server" | **todo** | Sub-interface pattern (`GitBackend`, `MultiSearchBackend`) |
-| REQ-MCP-07 | MCP action tools (`index_project`, `reindex`) with default policy: **propose** on MCP, **confirm** on CLI REPL. Never ARBITRARY path index on remote | **todo** | `action_policy` enum + propose/confirm/execute |
-| REQ-ACT-01 | Action tools: `index_worktree` (local), `reindex_project`, `server_repo_sync` (if logged in). Policy propose/confirm/execute | **todo** | Same `agent.Tool` interface; policy in `Agent.run` |
-| REQ-ACT-02 | `semidx repo sync` — trigger pull + reindex on server via jobs API | **todo** | Optional env-only recurrence (`SEMIDX_SYNC_INTERVAL`); no schema migration |
+| REQ-MCP-07 | MCP action tools (`index_project`, `reindex`) with default policy: **propose** on MCP, **confirm** on CLI REPL. Never ARBITRARY path index on remote | **partial** | `action_policy` enum + propose/confirm/execute; propose implemented, confirm/execute deferred |
+| REQ-ACT-01 | Action tools: `index_worktree` (local), `reindex_project`, `server_repo_sync` (if logged in). Policy propose/confirm/execute | **partial** | Tools implemented in `internal/agent/actions.go`; propose-only in Phase 5, confirm/execute deferred |
+| REQ-ACT-02 | `semidx repo sync` — trigger pull + reindex on server via jobs API | **partial** | `server_repo_sync` action tool in propose mode; enqueues server job on execute |
 
 ---
 
