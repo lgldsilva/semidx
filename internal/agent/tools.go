@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/lgldsilva/semidx/internal/chat"
+	"github.com/lgldsilva/semidx/internal/repotools"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -161,4 +162,265 @@ func (t *indexStatusTool) Run(ctx context.Context, argsJSON string) (string, err
 		"source": p.SourceType,
 		"files":  count,
 	}), nil
+}
+
+// ---------------------------------------------------------------------------
+// repo_worktrees tool
+// ---------------------------------------------------------------------------
+
+// NewRepoWorktreesTool creates a tool that lists git worktrees.
+// Takes a ScopeResolver to resolve project references to filesystem paths.
+func NewRepoWorktreesTool(resolver ScopeResolver) Tool {
+	return &repoWorktreesTool{resolver: resolver}
+}
+
+type repoWorktreesTool struct{ resolver ScopeResolver }
+
+func (t *repoWorktreesTool) Def() chat.ToolDef {
+	return chat.ToolDef{
+		Name:        "repo_worktrees",
+		Description: "List git worktrees (linked working trees) for a project. Returns path, HEAD commit, branch, and bare flag for each worktree.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"project": map[string]any{
+					"type":        "string",
+					"description": "Project name or identity (default: auto-detect from workspace)",
+				},
+			},
+			"required": []string{},
+		},
+	}
+}
+
+func (t *repoWorktreesTool) Run(ctx context.Context, argsJSON string) (string, error) {
+	var args struct {
+		Project string `json:"project,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	root, err := resolveRoot(ctx, t.resolver, args.Project)
+	if err != nil {
+		return "", err
+	}
+
+	wts, err := repotools.ListWorktrees(ctx, root)
+	if err != nil {
+		return "", fmt.Errorf("list worktrees failed: %w", err)
+	}
+
+	type wt struct {
+		Path   string `json:"path"`
+		HEAD   string `json:"head"`
+		Branch string `json:"branch"`
+		Bare   bool   `json:"bare"`
+	}
+	results := make([]wt, len(wts))
+	for i, w := range wts {
+		results[i] = wt{Path: w.Path, HEAD: w.HEAD, Branch: w.Branch, Bare: w.Bare}
+	}
+	if results == nil {
+		results = []wt{}
+	}
+	return JSONResult(map[string]any{
+		"worktrees": results,
+		"total":     len(results),
+	}), nil
+}
+
+// ---------------------------------------------------------------------------
+// repo_branches tool
+// ---------------------------------------------------------------------------
+
+// NewRepoBranchesTool creates a tool that lists git branches.
+func NewRepoBranchesTool(resolver ScopeResolver) Tool {
+	return &repoBranchesTool{resolver: resolver}
+}
+
+type repoBranchesTool struct{ resolver ScopeResolver }
+
+func (t *repoBranchesTool) Def() chat.ToolDef {
+	return chat.ToolDef{
+		Name:        "repo_branches",
+		Description: "List git branches for a project. Shows local branches by default; include remote branches with remote=true. Each branch shows ahead/behind tracking info.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"project": map[string]any{
+					"type":        "string",
+					"description": "Project name or identity (default: auto-detect from workspace)",
+				},
+				"remote": map[string]any{
+					"type":        "boolean",
+					"description": "Include remote branches",
+					"default":     false,
+				},
+			},
+			"required": []string{},
+		},
+	}
+}
+
+func (t *repoBranchesTool) Run(ctx context.Context, argsJSON string) (string, error) {
+	var args struct {
+		Project string `json:"project,omitempty"`
+		Remote  bool   `json:"remote,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	root, err := resolveRoot(ctx, t.resolver, args.Project)
+	if err != nil {
+		return "", err
+	}
+
+	branches, err := repotools.ListBranches(ctx, root, args.Remote)
+	if err != nil {
+		return "", fmt.Errorf("list branches failed: %w", err)
+	}
+
+	type br struct {
+		Name    string `json:"name"`
+		Current bool   `json:"current"`
+		Remote  bool   `json:"remote"`
+		Ahead   int    `json:"ahead"`
+		Behind  int    `json:"behind"`
+	}
+	results := make([]br, len(branches))
+	for i, b := range branches {
+		results[i] = br{Name: b.Name, Current: b.Current, Remote: b.Remote, Ahead: b.Ahead, Behind: b.Behind}
+	}
+	if results == nil {
+		results = []br{}
+	}
+	return JSONResult(map[string]any{
+		"branches": results,
+		"total":    len(results),
+	}), nil
+}
+
+// ---------------------------------------------------------------------------
+// repo_status tool
+// ---------------------------------------------------------------------------
+
+// NewRepoStatusTool creates a tool that returns git repository status.
+func NewRepoStatusTool(resolver ScopeResolver) Tool {
+	return &repoStatusTool{resolver: resolver}
+}
+
+type repoStatusTool struct{ resolver ScopeResolver }
+
+func (t *repoStatusTool) Def() chat.ToolDef {
+	return chat.ToolDef{
+		Name:        "repo_status",
+		Description: "Check git repository status: current branch, dirty state, detached HEAD. Useful before making changes or understanding what branch is active.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"project": map[string]any{
+					"type":        "string",
+					"description": "Project name or identity (default: auto-detect from workspace)",
+				},
+			},
+			"required": []string{},
+		},
+	}
+}
+
+func (t *repoStatusTool) Run(ctx context.Context, argsJSON string) (string, error) {
+	var args struct {
+		Project string `json:"project,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	root, err := resolveRoot(ctx, t.resolver, args.Project)
+	if err != nil {
+		return "", err
+	}
+
+	s, err := repotools.Status(ctx, root)
+	if err != nil {
+		return "", fmt.Errorf("status failed: %w", err)
+	}
+
+	return JSONResult(map[string]any{
+		"current_branch": s.CurrentBranch,
+		"detached":       s.Detached,
+		"dirty":          s.Dirty,
+		"head":           s.HEAD,
+	}), nil
+}
+
+// ---------------------------------------------------------------------------
+// list_projects tool
+// ---------------------------------------------------------------------------
+
+// NewListProjectsTool creates a tool that lists indexed projects.
+func NewListProjectsTool(db store.IndexStore) Tool {
+	return &listProjectsTool{db: db}
+}
+
+type listProjectsTool struct{ db store.IndexStore }
+
+func (t *listProjectsTool) Def() chat.ToolDef {
+	return chat.ToolDef{
+		Name:        "list_projects",
+		Description: "List all indexed projects with their name, identity, source type, indexing status, and embedding model. Call this first when you need to discover what is available.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+	}
+}
+
+func (t *listProjectsTool) Run(ctx context.Context, argsJSON string) (string, error) {
+	projects, err := t.db.ListProjects(ctx, 0, 0)
+	if err != nil {
+		return "", fmt.Errorf("list projects failed: %w", err)
+	}
+
+	type proj struct {
+		Name       string `json:"name"`
+		Identity   string `json:"identity"`
+		SourceType string `json:"source_type"`
+		Status     string `json:"status"`
+		Model      string `json:"model"`
+	}
+	results := make([]proj, len(projects))
+	for i, p := range projects {
+		results[i] = proj{
+			Name: p.Name, Identity: p.Identity,
+			SourceType: p.SourceType, Status: p.Status, Model: p.Model,
+		}
+	}
+	if results == nil {
+		results = []proj{}
+	}
+	return JSONResult(map[string]any{
+		"projects": results,
+		"total":    len(results),
+	}), nil
+}
+
+// resolveRoot resolves a project reference to a filesystem root path.
+func resolveRoot(ctx context.Context, resolver ScopeResolver, ref string) (string, error) {
+	if resolver == nil {
+		return "", fmt.Errorf("scope resolver not available — cannot resolve project path")
+	}
+	if ref == "" {
+		return "", fmt.Errorf("no project specified; provide a project argument")
+	}
+	scope, err := resolver.Resolve(ctx, ref)
+	if err != nil {
+		return "", fmt.Errorf("resolve project %q: %w", ref, err)
+	}
+	if scope.Path == "" {
+		return "", fmt.Errorf("project %q has no local path (remote-only)", ref)
+	}
+	return scope.Path, nil
 }
