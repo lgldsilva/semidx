@@ -25,12 +25,14 @@ func (a *searchAdapter) Search(ctx context.Context, req rag.SearchRequest) (*rag
 	}
 
 	searchReq := search.Request{
-		Project:     project,
-		Identity:    req.Identity,
-		Query:       req.Query,
-		TopK:        req.TopK,
-		KeywordOnly: req.KeywordOnly,
-		Worktree:    req.Worktree,
+		Project:       project,
+		Identity:      req.Identity,
+		Query:         req.Query,
+		TopK:          req.TopK,
+		KeywordOnly:   req.KeywordOnly,
+		Worktree:      req.Worktree,
+		Graph:         req.Graph,
+		GraphMaxDepth: req.GraphMaxDepth,
 	}
 
 	resp, err := a.svc.Search(ctx, searchReq)

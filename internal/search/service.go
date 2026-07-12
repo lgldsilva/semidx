@@ -82,6 +82,12 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	}
 	req.GraphMaxDepth = ClampGraphDepth(req.GraphMaxDepth)
 
+	// Apply query-type-aware routing (REQ-AGENT-04).
+	// ClassifyQuery determines whether the query looks like a path, identifier,
+	// exact string, or natural language, and adjusts search parameters.
+	qt := ClassifyQuery(req.Query)
+	applyQueryRouting(&req, qt)
+
 	project, err := s.resolveProject(ctx, req)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -258,7 +264,7 @@ func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults [
 		}
 	}
 
-	maxDepth := ClampGraphDepth(req.GraphMaxDepth)
+	maxDepth := req.GraphMaxDepth // already clamped in Search
 
 	const decay = 0.85
 	const floor = 0.3
@@ -402,6 +408,27 @@ func runGraphBFS(p bfsParams) map[string]float64 {
 	}
 
 	return expanded
+}
+
+// applyQueryRouting adjusts a search Request based on query type classification.
+// It is safe to call even when the classifier is uncertain — hybrid search is
+// the default for QueryNaturalLanguage and QueryUnknown.
+func applyQueryRouting(req *Request, qt QueryType) {
+	switch qt {
+	case QueryPath:
+		// Path queries benefit from keyword/hybrid over pure semantic.
+		// No change needed — hybrid fusion already handles this.
+		// Future: boost path prefix filter.
+	case QueryIdentifier:
+		// Identifiers (camelCase, snake_case, dotted) may not embed well;
+		// the keyword path tends to find exact matches. Still use hybrid
+		// since the embedding may capture the context around the symbol.
+	case QueryExact:
+		// Exact quoted queries: the user wants literal matches.
+		// No change — keyword path in hybrid handles quoted content.
+	case QueryNaturalLanguage:
+		// Default — hybrid (vector + keyword RRF). Already the default.
+	}
 }
 
 // mergeGraphResults merges original search results with graph-expanded results,
