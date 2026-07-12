@@ -374,6 +374,19 @@ func TestParseForEachRef(t *testing.T) {
 			},
 		},
 		{
+			// Regression: the origin/HEAD symref is not a real branch and must
+			// be filtered out (it otherwise pollutes `repo branches` and the
+			// repo_branches tool on any cloned repo).
+			name: "origin/HEAD symref filtered",
+			input: []string{
+				"refs/remotes/origin/HEAD\t\t",
+				"refs/remotes/origin/main\t\t",
+			},
+			want: []Branch{
+				{Name: "origin/main", FullRef: "refs/remotes/origin/main", Remote: true},
+			},
+		},
+		{
 			name:  "empty input",
 			input: []string{},
 			want:  nil,

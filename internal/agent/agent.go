@@ -83,16 +83,22 @@ func (a *Agent) Ask(ctx context.Context, question string, history []chat.Message
 			}, nil
 		}
 
-		// Assistant message with tool_calls.
-		if len(resp.ToolCalls) > 0 {
-			messages = append(messages, chat.Message{Role: "assistant", Content: resp.Content})
-		}
-		// Execute each tool call and add results as tool role.
+		// Assistant message carrying the tool_calls it wants to make. The
+		// wire format requires this to precede the tool results so each
+		// tool message can reference its call by id.
+		messages = append(messages, chat.Message{
+			Role:      "assistant",
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
+		})
+		// Execute each tool call and feed the result back as a "tool" message
+		// keyed by tool_call_id (required by the OpenAI-compatible wire format;
+		// strict providers reject a tool message without it).
 		for _, tc := range resp.ToolCalls {
 			tool, ok := a.tools[tc.Name]
 			if !ok {
 				result := JSONResult(map[string]string{"error": "unknown tool: " + tc.Name})
-				messages = append(messages, chat.Message{Role: "tool", Content: result})
+				messages = append(messages, chat.Message{Role: "tool", ToolCallID: tc.ID, Content: result})
 				trace = append(trace, ToolCallRecord{Tool: tc.Name, Args: tc.Args, Error: "unknown tool"})
 				continue
 			}
@@ -103,7 +109,7 @@ func (a *Agent) Ask(ctx context.Context, question string, history []chat.Message
 				errMsg = err.Error()
 				result = JSONResult(map[string]string{"error": errMsg})
 			}
-			messages = append(messages, chat.Message{Role: "tool", Content: result})
+			messages = append(messages, chat.Message{Role: "tool", ToolCallID: tc.ID, Content: result})
 			trace = append(trace, ToolCallRecord{
 				Tool: tc.Name, Args: tc.Args, Result: result,
 				Error: errMsg,

@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/indexing"
@@ -73,54 +73,51 @@ func parseAndValidateIndexArgs(argsJSON string) (indexWorktreeArgs, error) {
 }
 
 // resolveIndexPath resolves the project and filesystem path from the arguments.
-// Returns the project (nil if not found), the absolute path, and the model.
+//
+// Security: this tool is reachable by an LLM (potentially via an external MCP
+// client), so it must NEVER index an arbitrary filesystem path. The project
+// must already be registered, and an explicit path is only honored when it
+// stays inside that project's tree (its own path or a subdirectory/worktree of
+// it). Anything else is rejected. Returns the project, the absolute path, and
+// the embedding model.
 func (t *indexWorktreeTool) resolveIndexPath(ctx context.Context, args indexWorktreeArgs) (*store.Project, string, string, error) {
-	targetPath := args.Path
-
-	// Only allow paths from registered projects — reject LLM-supplied
-	// arbitrary filesystem paths (security: "never arbitrary path index").
 	p, err := t.db.GetProject(ctx, args.Project)
 	if err != nil {
 		p, err = t.db.GetProjectByIdentity(ctx, args.Project)
 	}
+	if err != nil || p == nil {
+		return nil, "", "", fmt.Errorf("project not found: %q (register it first; arbitrary paths are not allowed)", args.Project)
+	}
+	if p.Path == "" {
+		return nil, "", "", fmt.Errorf("project %q has no local path (remote-only)", args.Project)
+	}
+
+	base, err := filepath.Abs(p.Path)
 	if err != nil {
-		// Project not found; only proceed if an explicit, non-empty path was
-		// provided. Never use args.Project as a filesystem path.
-		if targetPath == "" {
-			return nil, "", "", fmt.Errorf("project not found: %q (use a registered project name or identity)", args.Project)
-		}
-		// Path was provided — validate it resolves to a real directory.
-		absPath, err := filepath.Abs(targetPath)
+		return nil, "", "", fmt.Errorf("resolving project path %q: %w", p.Path, err)
+	}
+
+	// Default to the project's own path. An explicit path is accepted only if
+	// it resolves inside the project's tree — this is what keeps an LLM from
+	// pointing the indexer at /etc, ~/.ssh, or any path outside the project.
+	targetPath := base
+	if args.Path != "" {
+		abs, err := filepath.Abs(args.Path)
 		if err != nil {
-			return nil, "", "", fmt.Errorf("resolving path %q: %w", targetPath, err)
+			return nil, "", "", fmt.Errorf("resolving path %q: %w", args.Path, err)
 		}
-		// Check that the path is a directory (not arbitrary).
-		info, err := os.Stat(absPath)
-		if err != nil || !info.IsDir() {
-			return nil, "", "", fmt.Errorf("path %q is not a valid directory", absPath)
+		rel, err := filepath.Rel(base, abs)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, "", "", fmt.Errorf("path %q is outside registered project %q", abs, p.Name)
 		}
-		model := args.Model
-		if model == "" {
-			model = "bge-m3"
-		}
-		return nil, absPath, model, nil
-	}
-
-	// Project found — use its stored path.
-	if targetPath == "" {
-		targetPath = p.Path
-	}
-
-	absPath, err := filepath.Abs(targetPath)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("resolving path %q: %w", targetPath, err)
+		targetPath = abs
 	}
 
 	model := args.Model
-	if model == "" && p != nil {
+	if model == "" {
 		model = p.Model
 	}
-	return p, absPath, model, nil
+	return p, targetPath, model, nil
 }
 
 func (t *indexWorktreeTool) Run(ctx context.Context, argsJSON string) (string, error) {
@@ -131,15 +128,13 @@ func (t *indexWorktreeTool) Run(ctx context.Context, argsJSON string) (string, e
 
 	p, absPath, model, err := t.resolveIndexPath(ctx, args)
 	if err != nil {
-		// Project not found and no explicit path given — return a soft error.
-		if p == nil && args.Path == "" {
-			return JSONResult(map[string]any{
-				"action":   "index",
-				"error":    fmt.Sprintf("project %q not found and no explicit path given", args.Project),
-				"proposed": false,
-			}), nil
-		}
-		return "", err
+		// Resolution failures (unknown project, path outside the project) are
+		// reported back to the model as a soft error, not a hard failure.
+		return JSONResult(map[string]any{
+			"action":   "index",
+			"error":    err.Error(),
+			"proposed": false,
+		}), nil
 	}
 
 	// Policy: propose or confirm — describe what would be done.

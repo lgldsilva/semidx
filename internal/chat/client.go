@@ -25,10 +25,13 @@ type StreamClient interface {
 	StreamMessage(ctx context.Context, req Request) (<-chan StreamChunk, error)
 }
 
-// Message is a single chat message.
+// Message is a single chat message. For tool calling, an assistant message may
+// carry ToolCalls, and a "tool" message must carry the ToolCallID it answers.
 type Message struct {
-	Role    string `json:"role"` // "system", "user", "assistant"
-	Content string `json:"content"`
+	Role       string     `json:"role"` // "system", "user", "assistant", "tool"
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // set on assistant messages that call tools
+	ToolCallID string     `json:"tool_call_id,omitempty"` // set on tool messages (which call they answer)
 }
 
 // ToolDef is an OpenAI/Gemini function declaration for tool calling.
