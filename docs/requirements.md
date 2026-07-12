@@ -263,7 +263,7 @@ surface that claims “yes”, not only CLI demos.
 |----|-------------|--------|
 | REQ-NFR-01 | Coverage on business packages (`internal/**`, `pkg/**`) | ≥ 90% (Sonar denominator; `cmd`/`deploy` excluded) |
 | REQ-NFR-02 | Race-safe tests in CI | `go test -race -shuffle=on ./...` |
-| REQ-NFR-03 | Toolchain | Go **1.25.12** pin (`GOTOOLCHAIN`); bump builder image with stdlib |
+| REQ-NFR-03 | Toolchain | Go **1.26.5** pin (`GOTOOLCHAIN`; required by `charm.land/fantasy`); bump builder image with stdlib |
 | REQ-NFR-04 | Security tooling | golangci-lint, gosec, govulncheck, gitleaks, Trivy on image |
 | REQ-NFR-05 | License | Apache-2.0 |
 | REQ-NFR-06 | Secrets | No keys/DSNs in git; config via env / `semidx config` |
