@@ -39,7 +39,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	bindAddr, _ := cmd.Flags().GetString("bind")
 
 	cfg := config.Load()
-	pipeline, _, ls, resolvedProject, err := buildPipeline(ctx, cfg, localIndex, project, model)
+	// nil approver: the web serve path uses the RAG pipeline, not the agent
+	// Runner, so no action tools are wired here.
+	pipeline, _, ls, resolvedProject, err := buildPipeline(ctx, cfg, localIndex, project, model, nil)
 	if err != nil {
 		return err
 	}
