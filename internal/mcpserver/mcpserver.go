@@ -93,6 +93,42 @@ type MultiSearchBackend interface {
 	SearchMulti(ctx context.Context, req search.MultiScopeRequest) (*search.MultiResponse, error)
 }
 
+// unwrapper is implemented by backend wrappers (e.g. the agentic/RAG ask
+// backends) that embed another Backend. It lets tool gating see the wrapped
+// backend's extra capabilities (GitBackend, MultiSearchBackend) which interface
+// embedding would otherwise hide.
+type unwrapper interface{ Unwrap() Backend }
+
+// asGitBackend finds a GitBackend in b or anywhere down its wrapped chain.
+func asGitBackend(b Backend) (GitBackend, bool) {
+	for b != nil {
+		if gb, ok := b.(GitBackend); ok {
+			return gb, true
+		}
+		u, ok := b.(unwrapper)
+		if !ok {
+			return nil, false
+		}
+		b = u.Unwrap()
+	}
+	return nil, false
+}
+
+// asMultiSearchBackend finds a MultiSearchBackend in b or its wrapped chain.
+func asMultiSearchBackend(b Backend) (MultiSearchBackend, bool) {
+	for b != nil {
+		if mb, ok := b.(MultiSearchBackend); ok {
+			return mb, true
+		}
+		u, ok := b.(unwrapper)
+		if !ok {
+			return nil, false
+		}
+		b = u.Unwrap()
+	}
+	return nil, false
+}
+
 // New builds an MCP server whose tools call the given backend.
 func New(b Backend) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "semidx", Version: version}, nil)
@@ -117,8 +153,9 @@ func New(b Backend) *mcp.Server {
 		Description: "Get the indexing status of a registered project. Reports file count, status, and model.",
 	}, statusHandler(b))
 
-	// Register git tools when the backend also implements GitBackend.
-	if gitB, ok := b.(GitBackend); ok {
+	// Register git tools when the backend (or a backend it wraps) implements
+	// GitBackend — an ask wrapper must not hide the local backend's git tools.
+	if gitB, ok := asGitBackend(b); ok {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        "repo_worktrees",
 			Description: "List all worktrees of a repository (requires local git access). On server mode, returns unsupported.",
@@ -135,8 +172,9 @@ func New(b Backend) *mcp.Server {
 		}, gitStatusHandler(gitB))
 	}
 
-	// Register multi-scope search when the backend implements MultiSearchBackend.
-	if msB, ok := b.(MultiSearchBackend); ok {
+	// Register multi-scope search when the backend (or one it wraps) implements
+	// MultiSearchBackend.
+	if msB, ok := asMultiSearchBackend(b); ok {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        "semantic_search_multi",
 			Description: "Search across multiple projects in one query, with fused results and project labels.",

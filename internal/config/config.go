@@ -72,6 +72,18 @@ type Config struct {
 	OllamaCloudAPIKey  string
 	OllamaCloudBaseURL string
 
+	// Chat LLM selection (agent + RAG answer generation), independent from the
+	// embedding chain. When ChatProvider is empty, the provider is auto-detected
+	// from the embedding keys (Gemini > OpenRouter > Groq) for backward
+	// compatibility. Set SEMIDX_CHAT_PROVIDER=openai-compatible with
+	// SEMIDX_CHAT_BASE_URL + SEMIDX_CHAT_MODEL + SEMIDX_CHAT_API_KEY to use any
+	// OpenAI-compatible gateway (e.g. OpenCode Zen).
+	ChatProvider    string  // google|anthropic|openrouter|groq|openai-compatible
+	ChatModel       string  // model id; defaults to gemini-2.5-flash only for google
+	ChatAPIKey      string  // falls back to the matching embedding provider key
+	ChatBaseURL     string  // required for openai-compatible
+	ChatTemperature float64 // default 0.3
+
 	// Privacy forces local-only embedding providers (EMBED_PRIVACY=true).
 	Privacy bool
 
@@ -144,6 +156,89 @@ type Config struct {
 	// SecretBlockEmbedding prevents embedding files with detected secrets
 	// (SEMIDX_SECRET_BLOCK_EMBEDDING). Implies SEMIDX_SECRET_SCAN=true.
 	SecretBlockEmbedding bool
+}
+
+// ChatLLM is the resolved chat-provider selection (agent + RAG generation),
+// mapped by the callers onto internal/llm.ProviderConfig.
+type ChatLLM struct {
+	Provider    string // google|anthropic|openrouter|groq|openai-compatible
+	Model       string
+	APIKey      string
+	BaseURL     string
+	Temperature float64
+}
+
+// ResolveChatLLM picks the chat provider. An explicit SEMIDX_CHAT_PROVIDER wins;
+// otherwise it auto-detects from the embedding keys (Gemini > OpenRouter > Groq)
+// for backward compatibility. ok is false when no usable provider is configured
+// (the caller then degrades to plain RAG / no agent).
+func (c *Config) ResolveChatLLM() (ChatLLM, bool) {
+	if c.ChatProvider != "" {
+		return c.explicitChatLLM()
+	}
+	return c.autoChatLLM()
+}
+
+func (c *Config) explicitChatLLM() (ChatLLM, bool) {
+	sel := ChatLLM{
+		Provider:    c.ChatProvider,
+		Model:       c.ChatModel,
+		APIKey:      c.ChatAPIKey,
+		BaseURL:     c.ChatBaseURL,
+		Temperature: c.ChatTemperature,
+	}
+	switch sel.Provider {
+	case "google":
+		sel.applyFallback(c.GeminiAPIKey, c.GeminiBaseURL, "gemini-2.5-flash")
+	case "groq":
+		sel.applyFallback(c.GroqAPIKey, c.GroqBaseURL, "")
+	case "openrouter":
+		sel.applyFallback(c.OpenRouterAPIKey, c.OpenRouterBaseURL, "")
+	}
+	return sel, sel.usable()
+}
+
+func (c *Config) autoChatLLM() (ChatLLM, bool) {
+	switch {
+	case c.GeminiAPIKey != "":
+		return ChatLLM{Provider: "google", Model: orString(c.ChatModel, "gemini-2.5-flash"), APIKey: c.GeminiAPIKey, BaseURL: c.GeminiBaseURL, Temperature: c.ChatTemperature}, true
+	case c.OpenRouterAPIKey != "" && c.ChatModel != "":
+		return ChatLLM{Provider: "openrouter", Model: c.ChatModel, APIKey: c.OpenRouterAPIKey, BaseURL: c.OpenRouterBaseURL, Temperature: c.ChatTemperature}, true
+	case c.GroqAPIKey != "" && c.ChatModel != "":
+		return ChatLLM{Provider: "groq", Model: c.ChatModel, APIKey: c.GroqAPIKey, BaseURL: c.GroqBaseURL, Temperature: c.ChatTemperature}, true
+	}
+	return ChatLLM{}, false
+}
+
+// applyFallback fills empty fields from the matching embedding provider config.
+func (s *ChatLLM) applyFallback(apiKey, baseURL, model string) {
+	if s.APIKey == "" {
+		s.APIKey = apiKey
+	}
+	if s.BaseURL == "" {
+		s.BaseURL = baseURL
+	}
+	if s.Model == "" {
+		s.Model = model
+	}
+}
+
+// usable reports whether the selection has enough to build a provider.
+func (s ChatLLM) usable() bool {
+	if s.Model == "" {
+		return false
+	}
+	if s.Provider == "openai-compatible" {
+		return s.BaseURL != ""
+	}
+	return true
+}
+
+func orString(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 // DefaultLocalIndexPath is the standalone index location. It uses the OS-native
@@ -240,6 +335,11 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 		OpenRouterBaseURL:   env.get("SEMIDX_OPENROUTER_BASE_URL", defaultOpenRouterURL),
 		OllamaCloudAPIKey:   env.get("OLLAMA_CLOUD_API_KEY", ""),
 		OllamaCloudBaseURL:  env.get("SEMIDX_OLLAMA_CLOUD_BASE_URL", defaultOllamaCloudURL),
+		ChatProvider:        env.get("SEMIDX_CHAT_PROVIDER", ""),
+		ChatModel:           env.get("SEMIDX_CHAT_MODEL", ""),
+		ChatAPIKey:          env.get("SEMIDX_CHAT_API_KEY", ""),
+		ChatBaseURL:         env.get("SEMIDX_CHAT_BASE_URL", ""),
+		ChatTemperature:     floatDefault(env.get("SEMIDX_CHAT_TEMPERATURE", ""), 0.3),
 		Privacy:             env.get("EMBED_PRIVACY", "") == "true",
 		IndexWorkers:        atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
 		EmbedBatchSize:      atoiDefault(env.get("SEMIDX_EMBED_BATCH_SIZE", ""), defaultEmbedBatchSize),
@@ -312,6 +412,12 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_OLLAMA_CLOUD_BASE_URL", "Ollama Cloud API base URL", false},
 	{"SEMIDX_OLLAMA_URL", "Local Ollama endpoint (embedding fallback)", false},
 	{"SEMIDX_OLLAMA_URLS", "Comma-separated Ollama URLs for parallel embedding pool", false},
+	// Chat LLM (agent + RAG answer generation), independent of the embedding chain.
+	{"SEMIDX_CHAT_PROVIDER", "Chat provider: google|anthropic|openrouter|groq|openai-compatible (default: auto-detect from embedding keys)", false},
+	{"SEMIDX_CHAT_MODEL", "Chat model id (e.g. gemini-2.5-flash, deepseek-v4-flash-free)", false},
+	{"SEMIDX_CHAT_API_KEY", "Chat provider API key (falls back to the matching embedding key)", true},
+	{"SEMIDX_CHAT_BASE_URL", "Chat base URL — required for openai-compatible (e.g. OpenCode Zen)", false},
+	{"SEMIDX_CHAT_TEMPERATURE", "Chat sampling temperature (default 0.3)", false},
 	{"EMBED_PROVIDER", "Custom provider prepended to the chain (openai|ollama)", false},
 	{"EMBED_ENDPOINT", "Custom provider endpoint URL", false},
 	{"EMBED_API_KEY", "Custom provider API key", true},
@@ -444,6 +550,18 @@ func EffectiveValue(key string) string {
 func atoiDefault(s string, def int) int {
 	if n, err := strconv.Atoi(s); err == nil && n > 0 {
 		return n
+	}
+	return def
+}
+
+// floatDefault parses s as a float, returning def when empty or invalid.
+// Unlike atoiDefault it accepts 0 and negatives as explicit values.
+func floatDefault(s string, def float64) float64 {
+	if s == "" {
+		return def
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f
 	}
 	return def
 }
