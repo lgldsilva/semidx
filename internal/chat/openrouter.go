@@ -47,3 +47,6 @@ func (c *OpenRouterClient) SendMessage(ctx context.Context, req Request) (*Respo
 	return sendOpenAIChat(ctx, c.client, c.baseURL+openRouterEndpoint, c.apiKey,
 		map[string]string{"HTTP-Referer": openRouterReferer}, req)
 }
+
+// SupportsTools reports whether OpenRouter supports tool calling.
+func (c *OpenRouterClient) SupportsTools() bool { return true }

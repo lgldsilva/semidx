@@ -143,7 +143,11 @@ func nonStreamingToChannel(ctx context.Context, client Client, req Request) (<-c
 	}
 
 	ch := make(chan StreamChunk, 2)
-	ch <- StreamChunk{Content: resp.Content}
+	if len(resp.ToolCalls) > 0 {
+		ch <- StreamChunk{ToolCalls: resp.ToolCalls}
+	} else {
+		ch <- StreamChunk{Content: resp.Content}
+	}
 	ch <- StreamChunk{Done: true, Model: resp.Model}
 	close(ch)
 	return ch, nil
