@@ -56,7 +56,12 @@ func setupTestRepo(t *testing.T) string {
 	wtDir := filepath.Join(filepath.Dir(dir), "wt-feat")
 	run("worktree", "add", wtDir)
 	t.Cleanup(func() {
-		_ = exec.Command("git", "worktree", "remove", "--force", wtDir).Run()
+		// Must set Dir: a bare `git worktree remove` runs in the process CWD
+		// (the real repo, when tests run from the worktree) instead of the temp
+		// repo — this is how the test previously corrupted the real worktree.
+		cmd := exec.Command("git", "worktree", "remove", "--force", wtDir)
+		cmd.Dir = dir
+		_ = cmd.Run()
 	})
 
 	return dir
