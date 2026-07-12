@@ -10,7 +10,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
-	"github.com/lgldsilva/semidx/internal/indexing"
+	"github.com/lgldsilva/semidx/internal/llm"
 	"github.com/lgldsilva/semidx/internal/localstore"
 	"github.com/lgldsilva/semidx/internal/projectref"
 	"github.com/lgldsilva/semidx/internal/rag"
@@ -19,8 +19,8 @@ import (
 
 // buildPipeline constructs the full RAG pipeline and its dependencies.
 // Caller must close the returned SQLiteStore when done.
-// Returns the pipeline, optional agent (nil when tool calling unavailable), store, and resolved project name.
-func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, model string) (*rag.Pipeline, *agent.Agent, *localstore.SQLiteStore, string, error) {
+// Returns the pipeline, optional agent Runner (nil when tool calling unavailable), store, and resolved project name.
+func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, model string) (*rag.Pipeline, *agent.Runner, *localstore.SQLiteStore, string, error) {
 	// Resolve local index path.
 	if indexPath == "" {
 		if cfg.LocalIndexPath != "" {
@@ -92,37 +92,32 @@ func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, 
 		Worktree:    pipelineWorktree,
 	})
 
-	// Build agent if tool calling is available (Gemini >=2.0 supports tools).
-	// Fall back to rag.Pipeline when agent is nil.
-	var agentInstance *agent.Agent
+	// Build the fantasy-backed agent Runner when a chat LLM is configured.
+	// Falls back to the rag.Pipeline (RAG mode) when runner is nil. Unlike the
+	// old loop, the configured model (chatModel) is honored by the agent too.
+	//
+	// NOTE: only the read tools are wired here for now. The propose-only action
+	// tools (index_worktree, reindex_project) are re-added in Phase 4, ported to
+	// fantasy.AgentTool with the real permission/approval gate.
+	var runner *agent.Runner
 	if cfg.GeminiAPIKey != "" {
-		resolver := agent.NewScopeResolver(ls)
-		svc := search.NewService(ls, emb)
-
-		// Build the Indexer for local action tools.
-		indexer := indexing.NewIndexer(ls, emb, 0, indexing.IndexerOpts{
-			Logger:  slog.Default(),
-			Workers: 2,
-			Verbose: false,
-		})
-
-		tools := []agent.Tool{
-			agent.NewSearchTool(svc),
-			agent.NewIndexStatusTool(ls),
-			agent.NewListProjectsTool(ls),
-			// Action tools in propose mode (Phase 5 — propose only).
-			agent.NewIndexWorktreeTool(ls, indexer, agent.PolicyPropose),
-			agent.NewReindexProjectTool(ls, indexer, agent.PolicyPropose),
+		model, err := llm.ResolveModel(ctx, llm.ProviderConfig{
+			Type:    llm.ProviderGoogle,
+			APIKey:  cfg.GeminiAPIKey,
+			BaseURL: cfg.GeminiBaseURL,
+		}, chatModel)
+		if err != nil {
+			slog.Warn("agent mode disabled: could not resolve chat model", "error", err)
+		} else {
+			resolver := agent.NewScopeResolver(ls)
+			svc := search.NewService(ls, emb)
+			temp := 0.3
+			runner = agent.NewRunner(model, agent.ReadTools(svc, ls, resolver), agent.RunnerConfig{
+				SystemPrompt: agent.SystemPrompt,
+				Temperature:  &temp,
+			})
 		}
-		// repotools need a path resolver; only add when the resolver is available.
-		tools = append(tools,
-			agent.NewRepoWorktreesTool(resolver),
-			agent.NewRepoBranchesTool(resolver),
-			agent.NewRepoStatusTool(resolver),
-		)
-
-		agentInstance = agent.NewAgent(chatClient, tools, resolver)
 	}
 
-	return pipeline, agentInstance, ls, project, nil
+	return pipeline, runner, ls, project, nil
 }
