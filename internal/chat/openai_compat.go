@@ -19,18 +19,55 @@ type openAIMessage struct {
 	Content string `json:"content"`
 }
 
+type openAIToolDef struct {
+	Type     string             `json:"type"`
+	Function openAIToolFunction `json:"function"`
+}
+
+type openAIToolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
+type openAIToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function openAIToolCallFn `json:"function"`
+}
+
+type openAIToolCallFn struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// openAIDeltaToolCall is a tool call delta in a streaming chunk.
+type openAIDeltaToolCall struct {
+	Index    int              `json:"index"`
+	ID       string           `json:"id,omitempty"`
+	Type     string           `json:"type,omitempty"`
+	Function *openAIDeltaFunc `json:"function,omitempty"`
+}
+
+type openAIDeltaFunc struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
 type openAIChatRequest struct {
 	Model       string          `json:"model"`
 	Messages    []openAIMessage `json:"messages"`
 	Temperature float64         `json:"temperature"`
 	MaxTokens   int             `json:"max_tokens,omitempty"`
 	Stream      bool            `json:"stream,omitempty"`
+	Tools       []openAIToolDef `json:"tools,omitempty"`
 }
 
 type openAIChatResponse struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content   string           `json:"content"`
+			ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 	} `json:"choices"`
 	Model string `json:"model,omitempty"`
@@ -61,12 +98,27 @@ func buildOpenAIChatRequest(req Request, stream bool) openAIChatRequest {
 	for i, m := range req.Messages {
 		messages[i] = openAIMessage(m)
 	}
+	var tools []openAIToolDef
+	if len(req.Tools) > 0 {
+		tools = make([]openAIToolDef, len(req.Tools))
+		for i, t := range req.Tools {
+			tools[i] = openAIToolDef{
+				Type: "function",
+				Function: openAIToolFunction{
+					Name:        t.Name,
+					Description: t.Description,
+					Parameters:  t.Parameters,
+				},
+			}
+		}
+	}
 	return openAIChatRequest{
 		Model:       model,
 		Messages:    messages,
 		Temperature: temp,
 		MaxTokens:   maxTok,
 		Stream:      stream,
+		Tools:       tools,
 	}
 }
 
@@ -114,8 +166,19 @@ func sendOpenAIChat(ctx context.Context, hc *http.Client, url, apiKey string, ex
 		return nil, fmt.Errorf("chat: no choices in response")
 	}
 
+	msg := result.Choices[0].Message
+	toolCalls := make([]ToolCall, len(msg.ToolCalls))
+	for i, tc := range msg.ToolCalls {
+		toolCalls[i] = ToolCall{
+			ID:   tc.ID,
+			Name: tc.Function.Name,
+			Args: tc.Function.Arguments,
+		}
+	}
+
 	return &Response{
-		Content: result.Choices[0].Message.Content,
-		Model:   result.Model,
+		Content:   msg.Content,
+		ToolCalls: toolCalls,
+		Model:     result.Model,
 	}, nil
 }

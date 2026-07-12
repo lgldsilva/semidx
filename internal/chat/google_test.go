@@ -626,5 +626,227 @@ func TestGoogleClientStreamFinishReason(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Tool calling tests
+// ---------------------------------------------------------------------------
+
+func TestGoogleClientToolCallNonStreaming(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify tools were sent in the request body.
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		tools, ok := body["tools"].([]any)
+		if !ok || len(tools) == 0 {
+			http.Error(w, "missing tools", http.StatusBadRequest)
+			return
+		}
+		tool0 := tools[0].(map[string]any)
+		if tool0["type"] != "function" {
+			t.Errorf("tool type = %v, want 'function'", tool0["type"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices": [{
+				"message": {
+					"content": null,
+					"tool_calls": [
+						{
+							"id": "call_abc123",
+							"type": "function",
+							"function": {
+								"name": "get_weather",
+								"arguments": "{\"location\": \"Paris\"}"
+							}
+						}
+					]
+				}
+			}],
+			"model": "gemini-2.5-flash"
+		}`))
+	}))
+	defer srv.Close()
+
+	c := NewGoogleClient(srv.URL, "test-key")
+	resp, err := c.SendMessage(context.Background(), Request{
+		Messages: []Message{{Role: "user", Content: "weather in Paris?"}},
+		Tools: []ToolDef{
+			{
+				Name:        "get_weather",
+				Description: "Get weather for a location",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	if resp.Content != "" {
+		t.Errorf("Content = %q, want empty for tool call", resp.Content)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("got %d tool calls, want 1", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].ID != "call_abc123" {
+		t.Errorf("ToolCall ID = %q, want %q", resp.ToolCalls[0].ID, "call_abc123")
+	}
+	if resp.ToolCalls[0].Name != "get_weather" {
+		t.Errorf("ToolCall Name = %q, want %q", resp.ToolCalls[0].Name, "get_weather")
+	}
+	if resp.ToolCalls[0].Args != `{"location": "Paris"}` {
+		t.Errorf("ToolCall Args = %q, want %q", resp.ToolCalls[0].Args, `{"location": "Paris"}`)
+	}
+}
+
+func TestGoogleClientToolCallStreaming(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+
+		// Simulate SSE chunks that emit a tool call.
+		// Chunk 1: tool call header (id + name).
+		chunk1, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{
+				{
+					"delta": map[string]any{
+						"tool_calls": []map[string]any{
+							{
+								"index": 0,
+								"id":    "call_stream_1",
+								"type":  "function",
+								"function": map[string]string{
+									"name":      "search_code",
+									"arguments": "",
+								},
+							},
+						},
+					},
+				},
+			},
+			"model": "gemini-2.5-flash",
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", chunk1)
+		flusher.Flush()
+
+		// Chunk 2: argument delta.
+		chunk2, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{
+				{
+					"delta": map[string]any{
+						"tool_calls": []map[string]any{
+							{
+								"index": 0,
+								"function": map[string]string{
+									"arguments": "{\"query\": \"semantic",
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", chunk2)
+		flusher.Flush()
+
+		// Chunk 3: final args delta.
+		chunk3, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{
+				{
+					"delta": map[string]any{
+						"tool_calls": []map[string]any{
+							{
+								"index": 0,
+								"function": map[string]string{
+									"arguments": " search\"}",
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", chunk3)
+		flusher.Flush()
+
+		// Chunk 4: finish reason.
+		chunk4, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{
+				{
+					"delta":         map[string]any{},
+					"finish_reason": "tool_calls",
+				},
+			},
+			"model": "gemini-2.5-flash",
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", chunk4)
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	c := NewGoogleClient(srv.URL, "test-key")
+	ch, err := c.StreamMessage(context.Background(), Request{
+		Messages: []Message{{Role: "user", Content: "search for x"}},
+		Tools: []ToolDef{
+			{
+				Name:        "search_code",
+				Description: "Search codebase",
+				Parameters:  map[string]any{"type": "object"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StreamMessage: %v", err)
+	}
+
+	var gotToolCalls []ToolCall
+	var gotDone bool
+	for chunk := range ch {
+		if chunk.Done {
+			gotDone = true
+			if len(chunk.ToolCalls) > 0 {
+				gotToolCalls = chunk.ToolCalls
+			}
+			break
+		}
+		if len(chunk.ToolCalls) > 0 {
+			gotToolCalls = chunk.ToolCalls
+		}
+	}
+
+	if !gotDone {
+		t.Fatal("expected Done chunk")
+	}
+	if len(gotToolCalls) != 1 {
+		t.Fatalf("got %d tool calls, want 1", len(gotToolCalls))
+	}
+	if gotToolCalls[0].ID != "call_stream_1" {
+		t.Errorf("ToolCall ID = %q, want %q", gotToolCalls[0].ID, "call_stream_1")
+	}
+	if gotToolCalls[0].Name != "search_code" {
+		t.Errorf("ToolCall Name = %q, want %q", gotToolCalls[0].Name, "search_code")
+	}
+	if gotToolCalls[0].Args != `{"query": "semantic search"}` {
+		t.Errorf("ToolCall Args = %q, want %q", gotToolCalls[0].Args, `{"query": "semantic search"}`)
+	}
+}
+
+func TestGoogleClientSupportsTools(t *testing.T) {
+	c := NewGoogleClient("http://example.com", "k")
+	if !c.SupportsTools() {
+		t.Error("GoogleClient should support tools")
+	}
+}
+
 // Ensure GoogleClient implements StreamClient.
 var _ StreamClient = (*GoogleClient)(nil)

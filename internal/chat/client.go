@@ -11,9 +11,10 @@ type Client interface {
 
 // StreamChunk is a single chunk from a streaming chat response.
 type StreamChunk struct {
-	Content string // delta content (empty for final chunk)
-	Done    bool   // true on the final (termination) chunk
-	Model   string // model name (only set on first or last chunk)
+	Content   string     // delta content (empty for final/tool chunks)
+	ToolCalls []ToolCall // tool calls from the model (nil for non-tool chunks)
+	Done      bool       // true on the final (termination) chunk
+	Model     string     // model name (only set on first or last chunk)
 }
 
 // StreamClient is a chat provider that supports streaming responses.
@@ -30,17 +31,40 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// ToolDef is an OpenAI/Gemini function declaration for tool calling.
+type ToolDef struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"` // JSON schema of arguments
+}
+
+// ToolCall is one call the model wants to make.
+type ToolCall struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Args string `json:"arguments"` // raw JSON arguments string
+}
+
+// ToolResult is the result of executing a tool call, sent back to the model.
+type ToolResult struct {
+	ToolCallID string `json:"tool_call_id"`
+	Name       string `json:"name"`
+	Content    string `json:"content"` // result text
+}
+
 // Request is a chat completion request.
 type Request struct {
 	Messages    []Message
-	Temperature float64 // 0.0-1.0
-	MaxTokens   int     // 0 = model default
-	Model       string  // e.g. "gemini-2.5-flash"
+	Tools       []ToolDef // tool definitions (nil/empty = no tool calling)
+	Temperature float64   // 0.0-1.0
+	MaxTokens   int       // 0 = model default
+	Model       string    // e.g. "gemini-2.5-flash"
 }
 
 // Response is a chat completion response.
 type Response struct {
-	Content string
+	Content   string     // response text (empty if only tool calls)
+	ToolCalls []ToolCall // tool calls from the model
 	// Model used (may differ from request if fallback happened).
 	Model string
 }

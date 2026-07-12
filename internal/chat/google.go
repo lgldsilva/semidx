@@ -69,12 +69,16 @@ func (e *HTTPError) Error() string {
 type googleStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string                `json:"content"`
+			ToolCalls []openAIDeltaToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Model string `json:"model,omitempty"`
 }
+
+// SupportsTools reports whether Google AI Studio supports tool calling.
+func (c *GoogleClient) SupportsTools() bool { return true }
 
 // SendMessage sends a chat completion request to Google AI Studio.
 func (c *GoogleClient) SendMessage(ctx context.Context, req Request) (*Response, error) {
@@ -130,6 +134,9 @@ func streamSSEResponse(resp *http.Response, ch chan<- StreamChunk) {
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
+	// Accumulator for streaming tool calls, keyed by index.
+	toolAcc := make(map[int]*ToolCall)
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -137,6 +144,10 @@ func streamSSEResponse(resp *http.Response, ch chan<- StreamChunk) {
 		}
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
+			if len(toolAcc) > 0 {
+				ch <- StreamChunk{ToolCalls: finalizeToolCalls(toolAcc), Done: true}
+				return
+			}
 			ch <- StreamChunk{Done: true}
 			return
 		}
@@ -154,10 +165,33 @@ func streamSSEResponse(resp *http.Response, ch chan<- StreamChunk) {
 		content := chunk.Delta.Content
 		modelName := streamResp.Model
 
+		// Accumulate any tool call deltas.
+		for _, dtc := range chunk.Delta.ToolCalls {
+			tc, ok := toolAcc[dtc.Index]
+			if !ok {
+				tc = &ToolCall{ID: dtc.ID, Name: ""}
+				toolAcc[dtc.Index] = tc
+			}
+			if dtc.ID != "" {
+				tc.ID = dtc.ID
+			}
+			if dtc.Function != nil {
+				if dtc.Function.Name != "" {
+					tc.Name = dtc.Function.Name
+				}
+				tc.Args += dtc.Function.Arguments
+			}
+		}
+
 		if content != "" {
 			ch <- StreamChunk{Content: content, Model: modelName}
 		}
+
 		if chunk.FinishReason != "" {
+			if len(toolAcc) > 0 {
+				ch <- StreamChunk{ToolCalls: finalizeToolCalls(toolAcc), Done: true, Model: modelName}
+				return
+			}
 			ch <- StreamChunk{Done: true, Model: modelName}
 			return
 		}
@@ -166,5 +200,29 @@ func streamSSEResponse(resp *http.Response, ch chan<- StreamChunk) {
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "chat stream scan error: %v\n", err)
 	}
+	if len(toolAcc) > 0 {
+		ch <- StreamChunk{ToolCalls: finalizeToolCalls(toolAcc), Done: true}
+		return
+	}
 	ch <- StreamChunk{Done: true}
+}
+
+// finalizeToolCalls converts the accumulated tool call map into a sorted slice.
+func finalizeToolCalls(acc map[int]*ToolCall) []ToolCall {
+	if len(acc) == 0 {
+		return nil
+	}
+	maxIdx := 0
+	for idx := range acc {
+		if idx > maxIdx {
+			maxIdx = idx
+		}
+	}
+	out := make([]ToolCall, 0, len(acc))
+	for i := 0; i <= maxIdx; i++ {
+		if tc, ok := acc[i]; ok {
+			out = append(out, *tc)
+		}
+	}
+	return out
 }
