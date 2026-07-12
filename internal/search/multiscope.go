@@ -22,9 +22,17 @@ type MultiScopeRequest struct {
 	MaxPerProject int // cap results per project for diversity (0 = no limit)
 }
 
+// MultiResult is one fused search hit tagged with the project identity it came
+// from. Provenance lives here (in the envelope), NOT in store.SearchResult,
+// which stays clean and free of the internal scope-label prefix.
+type MultiResult struct {
+	store.SearchResult
+	Project string `json:"project"` // project identity the hit came from
+}
+
 // MultiResponse is a fused result from multi-scope search, with provenance.
 type MultiResponse struct {
-	Results  []store.SearchResult
+	Results  []MultiResult
 	Fallback bool
 	Keyword  bool
 }
@@ -88,23 +96,25 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 	})
 
 	// Apply diversity caps.
-	result := applyDiversity(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK)
-	if result == nil {
-		result = allResults
-		if len(result) > req.TopK {
-			result = result[:req.TopK]
+	fused := applyDiversity(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK)
+	if fused == nil {
+		fused = allResults
+		if len(fused) > req.TopK {
+			fused = fused[:req.TopK]
 		}
 	}
 
-	// Strip provenance prefixes from FilePath before returning —
-	// the \x00 prefix should never leak to the caller.
-	for i := range result {
-		if _, file := splitProvenance(result[i].FilePath); file != "" {
-			result[i].FilePath = file
-		}
+	// Split the internal "identity\x00path" prefix back into an explicit
+	// Project field and a clean FilePath. The \x00 label must never leak to
+	// the caller (it corrupted MCP/JSON output before this).
+	results := make([]MultiResult, len(fused))
+	for i, r := range fused {
+		proj, file := splitProvenance(r.FilePath)
+		r.FilePath = file
+		results[i] = MultiResult{SearchResult: r, Project: proj}
 	}
 
-	return &MultiResponse{Results: result}, nil
+	return &MultiResponse{Results: results}, nil
 }
 
 // applyDiversity caps results per file and per project (identified by prefix

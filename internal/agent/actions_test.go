@@ -96,6 +96,51 @@ func TestIndexWorktreeTool_Run_noProject(t *testing.T) {
 	}
 }
 
+// TestIndexWorktreeTool_Run_pathOutsideProject verifies the security fix: an
+// explicit path outside the registered project's tree is rejected, so an LLM
+// cannot point the indexer at an arbitrary filesystem location.
+func TestIndexWorktreeTool_Run_pathOutsideProject(t *testing.T) {
+	fs := newFakeSearchStore()
+	fs.addProject(&store.Project{
+		Name: "my-project", Identity: "my-id",
+		Path: "/tmp/my-project", SourceType: "git", Model: "test-model",
+	})
+
+	tool := NewIndexWorktreeTool(fs, nil, PolicyPropose)
+	result, err := tool.Run(ctx, `{"project":"my-project","path":"/etc"}`)
+	if err != nil {
+		t.Fatalf("Run(path outside) should not return hard error: %v", err)
+	}
+	if !strings.Contains(result, "outside registered project") {
+		t.Errorf("result should reject the out-of-tree path: %s", result)
+	}
+	if !strings.Contains(result, `"proposed":false`) {
+		t.Errorf("result should have proposed=false: %s", result)
+	}
+}
+
+// TestIndexWorktreeTool_Run_pathInsideProject verifies a path that stays inside
+// the project's tree (a subdirectory/worktree) is accepted.
+func TestIndexWorktreeTool_Run_pathInsideProject(t *testing.T) {
+	fs := newFakeSearchStore()
+	fs.addProject(&store.Project{
+		Name: "my-project", Identity: "my-id",
+		Path: "/tmp/my-project", SourceType: "git", Model: "test-model",
+	})
+
+	tool := NewIndexWorktreeTool(fs, nil, PolicyPropose)
+	result, err := tool.Run(ctx, `{"project":"my-project","path":"/tmp/my-project/sub"}`)
+	if err != nil {
+		t.Fatalf("Run(path inside): %v", err)
+	}
+	if !strings.Contains(result, `"proposed":true`) {
+		t.Errorf("in-tree path should be accepted: %s", result)
+	}
+	if !strings.Contains(result, "/tmp/my-project/sub") {
+		t.Errorf("result should carry the in-tree path: %s", result)
+	}
+}
+
 func TestParseAndValidateIndexArgs_valid(t *testing.T) {
 	args, err := parseAndValidateIndexArgs(`{"project":"p","path":"/tmp","model":"m1"}`)
 	if err != nil {

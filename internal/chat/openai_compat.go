@@ -15,8 +15,10 @@ import (
 // instead of being copy-pasted per provider.
 
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
 
 type openAIToolDef struct {
@@ -91,12 +93,34 @@ func resolveChatDefaults(req Request) (model string, temp float64, maxTok int) {
 	return model, temp, maxTok
 }
 
+// toOpenAIMessage maps a chat.Message onto the wire shape, translating
+// ToolCalls into the OpenAI tool_calls array. A plain type conversion no longer
+// works because chat.Message carries []ToolCall (not []openAIToolCall).
+func toOpenAIMessage(m Message) openAIMessage {
+	om := openAIMessage{
+		Role:       m.Role,
+		Content:    m.Content,
+		ToolCallID: m.ToolCallID,
+	}
+	if len(m.ToolCalls) > 0 {
+		om.ToolCalls = make([]openAIToolCall, len(m.ToolCalls))
+		for i, tc := range m.ToolCalls {
+			om.ToolCalls[i] = openAIToolCall{
+				ID:       tc.ID,
+				Type:     "function",
+				Function: openAIToolCallFn{Name: tc.Name, Arguments: tc.Args},
+			}
+		}
+	}
+	return om
+}
+
 // buildOpenAIChatRequest assembles the shared payload for req.
 func buildOpenAIChatRequest(req Request, stream bool) openAIChatRequest {
 	model, temp, maxTok := resolveChatDefaults(req)
 	messages := make([]openAIMessage, len(req.Messages))
 	for i, m := range req.Messages {
-		messages[i] = openAIMessage(m)
+		messages[i] = toOpenAIMessage(m)
 	}
 	var tools []openAIToolDef
 	if len(req.Tools) > 0 {
