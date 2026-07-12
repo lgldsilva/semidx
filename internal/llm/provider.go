@@ -29,6 +29,10 @@ const (
 	ProviderAnthropic  ProviderType = "anthropic"
 	ProviderOpenRouter ProviderType = "openrouter"
 	ProviderGroq       ProviderType = "groq"
+	// ProviderOpenAICompat targets any OpenAI-compatible endpoint via an
+	// explicit BaseURL (e.g. OpenCode Zen, DeepInfra, Together, a local
+	// llama.cpp/vLLM server). BaseURL is required.
+	ProviderOpenAICompat ProviderType = "openai-compatible"
 )
 
 // groqDefaultBaseURL is Groq's OpenAI-compatible endpoint. Groq has no native
@@ -83,6 +87,19 @@ func BuildProvider(cfg ProviderConfig) (fantasy.Provider, error) {
 		opts := []openaicompat.Option{
 			openaicompat.WithName(string(cfg.Type)),
 			openaicompat.WithBaseURL(base),
+		}
+		if cfg.APIKey != "" {
+			opts = append(opts, openaicompat.WithAPIKey(cfg.APIKey))
+		}
+		return openaicompat.New(opts...)
+
+	case ProviderOpenAICompat:
+		if cfg.BaseURL == "" {
+			return nil, fmt.Errorf("llm: %s provider requires BaseURL", cfg.Type)
+		}
+		opts := []openaicompat.Option{
+			openaicompat.WithName(string(cfg.Type)),
+			openaicompat.WithBaseURL(cfg.BaseURL),
 		}
 		if cfg.APIKey != "" {
 			opts = append(opts, openaicompat.WithAPIKey(cfg.APIKey))
