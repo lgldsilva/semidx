@@ -70,5 +70,3 @@ func NormalizeRemote(url string) string {
 	}
 	return strings.ToLower(s)
 }
-
-

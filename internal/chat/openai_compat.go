@@ -103,12 +103,8 @@ func buildOpenAIChatRequest(req Request, stream bool) openAIChatRequest {
 		tools = make([]openAIToolDef, len(req.Tools))
 		for i, t := range req.Tools {
 			tools[i] = openAIToolDef{
-				Type: "function",
-				Function: openAIToolFunction{
-					Name:        t.Name,
-					Description: t.Description,
-					Parameters:  t.Parameters,
-				},
+				Type:     "function",
+				Function: openAIToolFunction(t),
 			}
 		}
 	}

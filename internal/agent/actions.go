@@ -12,6 +12,8 @@ import (
 	semidxclient "github.com/lgldsilva/semidx/pkg/client"
 )
 
+const errInvalidArgs = "invalid arguments: %w"
+
 // ---------------------------------------------------------------------------
 // index_worktree tool
 // ---------------------------------------------------------------------------
@@ -53,52 +55,72 @@ func (t *indexWorktreeTool) Def() chat.ToolDef {
 	}
 }
 
-func (t *indexWorktreeTool) Run(ctx context.Context, argsJSON string) (string, error) {
-	var args struct {
-		Project string `json:"project"`
-		Path    string `json:"path,omitempty"`
-		Model   string `json:"model,omitempty"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+// indexWorktreeArgs holds parsed arguments for the index_worktree tool.
+type indexWorktreeArgs struct {
+	Project string `json:"project"`
+	Path    string `json:"path,omitempty"`
+	Model   string `json:"model,omitempty"`
+}
 
-	// Resolve project.
+// parseAndValidateIndexArgs unmarshals and validates the JSON arguments string.
+func parseAndValidateIndexArgs(argsJSON string) (indexWorktreeArgs, error) {
+	var args indexWorktreeArgs
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return args, fmt.Errorf(errInvalidArgs, err)
+	}
+	return args, nil
+}
+
+// resolveIndexPath resolves the project and filesystem path from the arguments.
+// Returns the project (nil if not found), the absolute path, and the model.
+func (t *indexWorktreeTool) resolveIndexPath(ctx context.Context, args indexWorktreeArgs) (*store.Project, string, string, error) {
 	targetPath := args.Path
 	p, err := t.db.GetProject(ctx, args.Project)
 	if err != nil {
 		p, err = t.db.GetProjectByIdentity(ctx, args.Project)
 		if err != nil {
 			if targetPath == "" {
-				return JSONResult(map[string]any{
-					"action":   "index",
-					"error":    fmt.Sprintf("project %q not found and no explicit path given", args.Project),
-					"proposed": false,
-				}), nil
+				return nil, "", "", fmt.Errorf("project not found and no explicit path given")
 			}
-			// Use the explicit path — no matching project exists yet.
 			p = nil
 		}
 	}
-	if p != nil {
-		if targetPath == "" {
-			targetPath = p.Path
-		}
+	if p != nil && targetPath == "" {
+		targetPath = p.Path
 	}
-
 	if targetPath == "" {
-		targetPath = args.Project // treat project arg as a path
+		targetPath = args.Project
 	}
 
-	// Convert to absolute path.
 	absPath, err := filepath.Abs(targetPath)
 	if err != nil {
-		return "", fmt.Errorf("resolving path %q: %w", targetPath, err)
+		return nil, "", "", fmt.Errorf("resolving path %q: %w", targetPath, err)
 	}
 
 	model := args.Model
 	if model == "" && p != nil {
 		model = p.Model
+	}
+	return p, absPath, model, nil
+}
+
+func (t *indexWorktreeTool) Run(ctx context.Context, argsJSON string) (string, error) {
+	args, err := parseAndValidateIndexArgs(argsJSON)
+	if err != nil {
+		return "", err
+	}
+
+	p, absPath, model, err := t.resolveIndexPath(ctx, args)
+	if err != nil {
+		// Project not found and no explicit path given — return a soft error.
+		if p == nil && args.Path == "" {
+			return JSONResult(map[string]any{
+				"action":   "index",
+				"error":    fmt.Sprintf("project %q not found and no explicit path given", args.Project),
+				"proposed": false,
+			}), nil
+		}
+		return "", err
 	}
 
 	// Policy: propose or confirm — describe what would be done.
@@ -117,6 +139,11 @@ func (t *indexWorktreeTool) Run(ctx context.Context, argsJSON string) (string, e
 	}
 
 	// Policy: execute — run the indexer.
+	return t.indexProjectWithPolicy(ctx, args.Project, p, absPath, model)
+}
+
+// indexProjectWithPolicy executes the indexer and returns the JSON result.
+func (t *indexWorktreeTool) indexProjectWithPolicy(ctx context.Context, projectName string, p *store.Project, absPath, model string) (string, error) {
 	projectID := 0
 	if p != nil {
 		projectID = p.ID
@@ -127,7 +154,7 @@ func (t *indexWorktreeTool) Run(ctx context.Context, argsJSON string) (string, e
 	}
 	return JSONResult(map[string]any{
 		"action":          "index",
-		"project":         args.Project,
+		"project":         projectName,
 		"path":            absPath,
 		"files_scanned":   stats.FilesScanned,
 		"files_indexed":   stats.FilesIndexed,
@@ -180,7 +207,7 @@ func (t *reindexProjectTool) Run(ctx context.Context, argsJSON string) (string, 
 		Model   string `json:"model,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", fmt.Errorf(errInvalidArgs, err)
 	}
 
 	// Resolve the project; must already exist.
@@ -293,7 +320,7 @@ func (t *serverRepoSyncTool) Run(ctx context.Context, argsJSON string) (string, 
 		Branch  string `json:"branch,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", fmt.Errorf(errInvalidArgs, err)
 	}
 
 	// Verify the project exists on the server.

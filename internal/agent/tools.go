@@ -11,6 +11,8 @@ import (
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
+const projectDesc = "Project name or identity (default: auto-detect from workspace)"
+
 // NewSearchTool creates a semantic_search tool for the agent.
 func NewSearchTool(svc *search.Service) Tool {
 	return &searchTool{svc: svc}
@@ -33,7 +35,7 @@ func (t *searchTool) Def() chat.ToolDef {
 				},
 				"project": map[string]any{
 					"type":        "string",
-					"description": "Project name or identity (default: auto-detect from workspace)",
+					"description": projectDesc,
 				},
 				"top_k": map[string]any{
 					"type": "integer", "default": 5,
@@ -52,7 +54,7 @@ func (t *searchTool) Run(ctx context.Context, argsJSON string) (string, error) {
 		TopK    int    `json:"top_k,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", fmt.Errorf(errInvalidArgs, err)
 	}
 	if args.TopK <= 0 {
 		args.TopK = 5
@@ -131,7 +133,7 @@ func (t *indexStatusTool) Run(ctx context.Context, argsJSON string) (string, err
 		Project string `json:"project,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", fmt.Errorf(errInvalidArgs, err)
 	}
 
 	project := args.Project
@@ -185,7 +187,7 @@ func (t *repoWorktreesTool) Def() chat.ToolDef {
 			"properties": map[string]any{
 				"project": map[string]any{
 					"type":        "string",
-					"description": "Project name or identity (default: auto-detect from workspace)",
+					"description": projectDesc,
 				},
 			},
 			"required": []string{},
@@ -198,7 +200,7 @@ func (t *repoWorktreesTool) Run(ctx context.Context, argsJSON string) (string, e
 		Project string `json:"project,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", fmt.Errorf(errInvalidArgs, err)
 	}
 
 	root, err := resolveRoot(ctx, t.resolver, args.Project)
@@ -220,9 +222,6 @@ func (t *repoWorktreesTool) Run(ctx context.Context, argsJSON string) (string, e
 	results := make([]wt, len(wts))
 	for i, w := range wts {
 		results[i] = wt{Path: w.Path, HEAD: w.HEAD, Branch: w.Branch, Bare: w.Bare}
-	}
-	if results == nil {
-		results = []wt{}
 	}
 	return JSONResult(map[string]any{
 		"worktrees": results,
@@ -250,7 +249,7 @@ func (t *repoBranchesTool) Def() chat.ToolDef {
 			"properties": map[string]any{
 				"project": map[string]any{
 					"type":        "string",
-					"description": "Project name or identity (default: auto-detect from workspace)",
+					"description": projectDesc,
 				},
 				"remote": map[string]any{
 					"type":        "boolean",
@@ -269,7 +268,7 @@ func (t *repoBranchesTool) Run(ctx context.Context, argsJSON string) (string, er
 		Remote  bool   `json:"remote,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", fmt.Errorf(errInvalidArgs, err)
 	}
 
 	root, err := resolveRoot(ctx, t.resolver, args.Project)
@@ -292,9 +291,6 @@ func (t *repoBranchesTool) Run(ctx context.Context, argsJSON string) (string, er
 	results := make([]br, len(branches))
 	for i, b := range branches {
 		results[i] = br{Name: b.Name, Current: b.Current, Remote: b.Remote, Ahead: b.Ahead, Behind: b.Behind}
-	}
-	if results == nil {
-		results = []br{}
 	}
 	return JSONResult(map[string]any{
 		"branches": results,
@@ -322,7 +318,7 @@ func (t *repoStatusTool) Def() chat.ToolDef {
 			"properties": map[string]any{
 				"project": map[string]any{
 					"type":        "string",
-					"description": "Project name or identity (default: auto-detect from workspace)",
+					"description": projectDesc,
 				},
 			},
 			"required": []string{},
@@ -335,7 +331,7 @@ func (t *repoStatusTool) Run(ctx context.Context, argsJSON string) (string, erro
 		Project string `json:"project,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", fmt.Errorf(errInvalidArgs, err)
 	}
 
 	root, err := resolveRoot(ctx, t.resolver, args.Project)
@@ -397,9 +393,6 @@ func (t *listProjectsTool) Run(ctx context.Context, argsJSON string) (string, er
 			Name: p.Name, Identity: p.Identity,
 			SourceType: p.SourceType, Status: p.Status, Model: p.Model,
 		}
-	}
-	if results == nil {
-		results = []proj{}
 	}
 	return JSONResult(map[string]any{
 		"projects": results,

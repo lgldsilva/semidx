@@ -98,8 +98,8 @@ func TestExtractProject(t *testing.T) {
 		{"foo/bar/baz", "foo"},
 		{"noslash", "default"},
 		{"", "default"},
-		{"/absolute/path", "/absolute"},      // leading slash: first char is '/'
-		{"C:/Windows/file.go", "C"}, // colon triggers first, returning "C"
+		{"/absolute/path", "/absolute"}, // leading slash: first char is '/'
+		{"C:/Windows/file.go", "C"},     // colon triggers first, returning "C"
 	}
 
 	for _, tc := range tests {

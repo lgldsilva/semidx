@@ -11,6 +11,40 @@ import (
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
+// printBranchList formats and prints a slice of branches to stdout.
+// It sorts them (current first, then local alpha, then remote alpha) before printing.
+func printBranchList(branches []repotools.Branch, repoName string) error {
+	if len(branches) == 0 {
+		fmt.Printf("Branches of %s: none\n", repoName)
+		return nil
+	}
+	// Sort: current first, then local (alpha), then remote (alpha).
+	sort.SliceStable(branches, func(i, j int) bool {
+		if branches[i].Current != branches[j].Current {
+			return branches[i].Current
+		}
+		if branches[i].Remote != branches[j].Remote {
+			return !branches[i].Remote
+		}
+		return branches[i].Name < branches[j].Name
+	})
+	fmt.Printf("Branches of %s:\n", repoName)
+	for _, b := range branches {
+		kind := "local"
+		if b.Remote {
+			kind = "remote"
+		}
+		suffix := ""
+		if b.Current {
+			suffix = "  ← current"
+		}
+		fmt.Printf("  %-24s (%s)%s\n", b.Name, kind, suffix)
+	}
+	return nil
+}
+
+const projectPathDesc = "Path to the project directory (default: current directory)"
+
 // resolveProjectForGit resolves the project path and validates it is a git
 // repository. Returns the resolved target or an error if not a git repo.
 func resolveProjectForGit(ctx context.Context, projectPath string) (indexTarget, error) {
@@ -56,7 +90,7 @@ given path. Uses 'git worktree list --porcelain' for machine-parseable output.`,
 			return nil
 		},
 	}
-	c.Flags().StringVar(&projectPath, "project", ".", "Path to the project directory (default: current directory)")
+	c.Flags().StringVar(&projectPath, "project", ".", projectPathDesc)
 	return c
 }
 
@@ -83,38 +117,10 @@ shown prefixed by their remote name (e.g. origin/main).`,
 			if err != nil {
 				return fmt.Errorf("list branches: %w", err)
 			}
-			if len(branches) == 0 {
-				fmt.Printf("Branches of %s: none\n", tgt.name)
-				return nil
-			}
-			// Sort: current first, then local (alpha), then remote (alpha).
-			sort.SliceStable(branches, func(i, j int) bool {
-				// Current always first.
-				if branches[i].Current != branches[j].Current {
-					return branches[i].Current
-				}
-				// Local before remote.
-				if branches[i].Remote != branches[j].Remote {
-					return !branches[i].Remote
-				}
-				return branches[i].Name < branches[j].Name
-			})
-			fmt.Printf("Branches of %s:\n", tgt.name)
-			for _, b := range branches {
-				kind := "local"
-				if b.Remote {
-					kind = "remote"
-				}
-				suffix := ""
-				if b.Current {
-					suffix = "  ← current"
-				}
-				fmt.Printf("  %-24s (%s)%s\n", b.Name, kind, suffix)
-			}
-			return nil
+			return printBranchList(branches, tgt.name)
 		},
 	}
-	c.Flags().StringVar(&projectPath, "project", ".", "Path to the project directory (default: current directory)")
+	c.Flags().StringVar(&projectPath, "project", ".", projectPathDesc)
 	c.Flags().BoolVar(&includeRemote, "remote", true, "Include remote branches")
 	return c
 }
@@ -142,7 +148,7 @@ For non-git projects (document folders), only the index state is shown.`,
 			return printDocInfo(ctx, d, tgt)
 		},
 	}
-	c.Flags().StringVar(&projectPath, "project", ".", "Path to the project directory (default: current directory)")
+	c.Flags().StringVar(&projectPath, "project", ".", projectPathDesc)
 	c.Flags().BoolVar(&includeRemote, "remote", true, "Include remote branches in branch count")
 	return c
 }

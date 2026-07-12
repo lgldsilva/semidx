@@ -13,6 +13,8 @@ import (
 	"github.com/lgldsilva/semidx/internal/gitexec"
 )
 
+const refsHeadsPrefix = "refs/heads/"
+
 // Worktree is one row of `git worktree list --porcelain`.
 type Worktree struct {
 	Path   string
@@ -62,69 +64,84 @@ func parseWorktreePorcelain(lines []string) []Worktree {
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
-			if current != nil {
-				worktrees = append(worktrees, *current)
-				current = nil
-			}
+			current = flushWorktree(current, &worktrees)
 			continue
 		}
-
-		switch {
-		case strings.HasPrefix(line, "worktree "):
-			if current != nil {
-				worktrees = append(worktrees, *current)
-			}
-			current = &Worktree{Path: strings.TrimPrefix(line, "worktree ")}
-
-		case strings.HasPrefix(line, "HEAD "):
-			if current != nil {
-				sha := strings.TrimPrefix(line, "HEAD ")
-				if len(sha) > 7 {
-					sha = sha[:7]
-				}
-				current.HEAD = sha
-			}
-
-		case strings.HasPrefix(line, "branch "):
-			if current != nil {
-				ref := strings.TrimPrefix(line, "branch ")
-				current.Branch = strings.TrimPrefix(ref, "refs/heads/")
-			}
-
-		case line == "bare":
-			if current != nil {
-				current.Bare = true
-			}
-		}
+		current = parseWorktreeLine(line, current, &worktrees)
 	}
 
 	// Flush the last block if it had no trailing blank line.
-	if current != nil {
-		worktrees = append(worktrees, *current)
-	}
+	return appendWorktree(current, worktrees)
+}
 
-	return worktrees
+// flushWorktree saves the current worktree on a blank line.
+func flushWorktree(cur *Worktree, acc *[]Worktree) *Worktree {
+	if cur != nil {
+		*acc = append(*acc, *cur)
+	}
+	return nil
+}
+
+// parseWorktreeLine dispatches one porcelain line to the current worktree.
+func parseWorktreeLine(line string, cur *Worktree, acc *[]Worktree) *Worktree {
+	switch {
+	case strings.HasPrefix(line, "worktree "):
+		return startWorktree(line, cur, acc)
+	case strings.HasPrefix(line, "HEAD "):
+		if cur != nil {
+			cur.HEAD = trimHEAD(line)
+		}
+	case strings.HasPrefix(line, "branch "):
+		if cur != nil {
+			cur.Branch = trimBranchRef(line)
+		}
+	case line == "bare":
+		if cur != nil {
+			cur.Bare = true
+		}
+	}
+	return cur
+}
+
+// startWorktree creates a new worktree from a "worktree <path>" line.
+func startWorktree(line string, cur *Worktree, acc *[]Worktree) *Worktree {
+	if cur != nil {
+		*acc = append(*acc, *cur)
+	}
+	return &Worktree{Path: strings.TrimPrefix(line, "worktree ")}
+}
+
+// trimHEAD extracts the short SHA from a "HEAD <sha>" line.
+func trimHEAD(line string) string {
+	sha := strings.TrimPrefix(line, "HEAD ")
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	return sha
+}
+
+// trimBranchRef extracts the branch name from a "branch <ref>" line.
+func trimBranchRef(line string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(line, "branch "), refsHeadsPrefix)
+}
+
+// appendWorktree adds the final worktree if no trailing blank line.
+func appendWorktree(cur *Worktree, acc []Worktree) []Worktree {
+	if cur != nil {
+		acc = append(acc, *cur)
+	}
+	return acc
 }
 
 // ListBranches returns local (and optionally remote) branches.
 // Uses `git for-each-ref --format=%(refname)%09%(upstream:short)%09%(upstream:track)`.
 // This is locale/version-stable, unlike `git branch -vv`.
 func ListBranches(ctx context.Context, root string, includeRemote bool) ([]Branch, error) {
-	args := []string{
-		"for-each-ref",
-		"--format=%(refname)%09%(upstream:short)%09%(upstream:track)",
-		"refs/heads",
-	}
-	if includeRemote {
-		args = append(args, "refs/remotes")
-	}
-
-	out, err := gitexec.Run(ctx, root, args...)
+	lines, err := executeForEachRef(ctx, root, includeRemote)
 	if err != nil {
-		return nil, fmt.Errorf("git for-each-ref: %w", err)
+		return nil, err
 	}
 
-	lines := strings.Split(out, "\n")
 	branches := parseForEachRef(lines)
 
 	// Determine which branch is currently checked out.
@@ -140,6 +157,24 @@ func ListBranches(ctx context.Context, root string, includeRemote bool) ([]Branc
 	// Callers are responsible for sorting; the CLI re-sorts with
 	// "current first → local alpha → remote alpha". No sort here.
 	return branches, nil
+}
+
+// executeForEachRef runs git for-each-ref and returns the output lines.
+func executeForEachRef(ctx context.Context, root string, includeRemote bool) ([]string, error) {
+	args := []string{
+		"for-each-ref",
+		"--format=%(refname)%09%(upstream:short)%09%(upstream:track)",
+		"refs/heads",
+	}
+	if includeRemote {
+		args = append(args, "refs/remotes")
+	}
+
+	out, err := gitexec.Run(ctx, root, args...)
+	if err != nil {
+		return nil, fmt.Errorf("git for-each-ref: %w", err)
+	}
+	return strings.Split(out, "\n"), nil
 }
 
 // parseForEachRef parses for-each-ref output lines into Branches.
@@ -163,8 +198,8 @@ func parseForEachRef(lines []string) []Branch {
 		branch := Branch{FullRef: fullRef}
 
 		switch {
-		case strings.HasPrefix(fullRef, "refs/heads/"):
-			branch.Name = strings.TrimPrefix(fullRef, "refs/heads/")
+		case strings.HasPrefix(fullRef, refsHeadsPrefix):
+			branch.Name = strings.TrimPrefix(fullRef, refsHeadsPrefix)
 			branch.Remote = false
 		case strings.HasPrefix(fullRef, "refs/remotes/"):
 			branch.Name = strings.TrimPrefix(fullRef, "refs/remotes/")
