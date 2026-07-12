@@ -118,7 +118,7 @@ func (c *GoogleClient) StreamMessage(ctx context.Context, req Request) (<-chan S
 	}
 
 	ch := make(chan StreamChunk)
-	go streamSSEResponse(resp, ch)
+	go streamSSEResponse(ctx, resp, ch)
 
 	return ch, nil
 }
@@ -127,8 +127,8 @@ func (c *GoogleClient) buildStreamPayload(req Request) ([]byte, error) {
 	return json.Marshal(buildOpenAIChatRequest(req, true))
 }
 
-func streamSSEResponse(resp *http.Response, ch chan<- StreamChunk) {
-	defer func() { _ = resp.Body.Close() }()
+func streamSSEResponse(ctx context.Context, resp *http.Response, ch chan<- StreamChunk) {
+	defer resp.Body.Close()
 	defer close(ch)
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -138,7 +138,7 @@ func streamSSEResponse(resp *http.Response, ch chan<- StreamChunk) {
 	toolAcc := make(map[int]*ToolCall)
 
 	for scanner.Scan() {
-		if processStreamLine(scanner.Text(), toolAcc, ch) {
+		if processStreamLine(ctx, scanner.Text(), toolAcc, ch) {
 			return
 		}
 	}
@@ -147,24 +147,36 @@ func streamSSEResponse(resp *http.Response, ch chan<- StreamChunk) {
 		fmt.Fprintf(os.Stderr, "chat stream scan error: %v\n", err)
 	}
 	if len(toolAcc) > 0 {
-		ch <- StreamChunk{ToolCalls: finalizeToolCalls(toolAcc), Done: true}
+		select {
+		case ch <- StreamChunk{ToolCalls: finalizeToolCalls(toolAcc), Done: true}:
+		case <-ctx.Done():
+		}
 		return
 	}
-	ch <- StreamChunk{Done: true}
+	select {
+	case ch <- StreamChunk{Done: true}:
+	case <-ctx.Done():
+	}
 }
 
 // processStreamLine handles one SSE data line. Returns true when streaming is
 // complete (either [DONE] or a finish_reason was received).
-func processStreamLine(line string, toolAcc map[int]*ToolCall, ch chan<- StreamChunk) bool {
+func processStreamLine(ctx context.Context, line string, toolAcc map[int]*ToolCall, ch chan<- StreamChunk) bool {
 	if !strings.HasPrefix(line, "data: ") {
 		return false
 	}
 	data := strings.TrimPrefix(line, "data: ")
 	if data == "[DONE]" {
 		if len(toolAcc) > 0 {
-			ch <- StreamChunk{ToolCalls: finalizeToolCalls(toolAcc), Done: true}
+			select {
+			case ch <- StreamChunk{ToolCalls: finalizeToolCalls(toolAcc), Done: true}:
+			case <-ctx.Done():
+			}
 		} else {
-			ch <- StreamChunk{Done: true}
+			select {
+			case ch <- StreamChunk{Done: true}:
+			case <-ctx.Done():
+			}
 		}
 		return true
 	}
@@ -185,14 +197,23 @@ func processStreamLine(line string, toolAcc map[int]*ToolCall, ch chan<- StreamC
 	handleToolCallDelta(chunk.Delta.ToolCalls, toolAcc)
 
 	if content != "" {
-		ch <- StreamChunk{Content: content, Model: modelName}
+		select {
+		case ch <- StreamChunk{Content: content, Model: modelName}:
+		case <-ctx.Done():
+		}
 	}
 
 	if chunk.FinishReason != "" {
 		if len(toolAcc) > 0 {
-			ch <- StreamChunk{ToolCalls: finalizeToolCalls(toolAcc), Done: true, Model: modelName}
+			select {
+			case ch <- StreamChunk{ToolCalls: finalizeToolCalls(toolAcc), Done: true, Model: modelName}:
+			case <-ctx.Done():
+			}
 		} else {
-			ch <- StreamChunk{Done: true, Model: modelName}
+			select {
+			case ch <- StreamChunk{Done: true, Model: modelName}:
+			case <-ctx.Done():
+			}
 		}
 		return true
 	}

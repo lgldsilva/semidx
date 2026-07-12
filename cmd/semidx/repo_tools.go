@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -229,14 +230,14 @@ func printIndexState(ctx context.Context, d *deps, tgt indexTarget) error {
 
 	proj, err := db.GetProjectByIdentity(ctx, tgt.identity)
 	if err != nil {
-		if err == store.ErrNotFound {
+		if errors.Is(err, store.ErrNotFound) {
 			fmt.Printf("  Status: not indexed\n")
 			return nil
 		}
 		// Try by name as fallback.
 		proj, err = db.GetProject(ctx, tgt.name)
 		if err != nil {
-			if err == store.ErrNotFound {
+			if errors.Is(err, store.ErrNotFound) {
 				fmt.Printf("  Status: not indexed\n")
 				return nil
 			}
