@@ -1,5 +1,0 @@
--- +goose Up
-ALTER TABLE projects ADD COLUMN IF NOT EXISTS dims INTEGER NOT NULL DEFAULT 0;
-
--- +goose Down
-ALTER TABLE projects DROP COLUMN IF EXISTS dims;
