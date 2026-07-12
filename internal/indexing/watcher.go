@@ -166,7 +166,7 @@ func (w *Watcher) handleCreate(ctx context.Context, path string) {
 		rel = path
 	}
 
-	if !chunker.ShouldIndex(rel) {
+	if !Eligible(rel) {
 		return // not an indexable file
 	}
 
