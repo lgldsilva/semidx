@@ -2,7 +2,9 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/rag"
 )
 
@@ -50,3 +52,59 @@ func (b *chatRAGBackend) Ask(ctx context.Context, project, question string, topK
 
 // Compile-time interface assertion.
 var _ AskBackend = (*chatRAGBackend)(nil)
+
+// ---------------------------------------------------------------------------
+// Agentic ask backend — wraps an agent.Agent for the MCP semantic_ask tool.
+// ---------------------------------------------------------------------------
+
+// NewAgenticAskBackend creates a Backend that delegates Ask to the agent loop.
+// Other Backend methods (Search, Projects, Status, Reindex) fall through to
+// the wrapped backend. Use when the chat LLM supports tool calling.
+func NewAgenticAskBackend(b Backend, agt *agent.Agent) Backend {
+	return &agenticAskBackend{Backend: b, agent: agt}
+}
+
+type agenticAskBackend struct {
+	Backend
+	agent *agent.Agent
+}
+
+// Ask runs the agent loop instead of the simple RAG pipeline.
+// The agent has access to semantic_search, repo tools, etc.
+func (b *agenticAskBackend) Ask(ctx context.Context, project, question string, topK int) (*AskOutput, error) {
+	// Prepend project context to the question so the agent knows the scope.
+	fullQuestion := question
+	if project != "" {
+		fullQuestion = fmt.Sprintf("[project: %s] %s", project, question)
+	}
+	answer, err := b.agent.Ask(ctx, fullQuestion, nil)
+	if err != nil {
+		return nil, fmt.Errorf("agent ask failed: %w", err)
+	}
+
+	// Build sources from tool trace where possible.
+	var sources []AskSource
+	for _, tc := range answer.Trace {
+		if tc.Tool == "semantic_search" && tc.Error == "" {
+			// Try to extract sources from structured search results.
+			// At minimum, note that search was used.
+			sources = append(sources, AskSource{
+				Path:    fmt.Sprintf("tool://%s", tc.Tool),
+				Score:   1.0,
+				Keyword: false,
+			})
+		}
+	}
+	if sources == nil {
+		sources = []AskSource{}
+	}
+
+	return &AskOutput{
+		Answer:  answer.Content,
+		Sources: sources,
+		Model:   answer.Model,
+	}, nil
+}
+
+// Compile-time interface assertion.
+var _ AskBackend = (*agenticAskBackend)(nil)

@@ -12,6 +12,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/indexing"
@@ -723,7 +725,29 @@ into an agent client. (stdout carries the protocol — logs go to stderr.)`,
 			if err != nil {
 				return err
 			}
-			backend := mcpserver.NewLocalBackend(search.NewService(db, d.emb), db, d.keywordOnly)
+			svc := search.NewService(db, d.emb)
+			backend := mcpserver.NewLocalBackend(svc, db, d.keywordOnly)
+
+			// If a chat LLM with tool calling is available, wrap the backend with
+			// an agent to enable the semantic_ask tool.
+			if d.cfg != nil && d.cfg.GeminiAPIKey != "" {
+				chatClient := chat.NewChain(chat.NamedClient{
+					Name:   "gemini",
+					Client: chat.NewGoogleClient(d.cfg.GeminiBaseURL, d.cfg.GeminiAPIKey),
+				})
+				resolver := agent.NewScopeResolver(db)
+				tools := []agent.Tool{
+					agent.NewSearchTool(svc),
+					agent.NewIndexStatusTool(db),
+					agent.NewListProjectsTool(db),
+					agent.NewRepoWorktreesTool(resolver),
+					agent.NewRepoBranchesTool(resolver),
+					agent.NewRepoStatusTool(resolver),
+				}
+				agt := agent.NewAgent(chatClient, tools, resolver)
+				backend = mcpserver.NewAgenticAskBackend(backend, agt)
+			}
+
 			return mcpserver.Run(ctx, backend)
 		},
 	}
