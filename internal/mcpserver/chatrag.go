@@ -50,6 +50,10 @@ func (b *chatRAGBackend) Ask(ctx context.Context, project, question string, topK
 	}, nil
 }
 
+// Unwrap exposes the wrapped backend so tool gating can see its extra
+// capabilities (GitBackend, MultiSearchBackend) through the ask wrapper.
+func (b *chatRAGBackend) Unwrap() Backend { return b.Backend }
+
 // Compile-time interface assertion.
 var _ AskBackend = (*chatRAGBackend)(nil)
 
@@ -105,6 +109,10 @@ func (b *agenticAskBackend) Ask(ctx context.Context, project, question string, _
 		Model:   answer.Model,
 	}, nil
 }
+
+// Unwrap exposes the wrapped backend so tool gating can see its git/multi-search
+// capabilities through the agentic ask wrapper.
+func (b *agenticAskBackend) Unwrap() Backend { return b.Backend }
 
 // Compile-time interface assertion.
 var _ AskBackend = (*agenticAskBackend)(nil)

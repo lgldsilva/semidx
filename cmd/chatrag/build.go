@@ -100,19 +100,22 @@ func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, 
 	// tools (index_worktree, reindex_project) are re-added in Phase 4, ported to
 	// fantasy.AgentTool with the real permission/approval gate.
 	var runner *agent.Runner
-	if cfg.GeminiAPIKey != "" {
-		model, err := llm.ResolveModel(ctx, llm.ProviderConfig{
-			Type:    llm.ProviderGoogle,
-			APIKey:  cfg.GeminiAPIKey,
-			BaseURL: cfg.GeminiBaseURL,
-		}, chatModel)
+	if sel, ok := cfg.ResolveChatLLM(); ok {
+		if model != "" { // an explicit --model flag overrides the configured chat model
+			sel.Model = model
+		}
+		llmModel, err := llm.ResolveModel(ctx, llm.ProviderConfig{
+			Type:    llm.ProviderType(sel.Provider),
+			APIKey:  sel.APIKey,
+			BaseURL: sel.BaseURL,
+		}, sel.Model)
 		if err != nil {
 			slog.Warn("agent mode disabled: could not resolve chat model", "error", err)
 		} else {
 			resolver := agent.NewScopeResolver(ls)
 			svc := search.NewService(ls, emb)
-			temp := 0.3
-			runner = agent.NewRunner(model, agent.ReadTools(svc, ls, resolver), agent.RunnerConfig{
+			temp := sel.Temperature
+			runner = agent.NewRunner(llmModel, agent.ReadTools(svc, ls, resolver), agent.RunnerConfig{
 				SystemPrompt: agent.SystemPrompt,
 				Temperature:  &temp,
 			})

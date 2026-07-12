@@ -51,12 +51,12 @@ func (d *deps) buildAdminChatPipeline() webadmin.ChatPipeline {
 	// When Gemini is configured, build a fantasy Runner that wraps the pipeline.
 	// The agent's tool loop allows deeper analysis (calling semantic_search,
 	// repo_status, etc.) before answering.
-	if d.cfg.GeminiAPIKey != "" {
+	if sel, ok := d.cfg.ResolveChatLLM(); ok {
 		model, err := llm.ResolveModel(context.Background(), llm.ProviderConfig{
-			Type:    llm.ProviderGoogle,
-			APIKey:  d.cfg.GeminiAPIKey,
-			BaseURL: d.cfg.GeminiBaseURL,
-		}, "gemini-2.0-flash")
+			Type:    llm.ProviderType(sel.Provider),
+			APIKey:  sel.APIKey,
+			BaseURL: sel.BaseURL,
+		}, sel.Model)
 		if err == nil {
 			idxStore := d.mustSearchStore()
 			// repo tools only when project paths are local (serve mode may be
@@ -66,7 +66,11 @@ func (d *deps) buildAdminChatPipeline() webadmin.ChatPipeline {
 				resolver = agent.NewScopeResolver(idxStore)
 			}
 			tools := agent.ReadTools(svc, idxStore, resolver)
-			runner := agent.NewRunner(model, tools, agent.RunnerConfig{SystemPrompt: agent.SystemPrompt})
+			temp := sel.Temperature
+			runner := agent.NewRunner(model, tools, agent.RunnerConfig{
+				SystemPrompt: agent.SystemPrompt,
+				Temperature:  &temp,
+			})
 			return &agentChatPipeline{pipeline: pipeline, runner: runner}
 		}
 	}
