@@ -81,9 +81,16 @@ func parseAndValidateIndexArgs(argsJSON string) (indexWorktreeArgs, error) {
 // it). Anything else is rejected. Returns the project, the absolute path, and
 // the embedding model.
 func (t *indexWorktreeTool) resolveIndexPath(ctx context.Context, args indexWorktreeArgs) (*store.Project, string, string, error) {
-	p, err := t.db.GetProject(ctx, args.Project)
+	return resolveRegisteredPath(ctx, t.db, args)
+}
+
+// resolveRegisteredPath is the shared, security-critical resolver used by both
+// the legacy and fantasy index_worktree tools. See the doc above for why an
+// LLM-supplied path is only honored inside a registered project's tree.
+func resolveRegisteredPath(ctx context.Context, db store.IndexStore, args indexWorktreeArgs) (*store.Project, string, string, error) {
+	p, err := db.GetProject(ctx, args.Project)
 	if err != nil {
-		p, err = t.db.GetProjectByIdentity(ctx, args.Project)
+		p, err = db.GetProjectByIdentity(ctx, args.Project)
 	}
 	if err != nil || p == nil {
 		return nil, "", "", fmt.Errorf("project not found: %q (register it first; arbitrary paths are not allowed)", args.Project)

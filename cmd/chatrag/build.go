@@ -10,8 +10,10 @@ import (
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
+	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/llm"
 	"github.com/lgldsilva/semidx/internal/localstore"
+	"github.com/lgldsilva/semidx/internal/permission"
 	"github.com/lgldsilva/semidx/internal/projectref"
 	"github.com/lgldsilva/semidx/internal/rag"
 	"github.com/lgldsilva/semidx/internal/search"
@@ -20,7 +22,8 @@ import (
 // buildPipeline constructs the full RAG pipeline and its dependencies.
 // Caller must close the returned SQLiteStore when done.
 // Returns the pipeline, optional agent Runner (nil when tool calling unavailable), store, and resolved project name.
-func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, model string) (*rag.Pipeline, *agent.Runner, *localstore.SQLiteStore, string, error) {
+// approve is the action-tool approval gate (nil disables the action tools).
+func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, model string, approve permission.Approver) (*rag.Pipeline, *agent.Runner, *localstore.SQLiteStore, string, error) {
 	// Resolve local index path.
 	if indexPath == "" {
 		if cfg.LocalIndexPath != "" {
@@ -94,11 +97,10 @@ func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, 
 
 	// Build the fantasy-backed agent Runner when a chat LLM is configured.
 	// Falls back to the rag.Pipeline (RAG mode) when runner is nil. Unlike the
-	// old loop, the configured model (chatModel) is honored by the agent too.
-	//
-	// NOTE: only the read tools are wired here for now. The propose-only action
-	// tools (index_worktree, reindex_project) are re-added in Phase 4, ported to
-	// fantasy.AgentTool with the real permission/approval gate.
+	// old loop, the configured model is honored by the agent too. Read tools
+	// plus the action tools under PolicyConfirm — the agent proposes an action
+	// and the approve gate (a y/N prompt in the REPL) authorizes it before it
+	// runs. Without an approver the action tools are omitted.
 	var runner *agent.Runner
 	if sel, ok := cfg.ResolveChatLLM(); ok {
 		if model != "" { // an explicit --model flag overrides the configured chat model
@@ -114,8 +116,16 @@ func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, 
 		} else {
 			resolver := agent.NewScopeResolver(ls)
 			svc := search.NewService(ls, emb)
+			tools := agent.ReadTools(svc, ls, resolver)
+			if approve != nil {
+				indexer := indexing.NewIndexer(ls, emb, 0, indexing.IndexerOpts{
+					Logger:  slog.Default(),
+					Workers: 2,
+				})
+				tools = append(tools, agent.ActionTools(ls, indexer, nil, agent.PolicyConfirm, approve)...)
+			}
 			temp := sel.Temperature
-			runner = agent.NewRunner(llmModel, agent.ReadTools(svc, ls, resolver), agent.RunnerConfig{
+			runner = agent.NewRunner(llmModel, tools, agent.RunnerConfig{
 				SystemPrompt: agent.SystemPrompt,
 				Temperature:  &temp,
 			})

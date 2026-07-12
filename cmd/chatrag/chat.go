@@ -13,6 +13,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/config"
+	"github.com/lgldsilva/semidx/internal/permission"
 	"github.com/lgldsilva/semidx/internal/rag"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -23,21 +24,38 @@ const defaultChatModel = "gemini-2.5-flash"
 // It accepts a cobra command's context and the parsed flag values.
 func runChat(ctx context.Context, localIndex, project, model string) error {
 	cfg := config.Load()
-	pipeline, agt, ls, resolvedProject, err := buildPipeline(ctx, cfg, localIndex, project, model)
+	// One stdin scanner is shared by the REPL loop and the action-tool approval
+	// prompt so their reads don't fight over buffered input.
+	scanner := bufio.NewScanner(os.Stdin)
+	approve := makePromptApprover(scanner)
+	pipeline, runner, ls, resolvedProject, err := buildPipeline(ctx, cfg, localIndex, project, model, approve)
 	if err != nil {
 		return err
 	}
 	defer ls.Close()
 
 	// Run the interactive REPL.
-	return runREPL(ctx, pipeline, agt, resolvedProject)
+	return runREPL(ctx, pipeline, runner, resolvedProject, scanner)
+}
+
+// makePromptApprover returns an approval gate that asks the user y/N on the
+// shared stdin scanner before an action tool executes.
+func makePromptApprover(scanner *bufio.Scanner) permission.Approver {
+	return func(_ context.Context, req permission.Request) (bool, error) {
+		fmt.Printf("\n⚠  The agent wants to run %s\n   %s\n   Approve? [y/N] ", req.Tool, req.Detail)
+		if !scanner.Scan() {
+			return false, nil
+		}
+		ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		fmt.Println()
+		return ans == "y" || ans == "yes", nil
+	}
 }
 
 // runREPL is the interactive chat loop.
 // When runner is non-nil, the agent loop is used (supports tool calling).
-func runREPL(ctx context.Context, pipeline *rag.Pipeline, runner *agent.Runner, project string) error {
+func runREPL(ctx context.Context, pipeline *rag.Pipeline, runner *agent.Runner, project string, scanner *bufio.Scanner) error {
 	history := chat.NewHistory(10) // keep up to 10 turns
-	scanner := bufio.NewScanner(os.Stdin)
 
 	mode := "RAG"
 	if runner != nil {
