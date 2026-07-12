@@ -85,7 +85,11 @@ given path. Uses 'git worktree list --porcelain' for machine-parseable output.`,
 				if branch == "" {
 					branch = "detached"
 				}
-				fmt.Printf("  %s  (%s @ %s)\n", wt.Path, branch, wt.HEAD)
+				if wt.HEAD != "" {
+					fmt.Printf("  %s  (%s @ %s)\n", wt.Path, branch, wt.HEAD)
+				} else {
+					fmt.Printf("  %s  (%s)\n", wt.Path, branch)
+				}
 			}
 			return nil
 		},
