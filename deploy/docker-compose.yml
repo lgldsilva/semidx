@@ -1,0 +1,73 @@
+name: semidx
+
+# Reference deployment: the semidx server + its PostgreSQL/pgvector database.
+#
+# TWO MODES (pick one):
+#   Build from source:           docker compose up -d --build
+#   Pull pre-built image:        SEMIDX_IMAGE=gitea.raspberrypi.lan/lgldsilva/semidx:main SEMIDX_PULL_POLICY=always docker compose up -d
+#
+# When SEMIDX_IMAGE is set to a registry image, set SEMIDX_PULL_POLICY=always
+# to pull instead of building. The :main tag is pushed automatically on every
+# merge to main (CI pipeline), so you get the latest without waiting for a tag.
+# Pin a version with e.g. SEMIDX_IMAGE=.../semidx:v0.3.0.
+#
+# For a dedicated pull-only compose without the build section, see
+# docker-compose.pull.yml.
+#
+# The database has NO published ports — it is reachable only on the internal
+# compose network, so the only way in is the authenticated HTTP API.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: semidx
+      POSTGRES_PASSWORD: ${SEMIDX_DB_PASSWORD:-changeme}
+      POSTGRES_DB: semidx
+    # No `ports:` — the database is internal-only.
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U semidx -d semidx"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  semidx:
+    image: ${SEMIDX_IMAGE:-semidx:local}
+    pull_policy: ${SEMIDX_PULL_POLICY:-build}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SEMIDX_DB_DSN: postgres://semidx:${SEMIDX_DB_PASSWORD:-changeme}@db:5432/semidx?sslmode=disable
+      SEMIDX_LISTEN_ADDR: ":8080"
+      SEMIDX_INDEX_WORKERS: ${SEMIDX_INDEX_WORKERS:-1}
+      SEMIDX_DATA_DIR: /data
+      # Bootstrap credentials — used only while the DB is empty.
+      SEMIDX_BOOTSTRAP_TOKEN: ${SEMIDX_BOOTSTRAP_TOKEN:-}
+      SEMIDX_BOOTSTRAP_ADMIN_USER: ${SEMIDX_BOOTSTRAP_ADMIN_USER:-admin}
+      SEMIDX_BOOTSTRAP_ADMIN_PASSWORD: ${SEMIDX_BOOTSTRAP_ADMIN_PASSWORD:-}
+      # JWT secret for revocable control tokens (optional; disabled when empty).
+      SEMIDX_JWT_SECRET: ${SEMIDX_JWT_SECRET:-}
+      # Embedding providers (set what you use). Ollama example:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Soft heap cap so the runtime GCs before the container limit.
+      GOMEMLIMIT: ${GOMEMLIMIT:-900MiB}
+    # Make the OLLAMA_URL host.docker.internal default resolve on Linux hosts
+    # (Docker Desktop provides it automatically; plain Linux does not).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${SEMIDX_HTTP_PORT:-8080}:8080" # only the API is exposed
+    volumes:
+      - semidx_data:/data
+    restart: unless-stopped
+
+volumes:
+  db_data:
+  semidx_data:

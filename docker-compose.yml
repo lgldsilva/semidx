@@ -1,0 +1,30 @@
+services:
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: semantic-indexer-pg
+    environment:
+      POSTGRES_USER: semantic
+      POSTGRES_PASSWORD: semantic
+      POSTGRES_DB: semantic_indexer
+    ports:
+      - "55432:5432"
+    volumes:
+      # Schema is owned by the app's goose migrations (applied on startup),
+      # not by an init script — this DB just needs an empty database.
+      - pgvector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U semantic -d semantic_indexer"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+
+volumes:
+  pgvector_data:

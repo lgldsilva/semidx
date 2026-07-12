@@ -1,0 +1,171 @@
+// Package embed abstracts text-embedding providers behind a single Embedder
+// interface and composes them into a fallback chain. It knows nothing about the
+// database or the CLI.
+package embed
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+)
+
+type contextKey string
+
+const forceLocalKey contextKey = "force-local"
+
+// WithForceLocal marks a context so the chain restricts itself to local
+// providers (used when indexing sensitive files under a cloud model).
+func WithForceLocal(ctx context.Context, force bool) context.Context {
+	return context.WithValue(ctx, forceLocalKey, force)
+}
+
+func isForceLocal(ctx context.Context) bool {
+	val, _ := ctx.Value(forceLocalKey).(bool)
+	return val
+}
+
+// ModelInfo holds embedding model metadata.
+type ModelInfo struct {
+	Name string
+	Dims int
+}
+
+// Embedder generates embeddings for a given model.
+type Embedder interface {
+	ModelInfo(ctx context.Context, model string) (*ModelInfo, error)
+	Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error)
+	EmbedSingle(ctx context.Context, model, text string) ([]float32, error)
+	ListModels(ctx context.Context) ([]string, error)
+}
+
+// ProviderInstance is one provider in the chain, flagged local or remote.
+type ProviderInstance struct {
+	Name     string
+	Embedder Embedder
+	Local    bool
+}
+
+// ChainEmbedder tries providers in preference order, skipping remote ones when
+// privacy mode is on or the context forces local.
+type ChainEmbedder struct {
+	providers []ProviderInstance
+	privacy   bool
+}
+
+// NewChainEmbedder builds a chain over the given ordered providers.
+func NewChainEmbedder(providers []ProviderInstance, privacy bool) *ChainEmbedder {
+	return &ChainEmbedder{providers: providers, privacy: privacy}
+}
+
+// SetPrivacy toggles privacy mode (skip remote providers).
+func (ce *ChainEmbedder) SetPrivacy(privacy bool) {
+	ce.privacy = privacy
+}
+
+func (ce *ChainEmbedder) skip(p ProviderInstance, forceLocal bool) bool {
+	return (ce.privacy || forceLocal) && !p.Local
+}
+
+// tryEach iterates providers, calling fn on each non-skipped one, returning the
+// first successful result. Returns lastErr when all providers fail.
+func (ce *ChainEmbedder) tryEach(ctx context.Context, onEmpty string, fn func(context.Context, Embedder) error) error {
+	forceLocal := isForceLocal(ctx)
+	var lastErr error
+	for _, p := range ce.providers {
+		if ce.skip(p, forceLocal) {
+			continue
+		}
+		timeout := 30 * time.Second
+		if p.Local {
+			timeout = 5 * time.Second
+		}
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
+		err := fn(callCtx, p.Embedder)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	if lastErr == nil {
+		return fmt.Errorf("chain: %s: no embedding model available", onEmpty)
+	}
+	return fmt.Errorf("chain: %s: %w", onEmpty, lastErr)
+}
+
+func (ce *ChainEmbedder) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {
+	var result [][]float32
+	err := ce.tryEach(ctx, "failed to generate embeddings", func(ctx context.Context, e Embedder) error {
+		var eErr error
+		result, eErr = e.Embed(ctx, model, inputs...)
+		return eErr
+	})
+	return result, err
+}
+
+func (ce *ChainEmbedder) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
+	var result []float32
+	err := ce.tryEach(ctx, "failed to generate embedding", func(ctx context.Context, e Embedder) error {
+		var eErr error
+		result, eErr = e.EmbedSingle(ctx, model, text)
+		return eErr
+	})
+	return result, err
+}
+
+func (ce *ChainEmbedder) ModelInfo(ctx context.Context, model string) (*ModelInfo, error) {
+	var result *ModelInfo
+	err := ce.tryEach(ctx, "failed to get model info", func(ctx context.Context, e Embedder) error {
+		var eErr error
+		result, eErr = e.ModelInfo(ctx, model)
+		return eErr
+	})
+	return result, err
+}
+
+func (ce *ChainEmbedder) ListModels(ctx context.Context) ([]string, error) {
+	forceLocal := isForceLocal(ctx)
+	var models []string
+	seen := make(map[string]bool)
+	for _, p := range ce.providers {
+		if ce.skip(p, forceLocal) {
+			continue
+		}
+		list, err := p.Embedder.ListModels(ctx)
+		if err != nil {
+			continue
+		}
+		for _, m := range list {
+			if !seen[m] {
+				seen[m] = true
+				models = append(models, m)
+			}
+		}
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("chain: no embedding model available")
+	}
+	return models, nil
+}
+
+// InferDims returns the embedding dimension for a known model name, or 0 when
+// unknown (callers then rely on a provider's ModelInfo or a DB probe).
+func InferDims(model string) int {
+	model = strings.ToLower(model)
+	switch {
+	case strings.Contains(model, "nomic"):
+		return 768
+	case strings.Contains(model, "bge-m3"), strings.Contains(model, "mxbai"), strings.Contains(model, "qwen3"):
+		return 1024
+	case strings.Contains(model, "gemini-embedding-2"), strings.Contains(model, "text-embedding-3-large"):
+		return 3072
+	case strings.Contains(model, "text-embedding-3-small"), strings.Contains(model, "text-embedding-ada-002"), strings.Contains(model, "gemini-embedding-001"):
+		return 1536
+	default:
+		return 0
+	}
+}
