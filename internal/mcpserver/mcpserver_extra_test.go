@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
@@ -278,6 +279,7 @@ func (b *stubBackend) Reindex(ctx context.Context, project, jobType string) (str
 func (b *stubBackend) Status(ctx context.Context, project string) (*StatusInfo, error) {
 	return b.statusFunc(ctx, project)
 }
+func (b *stubBackend) Capabilities() agent.Capabilities { return agent.Capabilities{} }
 
 func TestStatusHandler(t *testing.T) {
 	t.Parallel()

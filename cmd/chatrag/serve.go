@@ -39,7 +39,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	bindAddr, _ := cmd.Flags().GetString("bind")
 
 	cfg := config.Load()
-	pipeline, ls, resolvedProject, err := buildPipeline(ctx, cfg, localIndex, project, model)
+	pipeline, _, ls, resolvedProject, err := buildPipeline(ctx, cfg, localIndex, project, model)
 	if err != nil {
 		return err
 	}

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/repotools"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -26,12 +28,17 @@ type localBackend struct {
 	svc         *search.Service
 	projects    projectLister
 	keywordOnly bool
+	caps        agent.Capabilities
 }
 
 // NewLocalBackend wraps a local search service and store as an MCP Backend
-// (standalone mode). keywordOnly mirrors the index's embedding mode.
-func NewLocalBackend(svc *search.Service, projects projectLister, keywordOnly bool) Backend {
-	return &localBackend{svc: svc, projects: projects, keywordOnly: keywordOnly}
+// (standalone mode). keywordOnly mirrors the index's embedding mode. caps
+// describes what the local runtime offers (local git, chat LLM, etc.).
+func NewLocalBackend(svc *search.Service, projects projectLister, keywordOnly bool, caps agent.Capabilities) Backend {
+	if caps.Flags == 0 {
+		caps.Flags = agent.CapLocalGit | agent.CapIndexLocal
+	}
+	return &localBackend{svc: svc, projects: projects, keywordOnly: keywordOnly, caps: caps}
 }
 
 func (b *localBackend) Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchOutput, error) {
@@ -107,3 +114,61 @@ func (b *localBackend) Reindex(_ context.Context, project, _ string) (string, er
 	// walk live in the CLI, not here). In standalone mode that path is the CLI.
 	return "", fmt.Errorf("standalone mode: reindex %q with `semidx index <path>` (or `--local`); MCP reindex is available in server mode", project)
 }
+
+// Capabilities reports what the local backend offers.
+func (b *localBackend) Capabilities() agent.Capabilities { return b.caps }
+
+// resolveProjectPath resolves a project name or identity to a local filesystem
+// path. Returns the path and an error if the project is not a local checkout.
+func (b *localBackend) resolveProjectPath(ctx context.Context, project string) (string, error) {
+	p, err := b.projects.GetProject(ctx, project)
+	if err != nil {
+		p, err = b.projects.GetProjectByIdentity(ctx, project)
+		if err != nil {
+			return "", fmt.Errorf("project %q not found locally", project)
+		}
+	}
+	if p.Path == "" {
+		return "", fmt.Errorf("project %q has no local path (remote/server clone)", project)
+	}
+	return p.Path, nil
+}
+
+// Worktrees lists git worktrees for a registered project.
+func (b *localBackend) Worktrees(ctx context.Context, project string) ([]repotools.Worktree, error) {
+	root, err := b.resolveProjectPath(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	return repotools.ListWorktrees(ctx, root)
+}
+
+// Branches lists git branches for a registered project.
+func (b *localBackend) Branches(ctx context.Context, project string, remote bool) ([]repotools.Branch, error) {
+	root, err := b.resolveProjectPath(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	return repotools.ListBranches(ctx, root, remote)
+}
+
+// GitStatus returns the working tree state for a registered project.
+func (b *localBackend) GitStatus(ctx context.Context, project string) (*repotools.RepoStatus, error) {
+	root, err := b.resolveProjectPath(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	return repotools.Status(ctx, root)
+}
+
+// SearchMulti searches across multiple project identities and fuses results.
+func (b *localBackend) SearchMulti(ctx context.Context, req search.MultiScopeRequest) (*search.MultiResponse, error) {
+	if b.keywordOnly {
+		req.KeywordOnly = true
+	}
+	return b.svc.SearchMulti(ctx, req)
+}
+
+// Compile-time check: *localBackend satisfies GitBackend and MultiSearchBackend.
+var _ GitBackend = (*localBackend)(nil)
+var _ MultiSearchBackend = (*localBackend)(nil)

@@ -505,3 +505,35 @@ func TestSearchAdapter_FallbackOnEmbeddingFailure(t *testing.T) {
 		t.Error("expected Keyword=true when embedding fails")
 	}
 }
+
+// TestHandleREPLCommand_modeToggle is the regression test for the /mode fix:
+// with an agent available, /mode must toggle agent -> RAG -> agent, not stay
+// stuck on agent.
+func TestHandleREPLCommand_modeToggle(t *testing.T) {
+	hist := chat.NewHistory(10)
+	mode := "agent"
+
+	handled, cont := handleREPLCommand("/mode", hist, &mode, true)
+	if !handled || !cont {
+		t.Fatalf("/mode should be handled and continue; handled=%v cont=%v", handled, cont)
+	}
+	if mode != "RAG" {
+		t.Errorf("first /mode should switch agent->RAG, got %q", mode)
+	}
+
+	handleREPLCommand("/mode", hist, &mode, true)
+	if mode != "agent" {
+		t.Errorf("second /mode should switch RAG->agent, got %q", mode)
+	}
+}
+
+// TestHandleREPLCommand_modeNoAgent verifies /mode stays on RAG when no agent
+// is configured.
+func TestHandleREPLCommand_modeNoAgent(t *testing.T) {
+	hist := chat.NewHistory(10)
+	mode := "RAG"
+	handleREPLCommand("/mode", hist, &mode, false)
+	if mode != "RAG" {
+		t.Errorf("without an agent /mode must stay RAG, got %q", mode)
+	}
+}

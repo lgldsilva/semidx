@@ -172,6 +172,90 @@ func TestOpenRouterClientDefaults(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Tool calling tests
+// ---------------------------------------------------------------------------
+
+func TestOpenRouterClientToolCall(t *testing.T) {
+	t.Parallel()
+
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices": [{
+				"message": {
+					"content": null,
+					"tool_calls": [
+						{
+							"id": "call_openrouter_1",
+							"type": "function",
+							"function": {
+								"name": "search_docs",
+								"arguments": "{\"term\": \"tool calling\"}"
+							}
+						}
+					]
+				}
+			}],
+			"model": "openrouter-model"
+		}`))
+	}))
+	defer srv.Close()
+
+	c := NewOpenRouterClient(srv.URL, "or-key")
+	resp, err := c.SendMessage(context.Background(), Request{
+		Messages: []Message{{Role: "user", Content: "search docs for tool calling"}},
+		Tools: []ToolDef{
+			{
+				Name:        "search_docs",
+				Description: "Search documentation",
+				Parameters:  map[string]any{"type": "object"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	if resp.Content != "" {
+		t.Errorf("Content = %q, want empty for tool call", resp.Content)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("got %d tool calls, want 1", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].ID != "call_openrouter_1" {
+		t.Errorf("ToolCall ID = %q, want %q", resp.ToolCalls[0].ID, "call_openrouter_1")
+	}
+	if resp.ToolCalls[0].Name != "search_docs" {
+		t.Errorf("ToolCall Name = %q, want %q", resp.ToolCalls[0].Name, "search_docs")
+	}
+	if resp.ToolCalls[0].Args != `{"term": "tool calling"}` {
+		t.Errorf("ToolCall Args = %q, want %q", resp.ToolCalls[0].Args, `{"term": "tool calling"}`)
+	}
+
+	// Verify tools were sent in the request.
+	tools, ok := gotBody["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatal("tools not sent in request")
+	}
+	tool0 := tools[0].(map[string]any)
+	if tool0["type"] != "function" {
+		t.Errorf("tool type = %v, want 'function'", tool0["type"])
+	}
+}
+
+func TestOpenRouterClientSupportsTools(t *testing.T) {
+	c := NewOpenRouterClient("http://example.com", "k")
+	if !c.SupportsTools() {
+		t.Error("OpenRouterClient should support tools")
+	}
+}
+
 func TestOpenRouterClientTransportError(t *testing.T) {
 	t.Parallel()
 

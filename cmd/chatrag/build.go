@@ -3,19 +3,24 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
+	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
+	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/localstore"
 	"github.com/lgldsilva/semidx/internal/projectref"
 	"github.com/lgldsilva/semidx/internal/rag"
+	"github.com/lgldsilva/semidx/internal/search"
 )
 
 // buildPipeline constructs the full RAG pipeline and its dependencies.
 // Caller must close the returned SQLiteStore when done.
-func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, model string) (*rag.Pipeline, *localstore.SQLiteStore, string, error) {
+// Returns the pipeline, optional agent (nil when tool calling unavailable), store, and resolved project name.
+func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, model string) (*rag.Pipeline, *agent.Agent, *localstore.SQLiteStore, string, error) {
 	// Resolve local index path.
 	if indexPath == "" {
 		if cfg.LocalIndexPath != "" {
@@ -28,7 +33,7 @@ func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, 
 	// Open the local store (needed early for project resolution).
 	ls, err := openLocalStore(indexPath)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("open local index: %w", err)
+		return nil, nil, nil, "", fmt.Errorf("open local index: %w", err)
 	}
 
 	// Auto-resolve project from current directory if not specified.
@@ -36,7 +41,7 @@ func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, 
 		p, err := projectref.Resolve(ctx, ls, ".")
 		if err != nil {
 			ls.Close()
-			return nil, nil, "", fmt.Errorf("no project specified and no indexed project found in current directory" +
+			return nil, nil, nil, "", fmt.Errorf("no project specified and no indexed project found in current directory" +
 				" — use --project <path> or run from an indexed directory" +
 				" (run: semidx index --project .)")
 		}
@@ -87,5 +92,37 @@ func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, 
 		Worktree:    pipelineWorktree,
 	})
 
-	return pipeline, ls, project, nil
+	// Build agent if tool calling is available (Gemini >=2.0 supports tools).
+	// Fall back to rag.Pipeline when agent is nil.
+	var agentInstance *agent.Agent
+	if cfg.GeminiAPIKey != "" {
+		resolver := agent.NewScopeResolver(ls)
+		svc := search.NewService(ls, emb)
+
+		// Build the Indexer for local action tools.
+		indexer := indexing.NewIndexer(ls, emb, 0, indexing.IndexerOpts{
+			Logger:  slog.Default(),
+			Workers: 2,
+			Verbose: false,
+		})
+
+		tools := []agent.Tool{
+			agent.NewSearchTool(svc),
+			agent.NewIndexStatusTool(ls),
+			agent.NewListProjectsTool(ls),
+			// Action tools in propose mode (Phase 5 — propose only).
+			agent.NewIndexWorktreeTool(ls, indexer, agent.PolicyPropose),
+			agent.NewReindexProjectTool(ls, indexer, agent.PolicyPropose),
+		}
+		// repotools need a path resolver; only add when the resolver is available.
+		tools = append(tools,
+			agent.NewRepoWorktreesTool(resolver),
+			agent.NewRepoBranchesTool(resolver),
+			agent.NewRepoStatusTool(resolver),
+		)
+
+		agentInstance = agent.NewAgent(chatClient, tools, resolver)
+	}
+
+	return pipeline, agentInstance, ls, project, nil
 }

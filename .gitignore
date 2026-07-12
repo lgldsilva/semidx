@@ -1,6 +1,7 @@
 # Build artifacts (anchored to repo root so they don't match the cmd/semidx/ dir)
 /semantic-indexer-poc
 /semidx
+/chatrag
 dist/
 # Embedded React admin assets (built by scripts/build-web.sh / npm run build).
 !internal/webui/dist/
