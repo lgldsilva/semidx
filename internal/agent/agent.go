@@ -83,13 +83,17 @@ func (a *Agent) Ask(ctx context.Context, question string, history []chat.Message
 			}, nil
 		}
 
-		// Execute each tool call.
+		// Assistant message with tool_calls.
+		if len(resp.ToolCalls) > 0 {
+			messages = append(messages, chat.Message{Role: "assistant", Content: resp.Content})
+		}
+		// Execute each tool call and add results as tool role.
 		for _, tc := range resp.ToolCalls {
 			tool, ok := a.tools[tc.Name]
 			if !ok {
-				msg := fmt.Sprintf("unknown tool: %s", tc.Name)
-				messages = append(messages, chat.Message{Role: "assistant", Content: msg})
-				trace = append(trace, ToolCallRecord{Tool: tc.Name, Args: tc.Args, Error: msg})
+				result := JSONResult(map[string]string{"error": "unknown tool: " + tc.Name})
+				messages = append(messages, chat.Message{Role: "tool", Content: result})
+				trace = append(trace, ToolCallRecord{Tool: tc.Name, Args: tc.Args, Error: "unknown tool"})
 				continue
 			}
 
@@ -97,15 +101,12 @@ func (a *Agent) Ask(ctx context.Context, question string, history []chat.Message
 			errMsg := ""
 			if err != nil {
 				errMsg = err.Error()
-				result = `{"error":"` + errMsg + `"}`
+				result = JSONResult(map[string]string{"error": errMsg})
 			}
-			messages = append(messages, chat.Message{
-				Role:    "assistant",
-				Content: fmt.Sprintf("Tool %s result:\n%s", tc.Name, result),
-			})
+			messages = append(messages, chat.Message{Role: "tool", Content: result})
 			trace = append(trace, ToolCallRecord{
-				Tool: tc.Name, Args: tc.Args,
-				Result: result, Error: errMsg,
+				Tool: tc.Name, Args: tc.Args, Result: result,
+				Error: errMsg,
 			})
 		}
 	}
