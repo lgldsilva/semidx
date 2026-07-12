@@ -25,15 +25,15 @@ type Answer struct {
 
 // PipelineConfig holds RAG pipeline settings.
 type PipelineConfig struct {
-	TopK        int     // number of chunks to retrieve (default 5)
-	MaxTokens   int     // max tokens for the LLM response (default 4096)
-	Temperature float64 // chat temperature (default 0.3)
-	Model       string  // chat model to use
-	Identity    string  // repo identity (git) or absolute path (docs) for search
-	Worktree    string  // worktree root path for git projects
-	Graph       bool    // enable graph expansion on search results (default false)
-	GraphMaxDepth int   // max BFS depth for graph expansion (default 2)
-	PathPrefix  string  // filter search results to files under this path prefix
+	TopK          int     // number of chunks to retrieve (default 5)
+	MaxTokens     int     // max tokens for the LLM response (default 4096)
+	Temperature   float64 // chat temperature (default 0.3)
+	Model         string  // chat model to use
+	Identity      string  // repo identity (git) or absolute path (docs) for search
+	Worktree      string  // worktree root path for git projects
+	Graph         bool    // enable graph expansion on search results (default false)
+	GraphMaxDepth int     // max BFS depth for graph expansion (default 2)
+	PathPrefix    string  // filter search results to files under this path prefix
 }
 
 // SearchService is the interface for semantic search (implemented by

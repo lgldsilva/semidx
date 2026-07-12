@@ -54,75 +54,118 @@ func runREPL(ctx context.Context, pipeline *rag.Pipeline, agt *agent.Agent, proj
 		}
 		line := strings.TrimSpace(scanner.Text())
 
-		// Handle commands.
-		switch line {
-		case "":
-			continue
-		case "/exit", "/quit":
-			fmt.Println("Goodbye!")
+		if handled, cont := handleREPLCommand(line, history, &mode, agt != nil); handled {
+			if cont {
+				continue
+			}
 			return nil
-		case "/clear":
-			history.Clear()
-			fmt.Println("History cleared.")
-			continue
-		case "/mode":
-			if agt != nil {
-				mode = "agent"
-			} else {
-				mode = "RAG"
-			}
-			fmt.Printf("Switched to %s mode.\n", mode)
-			continue
 		}
-
-		if agt != nil && mode == "agent" {
-			// Agent loop: tool-calling LLM.
-			answer, err := agt.Ask(ctx, line, history.GetMessages())
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %s\n", formatError(err))
-				continue
-			}
-
-			history.AddUser(line)
-			history.AddAssistant(answer.Content)
-
-			fmt.Println()
-			fmt.Println(answer.Content)
-			fmt.Println()
-
-			if len(answer.Trace) > 0 {
-				fmt.Println("Tool calls:")
-				for _, tc := range answer.Trace {
-					errInfo := ""
-					if tc.Error != "" {
-						errInfo = fmt.Sprintf(" error=%s", tc.Error)
-					}
-					fmt.Printf("  • %s(%s)%s\n", tc.Tool, tc.Args, errInfo)
-				}
-				fmt.Println()
-			}
-			fmt.Printf("[agent mode | model: %s]\n\n", answer.Model)
-		} else {
-			// Standard RAG pipeline.
-			answer, err := pipeline.Ask(ctx, line, project, history.GetMessages())
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %s\n", formatError(err))
-				continue
-			}
-
-			history.AddUser(line)
-			history.AddAssistant(answer.Content)
-
-			fmt.Println()
-			fmt.Println(answer.Content)
-			fmt.Println()
-
-			printSources(answer.Sources)
-			fmt.Printf("[model: %s]\n\n", formatModelInfo(answer.Model, answer.Fallback))
+		if handleREPLTurn(ctx, pipeline, agt, project, line, history, mode) {
+			continue
 		}
 	}
 
 	return scanner.Err()
+}
+
+// handleREPLCommand processes meta-commands (empty, exit, clear, mode).
+// handled=true when line matched a command; cont=false means stop the REPL.
+func handleREPLCommand(line string, history *chat.History, mode *string, hasAgent bool) (handled, cont bool) {
+	if line == "" {
+		return true, true
+	}
+	switch line {
+	case "/exit", "/quit":
+		fmt.Println("Goodbye!")
+		return true, false
+	case "/clear":
+		history.Clear()
+		fmt.Println("History cleared.")
+		return true, true
+	case "/mode":
+		if hasAgent {
+			*mode = "agent"
+		} else {
+			*mode = "RAG"
+		}
+		fmt.Printf("Switched to %s mode.\n", *mode)
+		return true, true
+	}
+	return false, false
+}
+
+// handleREPLTurn dispatches a question to agent or RAG. Returns true on error.
+func handleREPLTurn(ctx context.Context, pipeline *rag.Pipeline, agt *agent.Agent, project, line string, history *chat.History, mode string) bool {
+	if agt != nil && mode == "agent" {
+		if handleAgentReply(ctx, agt, line, history) {
+			return true
+		}
+	} else {
+		if handleRAGReply(ctx, pipeline, line, project, history) {
+			return true
+		}
+	}
+	return false
+}
+
+// handleAgentReply processes an agent-mode answer: calls the agent, updates
+// history, and prints the answer and tool trace. Returns true on error (caller
+// should continue the REPL loop).
+func handleAgentReply(ctx context.Context, agt *agent.Agent, line string, history *chat.History) bool {
+	answer, err := agt.Ask(ctx, line, history.GetMessages())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", formatError(err))
+		return true
+	}
+
+	history.AddUser(line)
+	history.AddAssistant(answer.Content)
+
+	fmt.Println()
+	fmt.Println(answer.Content)
+	fmt.Println()
+
+	printAgentTrace(answer.Trace)
+	fmt.Printf("[agent mode | model: %s]\n\n", answer.Model)
+	return false
+}
+
+// handleRAGReply processes a RAG-mode answer: calls the pipeline, updates
+// history, and prints the answer and sources. Returns true on error (caller
+// should continue the REPL loop).
+func handleRAGReply(ctx context.Context, pipeline *rag.Pipeline, line, project string, history *chat.History) bool {
+	answer, err := pipeline.Ask(ctx, line, project, history.GetMessages())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", formatError(err))
+		return true
+	}
+
+	history.AddUser(line)
+	history.AddAssistant(answer.Content)
+
+	fmt.Println()
+	fmt.Println(answer.Content)
+	fmt.Println()
+
+	printSources(answer.Sources)
+	fmt.Printf("[model: %s]\n\n", formatModelInfo(answer.Model, answer.Fallback))
+	return false
+}
+
+// printAgentTrace prints the tool call trace (if any) from an agent answer.
+func printAgentTrace(trace []agent.ToolCallRecord) {
+	if len(trace) == 0 {
+		return
+	}
+	fmt.Println("Tool calls:")
+	for _, tc := range trace {
+		errInfo := ""
+		if tc.Error != "" {
+			errInfo = fmt.Sprintf(" error=%s", tc.Error)
+		}
+		fmt.Printf("  • %s(%s)%s\n", tc.Tool, tc.Args, errInfo)
+	}
+	fmt.Println()
 }
 
 // formatError returns a clean, actionable error message for the REPL.
