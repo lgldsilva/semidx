@@ -128,8 +128,8 @@ func (c *GoogleClient) buildStreamPayload(req Request) ([]byte, error) {
 }
 
 func streamSSEResponse(ctx context.Context, resp *http.Response, ch chan<- StreamChunk) {
-	defer resp.Body.Close()
 	defer close(ch)
+	defer func() { _ = resp.Body.Close() }()
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
