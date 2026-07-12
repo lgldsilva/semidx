@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Project-local pre-commit hook, chained by the ai-standards global hook
+# (or by `lefthook install` on machines without a global core.hooksPath).
+# Delegates to lefthook, which runs the checks defined in lefthook.yml.
+set -euo pipefail
+
+export PATH="$HOME/go/bin:$PATH"
+
+if ! command -v lefthook >/dev/null 2>&1; then
+  echo "pre-commit: lefthook not found — install it (go install github.com/evilmartians/lefthook@latest)" >&2
+  exit 1
+fi
+
+exec lefthook run pre-commit "$@"

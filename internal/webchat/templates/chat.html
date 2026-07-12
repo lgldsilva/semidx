@@ -1,0 +1,279 @@
+{{define "title"}}Chat — {{.Project}}{{end}}
+{{define "body"}}
+<div id="chat" data-project="{{.Project}}" style="display:flex;flex-direction:column;flex:1;">
+    <div class="project-header">
+        <h1>{{.Project}}</h1>
+        <div class="subtitle">Ask questions about your codebase</div>
+    </div>
+
+    <div id="messages"></div>
+
+    <div id="loading">
+        <div class="spinner"></div>
+        <div style="margin-top:0.4rem;">Thinking...</div>
+    </div>
+
+    <div id="error"></div>
+
+    <form id="chat-form">
+        <input type="text" id="question" placeholder="Ask about your codebase..." autofocus>
+        <button type="submit" id="send-btn">Send</button>
+        <button type="button" id="clear-btn">Clear</button>
+    </form>
+
+    <div id="model-info"></div>
+</div>
+
+<script>
+(function() {
+    var form = document.getElementById('chat-form');
+    var input = document.getElementById('question');
+    var messages = document.getElementById('messages');
+    var errorEl = document.getElementById('error');
+    var loadingEl = document.getElementById('loading');
+    var modelInfo = document.getElementById('model-info');
+    var project = document.getElementById('chat').dataset.project;
+    var history = [];
+
+    function addMessage(role, content) {
+        var div = document.createElement('div');
+        div.className = 'message ' + role;
+        div.textContent = content;
+        messages.appendChild(div);
+        messages.scrollTop = messages.scrollHeight;
+    }
+
+    function showSources(sources) {
+        if (!sources || sources.length === 0) return;
+
+        var msgs = messages.querySelectorAll('.message.assistant');
+        var lastMsg = msgs[msgs.length - 1];
+        if (!lastMsg) return;
+
+        var toggle = document.createElement('button');
+        toggle.className = 'sources-toggle';
+        var plural = sources.length > 1 ? 's' : '';
+        toggle.textContent = '📎 ' + sources.length + ' source' + plural;
+        var sourceLabel = sources.length + ' source' + plural;
+        var hideLabel = '📎 hide sources';
+        toggle.addEventListener('click', function() {
+            var list = this.nextElementSibling;
+            if (list) {
+                list.classList.toggle('open');
+                if (list.classList.contains('open')) {
+                    this.textContent = hideLabel;
+                } else {
+                    this.textContent = '📎 ' + sourceLabel;
+                }
+            }
+        });
+        lastMsg.parentNode.insertBefore(toggle, lastMsg.nextSibling);
+
+        var list = document.createElement('ul');
+        list.className = 'sources-list';
+
+        sources.forEach(function(s) {
+            var li = document.createElement('li');
+            li.className = 'source-item';
+
+            if (!s.keyword && s.score > 0) {
+                var score = document.createElement('span');
+                score.className = 'score';
+                score.textContent = s.score.toFixed(3);
+                li.appendChild(score);
+            }
+            if (s.keyword) {
+                var badge = document.createElement('span');
+                badge.className = 'keyword-badge';
+                badge.textContent = '[keyword]';
+                li.appendChild(badge);
+            }
+
+            var path = document.createElement('span');
+            path.className = 'file-path';
+            path.textContent = s.file + ':' + s.start_line + '-' + s.end_line;
+            li.appendChild(path);
+
+            var content = document.createElement('pre');
+            content.className = 'source-content';
+            content.textContent = s.content;
+            li.appendChild(content);
+
+            list.appendChild(li);
+        });
+
+        toggle.parentNode.insertBefore(list, toggle.nextSibling);
+    }
+
+    function showError(msg) {
+        errorEl.textContent = msg;
+        errorEl.className = 'visible';
+        setTimeout(function() {
+            errorEl.className = '';
+        }, 8000);
+    }
+
+    function showLoading(on) {
+        loadingEl.className = on ? 'visible' : '';
+        if (on) {
+            var spinner = loadingEl.querySelector('.spinner');
+            if (spinner) spinner.style.display = 'inline-block';
+        }
+    }
+
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        var q = input.value.trim();
+        if (!q) return;
+
+        addMessage('user', q);
+        input.value = '';
+        input.disabled = true;
+        showLoading(true);
+        errorEl.className = '';
+        modelInfo.textContent = '';
+
+        // Try streaming first, fall back to non-streaming.
+        streamChat(q).catch(function() {
+            return nonStreamingChat(q);
+        })
+        .catch(function(err) {
+            showError('Network error: ' + err.message);
+        })
+        .finally(function() {
+            input.disabled = false;
+            showLoading(false);
+            input.focus();
+        });
+    });
+
+    function streamChat(question) {
+        return fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({question: question, project: project, history: history})
+        })
+        .then(function(resp) {
+            if (!resp.ok) {
+                return resp.json().then(function(data) {
+                    throw new Error(data.error || 'Stream failed: ' + resp.status);
+                });
+            }
+
+            var reader = resp.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = '';
+            var assistantDiv = null;
+            var content = '';
+            var model = '';
+
+            // Create an assistant message bubble immediately.
+            assistantDiv = document.createElement('div');
+            assistantDiv.className = 'message assistant';
+            messages.appendChild(assistantDiv);
+            messages.scrollTop = messages.scrollHeight;
+
+            function processLine(line) {
+                if (!line || line.indexOf('data: ') !== 0) return;
+                var jsonStr = line.substring(6);
+
+                var data = null;
+                try {
+                    data = JSON.parse(jsonStr);
+                } catch (parseErr) {
+                    console.debug('skip malformed SSE line', parseErr);
+                    return;
+                }
+                if (!data) {
+                    return;
+                }
+
+                if (data.type === 'chunk') {
+                    content += data.content;
+                    assistantDiv.textContent = content;
+                    messages.scrollTop = messages.scrollHeight;
+                } else if (data.type === 'done') {
+                    model = data.model || '';
+                } else if (data.type === 'sources') {
+                    if (data.sources && data.sources.length > 0) {
+                        showSources(data.sources);
+                    }
+                    var info = 'Model: ' + (model || data.model || 'unknown');
+                    if (data.fallback) {
+                        info += ' (keyword fallback)';
+                    }
+                    modelInfo.textContent = info;
+                } else if (data.type === 'error') {
+                    showError(data.error);
+                }
+            }
+
+            function processPart(part) {
+                part.split('\n').forEach(processLine);
+            }
+
+            function processBufferParts() {
+                var parts = buffer.split('\n\n');
+                buffer = parts.pop() || '';
+                parts.forEach(processPart);
+            }
+
+            function finishStream() {
+                var remaining = buffer.trim();
+                if (remaining) {
+                    remaining.split('\n').forEach(processLine);
+                }
+                if (content) {
+                    history.push({role: 'user', content: question}, {role: 'assistant', content: content});
+                }
+            }
+
+            function onReadResult(result) {
+                if (result.done) {
+                    finishStream();
+                    return;
+                }
+                buffer += decoder.decode(result.value, {stream: true});
+                processBufferParts();
+                return pump();
+            }
+
+            function pump() {
+                return reader.read().then(onReadResult);
+            }
+
+            return pump();
+        });
+    }
+
+    function nonStreamingChat(question) {
+        return fetch('/api/chat', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({question: question, project: project, history: history})
+        })
+        .then(function(resp) { return resp.json(); })
+        .then(function(data) {
+            if (data.error) {
+                throw new Error(data.error);
+            }
+            history.push({role: 'user', content: question}, {role: 'assistant', content: data.content});
+            addMessage('assistant', data.content);
+            if (data.sources && data.sources.length > 0) {
+                showSources(data.sources);
+            }
+            var info = 'Model: ' + (data.model || 'unknown');
+            if (data.fallback) info += ' (keyword fallback)';
+            modelInfo.textContent = info;
+        });
+    }
+
+    document.getElementById('clear-btn').addEventListener('click', function() {
+        messages.innerHTML = '';
+        modelInfo.textContent = '';
+        errorEl.className = '';
+        history = [];
+    });
+})();
+</script>
+{{end}}

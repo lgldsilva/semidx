@@ -1,0 +1,6 @@
+# Git hooks managed by lefthook (https://github.com/evilmartians/lefthook)
+# Install into .git/hooks with: lefthook install
+pre-commit:
+  commands:
+    gitleaks:
+      run: gitleaks protect --staged --redact -v

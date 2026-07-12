@@ -1,0 +1,41 @@
+# Build artifacts (anchored to repo root so they don't match the cmd/semidx/ dir)
+/semantic-indexer-poc
+/semidx
+dist/
+# Embedded React admin assets (built by scripts/build-web.sh / npm run build).
+!internal/webui/dist/
+!internal/webui/dist/**
+*.test
+coverage.out
+coverage.html
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
+
+# Editor / tooling
+.idea/
+.vscode/
+.claude/
+.mcp.json
+.mcp.json.bak-*
+opencode.json
+opencode.json.bak-*
+
+# property-test regression seeds (transient)
+testdata/rapid/
+
+# Deepwork progress files (Orchestrator session state)
+.slim/deepwork/
+.scannerwork/ bin/ semidx.exe
+.scannerwork/
+semidx.exe
+docs/auditoria-2026-07-06.md
+.slim/worktrees/
+.slim/worktrees.json
+.slim/deepwork/
+coverage*.out
+
+# Local build output
+/bin/

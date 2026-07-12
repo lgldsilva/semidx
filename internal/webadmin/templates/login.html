@@ -1,0 +1,22 @@
+{{define "login.html"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>semidx · sign in</title>
+{{template "style" .}}
+</head>
+<body class="centered">
+<main class="card narrow">
+  <h1>semidx</h1>
+  <p class="muted">Sign in to the management console.</p>
+  {{if .Err}}<p class="alert error">{{.Err}}</p>{{end}}
+  <form method="post" action="/admin/login">
+    <label>Username<input type="text" name="username" autocomplete="username" autofocus required></label>
+    <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
+    <label class="checkbox"><input type="checkbox" name="remember_me" value="1"> Remember me for 30 days</label>
+    <button type="submit">Sign in</button>
+  </form>
+</main>
+</body>
+</html>{{end}}

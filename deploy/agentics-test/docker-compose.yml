@@ -1,0 +1,61 @@
+# Full-stack "with server" variation of the agentics MCP test.
+#
+#   Postgres(pgvector)  ──  semidx serve  ──  agents (runs the harness)
+#
+# The agents container logs in to the server, indexes a fixture into the shared
+# Postgres, then drives a real MCP handshake through the server — and, when
+# ANTHROPIC_API_KEY is exported, a real Claude agent tool-call.
+#
+#   docker compose -f deploy/agentics-test/docker-compose.yml up --build \
+#     --abort-on-container-exit --exit-code-from agents
+#
+# Neither Postgres nor the server publishes a host port — the only ingress is
+# in-network, matching the production self-hosting posture.
+name: semidx-agentics
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: semidx
+      POSTGRES_PASSWORD: semidx
+      POSTGRES_DB: semidx
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U semidx -d semidx"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  serve:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["serve"]
+    environment:
+      SEMIDX_DB_DSN: postgres://semidx:semidx@postgres:5432/semidx?sslmode=disable
+      SEMIDX_BOOTSTRAP_TOKEN: test-admin-token
+      SEMIDX_LISTEN_ADDR: ":8080"
+      SEMIDX_INDEX_WORKERS: ${SEMIDX_INDEX_WORKERS:-1}
+      SEMIDX_COOKIE_SECURE: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  agents:
+    build:
+      context: ../..
+      dockerfile: deploy/agentics-test/Dockerfile.agents
+    command: ["server"]
+    environment:
+      SEMIDX_SERVER_URL: http://serve:8080
+      SEMIDX_TOKEN: test-admin-token
+      # Direct DSN lets the harness index the fixture into the same Postgres the
+      # server reads, then search it through the server via MCP.
+      SEMIDX_DB_DSN: postgres://semidx:semidx@postgres:5432/semidx?sslmode=disable
+      # Optional: export ANTHROPIC_API_KEY to also run a real Claude agent call.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      serve:
+        condition: service_started
