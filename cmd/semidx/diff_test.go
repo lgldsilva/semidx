@@ -38,17 +38,10 @@ func TestGetChangedFilesAndFileAtRef(t *testing.T) {
 	git("add", "-A")
 	git("commit", "-q", "--no-verify", "-m", "c2")
 
-	// getChangedFiles / getFileAtRef operate on the current working directory.
-	old, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(old) })
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	files, err := getChangedFiles("HEAD~1", "HEAD", false)
+	// Pass the temp repo dir explicitly. The test must NOT os.Chdir into it:
+	// that mutates the whole process working directory and, combined with git
+	// commands elsewhere, has corrupted the real worktree's branch.
+	files, err := getChangedFiles(dir, "HEAD~1", "HEAD", false)
 	if err != nil {
 		t.Fatalf("getChangedFiles: %v", err)
 	}
@@ -62,7 +55,7 @@ func TestGetChangedFilesAndFileAtRef(t *testing.T) {
 		t.Fatalf("expected b.txt among changed files, got %v", files)
 	}
 
-	content, err := getFileAtRef("a.txt", "HEAD")
+	content, err := getFileAtRef(dir, "a.txt", "HEAD")
 	if err != nil {
 		t.Fatalf("getFileAtRef: %v", err)
 	}

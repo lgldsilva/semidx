@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"charm.land/fantasy"
+
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/chat"
+	"github.com/lgldsilva/semidx/internal/llm"
 	"github.com/lgldsilva/semidx/internal/rag"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -45,41 +48,45 @@ func (d *deps) buildAdminChatPipeline() webadmin.ChatPipeline {
 		Model:       "gemini-2.0-flash",
 	})
 
-	// When Gemini is configured, build an agent that wraps the pipeline.
+	// When Gemini is configured, build a fantasy Runner that wraps the pipeline.
 	// The agent's tool loop allows deeper analysis (calling semantic_search,
 	// repo_status, etc.) before answering.
-	if d.cfg.GeminiAPIKey != "" {
-		resolver := agent.NewScopeResolver(d.mustSearchStore())
-		tools := []agent.Tool{
-			agent.NewSearchTool(svc),
-			agent.NewIndexStatusTool(d.mustSearchStore()),
-			agent.NewListProjectsTool(d.mustSearchStore()),
+	if sel, ok := d.cfg.ResolveChatLLM(); ok {
+		model, err := llm.ResolveModel(context.Background(), llm.ProviderConfig{
+			Type:    llm.ProviderType(sel.Provider),
+			APIKey:  sel.APIKey,
+			BaseURL: sel.BaseURL,
+		}, sel.Model)
+		if err == nil {
+			idxStore := d.mustSearchStore()
+			// repo tools only when project paths are local (serve mode may be
+			// server-side only). A nil resolver makes ReadTools omit them.
+			var resolver agent.ScopeResolver
+			if d.db != nil {
+				resolver = agent.NewScopeResolver(idxStore)
+			}
+			tools := agent.ReadTools(svc, idxStore, resolver)
+			temp := sel.Temperature
+			runner := agent.NewRunner(model, tools, agent.RunnerConfig{
+				SystemPrompt: agent.SystemPrompt,
+				Temperature:  &temp,
+			})
+			return &agentChatPipeline{pipeline: pipeline, runner: runner}
 		}
-		// Only add repotools when the store's project paths are local.
-		// In serve mode, paths may be server-side only.
-		if d.db != nil {
-			tools = append(tools,
-				agent.NewRepoWorktreesTool(resolver),
-				agent.NewRepoBranchesTool(resolver),
-				agent.NewRepoStatusTool(resolver),
-			)
-		}
-		agt := agent.NewAgent(chatClient, tools, resolver)
-		return &agentChatPipeline{pipeline: pipeline, agent: agt}
 	}
 
 	return pipeline
 }
 
-// agentChatPipeline wraps a rag.Pipeline with an agent loop.
+// agentChatPipeline wraps a rag.Pipeline with a fantasy agent Runner.
 // It implements webadmin.ChatPipeline.
 type agentChatPipeline struct {
 	pipeline *rag.Pipeline
-	agent    *agent.Agent
+	runner   *agent.Runner
 }
 
 func (a *agentChatPipeline) Ask(ctx context.Context, question, project string, history []chat.Message) (*rag.Answer, error) {
-	answer, err := a.agent.Ask(ctx, question, history)
+	answer, err := a.runner.Ask(ctx, question, adminHistoryToMessages(history))
 	if err != nil {
 		return nil, fmt.Errorf("agent ask failed: %w", err)
 	}
@@ -90,8 +97,9 @@ func (a *agentChatPipeline) Ask(ctx context.Context, question, project string, h
 }
 
 func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project string, history []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
-	// Agent doesn't support streaming natively; use synchronous Ask and wrap.
-	answer, err := a.agent.Ask(ctx, question, history)
+	// The agent Runner is not streaming yet (Phase 5); run synchronously and
+	// wrap the answer as a single chunk.
+	answer, err := a.runner.Ask(ctx, question, adminHistoryToMessages(history))
 	if err != nil {
 		return nil, nil, "", false, fmt.Errorf("agent stream ask failed: %w", err)
 	}
@@ -100,6 +108,26 @@ func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project str
 	ch <- chat.StreamChunk{Done: true, Model: answer.Model}
 	close(ch)
 	return ch, nil, answer.Model, false, nil
+}
+
+// adminHistoryToMessages converts chat.History turns (text-only) into fantasy
+// messages for the Runner. Full tool_call history is Phase 5.
+func adminHistoryToMessages(msgs []chat.Message) []fantasy.Message {
+	out := make([]fantasy.Message, 0, len(msgs))
+	for _, m := range msgs {
+		switch m.Role {
+		case "user":
+			out = append(out, fantasy.NewUserMessage(m.Content))
+		case "system":
+			out = append(out, fantasy.NewSystemMessage(m.Content))
+		case "assistant":
+			out = append(out, fantasy.Message{
+				Role:    fantasy.MessageRoleAssistant,
+				Content: []fantasy.MessagePart{fantasy.TextPart{Text: m.Content}},
+			})
+		}
+	}
+	return out
 }
 
 // mustSearchStore returns an IndexStore for search. During serve, database is
