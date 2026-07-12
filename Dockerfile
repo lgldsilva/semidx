@@ -7,7 +7,7 @@ RUN cd web && npm ci
 COPY web/ ./web/
 RUN cd web && npm run build
 
-FROM golang:1.25.12 AS build
+FROM golang:1.26.5 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
