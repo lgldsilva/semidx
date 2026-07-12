@@ -196,5 +196,6 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 `docs/architecture.md` · `docs/requirements.md` (product requirements) ·
 `docs/api.md` · `docs/self-hosting.md` · `docs/CICD.md` ·
-`docs/design-decisions.md` (ADRs) · `README.md` (quickstart) ·
-`deploy/agentics-test/README.md` (MCP harness).
+`docs/design-decisions.md` (ADRs) ·
+`docs/research/large-scale-semantic-code-search.md` (scale research + roadmap) ·
+`README.md` (quickstart) · `deploy/agentics-test/README.md` (MCP harness).
