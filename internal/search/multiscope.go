@@ -96,6 +96,14 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 		}
 	}
 
+	// Strip provenance prefixes from FilePath before returning —
+	// the \x00 prefix should never leak to the caller.
+	for i := range result {
+		if _, file := splitProvenance(result[i].FilePath); file != "" {
+			result[i].FilePath = file
+		}
+	}
+
 	return &MultiResponse{Results: result}, nil
 }
 

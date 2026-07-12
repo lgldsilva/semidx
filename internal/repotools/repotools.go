@@ -202,7 +202,12 @@ func parseForEachRef(lines []string) []Branch {
 			branch.Name = strings.TrimPrefix(fullRef, refsHeadsPrefix)
 			branch.Remote = false
 		case strings.HasPrefix(fullRef, "refs/remotes/"):
-			branch.Name = strings.TrimPrefix(fullRef, "refs/remotes/")
+			name := strings.TrimPrefix(fullRef, "refs/remotes/")
+			// Skip symbolic HEAD refs (e.g. origin/HEAD) that are not real branches.
+			if strings.HasSuffix(name, "/HEAD") {
+				continue
+			}
+			branch.Name = name
 			branch.Remote = true
 		default:
 			// Fallback: use the full ref as-is (shouldn't happen).

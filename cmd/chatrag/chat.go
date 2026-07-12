@@ -83,7 +83,9 @@ func handleREPLCommand(line string, history *chat.History, mode *string, hasAgen
 		fmt.Println("History cleared.")
 		return true, true
 	case "/mode":
-		if hasAgent {
+		if *mode == "agent" {
+			*mode = "RAG"
+		} else if hasAgent {
 			*mode = "agent"
 		} else {
 			*mode = "RAG"
