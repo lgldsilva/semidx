@@ -48,6 +48,20 @@ variation_standalone() {
   else
     fail "standalone MCP handshake failed"
   fi
+
+  # Verify new workspace-agent tools are registered (requires git tests only when
+  # the fixture is a real git repo; the docs fixture is not, so repo_worktrees
+  # gracefully returns "no local path" which proves the tool is wired).
+  log "verify new workspace-agent tools"
+  if node "$HERE/tool-test.mjs" \
+    --mcp-cmd "semidx" "--local" "mcp" \
+    --project "$PROJECT" \
+    --skip-git \
+    2>&1 | sed 's/^/     /'; then
+    pass "workspace-agent tools verified"
+  else
+    fail "workspace-agent tools check failed"
+  fi
 }
 
 variation_keyword() {

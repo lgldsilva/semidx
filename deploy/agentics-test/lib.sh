@@ -86,10 +86,12 @@ verify_claude_native() {
 # install_skill: verify `semidx skills install` writes the skill file.
 install_skill() {
   local dir; dir="$(mktemp -d)"
-  if semidx skills install --dir "$dir" >/dev/null 2>&1 && [ -f "$dir/semantic-search/SKILL.md" ]; then
-    pass "semidx skills install wrote semantic-search/SKILL.md"
+  if semidx skills install --dir "$dir" >/dev/null 2>&1 \
+    && [ -f "$dir/semantic-search/SKILL.md" ] \
+    && [ -f "$dir/workspace-agent/SKILL.md" ]; then
+    pass "semidx skills install wrote semantic-search and workspace-agent skills"
   else
-    fail "semidx skills install did not produce the skill file"
+    fail "semidx skills install did not produce the skill files"
   fi
 }
 

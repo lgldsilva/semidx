@@ -726,7 +726,12 @@ into an agent client. (stdout carries the protocol — logs go to stderr.)`,
 				return err
 			}
 			svc := search.NewService(db, d.emb)
-			backend := mcpserver.NewLocalBackend(svc, db, d.keywordOnly)
+
+			caps := agent.Capabilities{Flags: agent.CapLocalGit | agent.CapIndexLocal}
+			if d.cfg != nil && d.cfg.GeminiAPIKey != "" {
+				caps.Flags |= agent.CapChatLLM | agent.CapToolCalling
+			}
+			backend := mcpserver.NewLocalBackend(svc, db, d.keywordOnly, caps)
 
 			// If a chat LLM with tool calling is available, wrap the backend with
 			// an agent to enable the semantic_ask tool.

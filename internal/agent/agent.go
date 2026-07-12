@@ -59,7 +59,9 @@ func (a *Agent) Ask(ctx context.Context, question string, history []chat.Message
 		defs = append(defs, t.Def())
 	}
 
-	messages := append([]chat.Message{}, history...)
+	messages := make([]chat.Message, 0, 2+len(history))
+	messages = append(messages, chat.Message{Role: "system", Content: SystemPrompt})
+	messages = append(messages, history...)
 	messages = append(messages, chat.Message{Role: "user", Content: question})
 	var trace []ToolCallRecord
 
