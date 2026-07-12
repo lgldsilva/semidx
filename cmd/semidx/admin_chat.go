@@ -60,12 +60,14 @@ type adminSearchAdapter struct {
 
 func (a *adminSearchAdapter) Search(ctx context.Context, req rag.SearchRequest) (*rag.SearchResponse, error) {
 	resp, err := a.svc.Search(ctx, search.Request{
-		Project:     req.Project,
-		Identity:    req.Identity,
-		Query:       req.Query,
-		TopK:        req.TopK,
-		KeywordOnly: req.KeywordOnly,
-		Worktree:    req.Worktree,
+		Project:       req.Project,
+		Identity:      req.Identity,
+		Query:         req.Query,
+		TopK:          req.TopK,
+		KeywordOnly:   req.KeywordOnly,
+		Worktree:      req.Worktree,
+		Graph:         req.Graph,
+		GraphMaxDepth: req.GraphMaxDepth,
 	})
 	if err != nil {
 		return nil, err
