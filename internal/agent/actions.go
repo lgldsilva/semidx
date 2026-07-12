@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/lgldsilva/semidx/internal/chat"
@@ -75,21 +76,39 @@ func parseAndValidateIndexArgs(argsJSON string) (indexWorktreeArgs, error) {
 // Returns the project (nil if not found), the absolute path, and the model.
 func (t *indexWorktreeTool) resolveIndexPath(ctx context.Context, args indexWorktreeArgs) (*store.Project, string, string, error) {
 	targetPath := args.Path
+
+	// Only allow paths from registered projects — reject LLM-supplied
+	// arbitrary filesystem paths (security: "never arbitrary path index").
 	p, err := t.db.GetProject(ctx, args.Project)
 	if err != nil {
 		p, err = t.db.GetProjectByIdentity(ctx, args.Project)
-		if err != nil {
-			if targetPath == "" {
-				return nil, "", "", fmt.Errorf("project not found and no explicit path given")
-			}
-			p = nil
+	}
+	if err != nil {
+		// Project not found; only proceed if an explicit, non-empty path was
+		// provided. Never use args.Project as a filesystem path.
+		if targetPath == "" {
+			return nil, "", "", fmt.Errorf("project not found: %q (use a registered project name or identity)", args.Project)
 		}
+		// Path was provided — validate it resolves to a real directory.
+		absPath, err := filepath.Abs(targetPath)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("resolving path %q: %w", targetPath, err)
+		}
+		// Check that the path is a directory (not arbitrary).
+		info, err := os.Stat(absPath)
+		if err != nil || !info.IsDir() {
+			return nil, "", "", fmt.Errorf("path %q is not a valid directory", absPath)
+		}
+		model := args.Model
+		if model == "" {
+			model = "bge-m3"
+		}
+		return nil, absPath, model, nil
 	}
-	if p != nil && targetPath == "" {
-		targetPath = p.Path
-	}
+
+	// Project found — use its stored path.
 	if targetPath == "" {
-		targetPath = args.Project
+		targetPath = p.Path
 	}
 
 	absPath, err := filepath.Abs(targetPath)
