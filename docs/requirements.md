@@ -43,6 +43,13 @@ IDs are stable (`REQ-*`). Prefer adding rows over renumbering.
    keyword-only storage; cloud keys stay on the machine that embeds.
 5. **Agent-friendly**: MCP tools + install helpers + skills; not a SaaS and not
    a grep replacement.
+6. **Workspace agent**: in addition to search, semidx provides a conversational
+   agent (chat + tools) that answers questions about both **content** and
+   **state** of repositories, documents, and projects — git metadata
+   (worktrees, branches), index status, and semantic Content. Dual CLI/server:
+   the CLI sees the local filesystem and git; the server manages shared repo
+   clones. The agent loop (tool calling via LLM) activates when a chat model
+   with tool support is configured; without one, RAG-only is the fallback.
 
 ### 1.2 What semidx is not
 
@@ -85,6 +92,7 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-IDX-08 | Public extractor registration API for custom extensions | **done** | `internal/extract.Register` |
 | REQ-IDX-09 | Extract legacy Office (`.doc/.xls/.ppt`), email, images/OCR, generic zip/tar | **wont** (near-term) | Revisit if a real user case appears |
 | REQ-IDX-10 | Progress reporting during long index (CLI + jobs) | **done** | Local index verbose progress + async push and `repo add --wait` live status/%/counters |
+| REQ-IDX-11 | Watcher re-indexes document extracts (PDF/DOCX/…), not only `ShouldIndex` code/text files | **done** | Fix in `internal/indexing/watcher.go` + shared `Eligible` helper; ensures same predicate as the walk indexer |
 
 ### 3.2 Embedding and privacy
 
@@ -199,6 +207,23 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-OPS-08 | CI runs on `main` pushes (Sonar Community main-only gate) | **todo** | Known Gitea trigger issue |
 | REQ-OPS-09 | Reliable integration tests without container-per-test flakes | **partial** | Shared pgvector container recommended |
 
+### 3.10 Workspace agent — conversational + tools
+
+| ID | Requirement | Status | Notes |
+|----|-------------|--------|-------|
+| REQ-AGENT-01 | Conversational agent with tool-calling loop (chat/MCP). LLM decides whether to call git tools, search, or index tools; supports multi-round tool invocation with max-rounds guard | **todo** | `internal/agent` loop; activates only when LLM with tool calling is configured |
+| REQ-AGENT-02 | Tool calling in `internal/chat` (Gemini + OpenAI-compatible function definitions). `Request.Tools`, `Response.ToolCalls`, `StreamChunk.ToolCalls` | **todo** | Schema translation per provider; aggregation across streaming chunks |
+| REQ-AGENT-03 | Scope resolver: project ref → (path, identity, source). Injected once into agent, tools call it — no per-tool `projectref` duplication | **todo** | `agent.ScopeResolver` interface |
+| REQ-AGENT-04 | Query routing (`ClassifyQuery`) wired into `search.Service.Search`. Heuristic identifier/path/exact/NL → adjust recall weights | **todo** | Already implemented (`routing.go`) but dead code |
+| REQ-AGENT-05 | Graph expansion in the agent/chat retrieval path (not only `--graph` flag). Expand search results via dependency import BFS when query suggests code intent | **todo** | `rag.Pipeline` passes `Graph:true`; admin/chat adapters propagate it |
+| REQ-AGENT-06 | Multi-scope fused search (`SearchMulti`): across projects + optional path prefix. Cross-project RRF ranking with provenance labels + per-source diversification | **todo** | `*search.Service.SearchMulti`; provenance in `MultiResponse` envelope, not in `store.SearchResult` |
+| REQ-GIT-01 | Tools `repo_worktrees`, `repo_branches`, `repo_status` (git read-only). Hermetic, secured, locale-stable (`git for-each-ref`, `git worktree list --porcelain`) | **todo** | `internal/repotools` package; `internal/gitexec` shared git runner |
+| REQ-GIT-02 | Capability gating: local CLI exposes git tools + local index tools; remote/server exposes index/reindex tools only (no client worktrees) | **todo** | `agent.Capabilities` bitmask + capability-based MCP tool registration |
+| REQ-MCP-06 | MCP tools repotools (local) + semantic_search multi-scope + semantic_ask agentic (gated on CapToolCalling). Remote MCP omits git tools, returns "unsupported on server" | **todo** | Sub-interface pattern (`GitBackend`, `MultiSearchBackend`) |
+| REQ-MCP-07 | MCP action tools (`index_project`, `reindex`) with default policy: **propose** on MCP, **confirm** on CLI REPL. Never ARBITRARY path index on remote | **todo** | `action_policy` enum + propose/confirm/execute |
+| REQ-ACT-01 | Action tools: `index_worktree` (local), `reindex_project`, `server_repo_sync` (if logged in). Policy propose/confirm/execute | **todo** | Same `agent.Tool` interface; policy in `Agent.run` |
+| REQ-ACT-02 | `semidx repo sync` — trigger pull + reindex on server via jobs API | **todo** | Optional env-only recurrence (`SEMIDX_SYNC_INTERVAL`); no schema migration |
+
 ---
 
 ## 4. Surface parity matrix
@@ -221,6 +246,11 @@ Target state for core capabilities. Update this table when closing gaps.
 | Users / API tokens | admin | admin | yes | — |
 | Alerts / insights | partial | — | — | — |
 | Dead-code / SBOM / secrets | yes | — | — | — |
+| Git worktrees / branches / status | yes | partial (server checkout) | — | local, gated |
+| Search multi-scope (project+path prefix) | yes | — | — | yes (local) |
+| Agentic ask (tool-calling) | REPL | — | — | gated on LLM tools |
+| Action index / reindex / sync | yes | jobs | — | propose default |
+| Agent capability gating | yes | — | — | local vs remote |
 
 **REQ-PARITY-02:** Closing a row means automated or manual checks on each
 surface that claims “yes”, not only CLI demos.
@@ -335,4 +365,5 @@ second checklist.
 | Date | Change |
 |------|--------|
 | 2026-07-09 | Status refresh after implementation: hybrid default, graph caps, scoped job APIs/progress, SQLite top-K heap, worktree bulk writes, CI SPA build, and UI onboarding/ingest/detail updates |
+| 2026-07-12 | Workspace agent expansion: REQ-IDX-11 (watcher doc fix), REQ-AGENT-* (tool-calling agent, query routing, graph-in-chat, multi-scope fuse), REQ-GIT-* (repo tools, capability gating), REQ-ACT-* (action tools, sync), REQ-MCP-* (extended MCP tools) |
 | 2026-07-08 | Initial requirements doc from product principles, parity goals, audits, and post-SPA roadmap |
