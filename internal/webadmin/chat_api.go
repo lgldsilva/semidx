@@ -60,6 +60,19 @@ func sourcesJSON(src []rag.Source) []map[string]any {
 	return out
 }
 
+// chatSourcesJSON is sourcesJSON for chat.Source (citations delivered on the
+// terminal stream chunk by the agent path).
+func chatSourcesJSON(src []chat.Source) []map[string]any {
+	out := make([]map[string]any, 0, len(src))
+	for _, s := range src {
+		out = append(out, map[string]any{
+			"file": s.File, "start_line": s.StartLine, "end_line": s.EndLine,
+			"content": s.Content, "score": s.Score, "keyword": s.Keyword,
+		})
+	}
+	return out
+}
+
 func (a *Admin) apiProjectChat(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	_ = ac
 	if a.chat == nil {
@@ -125,6 +138,15 @@ func (a *Admin) apiProjectChatStream(w http.ResponseWriter, r *http.Request, ac 
 		if chunk.Content != "" {
 			tokJSON, _ := json.Marshal(map[string]any{"type": "chunk", "content": chunk.Content})
 			_, _ = fmt.Fprintf(w, spaSSEDataFmt, tokJSON)
+			flusher.Flush()
+		}
+		// Agent answers learn their sources only after the tool calls, so they
+		// arrive on the terminal chunk — emit them as a (late) sources event.
+		if len(chunk.Sources) > 0 {
+			lateJSON, _ := json.Marshal(map[string]any{
+				"type": "sources", "sources": chatSourcesJSON(chunk.Sources), "fallback": chunk.Fallback,
+			})
+			_, _ = fmt.Fprintf(w, spaSSEDataFmt, lateJSON)
 			flusher.Flush()
 		}
 		if chunk.Done {
