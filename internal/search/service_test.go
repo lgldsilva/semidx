@@ -112,9 +112,10 @@ func (f *fakeStore) UpdateProjectCommit(ctx context.Context, projectID int, comm
 // fakeEmbedder implements embed.Embedder; Search uses ModelInfo + EmbedSingle.
 type fakeEmbedder struct {
 	embed.Embedder
-	vec      []float32
-	embedErr error
-	dims     int
+	vec        []float32
+	embedErr   error
+	dims       int
+	embedCalls int
 }
 
 func (f *fakeEmbedder) ModelInfo(ctx context.Context, model string) (*embed.ModelInfo, error) {
@@ -124,6 +125,7 @@ func (f *fakeEmbedder) ModelInfo(ctx context.Context, model string) (*embed.Mode
 	return &embed.ModelInfo{Name: model, Dims: f.dims}, nil
 }
 func (f *fakeEmbedder) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
+	f.embedCalls++
 	return f.vec, f.embedErr
 }
 
@@ -164,7 +166,7 @@ func TestSearchKeywordFallback(t *testing.T) {
 	emb := &fakeEmbedder{embedErr: errors.New("offline"), dims: 3}
 	svc := NewService(st, emb)
 
-	resp, err := svc.Search(context.Background(), Request{Project: "p", Query: "q"})
+	resp, err := svc.Search(context.Background(), Request{Project: "p", Query: "offline keyword fallback"})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -196,7 +198,7 @@ func TestSearchModelOverride(t *testing.T) {
 	emb := &fakeEmbedder{vec: []float32{1, 2, 3}, dims: 3}
 	svc := NewService(st, emb)
 
-	resp, err := svc.Search(context.Background(), Request{Project: "p", Query: "q", Model: "nomic-embed-text"})
+	resp, err := svc.Search(context.Background(), Request{Project: "p", Query: "model override test", Model: "nomic-embed-text"})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -261,7 +263,7 @@ func TestSearchIgnoresWorktreeForNonGitProject(t *testing.T) {
 	emb := &fakeEmbedder{vec: []float32{1, 2, 3}, dims: 3}
 	svc := NewService(st, emb)
 
-	_, err := svc.Search(context.Background(), Request{Project: "docs", Query: "q", Worktree: "/tmp/wt"})
+	_, err := svc.Search(context.Background(), Request{Project: "docs", Query: "worktree filter test", Worktree: "/tmp/wt"})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -277,7 +279,7 @@ func TestSearchByIdentity(t *testing.T) {
 	}
 	svc := NewService(st, &fakeEmbedder{vec: []float32{1, 2, 3}, dims: 3})
 
-	resp, err := svc.Search(context.Background(), Request{Identity: "git:example/app", Query: "q"})
+	resp, err := svc.Search(context.Background(), Request{Identity: "git:example/app", Query: "identity search test"})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -293,7 +295,7 @@ func TestSearchGitWorktreeScoped(t *testing.T) {
 	}
 	svc := NewService(st, &fakeEmbedder{vec: []float32{1, 2, 3}, dims: 3})
 
-	if _, err := svc.Search(context.Background(), Request{Project: "app", Query: "q", Worktree: "/wt"}); err != nil {
+	if _, err := svc.Search(context.Background(), Request{Project: "app", Query: "worktree scoped search", Worktree: "/wt"}); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	if !st.usedWorktree {
@@ -308,7 +310,7 @@ func TestSearchKeywordFallbackUsesWorktree(t *testing.T) {
 	}
 	svc := NewService(st, &fakeEmbedder{embedErr: errors.New("offline"), dims: 3})
 
-	resp, err := svc.Search(context.Background(), Request{Project: "app", Query: "q", Worktree: "/wt"})
+	resp, err := svc.Search(context.Background(), Request{Project: "app", Query: "fallback worktree test", Worktree: "/wt"})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -352,7 +354,7 @@ func TestSearchKeywordFallbackKeywordError(t *testing.T) {
 		kwErr:   errors.New("kw down"),
 	}
 	svc := NewService(st, &fakeEmbedder{embedErr: errors.New("offline"), dims: 3})
-	_, err := svc.Search(context.Background(), Request{Project: "p", Query: "q"})
+	_, err := svc.Search(context.Background(), Request{Project: "p", Query: "keyword fallback error"})
 	if err == nil || err.Error() != "kw down" {
 		t.Fatalf("expected kw error, got %v", err)
 	}
@@ -364,8 +366,66 @@ func TestSearchVectorStoreError(t *testing.T) {
 		simErr:  errors.New("vector down"),
 	}
 	svc := NewService(st, &fakeEmbedder{vec: []float32{1}, dims: 1})
-	_, err := svc.Search(context.Background(), Request{Project: "p", Query: "q"})
+	_, err := svc.Search(context.Background(), Request{Project: "p", Query: "vector store failure test"})
 	if err == nil || err.Error() != "vector down" {
 		t.Fatalf("expected vector error, got %v", err)
+	}
+}
+
+func TestSearchRoutesIdentifierSkipsEmbed(t *testing.T) {
+	st := &fakeStore{
+		project:   &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		kwResults: []store.SearchResult{{FilePath: "auth.go", Content: "GetUser", Score: 0.5}},
+	}
+	emb := &fakeEmbedder{embedErr: errors.New("must not embed"), dims: 3}
+	svc := NewService(st, emb)
+
+	resp, err := svc.Search(context.Background(), Request{Project: "p", Query: "GetUserByID"})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if emb.embedCalls != 0 {
+		t.Errorf("identifier query should not embed, calls = %d", emb.embedCalls)
+	}
+	if !st.usedKW {
+		t.Fatal("identifier query should use keyword search")
+	}
+	if resp.Fallback {
+		t.Error("routed keyword should not set Fallback")
+	}
+	if !resp.Keyword {
+		t.Error("routed keyword should set Keyword")
+	}
+}
+
+func TestSearchRoutesPathSkipsEmbed(t *testing.T) {
+	st := &fakeStore{
+		project:   &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		kwResults: []store.SearchResult{{FilePath: "internal/auth/token.go", Score: 0.5}},
+	}
+	emb := &fakeEmbedder{vec: []float32{1, 2, 3}, dims: 3}
+	svc := NewService(st, emb)
+
+	if _, err := svc.Search(context.Background(), Request{Project: "p", Query: "internal/auth/token.go"}); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if emb.embedCalls != 0 {
+		t.Errorf("path query should not embed, calls = %d", emb.embedCalls)
+	}
+}
+
+func TestSearchRoutesExactStripsQuotes(t *testing.T) {
+	st := &fakeStore{
+		project:   &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		kwResults: []store.SearchResult{{FilePath: "a.go", Score: 0.5}},
+	}
+	emb := &fakeEmbedder{dims: 3}
+	svc := NewService(st, emb)
+
+	if _, err := svc.Search(context.Background(), Request{Project: "p", Query: `"retry backoff"`}); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if emb.embedCalls != 0 {
+		t.Fatal("exact query should not embed")
 	}
 }

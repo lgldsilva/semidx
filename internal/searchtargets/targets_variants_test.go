@@ -196,12 +196,12 @@ func TestSearchLocalBranches(t *testing.T) {
 		db2 := &memDB{projects: []store.Project{{
 			Name: "with-id", Identity: "git:id", Model: "bge-m3", SourceType: "git",
 		}}}
-		db2.usedWorktree = false
+		db2.usedWorktree.Store(false)
 		git := gitmeta.Info{IsGit: true, Identity: "git:other", Toplevel: "/wt"}
 		if _, err := SearchLocal(ctx, db2, stubEmbed{}, []*store.Project{&db2.projects[0]}, req, git); err != nil {
 			t.Fatal(err)
 		}
-		if db2.usedWorktree {
+		if db2.usedWorktree.Load() {
 			t.Fatal("worktree must not apply when cwd identity differs")
 		}
 	})

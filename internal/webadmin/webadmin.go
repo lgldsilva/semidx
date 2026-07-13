@@ -181,6 +181,7 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/api/projects/{project}/deps", a.protectAPI("", a.apiProjectDeps))
 	mux.HandleFunc("GET /admin/api/projects/{project}/graph-stats", a.protectAPI("", a.apiProjectGraphStats))
 	mux.HandleFunc("GET /admin/api/projects/{project}/dead-code", a.protectAPI("", a.apiProjectDeadCode))
+	mux.HandleFunc("GET /admin/api/projects/{project}/sbom", a.protectAPI("", a.apiProjectSbom))
 
 	// --- Legacy form auth (POST) for older HTML pages; SPA uses /admin/api/* ---
 	// GET /admin/login is served by the SPA (client route), not the HTML form.

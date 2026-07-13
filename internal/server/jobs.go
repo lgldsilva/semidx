@@ -153,15 +153,12 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 		return
 	}
 
-	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, indexing.IndexerOpts{
-		GitMode: job.Type == "git_history", GitSince: "30.days",
-		OnProgress: func(done, total, filesIndexed, chunksCreated, errorCount int) {
-			if err := s.store.UpdateJobProgress(ctx, job.ID, done, total, filesIndexed, chunksCreated, errorCount); err != nil {
-				s.log.Warn("update job progress", "job", job.ID, "err", err)
-			}
-		},
-	})
-	stats, err := idx.IndexProject(ctx, job.ProjectID, path, proj.Model, 0)
+	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, s.indexerOptsForJob(job.Type, func(done, total, filesIndexed, chunksCreated, errorCount int) {
+		if err := s.store.UpdateJobProgress(ctx, job.ID, done, total, filesIndexed, chunksCreated, errorCount); err != nil {
+			s.log.Warn("update job progress", "job", job.ID, "err", err)
+		}
+	}))
+	stats, err := idx.IndexProject(ctx, job.ProjectID, path, proj.Model, s.indexLimits.MaxFilesPerProject)
 	if err != nil {
 		fail("index: " + err.Error())
 		return

@@ -103,3 +103,23 @@ func TestQueryTypeString(t *testing.T) {
 		}
 	}
 }
+
+func TestRoutesToKeyword(t *testing.T) {
+	t.Parallel()
+	for _, qt := range []QueryType{QueryIdentifier, QueryPath, QueryExact} {
+		if !RoutesToKeyword(qt) {
+			t.Errorf("RoutesToKeyword(%v) = false, want true", qt)
+		}
+	}
+	if RoutesToKeyword(QueryNaturalLanguage) {
+		t.Error("NL should not route to keyword")
+	}
+}
+
+func TestKeywordQueryForRoutingExact(t *testing.T) {
+	t.Parallel()
+	got := KeywordQueryForRouting(`"foo bar"`, QueryExact)
+	if got != "foo bar" {
+		t.Fatalf("got %q", got)
+	}
+}
