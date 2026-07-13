@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/embed"
@@ -511,9 +512,10 @@ func TestSearchAdapter_FallbackOnEmbeddingFailure(t *testing.T) {
 // stuck on agent.
 func TestHandleREPLCommand_modeToggle(t *testing.T) {
 	hist := chat.NewHistory(10)
+	convo := agent.NewConversation(10)
 	mode := "agent"
 
-	handled, cont := handleREPLCommand("/mode", hist, &mode, true)
+	handled, cont := handleREPLCommand("/mode", hist, convo, &mode, true)
 	if !handled || !cont {
 		t.Fatalf("/mode should be handled and continue; handled=%v cont=%v", handled, cont)
 	}
@@ -521,7 +523,7 @@ func TestHandleREPLCommand_modeToggle(t *testing.T) {
 		t.Errorf("first /mode should switch agent->RAG, got %q", mode)
 	}
 
-	handleREPLCommand("/mode", hist, &mode, true)
+	handleREPLCommand("/mode", hist, convo, &mode, true)
 	if mode != "agent" {
 		t.Errorf("second /mode should switch RAG->agent, got %q", mode)
 	}
@@ -531,9 +533,45 @@ func TestHandleREPLCommand_modeToggle(t *testing.T) {
 // is configured.
 func TestHandleREPLCommand_modeNoAgent(t *testing.T) {
 	hist := chat.NewHistory(10)
+	convo := agent.NewConversation(10)
 	mode := "RAG"
-	handleREPLCommand("/mode", hist, &mode, false)
+	handleREPLCommand("/mode", hist, convo, &mode, false)
 	if mode != "RAG" {
 		t.Errorf("without an agent /mode must stay RAG, got %q", mode)
+	}
+}
+
+func TestFormatUsage(t *testing.T) {
+	if got := formatUsage(agent.Usage{}); got != "tokens: n/a" {
+		t.Errorf("empty usage = %q, want n/a", got)
+	}
+	got := formatUsage(agent.Usage{InputTokens: 30, OutputTokens: 13, TotalTokens: 43})
+	if got != "tokens: in=30 out=13 total=43" {
+		t.Errorf("usage = %q", got)
+	}
+	withCache := formatUsage(agent.Usage{InputTokens: 30, OutputTokens: 13, TotalTokens: 43, CacheReadTokens: 12})
+	if !strings.Contains(withCache, "cache(r=12 w=0)") {
+		t.Errorf("cache split missing: %q", withCache)
+	}
+}
+
+// TestHandleREPLCommand_clearResetsBoth verifies /clear empties both the RAG
+// history and the agent conversation (multi-turn tool memory).
+func TestHandleREPLCommand_clearResetsBoth(t *testing.T) {
+	hist := chat.NewHistory(10)
+	hist.AddUser("hi")
+	convo := agent.NewConversation(10)
+	convo.AddUser("hi")
+	mode := "agent"
+
+	handled, cont := handleREPLCommand("/clear", hist, convo, &mode, true)
+	if !handled || !cont {
+		t.Fatalf("/clear should be handled and continue; handled=%v cont=%v", handled, cont)
+	}
+	if len(hist.GetMessages()) != 0 {
+		t.Errorf("/clear must empty RAG history, got %d messages", len(hist.GetMessages()))
+	}
+	if convo.Len() != 0 {
+		t.Errorf("/clear must empty agent conversation, got %d messages", convo.Len())
 	}
 }
