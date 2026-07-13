@@ -186,6 +186,20 @@ button.danger,
   color: var(--accent);
   margin-left: 0.25rem;
 }
+/* Job status pills: a failed job must read red, not neutral. */
+.pill-failed {
+  background: #fef2f2;
+  color: var(--err);
+}
+.pill-succeeded {
+  background: #f0fdf4;
+  color: var(--ok);
+}
+.pill-running,
+.pill-queued {
+  background: #eff6ff;
+  color: var(--accent);
+}
 
 .table-wrap {
   width: 100%;

@@ -34,7 +34,7 @@ export function ProjectsPage() {
     }
   }, [])
 
-  const { job, project: jobProject, start: startJob } = useJobPoll(reload)
+  const { job, project: jobProject, err: pollErr, start: startJob } = useJobPoll(reload)
 
   useEffect(() => {
     void reload()
@@ -112,6 +112,7 @@ export function ProjectsPage() {
       {err && <div className="alert error">{err}</div>}
       {flash && <div className="alert ok">{flash}</div>}
       {job && <JobAlert job={job} project={jobProject} />}
+      {pollErr && <div className="alert error">{pollErr}</div>}
 
       <div className="filters card">
         <div className="row">
