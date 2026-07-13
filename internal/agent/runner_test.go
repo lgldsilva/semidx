@@ -215,6 +215,49 @@ func TestRunner_streamTextDeltas(t *testing.T) {
 	}
 }
 
+func TestRunner_CompactHistory(t *testing.T) {
+	// Under budget → unchanged, no model call needed.
+	r := NewRunner(&fakeModel{}, nil, RunnerConfig{})
+	short := []fantasy.Message{fantasy.NewUserMessage("hi"), fantasy.NewUserMessage("there")}
+	if got := r.CompactHistory(context.Background(), short); len(got) != 2 {
+		t.Errorf("short history should be unchanged, got %d", len(got))
+	}
+
+	// Over budget → oldest turns summarized into a leading system message,
+	// compactKeepRecent turns kept verbatim.
+	fm := &fakeModel{responses: []*fantasy.Response{{
+		Content:      fantasy.ResponseContent{fantasy.TextContent{Text: "SUMMARY"}},
+		FinishReason: fantasy.FinishReasonStop,
+	}}}
+	r2 := NewRunner(fm, nil, RunnerConfig{})
+	big := strings.Repeat("x", 5000) // 12 × 5000 = 60000 > compactMaxChars
+	var hist []fantasy.Message
+	for i := 0; i < 12; i++ {
+		hist = append(hist, fantasy.NewUserMessage(big))
+	}
+	got := r2.CompactHistory(context.Background(), hist)
+	if len(got) != 1+compactKeepRecent {
+		t.Fatalf("compacted len = %d, want %d", len(got), 1+compactKeepRecent)
+	}
+	wantRole := fantasy.NewSystemMessage("x").Role
+	if got[0].Role != wantRole || !strings.Contains(messageText(got[0]), "SUMMARY") {
+		t.Errorf("first message should be the system summary, got role=%s text=%q", got[0].Role, messageText(got[0]))
+	}
+
+	// Summarization failure → history returned unchanged (best-effort).
+	rErr := NewRunner(&errModel{}, nil, RunnerConfig{})
+	if got := rErr.CompactHistory(context.Background(), hist); len(got) != len(hist) {
+		t.Errorf("on summarize error, history must be unchanged, got %d want %d", len(got), len(hist))
+	}
+}
+
+// errModel fails Generate, exercising the best-effort compaction fallback.
+type errModel struct{ fakeModel }
+
+func (errModel) Generate(context.Context, fantasy.Call) (*fantasy.Response, error) {
+	return nil, errors.New("model down")
+}
+
 func TestNewRunner_defaultMaxSteps(t *testing.T) {
 	r := NewRunner(&fakeModel{}, nil, RunnerConfig{})
 	if r.cfg.MaxSteps != defaultMaxSteps {
