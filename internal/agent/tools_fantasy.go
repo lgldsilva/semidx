@@ -53,7 +53,21 @@ func newSearchToolF(svc *search.Service) fantasy.AgentTool {
 			if in.TopK <= 0 {
 				in.TopK = 5
 			}
-			resp, err := svc.Search(ctx, search.Request{Project: in.Project, Query: in.Query, TopK: in.TopK})
+			req := search.Request{Project: in.Project, Query: in.Query, TopK: in.TopK}
+			// When the turn is scoped to a project, that scope is the contract:
+			// pin the search to it regardless of what the model passed, and refuse
+			// a conflicting explicit project (so the model can't wander off-scope).
+			if scope, ok := scopeFromContext(ctx); ok && !scope.IsZero() {
+				if in.Project != "" && !scope.Matches(in.Project) {
+					return fantasy.NewTextErrorResponse(fmt.Sprintf(
+						"this chat is scoped to project %q; omit \"project\" to search it (refusing %q)",
+						scope.Label(), in.Project)), nil
+				}
+				req.Project = scope.Project
+				req.Identity = scope.Identity
+				req.Worktree = scope.Worktree
+			}
+			resp, err := svc.Search(ctx, req)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("search failed: %v", err)), nil
 			}

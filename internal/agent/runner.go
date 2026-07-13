@@ -52,6 +52,11 @@ type RunnerConfig struct {
 	SystemPrompt string
 	MaxSteps     int      // <= 0 uses defaultMaxSteps
 	Temperature  *float64 // nil = provider default
+	// Scope, when set, binds every turn to a project so tool calls stay in
+	// scope. A scope set on the call's context (via ContextWithScope) takes
+	// precedence — used by surfaces where the project varies per request
+	// (admin, MCP); the fixed-session REPL sets it here.
+	Scope SearchScope
 }
 
 // Runner drives a fantasy multi-step tool-calling loop over a language model
@@ -82,6 +87,7 @@ func (r *Runner) Model() string { return r.model.Model() }
 // of the tool calls made along the way. history carries prior turns (including
 // assistant tool_calls and tool results) so multi-turn context is preserved.
 func (r *Runner) Ask(ctx context.Context, question string, history []fantasy.Message) (*Answer, error) {
+	ctx = r.applyScope(ctx)
 	ag := fantasy.NewAgent(r.model, r.agentOptions()...)
 	res, err := ag.Generate(ctx, fantasy.AgentCall{Prompt: question, Messages: history})
 	if err != nil {
@@ -117,6 +123,7 @@ type StreamCallbacks struct {
 // the loop completes, so callers keep the full trace, usage, and turn messages
 // for multi-turn history.
 func (r *Runner) Stream(ctx context.Context, question string, history []fantasy.Message, cb StreamCallbacks) (*Answer, error) {
+	ctx = r.applyScope(ctx)
 	ag := fantasy.NewAgent(r.model, r.agentOptions()...)
 	call := fantasy.AgentStreamCall{Prompt: question, Messages: history}
 	if cb.OnText != nil {
@@ -152,6 +159,19 @@ func (r *Runner) Stream(ctx context.Context, question string, history []fantasy.
 		Usage:    usageFrom(res.TotalUsage),
 		Messages: messagesFromSteps(res.Steps),
 	}, nil
+}
+
+// applyScope injects the Runner's default project scope into the context when
+// the caller hasn't already set one. A caller-provided scope (ContextWithScope)
+// always wins, so per-request surfaces (admin, MCP) override the default.
+func (r *Runner) applyScope(ctx context.Context) context.Context {
+	if r.cfg.Scope.IsZero() {
+		return ctx
+	}
+	if _, ok := scopeFromContext(ctx); ok {
+		return ctx
+	}
+	return ContextWithScope(ctx, r.cfg.Scope)
 }
 
 // agentOptions builds the fantasy agent options shared by every run.
