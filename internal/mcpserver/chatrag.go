@@ -2,7 +2,9 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/rag"
@@ -74,7 +76,8 @@ type agenticAskBackend struct {
 }
 
 // Ask runs the agent loop instead of the simple RAG pipeline.
-// The agent has access to semantic_search, repo tools, etc.
+// The agent has access to semantic_search, repo tools, etc. The MCP tool is
+// single-turn (no history), so tool memory lives only within this loop.
 func (b *agenticAskBackend) Ask(ctx context.Context, project, question string, _ int) (*AskOutput, error) {
 	// Prepend project context to the question so the agent knows the scope.
 	fullQuestion := question
@@ -86,28 +89,73 @@ func (b *agenticAskBackend) Ask(ctx context.Context, project, question string, _
 		return nil, fmt.Errorf("agent ask failed: %w", err)
 	}
 
-	// Build sources from tool trace where possible.
-	var sources []AskSource
-	for _, tc := range answer.Trace {
-		if tc.Tool == "semantic_search" && tc.Error == "" {
-			// Try to extract sources from structured search results.
-			// At minimum, note that search was used.
-			sources = append(sources, AskSource{
-				Path:    fmt.Sprintf("tool://%s", tc.Tool),
-				Score:   1.0,
-				Keyword: false,
-			})
-		}
-	}
-	if sources == nil {
-		sources = []AskSource{}
-	}
+	// Observability: token accounting per ask (stderr; stdout is the MCP
+	// protocol channel).
+	slog.Info("agent ask complete",
+		"model", answer.Model,
+		"tool_calls", len(answer.Trace),
+		"input_tokens", answer.Usage.InputTokens,
+		"output_tokens", answer.Usage.OutputTokens,
+		"total_tokens", answer.Usage.TotalTokens,
+	)
 
 	return &AskOutput{
 		Answer:  answer.Content,
-		Sources: sources,
+		Sources: sourcesFromTrace(answer.Trace),
 		Model:   answer.Model,
 	}, nil
+}
+
+// searchToolResult mirrors the JSON the semantic_search agent tool returns
+// (see internal/agent/tools_fantasy.go). Only the fields needed to rebuild
+// AskSource entries are decoded.
+type searchToolResult struct {
+	Results []struct {
+		File      string  `json:"file"`
+		StartLine int     `json:"start_line"`
+		EndLine   int     `json:"end_line"`
+		Score     float64 `json:"score"`
+	} `json:"results"`
+	Keyword bool `json:"keyword"`
+}
+
+// sourcesFromTrace reconstructs real AskSource entries from the semantic_search
+// tool results captured in the agent trace. Hits are deduped by file+line span,
+// keeping the highest score seen across all searches the agent ran.
+func sourcesFromTrace(trace []agent.ToolCallRecord) []AskSource {
+	type spanKey struct {
+		path       string
+		start, end int
+	}
+	seen := make(map[spanKey]int)
+	out := []AskSource{}
+	for _, tc := range trace {
+		if tc.Tool != "semantic_search" || tc.Error != "" || tc.Result == "" {
+			continue
+		}
+		var r searchToolResult
+		if err := json.Unmarshal([]byte(tc.Result), &r); err != nil {
+			continue
+		}
+		for _, h := range r.Results {
+			k := spanKey{h.File, h.StartLine, h.EndLine}
+			if idx, ok := seen[k]; ok {
+				if h.Score > out[idx].Score {
+					out[idx].Score = h.Score
+				}
+				continue
+			}
+			seen[k] = len(out)
+			out = append(out, AskSource{
+				Path:      h.File,
+				StartLine: h.StartLine,
+				EndLine:   h.EndLine,
+				Score:     h.Score,
+				Keyword:   r.Keyword,
+			})
+		}
+	}
+	return out
 }
 
 // Unwrap exposes the wrapped backend so tool gating can see its git/multi-search

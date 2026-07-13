@@ -59,7 +59,11 @@ func TestIntegration_Zen_plainAnswer(t *testing.T) {
 	if strings.TrimSpace(ans.Content) == "" {
 		t.Fatal("expected a non-empty answer from the model")
 	}
-	t.Logf("Zen answer: %q (model %s)", ans.Content, ans.Model)
+	// Observability: a real provider reports token usage.
+	if ans.Usage.TotalTokens == 0 && ans.Usage.InputTokens == 0 && ans.Usage.OutputTokens == 0 {
+		t.Errorf("expected non-zero token usage from a live model, got %+v", ans.Usage)
+	}
+	t.Logf("Zen answer: %q (model %s, usage %+v)", ans.Content, ans.Model, ans.Usage)
 }
 
 // TestIntegration_Zen_toolCall checks the end-to-end tool-calling loop: a real
@@ -90,4 +94,63 @@ func TestIntegration_Zen_toolCall(t *testing.T) {
 		t.Errorf("expected the model to call list_projects; trace=%v answer=%q", ans.Trace, ans.Content)
 	}
 	t.Logf("Zen tool-call answer: %q (trace=%v)", ans.Content, ans.Trace)
+}
+
+// TestIntegration_Zen_multiTurnToolMemory is the decisive live check for F5.A:
+// turn 1 calls a tool; the assistant tool_call and its result are carried into
+// the conversation. Turn 2 runs a Runner with NO tools at all, yet must answer
+// from the earlier tool output — proving the multi-turn tool memory works and
+// isn't just a coincidental re-derivation.
+func TestIntegration_Zen_multiTurnToolMemory(t *testing.T) {
+	model := zenModel(t)
+	fs := newFakeSearchStore()
+	fs.addProject(&store.Project{
+		Name: "acme-api", Identity: "id-acme", SourceType: "git", Status: "ready", Model: "m1",
+	})
+
+	// Turn 1: the agent discovers the project via the tool.
+	toolRunner := NewRunner(model, ReadTools(nil, fs, nil), RunnerConfig{
+		SystemPrompt: "You answer questions about indexed projects. Call list_projects when asked what is indexed, then report the names.",
+		MaxSteps:     5,
+	})
+	q1 := "Which projects are indexed? Use a tool to find out."
+	ans1, err := toolRunner.Ask(t.Context(), q1, nil)
+	if err != nil {
+		t.Fatalf("turn 1 Ask: %v", err)
+	}
+	if len(ans1.Messages) == 0 {
+		t.Fatal("turn 1 must return the turn messages for multi-turn memory")
+	}
+	// The trace must carry the real tool output (not just the call args).
+	var listResult string
+	for _, tc := range ans1.Trace {
+		if tc.Tool == "list_projects" {
+			listResult = tc.Result
+		}
+	}
+	if !strings.Contains(listResult, "acme-api") {
+		t.Fatalf("turn 1 tool result should contain the project name, got %q", listResult)
+	}
+
+	// Persist the full turn, exactly like the REPL does.
+	convo := NewConversation(10)
+	convo.AddUser(q1)
+	convo.AddTurnMessages(ans1.Messages)
+
+	// Turn 2: a Runner with NO tools. The only way it can name the project is
+	// from the conversation history carried over from turn 1.
+	noToolRunner := NewRunner(model, nil, RunnerConfig{
+		SystemPrompt: "Answer strictly from the conversation so far. Do not ask to use tools.",
+		MaxSteps:     2,
+	})
+	ans2, err := noToolRunner.Ask(t.Context(),
+		"What is the exact name of the indexed project we just discussed? Reply with only the name.",
+		convo.Messages())
+	if err != nil {
+		t.Fatalf("turn 2 Ask: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(ans2.Content), "acme-api") {
+		t.Errorf("turn 2 answer should name acme-api from memory, got %q", ans2.Content)
+	}
+	t.Logf("Zen multi-turn memory answer: %q", ans2.Content)
 }

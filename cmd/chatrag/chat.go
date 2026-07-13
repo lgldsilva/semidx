@@ -8,8 +8,6 @@ import (
 	"os"
 	"strings"
 
-	"charm.land/fantasy"
-
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/config"
@@ -55,7 +53,8 @@ func makePromptApprover(scanner *bufio.Scanner) permission.Approver {
 // runREPL is the interactive chat loop.
 // When runner is non-nil, the agent loop is used (supports tool calling).
 func runREPL(ctx context.Context, pipeline *rag.Pipeline, runner *agent.Runner, project string, scanner *bufio.Scanner) error {
-	history := chat.NewHistory(10) // keep up to 10 turns
+	history := chat.NewHistory(10)     // RAG mode: text-only turns
+	convo := agent.NewConversation(10) // agent mode: full tool_call/tool-result memory
 
 	mode := "RAG"
 	if runner != nil {
@@ -74,13 +73,13 @@ func runREPL(ctx context.Context, pipeline *rag.Pipeline, runner *agent.Runner, 
 		}
 		line := strings.TrimSpace(scanner.Text())
 
-		if handled, cont := handleREPLCommand(line, history, &mode, runner != nil); handled {
+		if handled, cont := handleREPLCommand(line, history, convo, &mode, runner != nil); handled {
 			if cont {
 				continue
 			}
 			return nil
 		}
-		if handleREPLTurn(ctx, pipeline, runner, project, line, history, mode) {
+		if handleREPLTurn(ctx, pipeline, runner, project, line, history, convo, mode) {
 			continue
 		}
 	}
@@ -90,7 +89,7 @@ func runREPL(ctx context.Context, pipeline *rag.Pipeline, runner *agent.Runner, 
 
 // handleREPLCommand processes meta-commands (empty, exit, clear, mode).
 // handled=true when line matched a command; cont=false means stop the REPL.
-func handleREPLCommand(line string, history *chat.History, mode *string, hasAgent bool) (handled, cont bool) {
+func handleREPLCommand(line string, history *chat.History, convo *agent.Conversation, mode *string, hasAgent bool) (handled, cont bool) {
 	if line == "" {
 		return true, true
 	}
@@ -100,6 +99,7 @@ func handleREPLCommand(line string, history *chat.History, mode *string, hasAgen
 		return true, false
 	case "/clear":
 		history.Clear()
+		convo.Clear()
 		fmt.Println("History cleared.")
 		return true, true
 	case "/mode":
@@ -117,9 +117,9 @@ func handleREPLCommand(line string, history *chat.History, mode *string, hasAgen
 }
 
 // handleREPLTurn dispatches a question to agent or RAG. Returns true on error.
-func handleREPLTurn(ctx context.Context, pipeline *rag.Pipeline, runner *agent.Runner, project, line string, history *chat.History, mode string) bool {
+func handleREPLTurn(ctx context.Context, pipeline *rag.Pipeline, runner *agent.Runner, project, line string, history *chat.History, convo *agent.Conversation, mode string) bool {
 	if runner != nil && mode == "agent" {
-		if handleAgentReply(ctx, runner, line, history) {
+		if handleAgentReply(ctx, runner, line, convo) {
 			return true
 		}
 	} else {
@@ -130,25 +130,28 @@ func handleREPLTurn(ctx context.Context, pipeline *rag.Pipeline, runner *agent.R
 	return false
 }
 
-// handleAgentReply processes an agent-mode answer: calls the agent, updates
-// history, and prints the answer and tool trace. Returns true on error (caller
-// should continue the REPL loop).
-func handleAgentReply(ctx context.Context, runner *agent.Runner, line string, history *chat.History) bool {
-	answer, err := runner.Ask(ctx, line, historyToMessages(history.GetMessages()))
+// handleAgentReply processes an agent-mode answer: calls the agent with the
+// full multi-turn conversation (so the model sees prior tool_calls and their
+// results), records the turn, and prints the answer, tool trace, and token
+// usage. Returns true on error (caller should continue the REPL loop).
+func handleAgentReply(ctx context.Context, runner *agent.Runner, line string, convo *agent.Conversation) bool {
+	answer, err := runner.Ask(ctx, line, convo.Messages())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", formatError(err))
 		return true
 	}
 
-	history.AddUser(line)
-	history.AddAssistant(answer.Content)
+	// Persist the full turn — the user message plus every assistant/tool
+	// message — so the next turn keeps real tool memory.
+	convo.AddUser(line)
+	convo.AddTurnMessages(answer.Messages)
 
 	fmt.Println()
 	fmt.Println(answer.Content)
 	fmt.Println()
 
 	printAgentTrace(answer.Trace)
-	fmt.Printf("[agent mode | model: %s]\n\n", answer.Model)
+	fmt.Printf("[agent mode | model: %s | %s]\n\n", answer.Model, formatUsage(answer.Usage))
 	return false
 }
 
@@ -174,26 +177,18 @@ func handleRAGReply(ctx context.Context, pipeline *rag.Pipeline, line, project s
 	return false
 }
 
-// historyToMessages converts the REPL's chat.History (text-only turns) into
-// fantasy messages for the Runner. The legacy history keeps only user/assistant
-// text, so this is a plain text mapping; full tool_call/tool-result history is
-// Phase 5.
-func historyToMessages(msgs []chat.Message) []fantasy.Message {
-	out := make([]fantasy.Message, 0, len(msgs))
-	for _, m := range msgs {
-		switch m.Role {
-		case "user":
-			out = append(out, fantasy.NewUserMessage(m.Content))
-		case "system":
-			out = append(out, fantasy.NewSystemMessage(m.Content))
-		case "assistant":
-			out = append(out, fantasy.Message{
-				Role:    fantasy.MessageRoleAssistant,
-				Content: []fantasy.MessagePart{fantasy.TextPart{Text: m.Content}},
-			})
-		}
+// formatUsage renders token accounting for the trailing agent-mode status line.
+// It stays quiet (n/a) when a provider reports no usage, and surfaces the
+// prompt-cache split only when the provider actually used the cache.
+func formatUsage(u agent.Usage) string {
+	if u.InputTokens == 0 && u.OutputTokens == 0 && u.TotalTokens == 0 {
+		return "tokens: n/a"
 	}
-	return out
+	s := fmt.Sprintf("tokens: in=%d out=%d total=%d", u.InputTokens, u.OutputTokens, u.TotalTokens)
+	if u.CacheReadTokens > 0 || u.CacheCreationTokens > 0 {
+		s += fmt.Sprintf(" cache(r=%d w=%d)", u.CacheReadTokens, u.CacheCreationTokens)
+	}
+	return s
 }
 
 // printAgentTrace prints the tool call trace (if any) from an agent answer.
