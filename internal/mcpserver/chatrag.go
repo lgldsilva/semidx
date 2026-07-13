@@ -79,7 +79,11 @@ type agenticAskBackend struct {
 // The agent has access to semantic_search, repo tools, etc. The MCP tool is
 // single-turn (no history), so tool memory lives only within this loop.
 func (b *agenticAskBackend) Ask(ctx context.Context, project, question string, _ int) (*AskOutput, error) {
-	// Prepend project context to the question so the agent knows the scope.
+	// Bind the turn to the project so semantic_search is scoped by contract —
+	// the prompt hint alone (below) is not a guarantee the model honors.
+	if project != "" {
+		ctx = agent.ContextWithScope(ctx, agent.SearchScope{Project: project})
+	}
 	fullQuestion := question
 	if project != "" {
 		fullQuestion = fmt.Sprintf("[project: %s] %s", project, question)

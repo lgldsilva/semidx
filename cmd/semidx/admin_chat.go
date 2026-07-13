@@ -99,6 +99,9 @@ type agentChatPipeline struct {
 }
 
 func (a *agentChatPipeline) Ask(ctx context.Context, question, project string, history []chat.Message) (*rag.Answer, error) {
+	// Bind the turn to the requested project so semantic_search stays in scope
+	// (the model can't wander to another project). Contract, not a prompt hint.
+	ctx = agent.ContextWithScope(ctx, agent.SearchScope{Project: project})
 	answer, err := a.runner.Ask(ctx, question, adminHistoryToMessages(history))
 	if err != nil {
 		return nil, fmt.Errorf("agent ask failed: %w", err)
@@ -117,6 +120,8 @@ func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project str
 	model := a.runner.Model()
 	ch := make(chan chat.StreamChunk, 16)
 	msgs := adminHistoryToMessages(history)
+	// Bind the stream turn to the project (contract for semantic_search scope).
+	ctx = agent.ContextWithScope(ctx, agent.SearchScope{Project: project})
 	go func() {
 		defer close(ch)
 		cb := agent.StreamCallbacks{
