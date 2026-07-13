@@ -43,18 +43,11 @@ func ConnectAll(ctx context.Context, cfgs []ServerConfig) (tools []fantasy.Agent
 		if !cfg.Enabled {
 			continue
 		}
-		sess, e := Connect(ctx, cfg)
-		if e != nil {
-			slog.Warn("mcpclient: failed to connect to server", "server", cfg.Name, "error", e)
-			if errors.Is(e, errInvalidConfig) {
-				configErrs = append(configErrs, fmt.Errorf("mcp server %q: %w", cfg.Name, e))
+		toolset, sess, cfgErr := connectServerTools(ctx, cfg)
+		if cfgErr != nil {
+			if errors.Is(cfgErr, errInvalidConfig) {
+				configErrs = append(configErrs, fmt.Errorf("mcp server %q: %w", cfg.Name, cfgErr))
 			}
-			continue
-		}
-		toolset, e := sess.Tools(ctx)
-		if e != nil {
-			slog.Warn("mcpclient: failed to list tools", "server", cfg.Name, "error", e)
-			_ = sess.Close()
 			continue
 		}
 		sessions = append(sessions, sess)
@@ -65,4 +58,19 @@ func ConnectAll(ctx context.Context, cfgs []ServerConfig) (tools []fantasy.Agent
 		return nil, closer, errors.Join(configErrs...)
 	}
 	return tools, closer, nil
+}
+
+func connectServerTools(ctx context.Context, cfg ServerConfig) ([]fantasy.AgentTool, *Session, error) {
+	sess, err := Connect(ctx, cfg)
+	if err != nil {
+		slog.Warn("mcpclient: failed to connect to server", "server", cfg.Name, "error", err)
+		return nil, nil, err
+	}
+	toolset, err := sess.Tools(ctx)
+	if err != nil {
+		slog.Warn("mcpclient: failed to list tools", "server", cfg.Name, "error", err)
+		_ = sess.Close()
+		return nil, nil, err
+	}
+	return toolset, sess, nil
 }
