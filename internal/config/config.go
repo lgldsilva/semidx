@@ -160,6 +160,18 @@ type Config struct {
 	// (default x-access-token).
 	GitToken string
 	GitUser  string
+	// GithubToken is a GitHub PAT used for repo discovery via the GitHub API
+	// (SEMIDX_GITHUB_TOKEN). It also seeds the Copilot token exchange and the
+	// server-side private-clone token when their dedicated keys are unset.
+	GithubToken string
+	// CopilotToken authenticates the GitHub Copilot chat provider
+	// (SEMIDX_COPILOT_TOKEN); it falls back to SEMIDX_GITHUB_TOKEN. The value is a
+	// GitHub token that is exchanged at request time for a short-lived Copilot
+	// token (see internal/llm copilot transport).
+	CopilotToken string
+	// MCPClientConfig points at a JSON file describing external MCP servers the
+	// agent may use as a client (SEMIDX_MCP_CLIENT_CONFIG). Empty = none.
+	MCPClientConfig string
 	// MetricsToken, when set, requires Bearer auth on GET /metrics (SEMIDX_METRICS_TOKEN).
 	MetricsToken string
 
@@ -209,6 +221,10 @@ func (c *Config) explicitChatLLM() (ChatLLM, bool) {
 		sel.applyFallback(c.GroqAPIKey, c.GroqBaseURL, "")
 	case "openrouter":
 		sel.applyFallback(c.OpenRouterAPIKey, c.OpenRouterBaseURL, "")
+	case "copilot":
+		// The Copilot "API key" is a GitHub token exchanged at request time; the
+		// base URL is the Copilot default (filled by internal/llm.BuildProvider).
+		sel.applyFallback(c.CopilotToken, "", "gpt-4o")
 	}
 	return sel, sel.usable()
 }
@@ -243,8 +259,12 @@ func (s ChatLLM) usable() bool {
 	if s.Model == "" {
 		return false
 	}
-	if s.Provider == "openai-compatible" {
+	switch s.Provider {
+	case "openai-compatible":
 		return s.BaseURL != ""
+	case "copilot":
+		// Needs a GitHub token to exchange for the short-lived Copilot token.
+		return s.APIKey != ""
 	}
 	return true
 }
@@ -391,11 +411,14 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 			}
 			return 30 * time.Second
 		}(),
-		GitAllowFile:   env.get("SEMIDX_GIT_ALLOW_FILE", "") == "true",
-		GitSSLNoVerify: env.get("SEMIDX_GIT_SSL_NO_VERIFY", "") == "true",
-		GitToken:       env.first("SEMIDX_GIT_TOKEN", "SEMIDX_GITHUB_TOKEN", ""),
-		GitUser:        env.get("SEMIDX_GIT_USER", ""),
-		MetricsToken:   env.get("SEMIDX_METRICS_TOKEN", ""),
+		GitAllowFile:    env.get("SEMIDX_GIT_ALLOW_FILE", "") == "true",
+		GitSSLNoVerify:  env.get("SEMIDX_GIT_SSL_NO_VERIFY", "") == "true",
+		GitToken:        env.first("SEMIDX_GIT_TOKEN", "SEMIDX_GITHUB_TOKEN", ""),
+		GitUser:         env.get("SEMIDX_GIT_USER", ""),
+		GithubToken:     env.get("SEMIDX_GITHUB_TOKEN", ""),
+		CopilotToken:    env.first("SEMIDX_COPILOT_TOKEN", "SEMIDX_GITHUB_TOKEN", ""),
+		MCPClientConfig: env.get("SEMIDX_MCP_CLIENT_CONFIG", ""),
+		MetricsToken:    env.get("SEMIDX_METRICS_TOKEN", ""),
 
 		SecretScan:           env.get("SEMIDX_SECRET_SCAN", "") == "true",
 		SecretBlockEmbedding: env.get("SEMIDX_SECRET_BLOCK_EMBEDDING", "") == "true",
@@ -432,12 +455,14 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_OLLAMA_URL", "Local Ollama endpoint (embedding fallback)", false},
 	{"SEMIDX_OLLAMA_URLS", "Comma-separated Ollama URLs for parallel embedding pool", false},
 	// Chat LLM (agent + RAG answer generation), independent of the embedding chain.
-	{"SEMIDX_CHAT_PROVIDER", "Chat provider: google|anthropic|openrouter|groq|openai-compatible (default: auto-detect from embedding keys)", false},
+	{"SEMIDX_CHAT_PROVIDER", "Chat provider: google|anthropic|openrouter|groq|openai-compatible|copilot (default: auto-detect from embedding keys)", false},
 	{"SEMIDX_CHAT_MODEL", "Chat model id (e.g. gemini-2.5-flash, deepseek-v4-flash-free)", false},
 	{"SEMIDX_CHAT_API_KEY", "Chat provider API key (falls back to the matching embedding key)", true},
 	{"SEMIDX_CHAT_BASE_URL", "Chat base URL — required for openai-compatible (e.g. OpenCode Zen)", false},
 	{"SEMIDX_CHAT_TEMPERATURE", "Chat sampling temperature (default 0.3)", false},
+	{"SEMIDX_COPILOT_TOKEN", "GitHub token for the Copilot chat provider (falls back to SEMIDX_GITHUB_TOKEN)", true},
 	{"SEMIDX_AGENT_ACTIONS", "Action tools on MCP/admin: off (default), propose, or execute", false},
+	{"SEMIDX_MCP_CLIENT_CONFIG", "Path to a JSON file of external MCP servers the agent can use as a client", false},
 	{"EMBED_PROVIDER", "Custom provider prepended to the chain (openai|ollama)", false},
 	{"EMBED_ENDPOINT", "Custom provider endpoint URL", false},
 	{"EMBED_API_KEY", "Custom provider API key", true},
@@ -464,6 +489,7 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_GIT_SSL_NO_VERIFY", "Disable TLS verification for server-side git clone/pull — self-signed hosts (serve)", false},
 	{"SEMIDX_GIT_TOKEN", "Token for private HTTPS git clones server-side (falls back to SEMIDX_GITHUB_TOKEN)", true},
 	{"SEMIDX_GIT_USER", "Basic-auth user for SEMIDX_GIT_TOKEN (default x-access-token)", false},
+	{"SEMIDX_GITHUB_TOKEN", "GitHub PAT for repo discovery (list user/org repos) and private clones", true},
 	{"SEMIDX_METRICS_TOKEN", "Bearer token required for GET /metrics when set (serve)", true},
 	// Secret scanning.
 	{"SEMIDX_SECRET_SCAN", "Enable gitleaks secret scanning during indexing (true)", false},
