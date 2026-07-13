@@ -224,7 +224,7 @@ export function ProjectsPage() {
               <tbody>
                 {filtered.map((p) => (
                   <tr key={p.name}>
-                    <td>
+                    <td data-label="Name">
                       <Link to={`/projects/${encodeURIComponent(p.name)}`}>
                         <strong>{p.name}</strong>
                       </Link>
@@ -239,7 +239,7 @@ export function ProjectsPage() {
                         <div className="muted small">license: {p.license}</div>
                       )}
                     </td>
-                    <td>
+                    <td data-label="Source">
                       {p.source_type || '—'}
                       {p.git_url && (
                         <div className="muted small" title={p.git_url}>
@@ -259,10 +259,10 @@ export function ProjectsPage() {
                         </div>
                       )}
                     </td>
-                    <td>
+                    <td data-label="Status">
                       <span className="pill">{p.status}</span>
                     </td>
-                    <td>
+                    <td data-label="Model">
                       {p.model || '—'}
                       {p.dims ? (
                         <div className="muted small">{p.dims}d</div>
@@ -273,8 +273,8 @@ export function ProjectsPage() {
                         </div>
                       ) : null}
                     </td>
-                    <td>{p.total_files ?? '—'}</td>
-                    <td className="small">
+                    <td data-label="Files">{p.total_files ?? '—'}</td>
+                    <td className="small" data-label="Last job">
                       {p.last_job
                         ? `#${p.last_job.id} ${p.last_job.status}`
                         : '—'}
