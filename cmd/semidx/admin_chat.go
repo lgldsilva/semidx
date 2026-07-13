@@ -112,7 +112,8 @@ func (a *agentChatPipeline) Ask(ctx context.Context, question, project string, h
 	// (the model can't wander to another project). Contract, not a prompt hint.
 	// An empty project means the global chat: search across ALL projects.
 	ctx = agent.ContextWithScope(ctx, scopeForProject(project))
-	answer, err := a.runner.Ask(ctx, question, adminHistoryToMessages(history))
+	msgs := a.runner.CompactHistory(ctx, adminHistoryToMessages(history))
+	answer, err := a.runner.Ask(ctx, question, msgs)
 	if err != nil {
 		return nil, fmt.Errorf("agent ask failed: %w", err)
 	}
@@ -159,10 +160,10 @@ func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project str
 	// layer can emit it in the leading sources event before tokens flow.
 	model := a.runner.Model()
 	ch := make(chan chat.StreamChunk, 16)
-	msgs := adminHistoryToMessages(history)
 	// Bind the stream turn to the project (contract for semantic_search scope);
 	// an empty project is the global chat (search across ALL projects).
 	ctx = agent.ContextWithScope(ctx, scopeForProject(project))
+	msgs := a.runner.CompactHistory(ctx, adminHistoryToMessages(history))
 	go func() {
 		defer close(ch)
 		cb := agent.StreamCallbacks{
