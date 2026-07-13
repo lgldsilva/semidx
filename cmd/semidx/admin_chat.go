@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"charm.land/fantasy"
 
@@ -97,17 +98,35 @@ func (a *agentChatPipeline) Ask(ctx context.Context, question, project string, h
 }
 
 func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project string, history []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
-	// The agent Runner is not streaming yet (Phase 5); run synchronously and
-	// wrap the answer as a single chunk.
-	answer, err := a.runner.Ask(ctx, question, adminHistoryToMessages(history))
-	if err != nil {
-		return nil, nil, "", false, fmt.Errorf("agent stream ask failed: %w", err)
-	}
-	ch := make(chan chat.StreamChunk, 2)
-	ch <- chat.StreamChunk{Content: answer.Content}
-	ch <- chat.StreamChunk{Done: true, Model: answer.Model}
-	close(ch)
-	return ch, nil, answer.Model, false, nil
+	// Real streaming: the agent loop runs in a goroutine and each assistant
+	// text delta is pushed onto the channel as it arrives (replacing the old
+	// single-chunk "fake stream"). The model name is known up front, so the SSE
+	// layer can emit it in the leading sources event before tokens flow.
+	model := a.runner.Model()
+	ch := make(chan chat.StreamChunk, 16)
+	msgs := adminHistoryToMessages(history)
+	go func() {
+		defer close(ch)
+		cb := agent.StreamCallbacks{
+			OnText: func(delta string) {
+				select {
+				case ch <- chat.StreamChunk{Content: delta}:
+				case <-ctx.Done():
+				}
+			},
+		}
+		if _, err := a.runner.Stream(ctx, question, msgs, cb); err != nil {
+			// The channel contract has no error field and the SSE headers are
+			// already sent by the time tokens stream, so we can't fail the
+			// request here — log and terminate the stream cleanly.
+			slog.Error("admin agent stream failed", "error", err, "project", project)
+		}
+		select {
+		case ch <- chat.StreamChunk{Done: true, Model: model}:
+		case <-ctx.Done():
+		}
+	}()
+	return ch, nil, model, false, nil
 }
 
 // adminHistoryToMessages converts chat.History turns (text-only) into fantasy
