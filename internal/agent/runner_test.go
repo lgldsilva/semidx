@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy"
@@ -12,9 +13,10 @@ import (
 // Generate responses. Only Generate is exercised by Runner; the object/stream
 // methods are stubs.
 type fakeModel struct {
-	responses []*fantasy.Response
-	idx       int
-	gotTools  []fantasy.Tool
+	responses   []*fantasy.Response
+	idx         int
+	gotTools    []fantasy.Tool
+	streamParts []fantasy.StreamPart // replayed by Stream, in order
 }
 
 func (f *fakeModel) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
@@ -30,8 +32,16 @@ func (f *fakeModel) Generate(_ context.Context, call fantasy.Call) (*fantasy.Res
 	return r, nil
 }
 
-func (f *fakeModel) Stream(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
-	return nil, errors.New("stream not implemented in fake")
+func (f *fakeModel) Stream(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+	f.gotTools = call.Tools
+	parts := f.streamParts
+	return func(yield func(fantasy.StreamPart) bool) {
+		for _, p := range parts {
+			if !yield(p) {
+				return
+			}
+		}
+	}, nil
 }
 
 func (f *fakeModel) GenerateObject(context.Context, fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
@@ -166,6 +176,42 @@ func TestRunner_toolErrorCapturedInTrace(t *testing.T) {
 	}
 	if ans.Trace[0].Result != "" {
 		t.Errorf("trace Result should be empty on error, got %q", ans.Trace[0].Result)
+	}
+}
+
+func TestRunner_streamTextDeltas(t *testing.T) {
+	fm := &fakeModel{streamParts: []fantasy.StreamPart{
+		{Type: fantasy.StreamPartTypeTextStart, ID: "t1"},
+		{Type: fantasy.StreamPartTypeTextDelta, ID: "t1", Delta: "hello "},
+		{Type: fantasy.StreamPartTypeTextDelta, ID: "t1", Delta: "world"},
+		{Type: fantasy.StreamPartTypeTextEnd, ID: "t1"},
+		{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop,
+			Usage: fantasy.Usage{InputTokens: 3, OutputTokens: 2, TotalTokens: 5}},
+	}}
+	r := NewRunner(fm, nil, RunnerConfig{})
+
+	var sb strings.Builder
+	steps := 0
+	ans, err := r.Stream(context.Background(), "hi", nil, StreamCallbacks{
+		OnText: func(d string) { sb.WriteString(d) },
+		OnStep: func(Usage) { steps++ },
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	// Deltas arrived incrementally via the callback...
+	if sb.String() != "hello world" {
+		t.Errorf("streamed text = %q, want %q", sb.String(), "hello world")
+	}
+	// ...and the assembled Answer matches, with usage and one step.
+	if ans.Content != "hello world" {
+		t.Errorf("Content = %q", ans.Content)
+	}
+	if ans.Usage.TotalTokens != 5 {
+		t.Errorf("Usage = %+v, want total=5", ans.Usage)
+	}
+	if steps != 1 {
+		t.Errorf("OnStep calls = %d, want 1", steps)
 	}
 }
 

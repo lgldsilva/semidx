@@ -73,6 +73,11 @@ func NewRunner(model fantasy.LanguageModel, tools []fantasy.AgentTool, cfg Runne
 	return &Runner{model: model, tools: tools, cfg: cfg}
 }
 
+// Model returns the identifier of the underlying language model. Useful for
+// surfaces (e.g. the admin SSE stream) that must report the model before the
+// answer is produced.
+func (r *Runner) Model() string { return r.model.Model() }
+
 // Ask runs the loop for one user turn and returns the final text plus a trace
 // of the tool calls made along the way. history carries prior turns (including
 // assistant tool_calls and tool results) so multi-turn context is preserved.
@@ -81,6 +86,64 @@ func (r *Runner) Ask(ctx context.Context, question string, history []fantasy.Mes
 	res, err := ag.Generate(ctx, fantasy.AgentCall{Prompt: question, Messages: history})
 	if err != nil {
 		return nil, fmt.Errorf("agent: %w", err)
+	}
+	return &Answer{
+		Content:  res.Response.Content.Text(),
+		Trace:    traceFromSteps(res.Steps),
+		Model:    r.model.Model(),
+		Usage:    usageFrom(res.TotalUsage),
+		Messages: messagesFromSteps(res.Steps),
+	}, nil
+}
+
+// StreamCallbacks receives incremental events during a streamed agent turn.
+// Every field is optional; a nil callback is skipped. They run synchronously on
+// the streaming goroutine, so keep them fast (print/append, no blocking work).
+type StreamCallbacks struct {
+	// OnText is called for each assistant text delta as it arrives.
+	OnText func(delta string)
+	// OnToolCall is called when the model commits to a tool call (name + raw
+	// JSON input), before the tool runs.
+	OnToolCall func(name, input string)
+	// OnToolResult is called when a tool finishes; isError reports whether the
+	// tool returned an error result.
+	OnToolResult func(name, result string, isError bool)
+	// OnStep is called when a loop step finishes, with that step's token usage.
+	OnStep func(usage Usage)
+}
+
+// Stream runs one user turn with live streaming, invoking cb as text, tool
+// calls, tool results, and steps arrive. It returns the same Answer as Ask once
+// the loop completes, so callers keep the full trace, usage, and turn messages
+// for multi-turn history.
+func (r *Runner) Stream(ctx context.Context, question string, history []fantasy.Message, cb StreamCallbacks) (*Answer, error) {
+	ag := fantasy.NewAgent(r.model, r.agentOptions()...)
+	call := fantasy.AgentStreamCall{Prompt: question, Messages: history}
+	if cb.OnText != nil {
+		call.OnTextDelta = func(_, text string) error { cb.OnText(text); return nil }
+	}
+	if cb.OnToolCall != nil {
+		call.OnToolCall = func(tc fantasy.ToolCallContent) error {
+			cb.OnToolCall(tc.ToolName, tc.Input)
+			return nil
+		}
+	}
+	if cb.OnToolResult != nil {
+		call.OnToolResult = func(tr fantasy.ToolResultContent) error {
+			res, errMsg := toolResultText(tr)
+			cb.OnToolResult(tr.ToolName, res, errMsg != "")
+			return nil
+		}
+	}
+	if cb.OnStep != nil {
+		call.OnStepFinish = func(s fantasy.StepResult) error {
+			cb.OnStep(usageFrom(s.Usage))
+			return nil
+		}
+	}
+	res, err := ag.Stream(ctx, call)
+	if err != nil {
+		return nil, fmt.Errorf("agent stream: %w", err)
 	}
 	return &Answer{
 		Content:  res.Response.Content.Text(),
