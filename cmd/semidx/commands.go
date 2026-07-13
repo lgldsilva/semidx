@@ -729,70 +729,65 @@ into an agent client. (stdout carries the protocol — logs go to stderr.)`,
 		Example: `  semidx mcp                                  # run the stdio server
   semidx mcp install --client claude-code --apply`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			// Remote mode when a server is configured; otherwise serve the standalone
-			// local index directly, so MCP works without a server (like the CLI).
-			if d.remote() {
-				return mcpserver.Run(ctx, mcpserver.NewClientBackend(d.apiClient()))
-			}
-			db, err := d.indexStore(ctx)
-			if err != nil {
-				return err
-			}
-			svc := search.NewService(db, d.emb)
-
-			var sel config.ChatLLM
-			chatOK := false
-			if d.cfg != nil {
-				sel, chatOK = d.cfg.ResolveChatLLM()
-			}
-
-			caps := agent.Capabilities{Flags: agent.CapLocalGit | agent.CapIndexLocal}
-			if chatOK {
-				caps.Flags |= agent.CapChatLLM | agent.CapToolCalling
-			}
-			backend := mcpserver.NewLocalBackend(svc, db, d.keywordOnly, caps)
-
-			// If a chat LLM is configured, wrap the backend with an agent Runner
-			// to enable the semantic_ask tool.
-			if chatOK {
-				model, err := llm.ResolveModel(ctx, llm.ProviderConfig{
-					Type:    llm.ProviderType(sel.Provider),
-					APIKey:  sel.APIKey,
-					BaseURL: sel.BaseURL,
-				}, sel.Model)
-				if err != nil {
-					slog.Warn("agentic ask disabled: could not resolve chat model", "error", err)
-				} else {
-					resolver := agent.NewScopeResolver(db)
-					tools := agent.ReadTools(svc, db, resolver)
-					// Action tools are opt-in via SEMIDX_AGENT_ACTIONS. MCP has no
-					// interactive approval channel, so only "propose" (describe) or
-					// "execute" (run directly) apply; "off" (default) omits them.
-					// The path guard in resolveRegisteredPath still bounds writes to
-					// registered project trees. server_repo_sync needs a remote client
-					// (nil in standalone), so only index/reindex are wired here.
-					if pol, ok := agent.ParseActionPolicy(d.cfg.AgentActions); ok {
-						indexer := indexing.NewIndexer(db, d.emb, 0, indexing.IndexerOpts{
-							Logger:  slog.Default(),
-							Workers: 2,
-						})
-						tools = append(tools, agent.ActionTools(db, indexer, nil, pol, nil)...)
-					}
-					temp := sel.Temperature
-					runner := agent.NewRunner(model, tools, agent.RunnerConfig{
-						SystemPrompt: agent.SystemPrompt,
-						Temperature:  &temp,
-					})
-					backend = mcpserver.NewAgenticAskBackend(backend, runner)
-				}
-			}
-
-			return mcpserver.Run(ctx, backend)
+			return runMCPServer(cmd.Context(), d)
 		},
 	}
 	cmd.AddCommand(newMCPInstallCmd())
 	return cmd
+}
+
+func runMCPServer(ctx context.Context, d *deps) error {
+	if d.remote() {
+		return mcpserver.Run(ctx, mcpserver.NewClientBackend(d.apiClient()))
+	}
+	db, err := d.indexStore(ctx)
+	if err != nil {
+		return err
+	}
+	svc := search.NewService(db, d.emb)
+
+	var sel config.ChatLLM
+	chatOK := false
+	if d.cfg != nil {
+		sel, chatOK = d.cfg.ResolveChatLLM()
+	}
+
+	caps := agent.Capabilities{Flags: agent.CapLocalGit | agent.CapIndexLocal}
+	if chatOK {
+		caps.Flags |= agent.CapChatLLM | agent.CapToolCalling
+	}
+	backend := mcpserver.NewLocalBackend(svc, db, d.keywordOnly, caps)
+	if chatOK {
+		backend = wrapMCPServerWithAgent(ctx, d, db, svc, sel, backend)
+	}
+	return mcpserver.Run(ctx, backend)
+}
+
+func wrapMCPServerWithAgent(ctx context.Context, d *deps, db store.IndexStore, svc *search.Service, sel config.ChatLLM, backend mcpserver.Backend) mcpserver.Backend {
+	model, err := llm.ResolveModel(ctx, llm.ProviderConfig{
+		Type:    llm.ProviderType(sel.Provider),
+		APIKey:  sel.APIKey,
+		BaseURL: sel.BaseURL,
+	}, sel.Model)
+	if err != nil {
+		slog.Warn("agentic ask disabled: could not resolve chat model", "error", err)
+		return backend
+	}
+	resolver := agent.NewScopeResolver(db)
+	tools := agent.ReadTools(svc, db, resolver)
+	if pol, ok := agent.ParseActionPolicy(d.cfg.AgentActions); ok {
+		indexer := indexing.NewIndexer(db, d.emb, 0, indexing.IndexerOpts{
+			Logger:  slog.Default(),
+			Workers: 2,
+		})
+		tools = append(tools, agent.ActionTools(db, indexer, nil, pol, nil)...)
+	}
+	temp := sel.Temperature
+	runner := agent.NewRunner(model, tools, agent.RunnerConfig{
+		SystemPrompt: agent.SystemPrompt,
+		Temperature:  &temp,
+	})
+	return mcpserver.NewAgenticAskBackend(backend, runner)
 }
 
 // newMCPInstallCmd registers semidx's stdio MCP server in an agent's config,

@@ -15,10 +15,6 @@ import (
 	"fmt"
 
 	"charm.land/fantasy"
-	"charm.land/fantasy/providers/anthropic"
-	"charm.land/fantasy/providers/google"
-	"charm.land/fantasy/providers/openaicompat"
-	"charm.land/fantasy/providers/openrouter"
 )
 
 // ProviderType identifies a chat LLM backend.
@@ -58,77 +54,17 @@ type ProviderConfig struct {
 func BuildProvider(cfg ProviderConfig) (fantasy.Provider, error) {
 	switch cfg.Type {
 	case ProviderAnthropic:
-		opts := []anthropic.Option{anthropic.WithName(string(cfg.Type))}
-		if cfg.APIKey != "" {
-			opts = append(opts, anthropic.WithAPIKey(cfg.APIKey))
-		}
-		if cfg.BaseURL != "" {
-			opts = append(opts, anthropic.WithBaseURL(cfg.BaseURL))
-		}
-		return anthropic.New(opts...)
-
+		return buildAnthropicProvider(cfg)
 	case ProviderGoogle:
-		opts := []google.Option{google.WithName(string(cfg.Type))}
-		if cfg.APIKey != "" {
-			opts = append(opts, google.WithGeminiAPIKey(cfg.APIKey))
-		}
-		if cfg.BaseURL != "" {
-			opts = append(opts, google.WithBaseURL(cfg.BaseURL))
-		}
-		return google.New(opts...)
-
+		return buildGoogleProvider(cfg)
 	case ProviderOpenRouter:
-		opts := []openrouter.Option{openrouter.WithName(string(cfg.Type))}
-		if cfg.APIKey != "" {
-			opts = append(opts, openrouter.WithAPIKey(cfg.APIKey))
-		}
-		return openrouter.New(opts...)
-
+		return buildOpenRouterProvider(cfg)
 	case ProviderGroq:
-		base := cfg.BaseURL
-		if base == "" {
-			base = groqDefaultBaseURL
-		}
-		opts := []openaicompat.Option{
-			openaicompat.WithName(string(cfg.Type)),
-			openaicompat.WithBaseURL(base),
-		}
-		if cfg.APIKey != "" {
-			opts = append(opts, openaicompat.WithAPIKey(cfg.APIKey))
-		}
-		return openaicompat.New(opts...)
-
+		return buildOpenAICompatProvider(cfg, groqDefaultBaseURL, false)
 	case ProviderOpenAICompat:
-		if cfg.BaseURL == "" {
-			return nil, fmt.Errorf("llm: %s provider requires BaseURL", cfg.Type)
-		}
-		opts := []openaicompat.Option{
-			openaicompat.WithName(string(cfg.Type)),
-			openaicompat.WithBaseURL(cfg.BaseURL),
-		}
-		if cfg.APIKey != "" {
-			opts = append(opts, openaicompat.WithAPIKey(cfg.APIKey))
-		}
-		return openaicompat.New(opts...)
-
+		return buildOpenAICompatProvider(cfg, "", true)
 	case ProviderCopilot:
-		if cfg.APIKey == "" {
-			return nil, fmt.Errorf("llm: %s provider requires a GitHub token (SEMIDX_COPILOT_TOKEN or SEMIDX_GITHUB_TOKEN)", cfg.Type)
-		}
-		base := cfg.BaseURL
-		if base == "" {
-			base = copilotDefaultAPIBase
-		}
-		// The bearer token and integration headers are injected per request by
-		// copilotDoer; WithAPIKey is a placeholder the doer overrides.
-		opts := []openaicompat.Option{
-			openaicompat.WithName(string(cfg.Type)),
-			openaicompat.WithBaseURL(base),
-			openaicompat.WithAPIKey("copilot"),
-			openaicompat.WithHTTPClient(newCopilotDoer(cfg.APIKey, "", nil)),
-		}
-		return openaicompat.New(opts...)
-
+		return buildCopilotProvider(cfg)
 	default:
 		return nil, fmt.Errorf("llm: unknown provider type %q", cfg.Type)
 	}
