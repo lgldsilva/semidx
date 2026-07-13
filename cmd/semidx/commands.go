@@ -637,6 +637,7 @@ first run it generates a one-time bootstrap admin token. Requires Postgres
 			log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 			srv := server.New(db, d.emb, log)
 			srv.SetGitAllowFile(d.cfg.GitAllowFile)
+			srv.SetGitAuth(d.cfg.GitSSLNoVerify, d.cfg.GitToken, d.cfg.GitUser)
 			srv.SetMetricsToken(d.cfg.MetricsToken)
 
 			if err := d.bootstrapServer(cmd.Context(), srv, showBootstrapToken); err != nil {
