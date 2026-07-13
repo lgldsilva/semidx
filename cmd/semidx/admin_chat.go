@@ -56,6 +56,9 @@ func (d *deps) buildAdminChatPipeline() webadmin.ChatPipeline {
 				})
 				tools = append(tools, agent.ActionTools(idxStore, indexer, nil, pol, nil)...)
 			}
+			// External MCP servers (SEMIDX_MCP_CLIENT_CONFIG): the agent uses their
+			// tools as a client. No-op when unconfigured; failures are logged.
+			tools = append(tools, d.mcpClientTools(context.Background())...)
 			temp := sel.Temperature
 			runner := agent.NewRunner(model, tools, agent.RunnerConfig{
 				SystemPrompt: agent.SystemPrompt,
