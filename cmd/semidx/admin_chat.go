@@ -17,13 +17,55 @@ import (
 	"github.com/lgldsilva/semidx/internal/webadmin"
 )
 
-// buildAdminChatPipeline wires RAG chat for the admin SPA when at least one
-// chat provider key is configured. Returns nil when chat is unavailable.
-// When Gemini is configured, uses an agent loop (tool-calling) for richer context.
+// buildAdminChatPipeline wires the admin SPA chat. It uses the fantasy agent
+// Runner for ANY configured chat provider (google/anthropic/openrouter/groq/
+// openai-compatible) — the enablement decision is Config.ResolveChatLLM, not a
+// Gemini/OpenRouter key. Falls back to the legacy non-agent RAG chain only when
+// no chat provider resolves but a base key exists; nil when chat is unavailable.
 func (d *deps) buildAdminChatPipeline() webadmin.ChatPipeline {
 	if d.cfg == nil || d.emb == nil {
 		return nil
 	}
+	svc := search.NewService(d.mustSearchStore(), d.emb)
+
+	// Primary path: the agent Runner for whatever provider ResolveChatLLM picks
+	// (explicit SEMIDX_CHAT_* override, or auto-detected). The tool loop calls
+	// semantic_search / repo_* before answering.
+	if sel, ok := d.cfg.ResolveChatLLM(); ok {
+		model, err := llm.ResolveModel(context.Background(), llm.ProviderConfig{
+			Type:    llm.ProviderType(sel.Provider),
+			APIKey:  sel.APIKey,
+			BaseURL: sel.BaseURL,
+		}, sel.Model)
+		if err != nil {
+			slog.Warn("admin chat: could not resolve chat model", "provider", sel.Provider, "error", err)
+		} else {
+			idxStore := d.mustSearchStore()
+			// repo tools only when project paths are local; nil resolver omits them.
+			var resolver agent.ScopeResolver
+			if d.db != nil {
+				resolver = agent.NewScopeResolver(idxStore)
+			}
+			tools := agent.ReadTools(svc, idxStore, resolver)
+			// Action tools are opt-in via SEMIDX_AGENT_ACTIONS (propose/execute);
+			// the path guard still bounds writes to registered project trees.
+			if pol, ok := agent.ParseActionPolicy(d.cfg.AgentActions); ok {
+				indexer := indexing.NewIndexer(idxStore, d.emb, 0, indexing.IndexerOpts{
+					Logger:  slog.Default(),
+					Workers: 2,
+				})
+				tools = append(tools, agent.ActionTools(idxStore, indexer, nil, pol, nil)...)
+			}
+			temp := sel.Temperature
+			runner := agent.NewRunner(model, tools, agent.RunnerConfig{
+				SystemPrompt: agent.SystemPrompt,
+				Temperature:  &temp,
+			})
+			return &agentChatPipeline{runner: runner}
+		}
+	}
+
+	// Fallback: legacy non-agent RAG chain, only if a base provider key exists.
 	var providers []chat.NamedClient
 	if d.cfg.GeminiAPIKey != "" {
 		providers = append(providers, chat.NamedClient{
@@ -40,62 +82,16 @@ func (d *deps) buildAdminChatPipeline() webadmin.ChatPipeline {
 	if len(providers) == 0 {
 		return nil
 	}
-	chatClient := chat.NewChain(providers...)
-	svc := search.NewService(d.mustSearchStore(), d.emb)
 	adapter := &adminSearchAdapter{svc: svc}
-	pipeline := rag.NewPipeline(adapter, chatClient, rag.PipelineConfig{
-		TopK:        8,
-		MaxTokens:   4096,
-		Temperature: 0.3,
-		Model:       "gemini-2.0-flash",
+	return rag.NewPipeline(adapter, chat.NewChain(providers...), rag.PipelineConfig{
+		TopK: 8, MaxTokens: 4096, Temperature: 0.3, Model: "gemini-2.0-flash",
 	})
-
-	// When Gemini is configured, build a fantasy Runner that wraps the pipeline.
-	// The agent's tool loop allows deeper analysis (calling semantic_search,
-	// repo_status, etc.) before answering.
-	if sel, ok := d.cfg.ResolveChatLLM(); ok {
-		model, err := llm.ResolveModel(context.Background(), llm.ProviderConfig{
-			Type:    llm.ProviderType(sel.Provider),
-			APIKey:  sel.APIKey,
-			BaseURL: sel.BaseURL,
-		}, sel.Model)
-		if err == nil {
-			idxStore := d.mustSearchStore()
-			// repo tools only when project paths are local (serve mode may be
-			// server-side only). A nil resolver makes ReadTools omit them.
-			var resolver agent.ScopeResolver
-			if d.db != nil {
-				resolver = agent.NewScopeResolver(idxStore)
-			}
-			tools := agent.ReadTools(svc, idxStore, resolver)
-			// Action tools are opt-in via SEMIDX_AGENT_ACTIONS. The admin chat has
-			// no interactive approval channel, so only "propose"/"execute" apply
-			// ("off" is the default). The path guard still bounds writes to
-			// registered project trees.
-			if pol, ok := agent.ParseActionPolicy(d.cfg.AgentActions); ok {
-				indexer := indexing.NewIndexer(idxStore, d.emb, 0, indexing.IndexerOpts{
-					Logger:  slog.Default(),
-					Workers: 2,
-				})
-				tools = append(tools, agent.ActionTools(idxStore, indexer, nil, pol, nil)...)
-			}
-			temp := sel.Temperature
-			runner := agent.NewRunner(model, tools, agent.RunnerConfig{
-				SystemPrompt: agent.SystemPrompt,
-				Temperature:  &temp,
-			})
-			return &agentChatPipeline{pipeline: pipeline, runner: runner}
-		}
-	}
-
-	return pipeline
 }
 
-// agentChatPipeline wraps a rag.Pipeline with a fantasy agent Runner.
+// agentChatPipeline drives the admin chat through the fantasy agent Runner.
 // It implements webadmin.ChatPipeline.
 type agentChatPipeline struct {
-	pipeline *rag.Pipeline
-	runner   *agent.Runner
+	runner *agent.Runner
 }
 
 func (a *agentChatPipeline) Ask(ctx context.Context, question, project string, history []chat.Message) (*rag.Answer, error) {
