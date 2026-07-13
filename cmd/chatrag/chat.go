@@ -130,14 +130,27 @@ func handleREPLTurn(ctx context.Context, pipeline *rag.Pipeline, runner *agent.R
 	return false
 }
 
-// handleAgentReply processes an agent-mode answer: calls the agent with the
-// full multi-turn conversation (so the model sees prior tool_calls and their
-// results), records the turn, and prints the answer, tool trace, and token
-// usage. Returns true on error (caller should continue the REPL loop).
+// handleAgentReply streams an agent-mode answer live: the assistant text prints
+// as it arrives and tool calls are announced inline, using the full multi-turn
+// conversation (so the model sees prior tool_calls and their results). It then
+// records the turn and prints the token usage. Returns true on error (caller
+// should continue the REPL loop).
 func handleAgentReply(ctx context.Context, runner *agent.Runner, line string, convo *agent.Conversation) bool {
-	answer, err := runner.Ask(ctx, line, convo.Messages())
+	fmt.Println()
+	cb := agent.StreamCallbacks{
+		OnText: func(delta string) { fmt.Print(delta) },
+		OnToolCall: func(name, input string) {
+			fmt.Printf("\n  ⟳ %s(%s)\n", name, truncateArg(input, 120))
+		},
+		OnToolResult: func(name, result string, isError bool) {
+			if isError {
+				fmt.Printf("  ✗ %s: %s\n", name, truncateArg(result, 120))
+			}
+		},
+	}
+	answer, err := runner.Stream(ctx, line, convo.Messages(), cb)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", formatError(err))
+		fmt.Fprintf(os.Stderr, "\nError: %s\n", formatError(err))
 		return true
 	}
 
@@ -146,13 +159,17 @@ func handleAgentReply(ctx context.Context, runner *agent.Runner, line string, co
 	convo.AddUser(line)
 	convo.AddTurnMessages(answer.Messages)
 
-	fmt.Println()
-	fmt.Println(answer.Content)
-	fmt.Println()
-
-	printAgentTrace(answer.Trace)
-	fmt.Printf("[agent mode | model: %s | %s]\n\n", answer.Model, formatUsage(answer.Usage))
+	fmt.Printf("\n\n[agent mode | model: %s | %s]\n\n", answer.Model, formatUsage(answer.Usage))
 	return false
+}
+
+// truncateArg shortens a tool argument/result string for a single-line status
+// notice, appending an ellipsis when it overflows.
+func truncateArg(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 // handleRAGReply processes a RAG-mode answer: calls the pipeline, updates
@@ -189,22 +206,6 @@ func formatUsage(u agent.Usage) string {
 		s += fmt.Sprintf(" cache(r=%d w=%d)", u.CacheReadTokens, u.CacheCreationTokens)
 	}
 	return s
-}
-
-// printAgentTrace prints the tool call trace (if any) from an agent answer.
-func printAgentTrace(trace []agent.ToolCallRecord) {
-	if len(trace) == 0 {
-		return
-	}
-	fmt.Println("Tool calls:")
-	for _, tc := range trace {
-		errInfo := ""
-		if tc.Error != "" {
-			errInfo = fmt.Sprintf(" error=%s", tc.Error)
-		}
-		fmt.Printf("  • %s(%s)%s\n", tc.Tool, tc.Args, errInfo)
-	}
-	fmt.Println()
 }
 
 // formatError returns a clean, actionable error message for the REPL.
