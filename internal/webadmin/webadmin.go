@@ -58,6 +58,12 @@ type Admin struct {
 	limiter *loginLimiter
 	jwt     *jwtauth.Issuer // nil when control tokens are disabled
 	chat    ChatPipeline    // nil when no chat LLM is configured
+
+	// githubToken enables GitHub repo discovery (list user/org repos) via the
+	// admin API; empty disables the feature. githubBaseURL overrides the GitHub
+	// API host (GitHub Enterprise, or a test server) — empty uses the default.
+	githubToken   string
+	githubBaseURL string
 }
 
 // New builds the admin UI. secureCookies must be true when the server is reached
@@ -109,6 +115,14 @@ func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies 
 // SetChat enables project workspace chat (RAG). Safe to call with nil to disable.
 func (a *Admin) SetChat(p ChatPipeline) { a.chat = p }
 
+// SetGitHub enables GitHub repo discovery via the admin API. token is a GitHub
+// PAT; baseURL overrides the API host (empty = the public GitHub API). An empty
+// token leaves the feature disabled.
+func (a *Admin) SetGitHub(token, baseURL string) {
+	a.githubToken = token
+	a.githubBaseURL = baseURL
+}
+
 // Handler returns a mux serving the /admin/* routes: JSON SPA APIs, legacy
 // HTML admin pages (keys/tokens/users), and the embedded React SPA for the
 // product surfaces (projects, search, CLI guide).
@@ -138,6 +152,7 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/api/jobs", a.protectAPI("", a.apiListAllJobs))
 	mux.HandleFunc("GET /admin/api/jobs/{id}", a.protectAPI("", a.apiGetJob))
 	mux.HandleFunc("POST /admin/api/search", a.protectAPI("", a.apiSearch))
+	mux.HandleFunc("GET /admin/api/github/repos", a.protectAPI("admin", a.apiGithubRepos))
 
 	// Settings
 	mux.HandleFunc("GET /admin/api/keys", a.protectAPI("", a.apiListKeys))

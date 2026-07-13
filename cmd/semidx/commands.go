@@ -703,6 +703,7 @@ func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server, showBoot
 	if pipeline := d.buildAdminChatPipeline(); pipeline != nil {
 		adminUI.SetChat(pipeline)
 	}
+	adminUI.SetGitHub(d.cfg.GithubToken, "")
 	return nil
 }
 

@@ -112,6 +112,9 @@ func (a *Admin) apiSystem(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	if a.chat != nil {
 		caps = append(caps, "chat")
 	}
+	if a.githubToken != "" {
+		caps = append(caps, "github_discovery")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"product":      "semidx",
 		"mode":         "server",
