@@ -138,9 +138,21 @@ export function ChatPage() {
             Ask across all indexed projects — conversations are saved.
           </p>
         </div>
-        <button type="button" onClick={newChat}>
-          New chat
-        </button>
+        <div className="row-actions">
+          {selectedId != null && (
+            <button
+              type="button"
+              className="link"
+              onClick={() => void navigator.clipboard?.writeText(window.location.href)}
+              title="Copy a shareable link to this conversation"
+            >
+              Copy link
+            </button>
+          )}
+          <button type="button" onClick={newChat}>
+            New chat
+          </button>
+        </div>
       </div>
       <div className="files-layout">
         <aside className="card">
