@@ -151,6 +151,15 @@ type Config struct {
 
 	// GitAllowFile permits file:// git URLs for server-side sync (SEMIDX_GIT_ALLOW_FILE).
 	GitAllowFile bool
+	// GitSSLNoVerify disables TLS verification for server-side git clone/pull
+	// (SEMIDX_GIT_SSL_NO_VERIFY) — for self-signed homelab hosts.
+	GitSSLNoVerify bool
+	// GitToken authenticates HTTPS clones of private repos server-side, injected
+	// as an Authorization header (not embedded in the URL). Reuses SEMIDX_GITHUB_TOKEN
+	// when SEMIDX_GIT_TOKEN is unset. GitUser is the basic-auth user
+	// (default x-access-token).
+	GitToken string
+	GitUser  string
 	// MetricsToken, when set, requires Bearer auth on GET /metrics (SEMIDX_METRICS_TOKEN).
 	MetricsToken string
 
@@ -382,8 +391,11 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 			}
 			return 30 * time.Second
 		}(),
-		GitAllowFile: env.get("SEMIDX_GIT_ALLOW_FILE", "") == "true",
-		MetricsToken: env.get("SEMIDX_METRICS_TOKEN", ""),
+		GitAllowFile:   env.get("SEMIDX_GIT_ALLOW_FILE", "") == "true",
+		GitSSLNoVerify: env.get("SEMIDX_GIT_SSL_NO_VERIFY", "") == "true",
+		GitToken:       env.first("SEMIDX_GIT_TOKEN", "SEMIDX_GITHUB_TOKEN", ""),
+		GitUser:        env.get("SEMIDX_GIT_USER", ""),
+		MetricsToken:   env.get("SEMIDX_METRICS_TOKEN", ""),
 
 		SecretScan:           env.get("SEMIDX_SECRET_SCAN", "") == "true",
 		SecretBlockEmbedding: env.get("SEMIDX_SECRET_BLOCK_EMBEDDING", "") == "true",
@@ -449,6 +461,9 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_JWT_SECRET", "HS256 secret enabling JWT control tokens (serve)", true},
 	{"SEMIDX_CSRF_KEY", "HMAC key for web-admin CSRF tokens; persistent across restarts (serve)", true},
 	{"SEMIDX_GIT_ALLOW_FILE", "Allow file:// git URLs for server-side git sync (serve)", false},
+	{"SEMIDX_GIT_SSL_NO_VERIFY", "Disable TLS verification for server-side git clone/pull — self-signed hosts (serve)", false},
+	{"SEMIDX_GIT_TOKEN", "Token for private HTTPS git clones server-side (falls back to SEMIDX_GITHUB_TOKEN)", true},
+	{"SEMIDX_GIT_USER", "Basic-auth user for SEMIDX_GIT_TOKEN (default x-access-token)", false},
 	{"SEMIDX_METRICS_TOKEN", "Bearer token required for GET /metrics when set (serve)", true},
 	// Secret scanning.
 	{"SEMIDX_SECRET_SCAN", "Enable gitleaks secret scanning during indexing (true)", false},

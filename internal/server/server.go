@@ -56,9 +56,12 @@ type Server struct {
 	admin           http.Handler    // the /admin management UI, nil unless MountAdmin was called
 	jwt             *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
 
-	apiLimiter   *apiRateLimiter
-	gitAllowFile bool   // allow file:// git URLs (SEMIDX_GIT_ALLOW_FILE)
-	metricsToken string // when set, /metrics requires Bearer match (SEMIDX_METRICS_TOKEN)
+	apiLimiter     *apiRateLimiter
+	gitAllowFile   bool   // allow file:// git URLs (SEMIDX_GIT_ALLOW_FILE)
+	gitSSLNoVerify bool   // disable TLS verify on git clone/pull (SEMIDX_GIT_SSL_NO_VERIFY)
+	gitToken       string // token for private HTTPS clones (SEMIDX_GIT_TOKEN)
+	gitUser        string // basic-auth user for gitToken (SEMIDX_GIT_USER)
+	metricsToken   string // when set, /metrics requires Bearer match (SEMIDX_METRICS_TOKEN)
 }
 
 // EnableJWT turns on JWT control tokens using secret as the HS256 signing key.
@@ -233,6 +236,15 @@ func rerankerFromEnv(log *slog.Logger) search.Reranker {
 
 // SetGitAllowFile enables file:// git URLs for server-side git sync.
 func (s *Server) SetGitAllowFile(v bool) { s.gitAllowFile = v }
+
+// SetGitAuth configures TLS handling and credentials for server-side git sync:
+// sslNoVerify accepts self-signed hosts; token authenticates private HTTPS
+// clones (user defaults to x-access-token).
+func (s *Server) SetGitAuth(sslNoVerify bool, token, user string) {
+	s.gitSSLNoVerify = sslNoVerify
+	s.gitToken = token
+	s.gitUser = user
+}
 
 // SetMetricsToken requires a matching Bearer token on GET /metrics when non-empty.
 func (s *Server) SetMetricsToken(token string) { s.metricsToken = token }
