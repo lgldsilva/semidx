@@ -102,10 +102,40 @@ func (a *agentChatPipeline) Ask(ctx context.Context, question, project string, h
 	if err != nil {
 		return nil, fmt.Errorf("agent ask failed: %w", err)
 	}
+	// Surface the real semantic_search results as citations (and the fallback
+	// flag) instead of discarding the trace.
+	hits, fallback := agent.SourcesFromTrace(answer.Trace)
 	return &rag.Answer{
-		Content: answer.Content,
-		Model:   answer.Model,
+		Content:  answer.Content,
+		Model:    answer.Model,
+		Sources:  ragSources(hits),
+		Fallback: fallback,
 	}, nil
+}
+
+// ragSources maps agent search hits to rag.Source (admin non-stream answer).
+func ragSources(hits []agent.SearchHit) []rag.Source {
+	out := make([]rag.Source, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, rag.Source{
+			File: h.File, StartLine: h.StartLine, EndLine: h.EndLine,
+			Content: h.Content, Score: h.Score, Keyword: h.Keyword,
+		})
+	}
+	return out
+}
+
+// chatSources maps agent search hits to chat.Source (carried on the terminal
+// stream chunk so the SSE layer can emit citations after the tool calls).
+func chatSources(hits []agent.SearchHit) []chat.Source {
+	out := make([]chat.Source, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, chat.Source{
+			File: h.File, StartLine: h.StartLine, EndLine: h.EndLine,
+			Content: h.Content, Score: h.Score, Keyword: h.Keyword,
+		})
+	}
+	return out
 }
 
 func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project string, history []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
@@ -128,14 +158,21 @@ func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project str
 				}
 			},
 		}
-		if _, err := a.runner.Stream(ctx, question, msgs, cb); err != nil {
+		done := chat.StreamChunk{Done: true, Model: model}
+		answer, err := a.runner.Stream(ctx, question, msgs, cb)
+		if err != nil {
 			// The channel contract has no error field and the SSE headers are
 			// already sent by the time tokens stream, so we can't fail the
 			// request here — log and terminate the stream cleanly.
 			slog.Error("admin agent stream failed", "error", err, "project", project)
+		} else if answer != nil {
+			// Deliver citations on the terminal chunk (known only after tool calls).
+			hits, fb := agent.SourcesFromTrace(answer.Trace)
+			done.Sources = chatSources(hits)
+			done.Fallback = fb
 		}
 		select {
-		case ch <- chat.StreamChunk{Done: true, Model: model}:
+		case ch <- done:
 		case <-ctx.Done():
 		}
 	}()

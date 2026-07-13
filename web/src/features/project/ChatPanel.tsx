@@ -39,6 +39,16 @@ export function ChatPanel({
       for await (const ev of api.chatStream(project, q, history)) {
         if (ev.type === 'sources') {
           sources.push(...(ev.sources || []))
+          // Sources may arrive after the tokens (agent mode), so re-attach them
+          // to the current assistant message instead of only during chunks.
+          setMessages((m) => {
+            const copy = [...m]
+            const last = copy[copy.length - 1]
+            if (last?.role === 'assistant') {
+              copy[copy.length - 1] = { ...last, sources: [...sources] }
+            }
+            return copy
+          })
         } else if (ev.type === 'chunk') {
           assistant += ev.content
           setMessages((m) => {
