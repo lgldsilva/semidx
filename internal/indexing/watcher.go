@@ -148,15 +148,23 @@ func isIgnored(path string) bool {
 func (w *Watcher) debounce(ctx context.Context, timers map[string]*time.Timer, path string, window time.Duration) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if t, ok := timers[path]; ok {
-		t.Stop()
+	if prev, ok := timers[path]; ok {
+		prev.Stop()
 	}
-	timers[path] = time.AfterFunc(window, func() {
+	// Capture the timer pointer so a superseded AfterFunc (Stop does not always
+	// prevent a race where the old callback already started) can no-op.
+	var t *time.Timer
+	t = time.AfterFunc(window, func() {
 		w.mu.Lock()
+		if timers[path] != t {
+			w.mu.Unlock()
+			return
+		}
 		delete(timers, path)
 		w.mu.Unlock()
 		w.handleCreate(ctx, path)
 	})
+	timers[path] = t
 }
 
 // handleCreate re-indexes a single changed file.

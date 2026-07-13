@@ -304,6 +304,27 @@ func TestHandleCreateExtractSupported(t *testing.T) {
 	}
 }
 
+// waitForDebounceChunks polls until the fake store has embedded/text-only
+// chunks (timer fire + indexFile), instead of a fixed Sleep that flakes under
+// -race + busy CI runners.
+func waitForDebounceChunks(t *testing.T, fs *fakeStore, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		fs.mu.Lock()
+		n := len(fs.embedded) + len(fs.textOnly)
+		fs.mu.Unlock()
+		if n > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	fs.mu.Lock()
+	n := len(fs.embedded) + len(fs.textOnly)
+	fs.mu.Unlock()
+	t.Fatalf("expected chunks after debounce; got %d after %s", n, timeout)
+}
+
 func TestDebounce(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timer-based")
@@ -327,17 +348,7 @@ func TestDebounce(t *testing.T) {
 	ctx := context.Background()
 	timers := make(map[string]*time.Timer)
 	w.debounce(ctx, timers, goFile, 20*time.Millisecond)
-
-	// Wait for the timer to fire + indexFile (slower under -race).
-	time.Sleep(2 * time.Second)
-
-	fs.mu.Lock()
-	chunkCount := len(fs.embedded) + len(fs.textOnly)
-	fs.mu.Unlock()
-
-	if chunkCount == 0 {
-		t.Error("expected chunks after debounce timer fired")
-	}
+	waitForDebounceChunks(t, fs, 10*time.Second)
 }
 
 func TestDebounceCancelsPrevious(t *testing.T) {
@@ -363,16 +374,7 @@ func TestDebounceCancelsPrevious(t *testing.T) {
 	w.debounce(ctx, timers, goFile, 10*time.Second)
 	// Second debounce cancels the first.
 	w.debounce(ctx, timers, goFile, 20*time.Millisecond)
-
-	time.Sleep(2 * time.Second)
-
-	fs.mu.Lock()
-	chunkCount := len(fs.embedded) + len(fs.textOnly)
-	fs.mu.Unlock()
-
-	if chunkCount == 0 {
-		t.Error("expected chunks after debounce")
-	}
+	waitForDebounceChunks(t, fs, 10*time.Second)
 }
 
 func TestHandleEventCreate(t *testing.T) {
