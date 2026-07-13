@@ -753,6 +753,19 @@ into an agent client. (stdout carries the protocol — logs go to stderr.)`,
 				} else {
 					resolver := agent.NewScopeResolver(db)
 					tools := agent.ReadTools(svc, db, resolver)
+					// Action tools are opt-in via SEMIDX_AGENT_ACTIONS. MCP has no
+					// interactive approval channel, so only "propose" (describe) or
+					// "execute" (run directly) apply; "off" (default) omits them.
+					// The path guard in resolveRegisteredPath still bounds writes to
+					// registered project trees. server_repo_sync needs a remote client
+					// (nil in standalone), so only index/reindex are wired here.
+					if pol, ok := agent.ParseActionPolicy(d.cfg.AgentActions); ok {
+						indexer := indexing.NewIndexer(db, d.emb, 0, indexing.IndexerOpts{
+							Logger:  slog.Default(),
+							Workers: 2,
+						})
+						tools = append(tools, agent.ActionTools(db, indexer, nil, pol, nil)...)
+					}
 					temp := sel.Temperature
 					runner := agent.NewRunner(model, tools, agent.RunnerConfig{
 						SystemPrompt: agent.SystemPrompt,

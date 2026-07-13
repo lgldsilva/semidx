@@ -9,6 +9,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/chat"
+	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/llm"
 	"github.com/lgldsilva/semidx/internal/rag"
 	"github.com/lgldsilva/semidx/internal/search"
@@ -67,6 +68,17 @@ func (d *deps) buildAdminChatPipeline() webadmin.ChatPipeline {
 				resolver = agent.NewScopeResolver(idxStore)
 			}
 			tools := agent.ReadTools(svc, idxStore, resolver)
+			// Action tools are opt-in via SEMIDX_AGENT_ACTIONS. The admin chat has
+			// no interactive approval channel, so only "propose"/"execute" apply
+			// ("off" is the default). The path guard still bounds writes to
+			// registered project trees.
+			if pol, ok := agent.ParseActionPolicy(d.cfg.AgentActions); ok {
+				indexer := indexing.NewIndexer(idxStore, d.emb, 0, indexing.IndexerOpts{
+					Logger:  slog.Default(),
+					Workers: 2,
+				})
+				tools = append(tools, agent.ActionTools(idxStore, indexer, nil, pol, nil)...)
+			}
 			temp := sel.Temperature
 			runner := agent.NewRunner(model, tools, agent.RunnerConfig{
 				SystemPrompt: agent.SystemPrompt,
