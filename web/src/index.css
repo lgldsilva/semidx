@@ -608,6 +608,33 @@ pre.snippet {
   gap: 0.5rem 0.85rem;
   margin-top: 0.4rem;
 }
+.conv-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  border-radius: 6px;
+  padding: 0.1rem 0.2rem;
+}
+.conv-row.active,
+.conv-row:hover {
+  background: #eef2ff;
+}
+.conv-row .tree-file {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conv-actions {
+  display: inline-flex;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+}
+.conv-actions .link {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.2rem;
+}
 .chat-input textarea {
   width: 100%;
   font: inherit;

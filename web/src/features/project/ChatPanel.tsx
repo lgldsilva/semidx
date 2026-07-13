@@ -5,14 +5,22 @@ export function ChatPanel({
   project,
   seedQuestion,
   onOpenFile,
+  initialMessages,
+  onPersist,
 }: {
   project: string
   seedQuestion: string
   // project is passed for global-chat sources (empty for project-scoped chat).
   onOpenFile: (path: string, line?: number, project?: string) => void
+  // initialMessages seeds the log when reopening a persisted conversation; a new
+  // reference (e.g. switching conversations) resets the log.
+  initialMessages?: ChatMessage[]
+  // onPersist, when set, is called once per completed turn (user + assistant) so
+  // the caller can save it to a conversation.
+  onPersist?: (m: ChatMessage) => void
 }) {
   const global = project === ''
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? [])
   const [input, setInput] = useState(seedQuestion)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -21,6 +29,10 @@ export function ChatPanel({
   useEffect(() => {
     void api.system().then((s) => setChatOk(!!s.chat_enabled)).catch(() => setChatOk(false))
   }, [])
+
+  useEffect(() => {
+    if (initialMessages) setMessages(initialMessages)
+  }, [initialMessages])
 
   useEffect(() => {
     setInput(seedQuestion)
@@ -35,6 +47,7 @@ export function ChatPanel({
     const history = messages.map((m) => ({ role: m.role, content: m.content }))
     setMessages((m) => [...m, { role: 'user', content: q }])
     setInput('')
+    onPersist?.({ role: 'user', content: q })
     let assistant = ''
     const sources: ChatMessage['sources'] = []
     try {
@@ -74,6 +87,9 @@ export function ChatPanel({
           ...m.filter((x, i) => !(i === m.length - 1 && x.role === 'assistant' && !x.content)),
           { role: 'assistant', content: res.content, sources: res.sources },
         ])
+        onPersist?.({ role: 'assistant', content: res.content, sources: res.sources })
+      } else {
+        onPersist?.({ role: 'assistant', content: assistant, sources })
       }
     } catch (ex) {
       setErr(ex instanceof ApiError ? ex.message : 'chat failed')
