@@ -84,6 +84,12 @@ type Config struct {
 	ChatBaseURL     string  // required for openai-compatible
 	ChatTemperature float64 // default 0.3
 
+	// AgentActions gates the write/action tools on the non-interactive agent
+	// surfaces (MCP, admin): "off" (default), "propose" (agent describes the
+	// action but never runs it), or "execute" (agent runs it directly). The
+	// interactive chatrag REPL always asks y/N and is unaffected by this.
+	AgentActions string
+
 	// Privacy forces local-only embedding providers (EMBED_PRIVACY=true).
 	Privacy bool
 
@@ -340,6 +346,7 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 		ChatAPIKey:          env.get("SEMIDX_CHAT_API_KEY", ""),
 		ChatBaseURL:         env.get("SEMIDX_CHAT_BASE_URL", ""),
 		ChatTemperature:     floatDefault(env.get("SEMIDX_CHAT_TEMPERATURE", ""), 0.3),
+		AgentActions:        strings.ToLower(strings.TrimSpace(env.get("SEMIDX_AGENT_ACTIONS", "off"))),
 		Privacy:             env.get("EMBED_PRIVACY", "") == "true",
 		IndexWorkers:        atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
 		EmbedBatchSize:      atoiDefault(env.get("SEMIDX_EMBED_BATCH_SIZE", ""), defaultEmbedBatchSize),
@@ -418,6 +425,7 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_CHAT_API_KEY", "Chat provider API key (falls back to the matching embedding key)", true},
 	{"SEMIDX_CHAT_BASE_URL", "Chat base URL — required for openai-compatible (e.g. OpenCode Zen)", false},
 	{"SEMIDX_CHAT_TEMPERATURE", "Chat sampling temperature (default 0.3)", false},
+	{"SEMIDX_AGENT_ACTIONS", "Action tools on MCP/admin: off (default), propose, or execute", false},
 	{"EMBED_PROVIDER", "Custom provider prepended to the chain (openai|ollama)", false},
 	{"EMBED_ENDPOINT", "Custom provider endpoint URL", false},
 	{"EMBED_API_KEY", "Custom provider API key", true},

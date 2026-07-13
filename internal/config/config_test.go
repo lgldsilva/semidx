@@ -222,6 +222,21 @@ func TestLoadLocalIndexFromEnv(t *testing.T) {
 	}
 }
 
+func TestAgentActionsResolution(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	// Absent → safe default "off".
+	if cfg := LoadWithLookup(mapLookup(map[string]string{})); cfg.AgentActions != "off" {
+		t.Errorf("default AgentActions = %q, want %q", cfg.AgentActions, "off")
+	}
+	// Present → honored, lowercased and trimmed so ParseActionPolicy matches.
+	cfg := LoadWithLookup(mapLookup(map[string]string{"SEMIDX_AGENT_ACTIONS": "  Execute  "}))
+	if cfg.AgentActions != "execute" {
+		t.Errorf("AgentActions = %q, want %q (normalized)", cfg.AgentActions, "execute")
+	}
+}
+
 func TestLoadWithLookupHermetic(t *testing.T) {
 	// No real OS env interaction: all values come exclusively from the map.
 	t.Chdir(t.TempDir())
