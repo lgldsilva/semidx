@@ -15,6 +15,25 @@ type StreamChunk struct {
 	ToolCalls []ToolCall // tool calls from the model (nil for non-tool chunks)
 	Done      bool       // true on the final (termination) chunk
 	Model     string     // model name (only set on first or last chunk)
+	// Sources/Fallback carry citations on the terminal chunk for streams that
+	// only learn their sources after the fact (the agent, which runs tool calls
+	// before answering). Empty for the classic RAG stream, which returns sources
+	// up front instead.
+	Sources  []Source
+	Fallback bool
+}
+
+// Source is one retrieved chunk cited by an answer. It mirrors rag.Source but
+// lives in this package so StreamChunk can carry it without importing rag
+// (which would be a cycle).
+type Source struct {
+	File      string
+	StartLine int
+	EndLine   int
+	Content   string
+	Score     float64
+	Keyword   bool
+	Project   string // source project label; set only by global (all-projects) chat
 }
 
 // StreamClient is a chat provider that supports streaming responses.

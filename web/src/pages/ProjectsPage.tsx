@@ -34,7 +34,7 @@ export function ProjectsPage() {
     }
   }, [])
 
-  const { job, project: jobProject, start: startJob } = useJobPoll(reload)
+  const { job, project: jobProject, err: pollErr, start: startJob } = useJobPoll(reload)
 
   useEffect(() => {
     void reload()
@@ -112,6 +112,7 @@ export function ProjectsPage() {
       {err && <div className="alert error">{err}</div>}
       {flash && <div className="alert ok">{flash}</div>}
       {job && <JobAlert job={job} project={jobProject} />}
+      {pollErr && <div className="alert error">{pollErr}</div>}
 
       <div className="filters card">
         <div className="row">
@@ -223,7 +224,7 @@ export function ProjectsPage() {
               <tbody>
                 {filtered.map((p) => (
                   <tr key={p.name}>
-                    <td>
+                    <td data-label="Name">
                       <Link to={`/projects/${encodeURIComponent(p.name)}`}>
                         <strong>{p.name}</strong>
                       </Link>
@@ -238,7 +239,7 @@ export function ProjectsPage() {
                         <div className="muted small">license: {p.license}</div>
                       )}
                     </td>
-                    <td>
+                    <td data-label="Source">
                       {p.source_type || '—'}
                       {p.git_url && (
                         <div className="muted small" title={p.git_url}>
@@ -258,10 +259,10 @@ export function ProjectsPage() {
                         </div>
                       )}
                     </td>
-                    <td>
+                    <td data-label="Status">
                       <span className="pill">{p.status}</span>
                     </td>
-                    <td>
+                    <td data-label="Model">
                       {p.model || '—'}
                       {p.dims ? (
                         <div className="muted small">{p.dims}d</div>
@@ -272,8 +273,8 @@ export function ProjectsPage() {
                         </div>
                       ) : null}
                     </td>
-                    <td>{p.total_files ?? '—'}</td>
-                    <td className="small">
+                    <td data-label="Files">{p.total_files ?? '—'}</td>
+                    <td className="small" data-label="Last job">
                       {p.last_job
                         ? `#${p.last_job.id} ${p.last_job.status}`
                         : '—'}

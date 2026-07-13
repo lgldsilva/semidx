@@ -1,7 +1,7 @@
 # Large-Scale Semantic Code Search: Research & Recommendations for semidx
 
-> **Status:** Research completed 2026-07-06  
-> **Scope:** How tools like Sourcegraph/Zoekt, Glean, Google Code Search, and modern ANN systems handle 100K+ files / millions of chunks  
+> **Status:** Research completed 2026-07-06
+> **Scope:** How tools like Sourcegraph/Zoekt, Glean, Google Code Search, and modern ANN systems handle 100K+ files / millions of chunks
 > **Goal:** Concrete, evidence-backed recommendations for semidx at scale
 
 ---
@@ -537,9 +537,9 @@ WITH RECURSIVE graph_bfs AS (
     SELECT source_file, target_file, 1 AS depth
     FROM file_dependencies
     WHERE project_id = $1 AND source_file = $2
-    
+
     UNION ALL
-    
+
     -- Recursive: expand outbound edges only, depth-limited
     SELECT d.source_file, d.target_file, g.depth + 1
     FROM file_dependencies d

@@ -54,6 +54,31 @@ func TestResolveChatLLM_explicitOpenAICompat(t *testing.T) {
 	}
 }
 
+func TestResolveChatLLM_explicitCopilot(t *testing.T) {
+	// Copilot with a dedicated token → usable with the default model.
+	c := &Config{ChatProvider: "copilot", CopilotToken: "gh-copilot"}
+	sel, ok := c.ResolveChatLLM()
+	if !ok {
+		t.Fatal("expected a usable copilot selection")
+	}
+	if sel.Provider != "copilot" || sel.APIKey != "gh-copilot" || sel.Model != "gpt-4o" {
+		t.Errorf("copilot selection = %+v", sel)
+	}
+
+	// An explicit chat model overrides the default; the token still fills the key.
+	c = &Config{ChatProvider: "copilot", CopilotToken: "gh", ChatModel: "claude-3.5-sonnet"}
+	sel, _ = c.ResolveChatLLM()
+	if sel.Model != "claude-3.5-sonnet" {
+		t.Errorf("copilot model override = %q", sel.Model)
+	}
+
+	// Copilot without any token is not usable (no GitHub token to exchange).
+	c = &Config{ChatProvider: "copilot"}
+	if _, ok := c.ResolveChatLLM(); ok {
+		t.Error("copilot without a token must not be usable")
+	}
+}
+
 func TestResolveChatLLM_explicitGoogleFallsBackToEmbeddingKey(t *testing.T) {
 	// Explicit google provider but no ChatAPIKey → use the Gemini embedding key.
 	c := &Config{ChatProvider: "google", GeminiAPIKey: "gem", GeminiBaseURL: "https://gem"}

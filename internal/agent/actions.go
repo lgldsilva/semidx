@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/lgldsilva/semidx/internal/chat"
+	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/store"
 	semidxclient "github.com/lgldsilva/semidx/pkg/client"
@@ -104,18 +105,20 @@ func resolveRegisteredPath(ctx context.Context, db store.IndexStore, args indexW
 		return nil, "", "", fmt.Errorf("resolving project path %q: %w", p.Path, err)
 	}
 
-	// Default to the project's own path. An explicit path is accepted only if
-	// it resolves inside the project's tree — this is what keeps an LLM from
-	// pointing the indexer at /etc, ~/.ssh, or any path outside the project.
+	// Default to the project's own path. An explicit path is accepted if it is
+	// inside the project's tree OR is a git worktree of the SAME repo — git
+	// worktrees are sibling directories, so a lexical prefix check alone wrongly
+	// rejected the very path repo_worktrees returns. Validation by git identity
+	// still keeps an LLM from pointing the indexer at /etc, ~/.ssh, or any path
+	// outside the project's repo (those have a different or absent identity).
 	targetPath := base
 	if args.Path != "" {
 		abs, err := filepath.Abs(args.Path)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("resolving path %q: %w", args.Path, err)
 		}
-		rel, err := filepath.Rel(base, abs)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return nil, "", "", fmt.Errorf("path %q is outside registered project %q", abs, p.Name)
+		if !pathInsideTree(base, abs) && !sameGitRepo(ctx, abs, p.Identity) {
+			return nil, "", "", fmt.Errorf("path %q is outside registered project %q (not inside its tree nor a worktree of the same repo)", abs, p.Name)
 		}
 		targetPath = abs
 	}
@@ -125,6 +128,23 @@ func resolveRegisteredPath(ctx context.Context, db store.IndexStore, args indexW
 		model = p.Model
 	}
 	return p, targetPath, model, nil
+}
+
+// pathInsideTree reports whether abs is base or a descendant of base.
+func pathInsideTree(base, abs string) bool {
+	rel, err := filepath.Rel(base, abs)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// sameGitRepo reports whether abs is a git worktree whose repo identity matches
+// the project's — so a sibling worktree of the same repo is allowed while an
+// unrelated path (different or absent identity) is not.
+func sameGitRepo(ctx context.Context, abs, identity string) bool {
+	if identity == "" {
+		return false
+	}
+	gi := gitmeta.Resolve(ctx, abs)
+	return gi.IsGit && gi.Identity == identity
 }
 
 func (t *indexWorktreeTool) Run(ctx context.Context, argsJSON string) (string, error) {

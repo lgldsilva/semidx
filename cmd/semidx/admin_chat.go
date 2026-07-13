@@ -17,13 +17,58 @@ import (
 	"github.com/lgldsilva/semidx/internal/webadmin"
 )
 
-// buildAdminChatPipeline wires RAG chat for the admin SPA when at least one
-// chat provider key is configured. Returns nil when chat is unavailable.
-// When Gemini is configured, uses an agent loop (tool-calling) for richer context.
+// buildAdminChatPipeline wires the admin SPA chat. It uses the fantasy agent
+// Runner for ANY configured chat provider (google/anthropic/openrouter/groq/
+// openai-compatible) — the enablement decision is Config.ResolveChatLLM, not a
+// Gemini/OpenRouter key. Falls back to the legacy non-agent RAG chain only when
+// no chat provider resolves but a base key exists; nil when chat is unavailable.
 func (d *deps) buildAdminChatPipeline() webadmin.ChatPipeline {
 	if d.cfg == nil || d.emb == nil {
 		return nil
 	}
+	svc := search.NewService(d.mustSearchStore(), d.emb)
+
+	// Primary path: the agent Runner for whatever provider ResolveChatLLM picks
+	// (explicit SEMIDX_CHAT_* override, or auto-detected). The tool loop calls
+	// semantic_search / repo_* before answering.
+	if sel, ok := d.cfg.ResolveChatLLM(); ok {
+		model, err := llm.ResolveModel(context.Background(), llm.ProviderConfig{
+			Type:    llm.ProviderType(sel.Provider),
+			APIKey:  sel.APIKey,
+			BaseURL: sel.BaseURL,
+		}, sel.Model)
+		if err != nil {
+			slog.Warn("admin chat: could not resolve chat model", "provider", sel.Provider, "error", err)
+		} else {
+			idxStore := d.mustSearchStore()
+			// repo tools only when project paths are local; nil resolver omits them.
+			var resolver agent.ScopeResolver
+			if d.db != nil {
+				resolver = agent.NewScopeResolver(idxStore)
+			}
+			tools := agent.ReadTools(svc, idxStore, resolver)
+			// Action tools are opt-in via SEMIDX_AGENT_ACTIONS (propose/execute);
+			// the path guard still bounds writes to registered project trees.
+			if pol, ok := agent.ParseActionPolicy(d.cfg.AgentActions); ok {
+				indexer := indexing.NewIndexer(idxStore, d.emb, 0, indexing.IndexerOpts{
+					Logger:  slog.Default(),
+					Workers: 2,
+				})
+				tools = append(tools, agent.ActionTools(idxStore, indexer, nil, pol, nil)...)
+			}
+			// External MCP servers (SEMIDX_MCP_CLIENT_CONFIG): the agent uses their
+			// tools as a client. No-op when unconfigured; failures are logged.
+			tools = append(tools, d.mcpClientTools(context.Background())...)
+			temp := sel.Temperature
+			runner := agent.NewRunner(model, tools, agent.RunnerConfig{
+				SystemPrompt: agent.SystemPrompt,
+				Temperature:  &temp,
+			})
+			return &agentChatPipeline{runner: runner}
+		}
+	}
+
+	// Fallback: legacy non-agent RAG chain, only if a base provider key exists.
 	var providers []chat.NamedClient
 	if d.cfg.GeminiAPIKey != "" {
 		providers = append(providers, chat.NamedClient{
@@ -40,73 +85,72 @@ func (d *deps) buildAdminChatPipeline() webadmin.ChatPipeline {
 	if len(providers) == 0 {
 		return nil
 	}
-	chatClient := chat.NewChain(providers...)
-	svc := search.NewService(d.mustSearchStore(), d.emb)
 	adapter := &adminSearchAdapter{svc: svc}
-	pipeline := rag.NewPipeline(adapter, chatClient, rag.PipelineConfig{
-		TopK:        8,
-		MaxTokens:   4096,
-		Temperature: 0.3,
-		Model:       "gemini-2.0-flash",
+	return rag.NewPipeline(adapter, chat.NewChain(providers...), rag.PipelineConfig{
+		TopK: 8, MaxTokens: 4096, Temperature: 0.3, Model: "gemini-2.0-flash",
 	})
-
-	// When Gemini is configured, build a fantasy Runner that wraps the pipeline.
-	// The agent's tool loop allows deeper analysis (calling semantic_search,
-	// repo_status, etc.) before answering.
-	if sel, ok := d.cfg.ResolveChatLLM(); ok {
-		model, err := llm.ResolveModel(context.Background(), llm.ProviderConfig{
-			Type:    llm.ProviderType(sel.Provider),
-			APIKey:  sel.APIKey,
-			BaseURL: sel.BaseURL,
-		}, sel.Model)
-		if err == nil {
-			idxStore := d.mustSearchStore()
-			// repo tools only when project paths are local (serve mode may be
-			// server-side only). A nil resolver makes ReadTools omit them.
-			var resolver agent.ScopeResolver
-			if d.db != nil {
-				resolver = agent.NewScopeResolver(idxStore)
-			}
-			tools := agent.ReadTools(svc, idxStore, resolver)
-			// Action tools are opt-in via SEMIDX_AGENT_ACTIONS. The admin chat has
-			// no interactive approval channel, so only "propose"/"execute" apply
-			// ("off" is the default). The path guard still bounds writes to
-			// registered project trees.
-			if pol, ok := agent.ParseActionPolicy(d.cfg.AgentActions); ok {
-				indexer := indexing.NewIndexer(idxStore, d.emb, 0, indexing.IndexerOpts{
-					Logger:  slog.Default(),
-					Workers: 2,
-				})
-				tools = append(tools, agent.ActionTools(idxStore, indexer, nil, pol, nil)...)
-			}
-			temp := sel.Temperature
-			runner := agent.NewRunner(model, tools, agent.RunnerConfig{
-				SystemPrompt: agent.SystemPrompt,
-				Temperature:  &temp,
-			})
-			return &agentChatPipeline{pipeline: pipeline, runner: runner}
-		}
-	}
-
-	return pipeline
 }
 
-// agentChatPipeline wraps a rag.Pipeline with a fantasy agent Runner.
+// agentChatPipeline drives the admin chat through the fantasy agent Runner.
 // It implements webadmin.ChatPipeline.
 type agentChatPipeline struct {
-	pipeline *rag.Pipeline
-	runner   *agent.Runner
+	runner *agent.Runner
+}
+
+// scopeForProject maps a chat's project to the agent search scope: a named
+// project pins the turn to it; an empty project is the global chat, which fans
+// semantic_search across every indexed project.
+func scopeForProject(project string) agent.SearchScope {
+	if project == "" {
+		return agent.SearchScope{All: true}
+	}
+	return agent.SearchScope{Project: project}
 }
 
 func (a *agentChatPipeline) Ask(ctx context.Context, question, project string, history []chat.Message) (*rag.Answer, error) {
-	answer, err := a.runner.Ask(ctx, question, adminHistoryToMessages(history))
+	// Bind the turn to the requested project so semantic_search stays in scope
+	// (the model can't wander to another project). Contract, not a prompt hint.
+	// An empty project means the global chat: search across ALL projects.
+	ctx = agent.ContextWithScope(ctx, scopeForProject(project))
+	msgs := a.runner.CompactHistory(ctx, adminHistoryToMessages(history))
+	answer, err := a.runner.Ask(ctx, question, msgs)
 	if err != nil {
 		return nil, fmt.Errorf("agent ask failed: %w", err)
 	}
+	// Surface the real semantic_search results as citations (and the fallback
+	// flag) instead of discarding the trace.
+	hits, fallback := agent.SourcesFromTrace(answer.Trace)
 	return &rag.Answer{
-		Content: answer.Content,
-		Model:   answer.Model,
+		Content:  answer.Content,
+		Model:    answer.Model,
+		Sources:  ragSources(hits),
+		Fallback: fallback,
 	}, nil
+}
+
+// ragSources maps agent search hits to rag.Source (admin non-stream answer).
+func ragSources(hits []agent.SearchHit) []rag.Source {
+	out := make([]rag.Source, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, rag.Source{
+			File: h.File, StartLine: h.StartLine, EndLine: h.EndLine,
+			Content: h.Content, Score: h.Score, Keyword: h.Keyword, Project: h.Project,
+		})
+	}
+	return out
+}
+
+// chatSources maps agent search hits to chat.Source (carried on the terminal
+// stream chunk so the SSE layer can emit citations after the tool calls).
+func chatSources(hits []agent.SearchHit) []chat.Source {
+	out := make([]chat.Source, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, chat.Source{
+			File: h.File, StartLine: h.StartLine, EndLine: h.EndLine,
+			Content: h.Content, Score: h.Score, Keyword: h.Keyword, Project: h.Project,
+		})
+	}
+	return out
 }
 
 func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project string, history []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
@@ -116,7 +160,10 @@ func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project str
 	// layer can emit it in the leading sources event before tokens flow.
 	model := a.runner.Model()
 	ch := make(chan chat.StreamChunk, 16)
-	msgs := adminHistoryToMessages(history)
+	// Bind the stream turn to the project (contract for semantic_search scope);
+	// an empty project is the global chat (search across ALL projects).
+	ctx = agent.ContextWithScope(ctx, scopeForProject(project))
+	msgs := a.runner.CompactHistory(ctx, adminHistoryToMessages(history))
 	go func() {
 		defer close(ch)
 		cb := agent.StreamCallbacks{
@@ -127,14 +174,21 @@ func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project str
 				}
 			},
 		}
-		if _, err := a.runner.Stream(ctx, question, msgs, cb); err != nil {
+		done := chat.StreamChunk{Done: true, Model: model}
+		answer, err := a.runner.Stream(ctx, question, msgs, cb)
+		if err != nil {
 			// The channel contract has no error field and the SSE headers are
 			// already sent by the time tokens stream, so we can't fail the
 			// request here — log and terminate the stream cleanly.
 			slog.Error("admin agent stream failed", "error", err, "project", project)
+		} else if answer != nil {
+			// Deliver citations on the terminal chunk (known only after tool calls).
+			hits, fb := agent.SourcesFromTrace(answer.Trace)
+			done.Sources = chatSources(hits)
+			done.Fallback = fb
 		}
 		select {
-		case ch <- chat.StreamChunk{Done: true, Model: model}:
+		case ch <- done:
 		case <-ctx.Done():
 		}
 	}()

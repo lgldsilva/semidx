@@ -5,12 +5,22 @@ export function ChatPanel({
   project,
   seedQuestion,
   onOpenFile,
+  initialMessages,
+  onPersist,
 }: {
   project: string
   seedQuestion: string
-  onOpenFile: (path: string, line?: number) => void
+  // project is passed for global-chat sources (empty for project-scoped chat).
+  onOpenFile: (path: string, line?: number, project?: string) => void
+  // initialMessages seeds the log when reopening a persisted conversation; a new
+  // reference (e.g. switching conversations) resets the log.
+  initialMessages?: ChatMessage[]
+  // onPersist, when set, is called once per completed turn (user + assistant) so
+  // the caller can save it to a conversation.
+  onPersist?: (m: ChatMessage) => void
 }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const global = project === ''
+  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? [])
   const [input, setInput] = useState(seedQuestion)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -19,6 +29,10 @@ export function ChatPanel({
   useEffect(() => {
     void api.system().then((s) => setChatOk(!!s.chat_enabled)).catch(() => setChatOk(false))
   }, [])
+
+  useEffect(() => {
+    if (initialMessages) setMessages(initialMessages)
+  }, [initialMessages])
 
   useEffect(() => {
     setInput(seedQuestion)
@@ -33,12 +47,23 @@ export function ChatPanel({
     const history = messages.map((m) => ({ role: m.role, content: m.content }))
     setMessages((m) => [...m, { role: 'user', content: q }])
     setInput('')
+    onPersist?.({ role: 'user', content: q })
     let assistant = ''
     const sources: ChatMessage['sources'] = []
     try {
       for await (const ev of api.chatStream(project, q, history)) {
         if (ev.type === 'sources') {
           sources.push(...(ev.sources || []))
+          // Sources may arrive after the tokens (agent mode), so re-attach them
+          // to the current assistant message instead of only during chunks.
+          setMessages((m) => {
+            const copy = [...m]
+            const last = copy[copy.length - 1]
+            if (last?.role === 'assistant') {
+              copy[copy.length - 1] = { ...last, sources: [...sources] }
+            }
+            return copy
+          })
         } else if (ev.type === 'chunk') {
           assistant += ev.content
           setMessages((m) => {
@@ -62,6 +87,9 @@ export function ChatPanel({
           ...m.filter((x, i) => !(i === m.length - 1 && x.role === 'assistant' && !x.content)),
           { role: 'assistant', content: res.content, sources: res.sources },
         ])
+        onPersist?.({ role: 'assistant', content: res.content, sources: res.sources })
+      } else {
+        onPersist?.({ role: 'assistant', content: assistant, sources })
       }
     } catch (ex) {
       setErr(ex instanceof ApiError ? ex.message : 'chat failed')
@@ -88,8 +116,17 @@ export function ChatPanel({
       <div className="chat-log card" role="log" aria-live="polite" aria-atomic="false">
         {messages.length === 0 && (
           <p className="muted">
-            Ask anything about <strong>{project}</strong>. Answers use RAG over the
-            index; sources open in the Files tab.
+            {global ? (
+              <>
+                Ask anything across <strong>all indexed projects</strong>. Answers
+                cite the project each source came from.
+              </>
+            ) : (
+              <>
+                Ask anything about <strong>{project}</strong>. Answers use RAG over
+                the index; sources open in the Files tab.
+              </>
+            )}
           </p>
         )}
         {messages.map((m, i) => (
@@ -98,16 +135,29 @@ export function ChatPanel({
             <pre className="snippet">{m.content}</pre>
             {m.sources && m.sources.length > 0 && (
               <div className="chat-sources">
-                {m.sources.map((s, j) => (
-                  <button
-                    key={j}
-                    type="button"
-                    className="link"
-                    onClick={() => onOpenFile(s.file, s.start_line)}
-                  >
-                    {s.file}:{s.start_line}
-                  </button>
-                ))}
+                {m.sources.map((s, j) => {
+                  // Real deep-link (authenticated SPA route) so a source can be
+                  // opened in a new tab / copied, while a plain click still does
+                  // in-app navigation. Global-chat sources carry their project.
+                  const proj = s.project || project
+                  const href = proj
+                    ? `/admin/projects/${encodeURIComponent(proj)}?tab=files&path=${encodeURIComponent(s.file)}${s.start_line ? `&line=${s.start_line}` : ''}`
+                    : undefined
+                  return (
+                    <a
+                      key={j}
+                      className="link"
+                      href={href ?? '#'}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        onOpenFile(s.file, s.start_line, s.project)
+                      }}
+                    >
+                      {s.project ? `${s.project} · ` : ''}
+                      {s.file}:{s.start_line}
+                    </a>
+                  )
+                })}
               </div>
             )}
           </div>
