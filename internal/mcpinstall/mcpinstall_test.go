@@ -304,7 +304,7 @@ func TestApplyableClientsAndIsApplyable(t *testing.T) {
 			t.Errorf("ApplyableClients returned non-applyable client %q", c.ID)
 		}
 	}
-	// codex and cagent are print-only, so applyable must be a strict subset.
+	// cagent is print-only, so applyable must be a strict subset.
 	if len(applyable) >= len(Clients) {
 		t.Errorf("expected some print-only clients; applyable=%d total=%d", len(applyable), len(Clients))
 	}

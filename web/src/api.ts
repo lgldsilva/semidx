@@ -308,6 +308,15 @@ export const api = {
     }>(
       `/admin/api/projects/${encodeURIComponent(name)}/dead-code?limit=${limit}`,
     ),
+  projectSbom: (name: string, format = 'cyclonedx-json') =>
+    request<{
+      format: string
+      component_count: number
+      document: Record<string, unknown>
+      cli_equivalent: string
+    }>(
+      `/admin/api/projects/${encodeURIComponent(name)}/sbom?format=${encodeURIComponent(format)}`,
+    ),
   deleteProject: (name: string) =>
     request<{ ok: boolean }>(
       `/admin/api/projects/${encodeURIComponent(name)}`,

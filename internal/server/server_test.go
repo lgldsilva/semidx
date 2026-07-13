@@ -493,7 +493,7 @@ func TestSearchRetryableError(t *testing.T) {
 		project: &store.Project{ID: 1, Name: "proj", Model: "m"},
 	}, emb, nil)
 
-	rec := do(t, srv, "POST", "/api/v1/projects/proj/search", "tok", `{"query":"test"}`)
+	rec := do(t, srv, "POST", "/api/v1/projects/proj/search", "tok", `{"query":"retryable embed failure"}`)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d; body=%s", rec.Code, rec.Body.String())
 	}

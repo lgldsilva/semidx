@@ -12,7 +12,7 @@ For each variation the harness runs:
 1. **Client wiring gate** — `semidx mcp install --apply` for every supported
    client (Claude Code, Claude Desktop, Cursor, Windsurf, Gemini CLI, Antigravity,
    GitHub Copilot, VS Code, OpenCode, Crush) and asserts the written config matches
-   that agent's schema; Codex and cagent are verified as print-only; a merge test
+   that agent's schema; Codex uses TOML `--apply`; cagent is verified as print-only; a merge test
    proves an existing server is preserved and a `.bak` is written. See the full
    list with `semidx mcp install --list`.
 2. **Skill install** — `semidx skills install` produces `semantic-search/SKILL.md`.

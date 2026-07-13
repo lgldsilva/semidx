@@ -19,6 +19,7 @@ export function AnalyzePanel({
     { symbol: string; kind: string; file: string; start_line: number; confidence: string }[]
   >([])
   const [deadStats, setDeadStats] = useState<{ total: number; confirmed: number; public_api: number } | null>(null)
+  const [sbom, setSbom] = useState<{ format: string; component_count: number; cli_equivalent: string } | null>(null)
   const [graphStats, setGraphStats] = useState<{
     nodes: number
     edges: number
@@ -89,6 +90,23 @@ export function AnalyzePanel({
     }
   }
 
+  async function runSbom() {
+    setBusy('sbom')
+    setErr('')
+    try {
+      const r = await api.projectSbom(project)
+      setSbom({
+        format: r.format,
+        component_count: r.component_count,
+        cli_equivalent: r.cli_equivalent,
+      })
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'SBOM failed')
+    } finally {
+      setBusy('')
+    }
+  }
+
   return (
     <div className="workspace-grid">
       <div className="card full">
@@ -124,6 +142,9 @@ export function AnalyzePanel({
           </button>
           <button type="button" disabled={!!busy} onClick={() => void runDead()}>
             {busy === 'dead' ? '…' : 'Dead code scan'}
+          </button>
+          <button type="button" disabled={!!busy} onClick={() => void runSbom()}>
+            {busy === 'sbom' ? '…' : 'SBOM'}
           </button>
           <button type="button" disabled={!!busy} onClick={() => void runGraphStats()}>
             {busy === 'graphstats' ? '…' : 'Graph overview'}
@@ -252,6 +273,35 @@ export function AnalyzePanel({
           </div>
         </div>
       )}
+      <div className="card full">
+        <h2>CLI-only analysis tools</h2>
+        <p className="muted">
+          These run on your machine against the same index (or a server checkout). Use the
+          project name shown in the workspace header.
+        </p>
+        <ul>
+          <li>
+            <code>semidx sbom generate --project {project}</code> — dependency SBOM (also available
+            via the SBOM button above)
+          </li>
+          <li>
+            <code>semidx diff --project {project}</code> — compare index vs working tree
+          </li>
+          <li>
+            <code>semidx alerts list --project {project}</code> — saved search alerts (local JSON)
+          </li>
+          <li>
+            <code>semidx insights show</code> — query trend charts (local JSON)
+          </li>
+        </ul>
+        {sbom && (
+          <p>
+            Last SBOM: <span className="pill">{sbom.format}</span>{' '}
+            <strong>{sbom.component_count}</strong> components — CLI:{' '}
+            <code>{sbom.cli_equivalent}</code>
+          </p>
+        )}
+      </div>
       <div className="card full">
         <h2>
           Dead code

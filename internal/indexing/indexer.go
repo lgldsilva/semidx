@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -52,6 +53,7 @@ type Indexer struct {
 	maxFileSize         int // files larger than this are truncated; 0 = use default
 	maxChunksPerFile    int // cap on chunks per file; 0 = use default
 	maxChunksPerProject int // cap on total chunks per project; 0 = unlimited
+	maxFilesPerProject  int // cap on files scanned per index run; 0 = unlimited
 	maxChunkChars       int // max characters per chunk (~1000 tokens for bge-m3)
 	log                 *slog.Logger
 	verbose             bool
@@ -77,6 +79,8 @@ type Indexer struct {
 	memAt      time.Time
 	lastHeapMB uint64
 	lastSysMB  uint64
+
+	chunksRemaining atomic.Int64 // per-run chunk budget; -1 = unlimited
 }
 
 // IndexStats summarizes an indexing run.
@@ -123,6 +127,7 @@ type IndexerOpts struct {
 	MaxFileSize         int
 	MaxChunksPerFile    int
 	MaxChunksPerProject int
+	MaxFilesPerProject  int
 	Verbose             bool
 	GitMode             bool
 	GitSince            string
@@ -148,7 +153,13 @@ func NewIndexer(db store.IndexStore, emb embed.Embedder, dims int, opts IndexerO
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	return &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunksPerProject: opts.MaxChunksPerProject, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger, onProgress: opts.OnProgress}
+	idx := &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunksPerProject: opts.MaxChunksPerProject, maxFilesPerProject: opts.MaxFilesPerProject, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger, onProgress: opts.OnProgress}
+	if opts.MaxChunksPerProject > 0 {
+		idx.chunksRemaining.Store(int64(opts.MaxChunksPerProject))
+	} else {
+		idx.chunksRemaining.Store(-1)
+	}
+	return idx
 }
 
 // SetKeywordOnly switches the indexer to keyword-only mode: chunks are stored as
@@ -269,7 +280,43 @@ func (idx *Indexer) resolveIndexFiles(ctx context.Context, projectID int, projec
 		}
 		return files, nil
 	}
-	return ScanFiles(projectPath, maxFiles)
+	return ScanFiles(projectPath, effectiveMaxFiles(maxFiles, idx.maxFilesPerProject))
+}
+
+// effectiveMaxFiles combines a per-run limit with a server/project cap (0 = unlimited).
+func effectiveMaxFiles(requestMax, projectCap int) int {
+	switch {
+	case requestMax > 0 && projectCap > 0:
+		return min(requestMax, projectCap)
+	case requestMax > 0:
+		return requestMax
+	default:
+		return projectCap
+	}
+}
+
+// takeChunkBudget reserves up to want chunks from the per-project budget.
+// Returns 0 when the cap is exhausted. Unlimited budgets return want unchanged.
+func (idx *Indexer) takeChunkBudget(want int) int {
+	if want <= 0 {
+		return 0
+	}
+	for {
+		rem := idx.chunksRemaining.Load()
+		if rem < 0 {
+			return want
+		}
+		if rem == 0 {
+			return 0
+		}
+		take := want
+		if int64(take) > rem {
+			take = int(rem)
+		}
+		if idx.chunksRemaining.CompareAndSwap(rem, rem-int64(take)) {
+			return take
+		}
+	}
 }
 
 // finalizeProject runs the post-index steps: worktree manifest, git history,
@@ -307,8 +354,7 @@ func (idx *Indexer) accumulate(stats *IndexStats, manifest map[string]string, re
 		idx.logf("[err] %s: %s", rel, truncateErr(r.err, 200))
 	case r.outcome == outcomeIndexed:
 		// Per-project chunk cap: if the total would exceed the limit, log a
-		// warning and skip the chunks (the file is still marked indexed so the
-		// caller knows it was processed).
+		// warning and skip counting (storeChunks already enforced the budget).
 		if idx.maxChunksPerProject > 0 && stats.ChunksCreated+r.created > idx.maxChunksPerProject {
 			idx.logf("[warn] project chunk limit (%d) reached, not counting %d chunk(s) from %s",
 				idx.maxChunksPerProject, r.created, rel)
@@ -594,6 +640,16 @@ type chunkStoreParams struct {
 // or when secrets were detected and SECRET_BLOCK_EMBEDDING is true; otherwise it
 // embeds them (forcing a local provider for sensitive files).
 func (idx *Indexer) storeChunks(ctx context.Context, p chunkStoreParams) (created, softErrs int, hardErr error) {
+	budget := idx.takeChunkBudget(len(p.chunks))
+	if budget == 0 {
+		idx.logf("[warn] project chunk limit reached, skipping chunks for %s", p.rel)
+		return 0, 0, nil
+	}
+	if budget < len(p.chunks) {
+		idx.logf("[warn] project chunk limit: storing %d of %d chunk(s) for %s", budget, len(p.chunks), p.rel)
+		p.chunks = p.chunks[:budget]
+	}
+
 	// Keyword-only mode: no embedding provider at all — store the chunks as text
 	// so they stay searchable by keyword (FTS/ILIKE) without any model.
 	if idx.keywordOnly {

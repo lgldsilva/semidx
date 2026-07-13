@@ -572,24 +572,33 @@ This uses PostgreSQL's index on `file_dependencies(source_file)` and can be tune
 | Embedding circuit breaker | `internal/embed/circuit.go` | ✅ |
 | Top-K min-heap | O(n) scan + O(k log k) sort for SQLite | ✅ |
 
-### 7.2 What Needs Work (Impact-Ordered)
+### 7.2 Delivered since research (2026-07-06 → 2026-07-13)
+
+| # | Improvement | Status |
+|---|-------------|--------|
+| Git-diff incremental layer | ✅ `indexing.gitDiffChanged` |
+| Query routing (identifier/path/exact) | ✅ `search.ClassifyQuery` + hot path |
+| RRF hybrid search | ✅ default in `search.Service` |
+| SQL recursive CTE for graph BFS | ✅ Postgres path in store |
+| Embedding cache on reindex | ✅ `LookupEmbeddingCache` |
+| SQLite scale warning | ✅ `MaybeWarnSQLiteScale` |
+| Global index caps | ✅ `SEMIDX_MAX_CHUNKS/FILES_PER_PROJECT` |
+
+### 7.3 What Needs Work (Impact-Ordered)
 
 | # | Improvement | Effort | Impact | Research basis |
 |---|---|---|---|---|
-| **P0** | **Git-diff layer for incremental** | 2-3 days | 50-98% re-index speedup | Cartog, Glean, GitNexus all prove this |
-| **P0** | **Query routing** (keyword vs vector auto-detect) | 1-2 days | 50-100x speedup on identifier queries | Zoekt design, Google Code Search |
-| **P1** | **RRF hybrid search** | 3-5 days | +98% recall@10 vs single path | RuVector, Elastic, pgturbohybrid |
-| **P1** | **halfvec as default storage type** | 1 day | 2x storage reduction, <1% loss | pgvector 0.7+, Umur Inan guide |
-| **P2** | **SQL recursive CTE for BFS** | 1-2 days | 10-100x speedup on large graphs | Codebase-Memory paper |
+| **P1** | **halfvec as default storage type** | 1 day | 2x storage reduction, &lt;1% loss | pgvector 0.7+, Umur Inan guide |
+| **P1** | **Per-project quotas in DB** | 2–3 days | anti-abuse, multi-tenant homelab | REQ-SRV-12 extension |
 | **P2** | **Cross-project dedup cache** | 3-5 days | 10-30% storage savings on multi-project | Chunkstore benchmarks |
 | **P2** | **Partial HNSW indexes per language** | 2-3 days | 30-50% faster filtered searches | pgvector HNSW tuning guides |
+| **P2** | **Bench in CI/nightly** | 1-2 days | recall/latency regression gate | `semidx bench` |
 | **P3** | **Binary quantization + rerank** | 5-10 days | 32x compression, 95%+ recall | HuggingFace quantization blog |
-| **P3** | **Embedding cache in SearchSimilar** | 1 day | ~2ms saved per repeated query | Production hybrid search systems |
 | **P3** | **Hot/cold project tiering** | 3-5 days | Graceful degradation for 100K+ files | pgvector 100M analysis |
 | **P4** | **Product quantization** | 10-15 days | 10-100x vector compression | FAISS PQ paper, Qdrant PQ |
 | **P4** | **Parallel HNSW build** | 5-10 days | Faster index building at scale | pgvector 0.8 parallel build |
 
-### 7.3 Concrete Implementation Notes
+### 7.4 Concrete Implementation Notes
 
 **P0 — Git-diff incremental layer**:
 ```go
@@ -708,4 +717,4 @@ Autodetect: warn when localstore reaches 100K files or 500K chunks during index.
 
 ---
 
-*Last updated: 2026-07-06*
+*Last updated: 2026-07-13*

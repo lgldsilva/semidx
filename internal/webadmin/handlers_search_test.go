@@ -91,7 +91,7 @@ func TestMergeProjectSearchesSetsFallbackFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	merged, fallback, err := a.mergeProjectSearches(context.Background(), fs.projects, "q", 5)
+	merged, fallback, err := a.mergeProjectSearches(context.Background(), fs.projects, "offline embed query", 5)
 	if err != nil || !fallback || len(merged) != 1 {
 		t.Fatalf("merge fallback = %+v flag=%v err=%v", merged, fallback, err)
 	}

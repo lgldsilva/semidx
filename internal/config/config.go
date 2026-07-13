@@ -40,6 +40,7 @@ const (
 	defaultMaxFileSize         = 1024 * 1024 // 1MB
 	defaultMaxChunksPerFile    = 32
 	defaultMaxChunksPerProject = 0 // 0 = unlimited
+	defaultMaxFilesPerProject  = 0 // 0 = unlimited
 	defaultListenAddr          = ":8080"
 	defaultDataDir             = "/var/lib/semidx"
 )
@@ -109,6 +110,9 @@ type Config struct {
 	// MaxChunksPerProject caps the total number of chunks a project may have
 	// (SEMIDX_MAX_CHUNKS_PER_PROJECT). 0 = unlimited. Default is unlimited.
 	MaxChunksPerProject int
+	// MaxFilesPerProject caps how many files a single index run may process
+	// (SEMIDX_MAX_FILES_PER_PROJECT). 0 = unlimited.
+	MaxFilesPerProject int
 
 	// ListenAddr is the server bind address (SEMIDX_LISTEN_ADDR, e.g. ":8080").
 	ListenAddr string
@@ -382,6 +386,7 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 		MaxFileSize:         atoiDefault(env.get("SEMIDX_MAX_FILE_SIZE", ""), defaultMaxFileSize),
 		MaxChunksPerFile:    atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_FILE", ""), defaultMaxChunksPerFile),
 		MaxChunksPerProject: atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_PROJECT", ""), defaultMaxChunksPerProject),
+		MaxFilesPerProject:  atoiDefault(env.get("SEMIDX_MAX_FILES_PER_PROJECT", ""), defaultMaxFilesPerProject),
 		ListenAddr:          env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
 		BootstrapToken:      env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
 		DataDir:             env.get("SEMIDX_DATA_DIR", defaultDataDir),
@@ -474,6 +479,7 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_MAX_FILE_SIZE", "Largest file the indexer processes (bytes, positive int)", false},
 	{"SEMIDX_MAX_CHUNKS_PER_FILE", "Maximum chunks a single file can produce (positive int)", false},
 	{"SEMIDX_MAX_CHUNKS_PER_PROJECT", "Maximum chunks per project (0=unlimited)", false},
+	{"SEMIDX_MAX_FILES_PER_PROJECT", "Maximum files per index run per project (0=unlimited)", false},
 	{"SEMIDX_JAVA_DECOMPILER", "External Java decompiler command for .class in JARs", false},
 	// Self-update (semidx upgrade) — override to point at a different release host.
 	{"SEMIDX_UPDATE_API", "Releases API base for `semidx upgrade` (default: homelab Gitea)", false},
