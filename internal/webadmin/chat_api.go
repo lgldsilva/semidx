@@ -54,7 +54,7 @@ func sourcesJSON(src []rag.Source) []map[string]any {
 	for _, s := range src {
 		out = append(out, map[string]any{
 			"file": s.File, "start_line": s.StartLine, "end_line": s.EndLine,
-			"content": s.Content, "score": s.Score, "keyword": s.Keyword,
+			"content": s.Content, "score": s.Score, "keyword": s.Keyword, "project": s.Project,
 		})
 	}
 	return out
@@ -67,19 +67,30 @@ func chatSourcesJSON(src []chat.Source) []map[string]any {
 	for _, s := range src {
 		out = append(out, map[string]any{
 			"file": s.File, "start_line": s.StartLine, "end_line": s.EndLine,
-			"content": s.Content, "score": s.Score, "keyword": s.Keyword,
+			"content": s.Content, "score": s.Score, "keyword": s.Keyword, "project": s.Project,
 		})
 	}
 	return out
 }
 
+// apiProjectChat answers within one project; apiGlobalChat answers across all
+// projects (empty name). Both share handleChatAsk.
 func (a *Admin) apiProjectChat(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	_ = ac
+	a.handleChatAsk(w, r, r.PathValue("project"))
+}
+
+// apiGlobalChat answers a cross-project chat turn (no project binding).
+func (a *Admin) apiGlobalChat(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	_ = ac
+	a.handleChatAsk(w, r, "")
+}
+
+func (a *Admin) handleChatAsk(w http.ResponseWriter, r *http.Request, name string) {
 	if a.chat == nil {
 		writeJSONErr(w, http.StatusServiceUnavailable, "chat is not configured — set GEMINI_API_KEY or OPENROUTER_API_KEY on the server")
 		return
 	}
-	name := r.PathValue("project")
 	body, err := parseChatBody(r)
 	if err != nil || body.Question == "" {
 		writeJSONErr(w, http.StatusBadRequest, "question is required")
@@ -102,11 +113,20 @@ func (a *Admin) apiProjectChat(w http.ResponseWriter, r *http.Request, ac *authC
 
 func (a *Admin) apiProjectChatStream(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	_ = ac
+	a.handleChatStream(w, r, r.PathValue("project"))
+}
+
+// apiGlobalChatStream streams a cross-project chat turn (no project binding).
+func (a *Admin) apiGlobalChatStream(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	_ = ac
+	a.handleChatStream(w, r, "")
+}
+
+func (a *Admin) handleChatStream(w http.ResponseWriter, r *http.Request, name string) {
 	if a.chat == nil {
 		writeJSONErr(w, http.StatusServiceUnavailable, "chat is not configured — set GEMINI_API_KEY or OPENROUTER_API_KEY on the server")
 		return
 	}
-	name := r.PathValue("project")
 	body, err := parseChatBody(r)
 	if err != nil || body.Question == "" {
 		writeJSONErr(w, http.StatusBadRequest, "question is required")

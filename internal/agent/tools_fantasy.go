@@ -53,6 +53,12 @@ func newSearchToolF(svc *search.Service) fantasy.AgentTool {
 			if in.TopK <= 0 {
 				in.TopK = 5
 			}
+			// A global (all-projects) scope fans the search across every indexed
+			// project and returns project-tagged hits — the model can't scope it
+			// down, so an explicit project is ignored here.
+			if scope, ok := scopeFromContext(ctx); ok && scope.All {
+				return searchAllProjectsResult(ctx, svc, in)
+			}
 			req := search.Request{Project: in.Project, Query: in.Query, TopK: in.TopK}
 			// When the turn is scoped to a project, that scope is the contract:
 			// pin the search to it regardless of what the model passed, and refuse
@@ -92,6 +98,40 @@ func newSearchToolF(svc *search.Service) fantasy.AgentTool {
 				"keyword": resp.Keyword,
 			})), nil
 		})
+}
+
+// searchAllProjectsResult runs a cross-project search for a global (all-projects)
+// chat turn and formats the fused, project-tagged hits the same way
+// semantic_search does, so SourcesFromTrace can rebuild citations across
+// projects. Diversity caps keep any single file/project from dominating.
+func searchAllProjectsResult(ctx context.Context, svc *search.Service, in searchInput) (fantasy.ToolResponse, error) {
+	resp, err := svc.SearchAllProjects(ctx, search.MultiScopeRequest{
+		Query: in.Query, TopK: in.TopK, MaxPerFile: 3, MaxPerProject: 5,
+	})
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("search failed: %v", err)), nil
+	}
+	type hit struct {
+		File      string  `json:"file"`
+		Project   string  `json:"project"`
+		StartLine int     `json:"start_line"`
+		EndLine   int     `json:"end_line"`
+		Score     float64 `json:"score"`
+		Content   string  `json:"content"`
+	}
+	hits := []hit{}
+	for _, r := range resp.Results {
+		hits = append(hits, hit{
+			File: r.FilePath, Project: r.Project, StartLine: r.StartLine, EndLine: r.EndLine,
+			Score: r.Score, Content: truncate(r.Content, 200),
+		})
+	}
+	return fantasy.NewTextResponse(JSONResult(map[string]any{
+		"results": hits,
+		"total":   len(hits),
+		"scope":   "all-projects",
+		"keyword": resp.Keyword,
+	})), nil
 }
 
 // --- index_status ---

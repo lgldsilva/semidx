@@ -8,8 +8,10 @@ export function ChatPanel({
 }: {
   project: string
   seedQuestion: string
-  onOpenFile: (path: string, line?: number) => void
+  // project is passed for global-chat sources (empty for project-scoped chat).
+  onOpenFile: (path: string, line?: number, project?: string) => void
 }) {
+  const global = project === ''
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState(seedQuestion)
   const [busy, setBusy] = useState(false)
@@ -98,8 +100,17 @@ export function ChatPanel({
       <div className="chat-log card" role="log" aria-live="polite" aria-atomic="false">
         {messages.length === 0 && (
           <p className="muted">
-            Ask anything about <strong>{project}</strong>. Answers use RAG over the
-            index; sources open in the Files tab.
+            {global ? (
+              <>
+                Ask anything across <strong>all indexed projects</strong>. Answers
+                cite the project each source came from.
+              </>
+            ) : (
+              <>
+                Ask anything about <strong>{project}</strong>. Answers use RAG over
+                the index; sources open in the Files tab.
+              </>
+            )}
           </p>
         )}
         {messages.map((m, i) => (
@@ -113,8 +124,9 @@ export function ChatPanel({
                     key={j}
                     type="button"
                     className="link"
-                    onClick={() => onOpenFile(s.file, s.start_line)}
+                    onClick={() => onOpenFile(s.file, s.start_line, s.project)}
                   >
+                    {s.project ? `${s.project} · ` : ''}
                     {s.file}:{s.start_line}
                   </button>
                 ))}

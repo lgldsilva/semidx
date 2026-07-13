@@ -153,6 +153,9 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/api/jobs/{id}", a.protectAPI("", a.apiGetJob))
 	mux.HandleFunc("POST /admin/api/search", a.protectAPI("", a.apiSearch))
 	mux.HandleFunc("GET /admin/api/github/repos", a.protectAPI("admin", a.apiGithubRepos))
+	// Global (cross-project) chat: no project binding — searches all projects.
+	mux.HandleFunc("POST /admin/api/chat", a.protectAPI("", a.apiGlobalChat))
+	mux.HandleFunc("POST /admin/api/chat/stream", a.protectAPI("", a.apiGlobalChatStream))
 
 	// Settings
 	mux.HandleFunc("GET /admin/api/keys", a.protectAPI("", a.apiListKeys))

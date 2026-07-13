@@ -97,10 +97,21 @@ type agentChatPipeline struct {
 	runner *agent.Runner
 }
 
+// scopeForProject maps a chat's project to the agent search scope: a named
+// project pins the turn to it; an empty project is the global chat, which fans
+// semantic_search across every indexed project.
+func scopeForProject(project string) agent.SearchScope {
+	if project == "" {
+		return agent.SearchScope{All: true}
+	}
+	return agent.SearchScope{Project: project}
+}
+
 func (a *agentChatPipeline) Ask(ctx context.Context, question, project string, history []chat.Message) (*rag.Answer, error) {
 	// Bind the turn to the requested project so semantic_search stays in scope
 	// (the model can't wander to another project). Contract, not a prompt hint.
-	ctx = agent.ContextWithScope(ctx, agent.SearchScope{Project: project})
+	// An empty project means the global chat: search across ALL projects.
+	ctx = agent.ContextWithScope(ctx, scopeForProject(project))
 	answer, err := a.runner.Ask(ctx, question, adminHistoryToMessages(history))
 	if err != nil {
 		return nil, fmt.Errorf("agent ask failed: %w", err)
@@ -122,7 +133,7 @@ func ragSources(hits []agent.SearchHit) []rag.Source {
 	for _, h := range hits {
 		out = append(out, rag.Source{
 			File: h.File, StartLine: h.StartLine, EndLine: h.EndLine,
-			Content: h.Content, Score: h.Score, Keyword: h.Keyword,
+			Content: h.Content, Score: h.Score, Keyword: h.Keyword, Project: h.Project,
 		})
 	}
 	return out
@@ -135,7 +146,7 @@ func chatSources(hits []agent.SearchHit) []chat.Source {
 	for _, h := range hits {
 		out = append(out, chat.Source{
 			File: h.File, StartLine: h.StartLine, EndLine: h.EndLine,
-			Content: h.Content, Score: h.Score, Keyword: h.Keyword,
+			Content: h.Content, Score: h.Score, Keyword: h.Keyword, Project: h.Project,
 		})
 	}
 	return out
@@ -149,8 +160,9 @@ func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project str
 	model := a.runner.Model()
 	ch := make(chan chat.StreamChunk, 16)
 	msgs := adminHistoryToMessages(history)
-	// Bind the stream turn to the project (contract for semantic_search scope).
-	ctx = agent.ContextWithScope(ctx, agent.SearchScope{Project: project})
+	// Bind the stream turn to the project (contract for semantic_search scope);
+	// an empty project is the global chat (search across ALL projects).
+	ctx = agent.ContextWithScope(ctx, scopeForProject(project))
 	go func() {
 		defer close(ch)
 		cb := agent.StreamCallbacks{

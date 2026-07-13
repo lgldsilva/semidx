@@ -14,11 +14,16 @@ type SearchScope struct {
 	Project  string // project name the chat is bound to
 	Identity string // git repo identity (preferred by search when set)
 	Worktree string // worktree toplevel, for git worktree filtering
+	// All binds the turn to EVERY project (global cross-project chat): the search
+	// tool fans out across all indexed projects and fuses the results. It is
+	// mutually exclusive with a specific Project/Identity in practice.
+	All bool
 }
 
-// IsZero reports whether the scope binds nothing.
+// IsZero reports whether the scope binds nothing. A scope with All set is not
+// zero — it binds to all projects.
 func (s SearchScope) IsZero() bool {
-	return s.Project == "" && s.Identity == "" && s.Worktree == ""
+	return s.Project == "" && s.Identity == "" && s.Worktree == "" && !s.All
 }
 
 // Matches reports whether a project reference supplied by the model refers to the
