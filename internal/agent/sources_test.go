@@ -4,7 +4,7 @@ import "testing"
 
 func TestSourcesFromTrace(t *testing.T) {
 	trace := []ToolCallRecord{
-		{Tool: "list_projects", Result: `{"projects":[]}`}, // ignored (not search)
+		{Tool: "list_projects", Result: `{"projects":[]}`},                 // ignored (not search)
 		{Tool: "semantic_search", Error: "boom", Result: `{"results":[]}`}, // ignored (errored)
 		{Tool: "semantic_search", Result: `not json`},                      // ignored (malformed)
 		{Tool: "semantic_search", Result: `{"results":[{"file":"a.go","start_line":1,"end_line":10,"content":"x","score":0.3}],"keyword":false}`},
