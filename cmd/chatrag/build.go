@@ -128,6 +128,10 @@ func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, 
 			runner = agent.NewRunner(llmModel, tools, agent.RunnerConfig{
 				SystemPrompt: agent.SystemPrompt,
 				Temperature:  &temp,
+				// Bind the REPL session to the resolved project so the agent's
+				// semantic_search stays in scope (the git identity/worktree also
+				// drive worktree filtering, matching the RAG pipeline).
+				Scope: agent.SearchScope{Project: project, Identity: pipelineIdentity, Worktree: pipelineWorktree},
 			})
 		}
 	}

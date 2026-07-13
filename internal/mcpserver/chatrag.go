@@ -2,7 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -79,7 +78,11 @@ type agenticAskBackend struct {
 // The agent has access to semantic_search, repo tools, etc. The MCP tool is
 // single-turn (no history), so tool memory lives only within this loop.
 func (b *agenticAskBackend) Ask(ctx context.Context, project, question string, _ int) (*AskOutput, error) {
-	// Prepend project context to the question so the agent knows the scope.
+	// Bind the turn to the project so semantic_search is scoped by contract —
+	// the prompt hint alone (below) is not a guarantee the model honors.
+	if project != "" {
+		ctx = agent.ContextWithScope(ctx, agent.SearchScope{Project: project})
+	}
 	fullQuestion := question
 	if project != "" {
 		fullQuestion = fmt.Sprintf("[project: %s] %s", project, question)
@@ -106,54 +109,20 @@ func (b *agenticAskBackend) Ask(ctx context.Context, project, question string, _
 	}, nil
 }
 
-// searchToolResult mirrors the JSON the semantic_search agent tool returns
-// (see internal/agent/tools_fantasy.go). Only the fields needed to rebuild
-// AskSource entries are decoded.
-type searchToolResult struct {
-	Results []struct {
-		File      string  `json:"file"`
-		StartLine int     `json:"start_line"`
-		EndLine   int     `json:"end_line"`
-		Score     float64 `json:"score"`
-	} `json:"results"`
-	Keyword bool `json:"keyword"`
-}
-
 // sourcesFromTrace reconstructs real AskSource entries from the semantic_search
-// tool results captured in the agent trace. Hits are deduped by file+line span,
-// keeping the highest score seen across all searches the agent ran.
+// tool results captured in the agent trace, via the shared agent parser (deduped
+// by file+line span, highest score kept).
 func sourcesFromTrace(trace []agent.ToolCallRecord) []AskSource {
-	type spanKey struct {
-		path       string
-		start, end int
-	}
-	seen := make(map[spanKey]int)
-	out := []AskSource{}
-	for _, tc := range trace {
-		if tc.Tool != "semantic_search" || tc.Error != "" || tc.Result == "" {
-			continue
-		}
-		var r searchToolResult
-		if err := json.Unmarshal([]byte(tc.Result), &r); err != nil {
-			continue
-		}
-		for _, h := range r.Results {
-			k := spanKey{h.File, h.StartLine, h.EndLine}
-			if idx, ok := seen[k]; ok {
-				if h.Score > out[idx].Score {
-					out[idx].Score = h.Score
-				}
-				continue
-			}
-			seen[k] = len(out)
-			out = append(out, AskSource{
-				Path:      h.File,
-				StartLine: h.StartLine,
-				EndLine:   h.EndLine,
-				Score:     h.Score,
-				Keyword:   r.Keyword,
-			})
-		}
+	hits, _ := agent.SourcesFromTrace(trace)
+	out := make([]AskSource, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, AskSource{
+			Path:      h.File,
+			StartLine: h.StartLine,
+			EndLine:   h.EndLine,
+			Score:     h.Score,
+			Keyword:   h.Keyword,
+		})
 	}
 	return out
 }

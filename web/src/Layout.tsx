@@ -19,6 +19,7 @@ export function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
           Projects
         </NavLink>
         <NavLink to="/search">Search</NavLink>
+        <NavLink to="/chat">Chat</NavLink>
         <NavLink to="/jobs">Jobs</NavLink>
         <NavLink to="/settings">Settings</NavLink>
         <NavLink to="/cli">CLI guide</NavLink>

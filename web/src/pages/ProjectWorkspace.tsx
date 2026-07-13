@@ -39,7 +39,7 @@ export function ProjectWorkspace() {
     }
   }, [name])
 
-  const { job, start: startJob } = useJobPoll(reload)
+  const { job, err: pollErr, start: startJob } = useJobPoll(reload)
 
   useEffect(() => {
     void reload()
@@ -131,6 +131,7 @@ export function ProjectWorkspace() {
 
       {err && <div className="alert error">{err}</div>}
       {job && <JobAlert job={job} />}
+      {pollErr && <div className="alert error">{pollErr}</div>}
 
       <div className="tab-nav" role="tablist" aria-label="Project sections">
         {TABS.map((t) => (

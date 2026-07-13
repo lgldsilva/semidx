@@ -140,12 +140,11 @@ func newReindexProjectToolF(db store.IndexStore, idx *indexing.Indexer, policy A
 
 type serverSyncArgs struct {
 	Project string `json:"project" description:"Project name registered on the server"`
-	Branch  string `json:"branch,omitempty" description:"Git branch to sync (optional; defaults to the project's configured branch)"`
 }
 
 func newServerRepoSyncToolF(client *semidxclient.Client, policy ActionPolicy, approve permission.Approver) fantasy.AgentTool {
 	return fantasy.NewAgentTool("server_repo_sync",
-		"Trigger a server-side git repository sync (clone or pull) and reindex job for a project registered on the remote server. Only available when logged in to a semidx server.",
+		"Trigger a server-side git sync (clone or pull) and reindex job for a project registered on the remote server. Syncs the project's configured branch. Only available when logged in to a semidx server.",
 		func(ctx context.Context, in serverSyncArgs, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if client == nil {
 				return fantasy.NewTextErrorResponse("not logged in to a remote server — use `semidx login <url>` first, or index locally"), nil
@@ -156,17 +155,20 @@ func newServerRepoSyncToolF(client *semidxclient.Client, policy ActionPolicy, ap
 			}
 			proceed, resp := applyActionPolicy(ctx, policy, approve,
 				permission.Request{Tool: "server_repo_sync", Path: proj.Name, Detail: fmt.Sprintf("server sync+reindex %q", proj.Name)},
-				map[string]any{"action": "sync", "project": proj.Name, "git_url": proj.GitURL, "branch": in.Branch})
+				map[string]any{"action": "sync", "project": proj.Name, "git_url": proj.GitURL})
 			if !proceed {
 				return resp, nil
 			}
+			// The server enqueue API syncs the project's configured branch; there
+			// is no per-job branch override (a "branch" arg would be silently
+			// ignored, so it is not accepted).
 			jobID, err := client.EnqueueJob(ctx, in.Project, "full")
 			if err != nil {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("enqueue sync job failed: %v", err)), nil
 			}
 			return fantasy.NewTextResponse(JSONResult(map[string]any{
 				"action": "sync", "project": proj.Name, "job_id": jobID, "job_type": "full",
-				"message": fmt.Sprintf("Queued full sync+reindex job #%d for %q", jobID, proj.Name),
+				"message": fmt.Sprintf("Queued full sync+reindex job #%d for %q (configured branch)", jobID, proj.Name),
 			})), nil
 		})
 }

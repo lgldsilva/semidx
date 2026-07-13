@@ -3,8 +3,18 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"charm.land/fantasy"
+)
+
+// History compaction budget (Fase 12b). When a conversation's transcript exceeds
+// compactMaxChars (chars ≈ 4× tokens), the oldest turns are summarized into one
+// system message and only compactKeepRecent turns are kept verbatim, bounding
+// token cost as a thread grows.
+const (
+	compactMaxChars   = 24000
+	compactKeepRecent = 6
 )
 
 // defaultMaxSteps caps the agent loop when the caller does not configure one.
@@ -52,6 +62,11 @@ type RunnerConfig struct {
 	SystemPrompt string
 	MaxSteps     int      // <= 0 uses defaultMaxSteps
 	Temperature  *float64 // nil = provider default
+	// Scope, when set, binds every turn to a project so tool calls stay in
+	// scope. A scope set on the call's context (via ContextWithScope) takes
+	// precedence — used by surfaces where the project varies per request
+	// (admin, MCP); the fixed-session REPL sets it here.
+	Scope SearchScope
 }
 
 // Runner drives a fantasy multi-step tool-calling loop over a language model
@@ -82,6 +97,7 @@ func (r *Runner) Model() string { return r.model.Model() }
 // of the tool calls made along the way. history carries prior turns (including
 // assistant tool_calls and tool results) so multi-turn context is preserved.
 func (r *Runner) Ask(ctx context.Context, question string, history []fantasy.Message) (*Answer, error) {
+	ctx = r.applyScope(ctx)
 	ag := fantasy.NewAgent(r.model, r.agentOptions()...)
 	res, err := ag.Generate(ctx, fantasy.AgentCall{Prompt: question, Messages: history})
 	if err != nil {
@@ -117,6 +133,7 @@ type StreamCallbacks struct {
 // the loop completes, so callers keep the full trace, usage, and turn messages
 // for multi-turn history.
 func (r *Runner) Stream(ctx context.Context, question string, history []fantasy.Message, cb StreamCallbacks) (*Answer, error) {
+	ctx = r.applyScope(ctx)
 	ag := fantasy.NewAgent(r.model, r.agentOptions()...)
 	call := fantasy.AgentStreamCall{Prompt: question, Messages: history}
 	if cb.OnText != nil {
@@ -152,6 +169,79 @@ func (r *Runner) Stream(ctx context.Context, question string, history []fantasy.
 		Usage:    usageFrom(res.TotalUsage),
 		Messages: messagesFromSteps(res.Steps),
 	}, nil
+}
+
+// applyScope injects the Runner's default project scope into the context when
+// the caller hasn't already set one. A caller-provided scope (ContextWithScope)
+// always wins, so per-request surfaces (admin, MCP) override the default.
+func (r *Runner) applyScope(ctx context.Context) context.Context {
+	if r.cfg.Scope.IsZero() {
+		return ctx
+	}
+	if _, ok := scopeFromContext(ctx); ok {
+		return ctx
+	}
+	return ContextWithScope(ctx, r.cfg.Scope)
+}
+
+// CompactHistory bounds multi-turn cost: when the transcript exceeds the char
+// budget, it summarizes all but the most recent turns into a single system
+// message via a tool-less model call, keeping recent turns verbatim. It is
+// best-effort — on any error (or when under budget) it returns history
+// unchanged, so a summarization failure never breaks the chat.
+func (r *Runner) CompactHistory(ctx context.Context, history []fantasy.Message) []fantasy.Message {
+	if len(history) <= compactKeepRecent+1 || historyChars(history) <= compactMaxChars {
+		return history
+	}
+	cut := len(history) - compactKeepRecent
+	old, recent := history[:cut], history[cut:]
+	summary, err := r.summarize(ctx, old)
+	if err != nil || strings.TrimSpace(summary) == "" {
+		return history
+	}
+	out := make([]fantasy.Message, 0, 1+len(recent))
+	out = append(out, fantasy.NewSystemMessage("Summary of earlier conversation:\n"+summary))
+	return append(out, recent...)
+}
+
+// summarize asks the model, with no tools, to condense the given turns.
+func (r *Runner) summarize(ctx context.Context, msgs []fantasy.Message) (string, error) {
+	var b strings.Builder
+	for _, m := range msgs {
+		b.WriteString(string(m.Role))
+		b.WriteString(": ")
+		b.WriteString(messageText(m))
+		b.WriteByte('\n')
+	}
+	ag := fantasy.NewAgent(r.model, fantasy.WithSystemPrompt(
+		"You compress chat history. Produce a concise summary that preserves key facts, decisions, open questions, and any file:line references. No preamble."))
+	res, err := ag.Generate(ctx, fantasy.AgentCall{
+		Prompt: "Summarize the conversation so far:\n\n" + b.String(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("summarize: %w", err)
+	}
+	return res.Response.Content.Text(), nil
+}
+
+// messageText concatenates the text parts of a message.
+func messageText(m fantasy.Message) string {
+	var b strings.Builder
+	for _, p := range m.Content {
+		if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](p); ok {
+			b.WriteString(tp.Text)
+		}
+	}
+	return b.String()
+}
+
+// historyChars is the transcript's total text length (a cheap token proxy).
+func historyChars(history []fantasy.Message) int {
+	n := 0
+	for _, m := range history {
+		n += len(messageText(m))
+	}
+	return n
 }
 
 // agentOptions builds the fantasy agent options shared by every run.

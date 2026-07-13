@@ -1,6 +1,9 @@
 package llm
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // TestBuildProvider_allTypes verifies each supported provider type builds
 // without error and reports the expected name. It does not hit the network —
@@ -46,5 +49,36 @@ func TestBuildProvider_groqDefaultBaseURL(t *testing.T) {
 func TestBuildProvider_unknown(t *testing.T) {
 	if _, err := BuildProvider(ProviderConfig{Type: "nope"}); err == nil {
 		t.Error("expected error for unknown provider type")
+	}
+}
+
+// TestBuildProvider_openAICompat covers the openai-compatible case: it requires
+// an explicit BaseURL and errors without one.
+func TestBuildProvider_openAICompat(t *testing.T) {
+	p, err := BuildProvider(ProviderConfig{Type: ProviderOpenAICompat, BaseURL: "https://example.test/v1", APIKey: "k"})
+	if err != nil {
+		t.Fatalf("BuildProvider(openai-compatible): %v", err)
+	}
+	if p == nil {
+		t.Fatal("nil provider")
+	}
+	if _, err := BuildProvider(ProviderConfig{Type: ProviderOpenAICompat}); err == nil {
+		t.Error("expected error when openai-compatible has no BaseURL")
+	}
+}
+
+// TestResolveModel builds a provider and resolves a model without hitting the
+// network (construction only). An unknown provider surfaces the build error.
+func TestResolveModel(t *testing.T) {
+	m, err := ResolveModel(context.Background(),
+		ProviderConfig{Type: ProviderOpenAICompat, BaseURL: "https://example.test/v1", APIKey: "k"}, "gpt-4o")
+	if err != nil {
+		t.Fatalf("ResolveModel: %v", err)
+	}
+	if m == nil {
+		t.Fatal("nil model")
+	}
+	if _, err := ResolveModel(context.Background(), ProviderConfig{Type: "nope"}, "x"); err == nil {
+		t.Error("expected error resolving model on unknown provider")
 	}
 }

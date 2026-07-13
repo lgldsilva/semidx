@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"slices"
 
+	"github.com/lgldsilva/semidx/internal/projectref"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -50,6 +51,10 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 	}
 
 	var allResults []store.SearchResult
+	// Aggregate the per-search flags: if any sub-search fell back to keyword or
+	// reported a keyword ranking, the fused response must say so — a client
+	// mustn't receive keyword/fallback results silently labeled as semantic.
+	var anyFallback, anyKeyword bool
 
 	for _, ident := range req.Identities {
 		// Search one project at a time.
@@ -67,6 +72,12 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 			slog.Warn("search failed for project", "identity", ident, "error", err)
 			continue
 		}
+		if resp.Fallback {
+			anyFallback = true
+		}
+		if resp.Keyword {
+			anyKeyword = true
+		}
 
 		// Tag results with project label using null-byte separator so
 		// identities containing ':' (e.g. "path:/abs/path") or '/' are safe.
@@ -76,15 +87,75 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 		allResults = append(allResults, resp.Results...)
 	}
 
-	if len(allResults) == 0 {
-		return &MultiResponse{}, nil
-	}
-
 	// Fuse by score descending with diversity caps. True cross-project RRF
 	// requires rank maps per identity and is deferred to a follow-up.
 	// Note: each sub-search does NOT call applyQueryRouting — if routing
 	// gains real weight, SearchMulti must route per sub-search too.
+	return fuseResults(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK, anyFallback, anyKeyword), nil
+}
 
+// SearchAllProjects searches every indexed project (deduped by identity) and
+// fuses the results the same way SearchMulti does, tagging each hit with its
+// project. It powers the global (cross-project) chat, where the agent is not
+// bound to a single project. Git projects search by identity; document/push
+// projects (no identity) search by name.
+func (s *Service) SearchAllProjects(ctx context.Context, req MultiScopeRequest) (*MultiResponse, error) {
+	projects, err := s.store.ListProjects(ctx, 0, 0)
+	if err != nil {
+		return nil, fmt.Errorf("list projects: %w", err)
+	}
+	projects = projectref.UniqueByIdentity(projects)
+	if len(projects) == 0 {
+		return &MultiResponse{}, nil
+	}
+	if req.TopK <= 0 {
+		req.TopK = 5
+	}
+
+	var allResults []store.SearchResult
+	var anyFallback, anyKeyword bool
+	for _, p := range projects {
+		one := Request{
+			Query:         req.Query,
+			TopK:          req.TopK * 2, // over-fetch per project for fusion quality
+			Graph:         req.Graph,
+			GraphMaxDepth: req.GraphMaxDepth,
+			KeywordOnly:   req.KeywordOnly,
+		}
+		label := p.Identity
+		if p.Identity != "" {
+			one.Identity = p.Identity
+		} else {
+			one.Project = p.Name
+			label = p.Name
+		}
+		resp, err := s.Search(ctx, one)
+		if err != nil {
+			slog.Warn("search failed for project", "project", p.Name, "error", err)
+			continue
+		}
+		if resp.Fallback {
+			anyFallback = true
+		}
+		if resp.Keyword {
+			anyKeyword = true
+		}
+		for i := range resp.Results {
+			resp.Results[i].FilePath = fmt.Sprintf("%s\x00%s", label, resp.Results[i].FilePath)
+		}
+		allResults = append(allResults, resp.Results...)
+	}
+	return fuseResults(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK, anyFallback, anyKeyword), nil
+}
+
+// fuseResults sorts the tagged results by score, applies diversity caps, and
+// splits the internal "identity\x00path" provenance prefix back into an explicit
+// Project field and a clean FilePath (the \x00 label must never leak). Shared by
+// SearchMulti and SearchAllProjects.
+func fuseResults(allResults []store.SearchResult, maxPerFile, maxPerProject, topK int, anyFallback, anyKeyword bool) *MultiResponse {
+	if len(allResults) == 0 {
+		return &MultiResponse{Fallback: anyFallback, Keyword: anyKeyword}
+	}
 	slices.SortFunc(allResults, func(a, b store.SearchResult) int {
 		if a.Score > b.Score {
 			return -1
@@ -94,27 +165,20 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 		}
 		return 0
 	})
-
-	// Apply diversity caps.
-	fused := applyDiversity(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK)
+	fused := applyDiversity(allResults, maxPerFile, maxPerProject, topK)
 	if fused == nil {
 		fused = allResults
-		if len(fused) > req.TopK {
-			fused = fused[:req.TopK]
+		if len(fused) > topK {
+			fused = fused[:topK]
 		}
 	}
-
-	// Split the internal "identity\x00path" prefix back into an explicit
-	// Project field and a clean FilePath. The \x00 label must never leak to
-	// the caller (it corrupted MCP/JSON output before this).
 	results := make([]MultiResult, len(fused))
 	for i, r := range fused {
 		proj, file := splitProvenance(r.FilePath)
 		r.FilePath = file
 		results[i] = MultiResult{SearchResult: r, Project: proj}
 	}
-
-	return &MultiResponse{Results: results}, nil
+	return &MultiResponse{Results: results, Fallback: anyFallback, Keyword: anyKeyword}
 }
 
 // applyDiversity caps results per file and per project (identified by prefix

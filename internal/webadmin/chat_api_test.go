@@ -91,6 +91,41 @@ func TestChatStreamAPI(t *testing.T) {
 	}
 }
 
+// TestGlobalChatAPI exercises the project-less (cross-project) chat endpoints.
+func TestGlobalChatAPI(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	a, _ := New(fs, fakeEmbedder{}, nil, true, nil, "")
+	a.SetChat(fakeChat{})
+	srv.Config.Handler = a.Handler()
+
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+
+	code, body := postAdminJSON(t, c, srv.URL+"/admin/api/chat", csrf, map[string]any{
+		"question": "how does auth work across projects?",
+	})
+	if code != 200 || !strings.Contains(body, `"content":"answer"`) {
+		t.Fatalf("global chat = %d body=%s", code, body)
+	}
+	if !strings.Contains(body, `"project"`) {
+		t.Errorf("sources should carry a project field: %s", body)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/admin/api/chat/stream", strings.NewReader(`{"question":"hi"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 || !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("global stream = %d ct=%s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+}
+
 func TestChatAPINoConfig(t *testing.T) {
 	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
 	fs.addUser("admin", "supersecret", "admin")

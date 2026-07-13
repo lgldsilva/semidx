@@ -86,12 +86,30 @@ export type ChatSource = {
   content: string
   score: number
   keyword?: boolean
+  project?: string // set only by the global (all-projects) chat
 }
 
 export type ChatMessage = {
   role: 'user' | 'assistant'
   content: string
   sources?: ChatSource[]
+}
+
+export type Conversation = {
+  id: number
+  project: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export type ConversationDetail = Conversation & {
+  messages: {
+    id: number
+    role: 'user' | 'assistant'
+    content: string
+    sources?: ChatSource[]
+  }[]
 }
 
 export type MeResponse = {
@@ -177,6 +195,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     return undefined as T
   }
   return (await res.json()) as T
+}
+
+// chatBase returns the chat endpoint prefix: a named project scopes the chat to
+// that project; an empty name is the global (all-projects) chat.
+function chatBase(name: string): string {
+  return name ? `/admin/api/projects/${encodeURIComponent(name)}` : '/admin/api'
 }
 
 export const api = {
@@ -384,6 +408,36 @@ export const api = {
     }>(
       `/admin/api/projects/${encodeURIComponent(name)}/analyze/explain?path=${encodeURIComponent(path)}&line=${line}`,
     ),
+  conversations: () =>
+    request<{ conversations: Conversation[] }>('/admin/api/conversations').then(
+      (r) => r.conversations ?? [],
+    ),
+  createConversation: (project: string, title: string) =>
+    request<Conversation>('/admin/api/conversations', {
+      method: 'POST',
+      body: JSON.stringify({ project, title }),
+    }),
+  conversation: (id: number) =>
+    request<ConversationDetail>(`/admin/api/conversations/${id}`),
+  renameConversation: (id: number, title: string) =>
+    request<{ ok: boolean }>(`/admin/api/conversations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+  deleteConversation: (id: number) =>
+    request<{ ok: boolean }>(`/admin/api/conversations/${id}`, {
+      method: 'DELETE',
+    }),
+  addMessage: (
+    id: number,
+    role: 'user' | 'assistant',
+    content: string,
+    sources?: ChatSource[],
+  ) =>
+    request<{ id: number }>(`/admin/api/conversations/${id}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ role, content, sources: sources ?? [] }),
+    }),
   chat: (
     name: string,
     question: string,
@@ -394,7 +448,7 @@ export const api = {
       model: string
       sources: ChatSource[]
       fallback?: boolean
-    }>(`/admin/api/projects/${encodeURIComponent(name)}/chat`, {
+    }>(`${chatBase(name)}/chat`, {
       method: 'POST',
       body: JSON.stringify({ question, history }),
     }),
@@ -409,7 +463,7 @@ export const api = {
     | { type: 'error'; error: string }
   > {
     const res = await fetch(
-      `/admin/api/projects/${encodeURIComponent(name)}/chat/stream`,
+      `${chatBase(name)}/chat/stream`,
       {
         method: 'POST',
         headers: {
