@@ -79,7 +79,10 @@ func runREPL(ctx context.Context, pipeline *rag.Pipeline, runner *agent.Runner, 
 			}
 			return nil
 		}
-		if handleREPLTurn(ctx, pipeline, runner, project, line, history, convo, mode) {
+		if handleREPLTurn(replTurn{
+			ctx: ctx, pipeline: pipeline, runner: runner, project: project,
+			line: line, history: history, convo: convo, mode: mode,
+		}) {
 			continue
 		}
 	}
@@ -116,16 +119,26 @@ func handleREPLCommand(line string, history *chat.History, convo *agent.Conversa
 	return false, false
 }
 
+// replTurn bundles one REPL question dispatch.
+type replTurn struct {
+	ctx      context.Context
+	pipeline *rag.Pipeline
+	runner   *agent.Runner
+	project  string
+	line     string
+	history  *chat.History
+	convo    *agent.Conversation
+	mode     string
+}
+
 // handleREPLTurn dispatches a question to agent or RAG. Returns true on error.
-func handleREPLTurn(ctx context.Context, pipeline *rag.Pipeline, runner *agent.Runner, project, line string, history *chat.History, convo *agent.Conversation, mode string) bool {
-	if runner != nil && mode == "agent" {
-		if handleAgentReply(ctx, runner, line, convo) {
+func handleREPLTurn(t replTurn) bool {
+	if t.runner != nil && t.mode == "agent" {
+		if handleAgentReply(t.ctx, t.runner, t.line, t.convo) {
 			return true
 		}
-	} else {
-		if handleRAGReply(ctx, pipeline, line, project, history) {
-			return true
-		}
+	} else if handleRAGReply(t.ctx, t.pipeline, t.line, t.project, t.history) {
+		return true
 	}
 	return false
 }

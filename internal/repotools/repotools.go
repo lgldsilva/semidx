@@ -195,24 +195,9 @@ func parseForEachRef(lines []string) []Branch {
 		}
 
 		fullRef := parts[0]
-		branch := Branch{FullRef: fullRef}
-
-		switch {
-		case strings.HasPrefix(fullRef, refsHeadsPrefix):
-			branch.Name = strings.TrimPrefix(fullRef, refsHeadsPrefix)
-			branch.Remote = false
-		case strings.HasPrefix(fullRef, "refs/remotes/"):
-			name := strings.TrimPrefix(fullRef, "refs/remotes/")
-			// Skip symbolic HEAD refs (e.g. origin/HEAD) that are not real branches.
-			if strings.HasSuffix(name, "/HEAD") {
-				continue
-			}
-			branch.Name = name
-			branch.Remote = true
-		default:
-			// Fallback: use the full ref as-is (shouldn't happen).
-			branch.Name = fullRef
-			branch.Remote = strings.Contains(fullRef, "/")
+		branch, ok := branchFromFullRef(fullRef)
+		if !ok {
+			continue
 		}
 
 		// Second column: upstream short name (e.g. "origin/main").
@@ -229,6 +214,26 @@ func parseForEachRef(lines []string) []Branch {
 	}
 
 	return branches
+}
+
+func branchFromFullRef(fullRef string) (Branch, bool) {
+	branch := Branch{FullRef: fullRef}
+	switch {
+	case strings.HasPrefix(fullRef, refsHeadsPrefix):
+		branch.Name = strings.TrimPrefix(fullRef, refsHeadsPrefix)
+		branch.Remote = false
+	case strings.HasPrefix(fullRef, "refs/remotes/"):
+		name := strings.TrimPrefix(fullRef, "refs/remotes/")
+		if strings.HasSuffix(name, "/HEAD") {
+			return Branch{}, false
+		}
+		branch.Name = name
+		branch.Remote = true
+	default:
+		branch.Name = fullRef
+		branch.Remote = strings.Contains(fullRef, "/")
+	}
+	return branch, true
 }
 
 // parseTrackingInfo parses the output of %(upstream:track) (e.g. "[ahead 1, behind 0]")

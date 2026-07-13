@@ -96,8 +96,13 @@ func gitConfigArgs(opts Options) []string {
 	return args
 }
 
+const (
+	schemeHTTPS = "https://"
+	schemeSSH   = "ssh://"
+)
+
 func isSSHURL(url string) bool {
-	return strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://")
+	return strings.HasPrefix(url, "git@") || strings.HasPrefix(url, schemeSSH)
 }
 
 func hasSSHClient() bool {
@@ -112,24 +117,24 @@ func normalizeToHTTPS(url string) string {
 	case strings.HasPrefix(url, "git@"):
 		rest := strings.TrimPrefix(url, "git@")
 		if i := strings.Index(rest, ":"); i > 0 {
-			return "https://" + rest[:i] + "/" + rest[i+1:]
+			return schemeHTTPS + rest[:i] + "/" + rest[i+1:]
 		}
-	case strings.HasPrefix(url, "ssh://"):
-		rest := strings.TrimPrefix(url, "ssh://")
+	case strings.HasPrefix(url, schemeSSH):
+		rest := strings.TrimPrefix(url, schemeSSH)
 		rest = strings.TrimPrefix(rest, "git@")
 		if slash := strings.Index(rest, "/"); slash > 0 {
 			hostport, path := rest[:slash], rest[slash+1:]
 			if c := strings.Index(hostport, ":"); c > 0 {
 				hostport = hostport[:c]
 			}
-			return "https://" + hostport + "/" + path
+			return schemeHTTPS + hostport + "/" + path
 		}
 	}
 	return url
 }
 
 func validURL(url string, allowFile bool) bool {
-	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "git@") {
+	if strings.HasPrefix(url, schemeHTTPS) || strings.HasPrefix(url, "git@") {
 		return true
 	}
 	return allowFile && strings.HasPrefix(url, "file://")

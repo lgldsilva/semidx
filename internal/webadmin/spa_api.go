@@ -55,7 +55,7 @@ func (a *Admin) apiLogin(w http.ResponseWriter, r *http.Request) {
 	user, err := a.store.GetUserByUsername(r.Context(), username)
 	if errors.Is(err, store.ErrNotFound) || (user != nil && user.Disabled) {
 		a.limiter.record(username, now)
-		writeJSONErr(w, http.StatusUnauthorized, "invalid username or password")
+		writeJSONErr(w, http.StatusUnauthorized, spaErrInvalidCredentials)
 		return
 	}
 	if err != nil {
@@ -66,7 +66,7 @@ func (a *Admin) apiLogin(w http.ResponseWriter, r *http.Request) {
 	ok, err := passwd.Verify(password, user.PasswordHash)
 	if err != nil || !ok {
 		a.limiter.record(username, now)
-		writeJSONErr(w, http.StatusUnauthorized, "invalid username or password")
+		writeJSONErr(w, http.StatusUnauthorized, spaErrInvalidCredentials)
 		return
 	}
 	ttl := sessionTTL
