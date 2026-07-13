@@ -54,12 +54,22 @@ semidx logout`}</pre>
           <li>Queue reindex jobs and watch status</li>
           <li>Semantic search (one project or all)</li>
           <li>Ingest files, folders and .zip archives into push projects</li>
+          <li>Project Analyze: callers, deps, explain, dead-code, SBOM, graph overview</li>
         </ul>
         <p className="muted">
           For large repositories the CLI (<code>semidx push</code> or{' '}
-          <code>repo add</code>) is still the fastest path. More screens
-          (keys, alerts, analyze) come next on the same SPA shell.
+          <code>repo add</code>) is still the fastest path. Diff, alerts, and insights
+          remain CLI-only (stored locally under <code>~/.config/semidx/</code>).
         </p>
+      </div>
+
+      <div className="card">
+        <h2>Advanced CLI commands</h2>
+        <pre className="snippet">{`semidx sbom generate --project myapp
+semidx dead-code --project myapp
+semidx diff --project myapp
+semidx alerts check --project myapp
+semidx insights show`}</pre>
       </div>
     </div>
   )

@@ -329,7 +329,7 @@ func TestSearchAdapter_FallbackAndKeyword(t *testing.T) {
 	t.Run("semantic search", func(t *testing.T) {
 		adapter := &searchAdapter{svc: svc, project: "test-project"}
 		resp, err := adapter.Search(context.Background(), rag.SearchRequest{
-			Query: "something",
+			Query: "find something in code",
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -357,7 +357,7 @@ func TestSearchAdapter_ErrorPropagation(t *testing.T) {
 	adapter := &searchAdapter{svc: svc, project: "test-project"}
 
 	_, err := adapter.Search(context.Background(), rag.SearchRequest{
-		Query: "something",
+		Query: "find something in code",
 	})
 
 	if err == nil {
@@ -377,7 +377,7 @@ func TestSearchAdapter_ErrNotFoundWrapped(t *testing.T) {
 	adapter := &searchAdapter{svc: svc, project: "missing-project"}
 
 	_, err := adapter.Search(context.Background(), rag.SearchRequest{
-		Query: "something",
+		Query: "find something in code",
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -493,7 +493,7 @@ func TestSearchAdapter_FallbackOnEmbeddingFailure(t *testing.T) {
 	adapter := &searchAdapter{svc: svc, project: "test-project"}
 
 	resp, err := adapter.Search(context.Background(), rag.SearchRequest{
-		Query: "something",
+		Query: "find something in code",
 		TopK:  5,
 	})
 	if err != nil {

@@ -197,7 +197,7 @@ func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, fil
 		}
 	}
 
-	idx := indexing.NewIndexer(s.store, s.emb, dims, indexing.IndexerOpts{})
+	idx := indexing.NewIndexer(s.store, s.emb, dims, s.indexerOpts())
 	for _, f := range files {
 		created, hErr := s.indexBatchFile(ctx, proj, idx, f, dims)
 		if hErr != nil {

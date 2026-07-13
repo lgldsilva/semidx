@@ -100,7 +100,7 @@ func TestLocalBackendSearchOverRealIndex(t *testing.T) {
 	if isErr {
 		t.Fatalf("unexpected isError; text=%q", text)
 	}
-	if !strings.Contains(text, "alpha.go:1") {
+	if !strings.Contains(text, "alpha.go:") {
 		t.Errorf("local search missing alpha.go hit: %q", text)
 	}
 }

@@ -263,6 +263,7 @@ func runIndexLocal(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 		MaxFileSize:         d.cfg.MaxFileSize,
 		MaxChunksPerFile:    d.cfg.MaxChunksPerFile,
 		MaxChunksPerProject: d.cfg.MaxChunksPerProject,
+		MaxFilesPerProject:  d.cfg.MaxFilesPerProject,
 		Verbose:             opts.verbose,
 		GitMode:             opts.gitMode,
 		GitSince:            opts.gitSince,
@@ -278,6 +279,10 @@ func runIndexLocal(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 	}
 	fmt.Printf("\nDone in %v\nFiles scanned: %d\nFiles indexed: %d\nFiles skipped (unchanged): %d\nChunks created: %d\nErrors: %d\n",
 		time.Since(start), stats.FilesScanned, stats.FilesIndexed, stats.FilesSkipped, stats.ChunksCreated, stats.Errors)
+
+	if d.cfg.LocalIndexPath != "" {
+		indexing.MaybeWarnSQLiteScale(os.Stderr, stats.FilesIndexed, stats.ChunksCreated)
+	}
 
 	// Record password-protected files so `semidx unlock` can find them, and
 	// point the user at it.
@@ -639,6 +644,12 @@ first run it generates a one-time bootstrap admin token. Requires Postgres
 			srv.SetGitAllowFile(d.cfg.GitAllowFile)
 			srv.SetGitAuth(d.cfg.GitSSLNoVerify, d.cfg.GitToken, d.cfg.GitUser)
 			srv.SetMetricsToken(d.cfg.MetricsToken)
+			srv.SetIndexLimits(server.IndexLimits{
+				MaxFileSize:         d.cfg.MaxFileSize,
+				MaxChunksPerFile:    d.cfg.MaxChunksPerFile,
+				MaxChunksPerProject: d.cfg.MaxChunksPerProject,
+				MaxFilesPerProject:  d.cfg.MaxFilesPerProject,
+			})
 
 			if err := d.bootstrapServer(cmd.Context(), srv, showBootstrapToken); err != nil {
 				return err

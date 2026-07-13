@@ -51,7 +51,7 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
   server) exposing `semantic_search`, `semantic_projects`, `semantic_reindex`.
 - **`semidx mcp install`** wires the MCP server into 12 agent clients
   (Claude Code/Desktop, Cursor, Windsurf, Gemini CLI, Antigravity, GitHub
-  Copilot, VS Code, OpenCode, Crush; Codex + cagent are print-only).
+  Copilot, VS Code, OpenCode, Crush, Codex; **cagent** is print-only (YAML toolset has no safe merge)).
 - **`semidx config`** persists provider keys + the backend choice
   (`~/.config/semidx/semidx.env`); `semidx skills install` ships agent skills.
 - **Web admin** (`/admin`, embedded via `embed.FS`): users, API keys, JWT control

@@ -54,6 +54,22 @@ install_preserves_others() {
   fi
 }
 
+# install_toml_client <client> <grep-pattern>: run `semidx mcp install --apply`
+# for a TOML-config client into a temp file, then assert the written entry.
+install_toml_client() {
+  local client="$1" pat="$2"
+  local out; out="$(mktemp -d)/config.toml"
+  if ! semidx mcp install --client "$client" --config-file "$out" --apply >/dev/null 2>&1; then
+    fail "$client: mcp install --apply failed"
+    return
+  fi
+  if grep -q "$pat" "$out" 2>/dev/null; then
+    pass "$client: TOML config written with a valid semidx entry"
+  else
+    fail "$client: written config missing semidx entry ($out)"
+  fi
+}
+
 # print_only_client <client> <grep-pattern>: a client with no safe in-place
 # merge must PRINT a snippet matching the pattern and refuse --apply.
 print_only_client() {
@@ -64,7 +80,7 @@ print_only_client() {
     fail "$client: did not print the expected snippet"
   fi
   if semidx mcp install --client "$client" --config-file "$(mktemp -d)/x" --apply >/dev/null 2>&1; then
-    skip "$client: --apply accepted by this CLI build (treating as non-blocking)"
+    fail "$client: --apply should be refused (print-only)"
   else
     pass "$client: --apply is correctly refused (print-only)"
   fi
@@ -118,7 +134,7 @@ install_all_clients() {
   install_json_client vscode         'c.servers.semidx.command && c.servers.semidx.args[0]==="mcp"'
   install_json_client opencode       'c.mcp.semidx.command.includes("mcp") && c.mcp.semidx.type==="local"'
   install_json_client crush          'c.mcp.semidx.type==="stdio" && c.mcp.semidx.args[0]==="mcp"'
-  print_only_client codex  '\[mcp_servers.semidx\]'
+  install_toml_client codex '\[mcp_servers.semidx\]'
   print_only_client cagent 'type: mcp'
   install_preserves_others cursor "$mcpservers"
   verify_claude_native

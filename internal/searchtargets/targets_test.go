@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/lgldsilva/semidx/internal/embed"
@@ -21,7 +22,7 @@ type memDB struct {
 	projects     []store.Project
 	listErr      error
 	searchErr    error
-	usedWorktree bool
+	usedWorktree atomic.Bool
 }
 
 func (m *memDB) GetProject(_ context.Context, name string) (*store.Project, error) {
@@ -78,16 +79,20 @@ func (m *memDB) SearchSimilarKeywords(context.Context, int, string, int, int) ([
 	if m.searchErr != nil {
 		return nil, m.searchErr
 	}
-	return nil, nil
+	return []store.SearchResult{{FilePath: "a.go", Content: "hit", Score: 0.5}}, nil
 }
 
 func (m *memDB) SearchSimilarWorktree(context.Context, int, []float32, int, int, string) ([]store.SearchResult, error) {
-	m.usedWorktree = true
+	m.usedWorktree.Store(true)
 	return []store.SearchResult{{FilePath: "wt.go", Content: "hit", Score: 0.9}}, nil
 }
 
 func (m *memDB) SearchSimilarKeywordsWorktree(ctx context.Context, projectID int, queryText string, dims, topK int, worktree string) ([]store.SearchResult, error) {
-	return m.SearchSimilarKeywords(ctx, projectID, queryText, dims, topK)
+	m.usedWorktree.Store(true)
+	if m.searchErr != nil {
+		return nil, m.searchErr
+	}
+	return []store.SearchResult{{FilePath: "wt.go", Content: "hit", Score: 0.5}}, nil
 }
 
 func (m *memDB) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) {
@@ -263,11 +268,11 @@ func TestSearchLocalWorktreeFilter(t *testing.T) {
 		Name: "app", Identity: "git:app", Model: "bge-m3", SourceType: "git",
 	}}}
 	out, err := SearchLocal(context.Background(), db, stubEmbed{}, []*store.Project{&db.projects[0]},
-		search.Request{Query: "q", TopK: 5}, gitmeta.Info{IsGit: true, Identity: "git:app", Toplevel: "/wt"})
+		search.Request{Query: "worktree scoped search", TopK: 5}, gitmeta.Info{IsGit: true, Identity: "git:app", Toplevel: "/wt"})
 	if err != nil || len(out) != 1 {
 		t.Fatalf("SearchLocal worktree = %+v, %v", out, err)
 	}
-	if !db.usedWorktree {
+	if !db.usedWorktree.Load() {
 		t.Fatal("expected worktree-scoped search")
 	}
 }
