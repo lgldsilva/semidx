@@ -67,6 +67,21 @@ func setupTestRepo(t *testing.T) string {
 	return dir
 }
 
+// pathsEqual compares filesystem paths after resolving symlinks (macOS maps
+// /var → /private/var, which git worktree list reports literally).
+func pathsEqual(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if ra, err := filepath.EvalSymlinks(a); err == nil {
+		a = ra
+	}
+	if rb, err := filepath.EvalSymlinks(b); err == nil {
+		b = rb
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
 // ---------------------------------------------------------------------------
 // Integration tests (real git repo)
 // ---------------------------------------------------------------------------
@@ -85,7 +100,7 @@ func TestListWorktrees(t *testing.T) {
 	}
 
 	// First worktree should be the main repo.
-	if wts[0].Path != dir {
+	if !pathsEqual(wts[0].Path, dir) {
 		t.Errorf("first worktree path = %q, want %q", wts[0].Path, dir)
 	}
 	if len(wts[0].HEAD) != 7 {
@@ -97,7 +112,7 @@ func TestListWorktrees(t *testing.T) {
 
 	// Second worktree should be wt-feat.
 	expectedWTPath := filepath.Join(filepath.Dir(dir), "wt-feat")
-	if wts[1].Path != expectedWTPath {
+	if !pathsEqual(wts[1].Path, expectedWTPath) {
 		t.Errorf("second worktree path = %q, want %q", wts[1].Path, expectedWTPath)
 	}
 	if len(wts[1].HEAD) != 7 {
