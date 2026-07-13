@@ -24,7 +24,7 @@ const (
 	jsonServers                // {"servers": {name: {command, args}}}  (VS Code)
 	jsonOpenCode               // {"mcp": {name: {type:"local", command:[...] }}}
 	jsonCrush                  // {"mcp": {name: {type:"stdio", command, args}}}  (Charm Crush)
-	tomlCodex                  // [mcp_servers.name]\ncommand=..\nargs=[..]  (print-only)
+	tomlCodex                  // [mcp_servers.name]\ncommand=..\nargs=[..]  (TOML merge)
 	yamlCagent                 // toolsets: [{type: mcp, command, args}]  (print-only)
 )
 
@@ -112,7 +112,7 @@ func Snippet(o Options) (path, snippet string, err error) {
 
 // Apply merges the semidx entry into the client's config file idempotently,
 // backing up the original first. Returns the file written. Print-only clients
-// (Codex) return an error directing the user to add the printed snippet.
+// (cagent) return an error directing the user to add the printed snippet.
 func Apply(o Options) (string, error) {
 	c, ok := clientByID(o.Client)
 	if !ok {

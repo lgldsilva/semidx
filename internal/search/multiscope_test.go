@@ -23,7 +23,7 @@ func TestSearchMulti_provenanceInEnvelope(t *testing.T) {
 
 	resp, err := svc.SearchMulti(context.Background(), MultiScopeRequest{
 		Identities: []string{"proj-app"},
-		Query:      "main",
+		Query:      "find main",
 		TopK:       5,
 	})
 	if err != nil {
@@ -84,7 +84,7 @@ func TestSearchAllProjects_tagsAndFuses(t *testing.T) {
 		simResults: []store.SearchResult{{FilePath: "cmd/main.go", Content: "x", Score: 0.9}},
 	}
 	svc := NewService(st, &fakeEmbedder{vec: []float32{1, 2, 3}, dims: 3})
-	resp, err := svc.SearchAllProjects(context.Background(), MultiScopeRequest{Query: "main", TopK: 5})
+	resp, err := svc.SearchAllProjects(context.Background(), MultiScopeRequest{Query: "find main", TopK: 5})
 	if err != nil {
 		t.Fatalf("SearchAllProjects: %v", err)
 	}

@@ -400,7 +400,7 @@ func TestSearchGraphDisabledDoesNotCallGraphMethods(t *testing.T) {
 	// Graph=false must NOT call FetchGraphNeighbors — graphlessStore panics if it does.
 	resp, err := svc.Search(context.Background(), Request{
 		Project: "p",
-		Query:   "q",
+		Query:   "graph expansion test",
 		TopK:    5,
 		Graph:   false,
 	})
@@ -423,7 +423,7 @@ func TestSearchGraphEnabledWithEmptyGraphReturnsOriginalResults(t *testing.T) {
 
 	resp, err := svc.Search(context.Background(), Request{
 		Project: "p",
-		Query:   "q",
+		Query:   "graph expansion test",
 		TopK:    5,
 		Graph:   true,
 	})

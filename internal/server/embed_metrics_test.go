@@ -17,7 +17,7 @@ func TestEmbedMetricsRecordedOnSearch(t *testing.T) {
 		results: []store.SearchResult{{FilePath: "a.go", Score: 0.9, Content: "x"}},
 	}, fakeEmbedder{}, nil)
 
-	if rec := do(t, srv, "POST", "/api/v1/projects/proj/search", "tok", `{"query":"auth"}`); rec.Code != 200 {
+	if rec := do(t, srv, "POST", "/api/v1/projects/proj/search", "tok", `{"query":"how does auth work"}`); rec.Code != 200 {
 		t.Fatalf("search = %d: %s", rec.Code, rec.Body.String())
 	}
 

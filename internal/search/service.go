@@ -127,7 +127,12 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		// exists for keyword-only-indexed projects and 500s ("relation chunks_1
 		// does not exist") on a project indexed with embeddings.
 		resp, err = s.searchKeywordOnly(ctx, project.ID, req, project.Dims, worktree, resp)
+	} else if qt := ClassifyQuery(req.Query); RoutesToKeyword(qt) {
+		kwQuery := KeywordQueryForRouting(req.Query, qt)
+		span.SetAttributes(attribute.String("query_type", qt.String()))
+		resp, err = s.searchRoutedKeyword(ctx, project.ID, req, kwQuery, dims, worktree, resp)
 	} else {
+		span.SetAttributes(attribute.String("query_type", QueryNaturalLanguage.String()))
 		resp, err = s.searchSemantic(ctx, project.ID, req, model, dims, worktree, resp)
 	}
 	if err != nil {
@@ -176,6 +181,19 @@ func worktreeFilter(project *store.Project, reqWorktree string) string {
 
 func (s *Service) searchKeywordOnly(ctx context.Context, projectID int, req Request, dims int, worktree string, resp *Response) (*Response, error) {
 	results, err := s.keywordSearch(ctx, projectID, req.Query, dims, req.TopK, worktree)
+	if err != nil {
+		return nil, err
+	}
+	resp.Results = results
+	resp.Keyword = true
+	return resp, nil
+}
+
+// searchRoutedKeyword runs keyword search for identifier/path/exact queries
+// without calling the embedder (query routing). Results are keyword matches,
+// not a fallback from a failed embed.
+func (s *Service) searchRoutedKeyword(ctx context.Context, projectID int, req Request, query string, dims int, worktree string, resp *Response) (*Response, error) {
+	results, err := s.keywordSearch(ctx, projectID, query, dims, req.TopK, worktree)
 	if err != nil {
 		return nil, err
 	}

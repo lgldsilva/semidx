@@ -65,6 +65,26 @@ func isIdentifier(s string) bool {
 	return true
 }
 
+// RoutesToKeyword reports whether a query should skip embedding and use the
+// keyword/FTS path directly (identifiers, paths, exact quoted strings).
+func RoutesToKeyword(qt QueryType) bool {
+	switch qt {
+	case QueryIdentifier, QueryPath, QueryExact:
+		return true
+	default:
+		return false
+	}
+}
+
+// KeywordQueryForRouting returns the text to pass to keyword search after
+// routing. Exact queries lose their surrounding quotes.
+func KeywordQueryForRouting(query string, qt QueryType) string {
+	if qt == QueryExact && len(query) >= 2 {
+		return query[1 : len(query)-1]
+	}
+	return query
+}
+
 // String returns a human-readable label for the query type.
 func (qt QueryType) String() string {
 	switch qt {
