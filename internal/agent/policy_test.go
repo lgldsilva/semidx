@@ -23,3 +23,28 @@ func TestActionPolicyString(t *testing.T) {
 		})
 	}
 }
+
+func TestParseActionPolicy(t *testing.T) {
+	cases := []struct {
+		in      string
+		wantPol ActionPolicy
+		wantOK  bool
+	}{
+		{"propose", PolicyPropose, true},
+		{"confirm", PolicyConfirm, true},
+		{"execute", PolicyExecute, true},
+		{"off", PolicyPropose, false},     // explicitly disabled → not enabled
+		{"", PolicyPropose, false},        // unset → not enabled
+		{"PROPOSE", PolicyPropose, false}, // case-sensitive: callers normalize to lowercase first
+		{"garbage", PolicyPropose, false},
+	}
+	for _, c := range cases {
+		gotPol, gotOK := ParseActionPolicy(c.in)
+		if gotOK != c.wantOK {
+			t.Errorf("ParseActionPolicy(%q) ok = %v, want %v", c.in, gotOK, c.wantOK)
+		}
+		if gotOK && gotPol != c.wantPol {
+			t.Errorf("ParseActionPolicy(%q) policy = %v, want %v", c.in, gotPol, c.wantPol)
+		}
+	}
+}

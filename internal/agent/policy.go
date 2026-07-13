@@ -21,3 +21,21 @@ func (p ActionPolicy) String() string {
 		return "unknown"
 	}
 }
+
+// ParseActionPolicy maps a config string to an ActionPolicy. ok is false for
+// "off", "" or any unrecognized value — meaning action tools should not be
+// enabled at all on that surface (the safe default). This lets a non-interactive
+// surface (MCP, admin) opt into "propose" (describe only) or "execute" (run)
+// without wiring an interactive approver, which "confirm" would require.
+func ParseActionPolicy(s string) (ActionPolicy, bool) {
+	switch s {
+	case "propose":
+		return PolicyPropose, true
+	case "confirm":
+		return PolicyConfirm, true
+	case "execute":
+		return PolicyExecute, true
+	default:
+		return PolicyPropose, false
+	}
+}
