@@ -95,6 +95,23 @@ export type ChatMessage = {
   sources?: ChatSource[]
 }
 
+export type Conversation = {
+  id: number
+  project: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export type ConversationDetail = Conversation & {
+  messages: {
+    id: number
+    role: 'user' | 'assistant'
+    content: string
+    sources?: ChatSource[]
+  }[]
+}
+
 export type MeResponse = {
   user: User
   csrf: string
@@ -391,6 +408,36 @@ export const api = {
     }>(
       `/admin/api/projects/${encodeURIComponent(name)}/analyze/explain?path=${encodeURIComponent(path)}&line=${line}`,
     ),
+  conversations: () =>
+    request<{ conversations: Conversation[] }>('/admin/api/conversations').then(
+      (r) => r.conversations ?? [],
+    ),
+  createConversation: (project: string, title: string) =>
+    request<Conversation>('/admin/api/conversations', {
+      method: 'POST',
+      body: JSON.stringify({ project, title }),
+    }),
+  conversation: (id: number) =>
+    request<ConversationDetail>(`/admin/api/conversations/${id}`),
+  renameConversation: (id: number, title: string) =>
+    request<{ ok: boolean }>(`/admin/api/conversations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+  deleteConversation: (id: number) =>
+    request<{ ok: boolean }>(`/admin/api/conversations/${id}`, {
+      method: 'DELETE',
+    }),
+  addMessage: (
+    id: number,
+    role: 'user' | 'assistant',
+    content: string,
+    sources?: ChatSource[],
+  ) =>
+    request<{ id: number }>(`/admin/api/conversations/${id}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ role, content, sources: sources ?? [] }),
+    }),
   chat: (
     name: string,
     question: string,
