@@ -135,17 +135,29 @@ export function ChatPanel({
             <pre className="snippet">{m.content}</pre>
             {m.sources && m.sources.length > 0 && (
               <div className="chat-sources">
-                {m.sources.map((s, j) => (
-                  <button
-                    key={j}
-                    type="button"
-                    className="link"
-                    onClick={() => onOpenFile(s.file, s.start_line, s.project)}
-                  >
-                    {s.project ? `${s.project} · ` : ''}
-                    {s.file}:{s.start_line}
-                  </button>
-                ))}
+                {m.sources.map((s, j) => {
+                  // Real deep-link (authenticated SPA route) so a source can be
+                  // opened in a new tab / copied, while a plain click still does
+                  // in-app navigation. Global-chat sources carry their project.
+                  const proj = s.project || project
+                  const href = proj
+                    ? `/admin/projects/${encodeURIComponent(proj)}?tab=files&path=${encodeURIComponent(s.file)}${s.start_line ? `&line=${s.start_line}` : ''}`
+                    : undefined
+                  return (
+                    <a
+                      key={j}
+                      className="link"
+                      href={href ?? '#'}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        onOpenFile(s.file, s.start_line, s.project)
+                      }}
+                    >
+                      {s.project ? `${s.project} · ` : ''}
+                      {s.file}:{s.start_line}
+                    </a>
+                  )
+                })}
               </div>
             )}
           </div>
