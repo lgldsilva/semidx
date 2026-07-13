@@ -33,6 +33,7 @@ type Source struct {
 	Content   string
 	Score     float64
 	Keyword   bool
+	Project   string // source project label; set only by global (all-projects) chat
 }
 
 // StreamClient is a chat provider that supports streaming responses.

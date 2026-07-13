@@ -12,6 +12,7 @@ type Source struct {
 	Content   string  // the chunk text
 	Score     float64 // similarity score
 	Keyword   bool    // true if score is from keyword match rather than semantic
+	Project   string  // source project label; set only by global (all-projects) chat
 }
 
 // Answer is a RAG response.

@@ -82,6 +82,35 @@ func TestSearchTool_scopeContract(t *testing.T) {
 	}
 }
 
+// TestSearchTool_allProjectsScope is the Fase 6 check: an All scope fans
+// semantic_search across every project and tags each hit with its project.
+func TestSearchTool_allProjectsScope(t *testing.T) {
+	if (SearchScope{All: true}).IsZero() {
+		t.Fatal("a scope with All set must not be zero")
+	}
+	fs := newFakeSearchStore()
+	fs.addProject(&store.Project{Name: "acme", Identity: "id-acme", SourceType: "git", Model: "m", Status: "ready"})
+	fs.addProject(&store.Project{Name: "beta", Identity: "id-beta", SourceType: "git", Model: "m", Status: "ready"})
+	svc := search.NewService(fs, fakeEmbedder{})
+	tool := newSearchToolF(svc)
+
+	ctx := ContextWithScope(t.Context(), SearchScope{All: true})
+	resp, err := tool.Run(ctx, fantasy.ToolCall{Input: `{"query":"x"}`})
+	if err != nil {
+		t.Fatalf("Run(all): %v", err)
+	}
+	if resp.IsError {
+		t.Fatalf("all-projects search should succeed, got error: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, `"scope":"all-projects"`) {
+		t.Errorf("expected the all-projects scope marker, got: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, `"project":"id-acme"`) &&
+		!strings.Contains(resp.Content, `"project":"id-beta"`) {
+		t.Errorf("expected project-tagged hits, got: %s", resp.Content)
+	}
+}
+
 // TestRunner_appliesDefaultScope verifies the Runner injects its configured
 // default scope into the context (used by the ChatRAG REPL) when the caller
 // didn't set one, while a caller-set scope wins.

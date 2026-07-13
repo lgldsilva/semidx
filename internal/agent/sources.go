@@ -12,6 +12,9 @@ type SearchHit struct {
 	Content   string
 	Score     float64
 	Keyword   bool
+	// Project is the source project's label, set only by the global (all-projects)
+	// chat so a citation can say which project it came from. Empty otherwise.
+	Project string
 }
 
 // searchToolResult mirrors the JSON the semantic_search tool returns
@@ -20,6 +23,7 @@ type SearchHit struct {
 type searchToolResult struct {
 	Results []struct {
 		File      string  `json:"file"`
+		Project   string  `json:"project"`
 		StartLine int     `json:"start_line"`
 		EndLine   int     `json:"end_line"`
 		Content   string  `json:"content"`
@@ -62,6 +66,7 @@ func SourcesFromTrace(trace []ToolCallRecord) (hits []SearchHit, fallback bool) 
 			hits = append(hits, SearchHit{
 				File: h.File, StartLine: h.StartLine, EndLine: h.EndLine,
 				Content: h.Content, Score: h.Score, Keyword: r.Keyword,
+				Project: h.Project,
 			})
 		}
 	}

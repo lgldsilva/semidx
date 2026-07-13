@@ -86,6 +86,7 @@ export type ChatSource = {
   content: string
   score: number
   keyword?: boolean
+  project?: string // set only by the global (all-projects) chat
 }
 
 export type ChatMessage = {
@@ -177,6 +178,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     return undefined as T
   }
   return (await res.json()) as T
+}
+
+// chatBase returns the chat endpoint prefix: a named project scopes the chat to
+// that project; an empty name is the global (all-projects) chat.
+function chatBase(name: string): string {
+  return name ? `/admin/api/projects/${encodeURIComponent(name)}` : '/admin/api'
 }
 
 export const api = {
@@ -394,7 +401,7 @@ export const api = {
       model: string
       sources: ChatSource[]
       fallback?: boolean
-    }>(`/admin/api/projects/${encodeURIComponent(name)}/chat`, {
+    }>(`${chatBase(name)}/chat`, {
       method: 'POST',
       body: JSON.stringify({ question, history }),
     }),
@@ -409,7 +416,7 @@ export const api = {
     | { type: 'error'; error: string }
   > {
     const res = await fetch(
-      `/admin/api/projects/${encodeURIComponent(name)}/chat/stream`,
+      `${chatBase(name)}/chat/stream`,
       {
         method: 'POST',
         headers: {

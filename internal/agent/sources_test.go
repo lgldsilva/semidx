@@ -31,3 +31,15 @@ func TestSourcesFromTrace(t *testing.T) {
 		t.Errorf("empty trace: hits=%v fallback=%v", hits, fallback)
 	}
 }
+
+// TestSourcesFromTrace_projectTag verifies the project label (global chat) is
+// captured on the hit so citations can say which project they came from.
+func TestSourcesFromTrace_projectTag(t *testing.T) {
+	trace := []ToolCallRecord{
+		{Tool: "semantic_search", Result: `{"results":[{"file":"a.go","project":"id-acme","start_line":1,"end_line":3,"content":"x","score":0.9}],"scope":"all-projects"}`},
+	}
+	hits, _ := SourcesFromTrace(trace)
+	if len(hits) != 1 || hits[0].Project != "id-acme" {
+		t.Errorf("project tag not captured: %+v", hits)
+	}
+}
