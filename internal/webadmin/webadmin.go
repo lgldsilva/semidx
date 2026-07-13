@@ -156,6 +156,13 @@ func (a *Admin) Handler() http.Handler {
 	// Global (cross-project) chat: no project binding — searches all projects.
 	mux.HandleFunc("POST /admin/api/chat", a.protectAPI("", a.apiGlobalChat))
 	mux.HandleFunc("POST /admin/api/chat/stream", a.protectAPI("", a.apiGlobalChatStream))
+	// Persistent conversations (per-user; PgStore only).
+	mux.HandleFunc("GET /admin/api/conversations", a.protectAPI("", a.apiListConversations))
+	mux.HandleFunc("POST /admin/api/conversations", a.protectAPI("", a.apiCreateConversation))
+	mux.HandleFunc("GET /admin/api/conversations/{id}", a.protectAPI("", a.apiGetConversation))
+	mux.HandleFunc("PATCH /admin/api/conversations/{id}", a.protectAPI("", a.apiRenameConversation))
+	mux.HandleFunc("DELETE /admin/api/conversations/{id}", a.protectAPI("", a.apiDeleteConversation))
+	mux.HandleFunc("POST /admin/api/conversations/{id}/messages", a.protectAPI("", a.apiAddConversationMessage))
 
 	// Settings
 	mux.HandleFunc("GET /admin/api/keys", a.protectAPI("", a.apiListKeys))

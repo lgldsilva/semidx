@@ -47,6 +47,12 @@ type fakeStore struct {
 	graph      map[string][]string  // FetchGraphNeighbors
 	nextJob    int
 
+	// conversation support (ConversationStore)
+	convs    map[int]*store.Conversation
+	convMsgs map[int][]store.ConversationMessage
+	nextConv int
+	nextMsg  int
+
 	projectCommit string // GetProjectCommit
 	chunkCount    int    // CountProjectChunks
 
@@ -70,6 +76,7 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{
 		users: map[int]*store.User{}, byName: map[string]*store.User{},
 		sessions: map[string]int{}, tokens: map[int]*store.Token{}, tokenOwner: map[int]int{},
+		convs: map[int]*store.Conversation{}, convMsgs: map[int][]store.ConversationMessage{},
 	}
 }
 
