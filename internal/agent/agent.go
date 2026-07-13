@@ -15,14 +15,6 @@ type Tool interface {
 	Run(ctx context.Context, args string) (string, error) // args JSON -> result text
 }
 
-// ToolCallRecord traces one tool invocation for provenance.
-type ToolCallRecord struct {
-	Tool   string
-	Args   string
-	Result string
-	Error  string
-}
-
 // Agent runs the LLM<->tools loop.
 type Agent struct {
 	chat      chat.Client
@@ -43,13 +35,6 @@ func NewAgent(client chat.Client, tools []Tool, resolver ScopeResolver) *Agent {
 		resolver:  resolver,
 		maxRounds: defaultMaxRounds,
 	}
-}
-
-// Answer is the final agent response with provenance.
-type Answer struct {
-	Content string
-	Trace   []ToolCallRecord
-	Model   string
 }
 
 // Ask runs the tool-calling loop and returns the final answer.
