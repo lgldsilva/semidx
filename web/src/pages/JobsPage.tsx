@@ -92,11 +92,11 @@ export function JobsPage() {
                   </td>
                   <td>{j.type}</td>
                   <td>
-                    <span className="pill">{j.status}</span>
+                    <span className={`pill pill-${j.status}`}>{j.status}</span>
                   </td>
                   <td>{j.files_indexed ?? '—'}</td>
                   <td>{j.chunks_created ?? '—'}</td>
-                  <td className="muted small">{j.error || ''}</td>
+                  <td className={j.error ? 'small danger-text' : 'muted small'}>{j.error || '—'}</td>
                 </tr>
               ))
             )}

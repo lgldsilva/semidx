@@ -405,11 +405,46 @@ func (a *Admin) writeScopedJob(w http.ResponseWriter, r *http.Request, project s
 	writeJSON(w, http.StatusOK, jobToJSON(job))
 }
 
+// jobErrorSummary maps a failed job's raw error (which may contain DSNs, hosts
+// or credentials) to a safe, actionable summary for the authenticated admin API.
+// Only curated strings are returned — no raw error text — so nothing sensitive
+// leaks; the full detail stays in the server logs.
+func jobErrorSummary(raw string) string {
+	l := strings.ToLower(raw)
+	// Classify git failures only within a git context, so a DB error like
+	// "pq: password authentication failed" is NOT mistaken for a git auth error.
+	isGit := strings.Contains(l, "git clone") || strings.Contains(l, "git pull") ||
+		strings.Contains(l, "cloning into") || strings.Contains(l, "fatal:") ||
+		strings.Contains(l, "remote:")
+	if isGit {
+		switch {
+		case strings.Contains(l, "cannot run ssh") || strings.Contains(l, "unable to fork"):
+			return "git clone failed: the server has no SSH client — register the repo with an https:// URL"
+		case strings.Contains(l, "ssl certificate") || strings.Contains(l, "certificate problem") || strings.Contains(l, "unable to get local issuer"):
+			return "git clone failed: TLS certificate not trusted (self-signed?) — see server logs"
+		case strings.Contains(l, "authentication failed") || strings.Contains(l, "could not read username") || strings.Contains(l, "invalid username or password") || strings.Contains(l, "403"):
+			return "git clone failed: authentication required or invalid — check the repo credentials"
+		case strings.Contains(l, "not found") || strings.Contains(l, "404"):
+			return "git clone failed: repository not found or no access"
+		default:
+			return "git clone/pull failed — see server logs"
+		}
+	}
+	if strings.Contains(l, "embedding") || strings.Contains(l, "model info") || strings.Contains(l, "ensure chunks") {
+		return "indexing failed: embedding/store error — see server logs"
+	}
+	return "index job failed — see server logs"
+}
+
 func jobToJSON(j *store.Job) map[string]any {
 	errMsg := j.Error
 	if j.Status == "failed" && errMsg != "" {
-		// Keep UI/API error surfaces generic: detailed failures stay in server logs.
-		errMsg = "index job failed"
+		// The raw error may carry DSNs, hosts or credentials, so don't expose it
+		// verbatim. Map it to a SAFE, ACTIONABLE summary so the admin learns why
+		// a reindex failed (e.g. ssh/cert/auth) without leaking secrets; the full
+		// detail stays in the server logs. (A bare "index job failed" hid the
+		// cause entirely.)
+		errMsg = jobErrorSummary(errMsg)
 	}
 	out := map[string]any{
 		"id": j.ID, "type": j.Type, "status": j.Status, "error": errMsg,
