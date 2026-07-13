@@ -50,54 +50,64 @@ func newSearchToolF(svc *search.Service) fantasy.AgentTool {
 	return fantasy.NewParallelAgentTool("semantic_search",
 		"Search indexed code and documents by meaning. Returns file:line results with relevance scores. Use for intent/behavior queries, not exact string matching.",
 		func(ctx context.Context, in searchInput, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			if in.TopK <= 0 {
-				in.TopK = 5
-			}
-			// A global (all-projects) scope fans the search across every indexed
-			// project and returns project-tagged hits — the model can't scope it
-			// down, so an explicit project is ignored here.
-			if scope, ok := scopeFromContext(ctx); ok && scope.All {
-				return searchAllProjectsResult(ctx, svc, in)
-			}
-			req := search.Request{Project: in.Project, Query: in.Query, TopK: in.TopK}
-			// When the turn is scoped to a project, that scope is the contract:
-			// pin the search to it regardless of what the model passed, and refuse
-			// a conflicting explicit project (so the model can't wander off-scope).
-			if scope, ok := scopeFromContext(ctx); ok && !scope.IsZero() {
-				if in.Project != "" && !scope.Matches(in.Project) {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf(
-						"this chat is scoped to project %q; omit \"project\" to search it (refusing %q)",
-						scope.Label(), in.Project)), nil
-				}
-				req.Project = scope.Project
-				req.Identity = scope.Identity
-				req.Worktree = scope.Worktree
-			}
-			resp, err := svc.Search(ctx, req)
-			if err != nil {
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("search failed: %v", err)), nil
-			}
-			type hit struct {
-				File      string  `json:"file"`
-				StartLine int     `json:"start_line"`
-				EndLine   int     `json:"end_line"`
-				Score     float64 `json:"score"`
-				Content   string  `json:"content"`
-			}
-			hits := []hit{}
-			for _, r := range resp.Results {
-				hits = append(hits, hit{
-					File: r.FilePath, StartLine: r.StartLine, EndLine: r.EndLine,
-					Score: r.Score, Content: truncate(r.Content, 200),
-				})
-			}
-			return fantasy.NewTextResponse(JSONResult(map[string]any{
-				"results": hits,
-				"total":   len(hits),
-				"project": resp.Project.Name,
-				"keyword": resp.Keyword,
-			})), nil
+			return runSemanticSearch(ctx, svc, in)
 		})
+}
+
+func runSemanticSearch(ctx context.Context, svc *search.Service, in searchInput) (fantasy.ToolResponse, error) {
+	if in.TopK <= 0 {
+		in.TopK = 5
+	}
+	if scope, ok := scopeFromContext(ctx); ok && scope.All {
+		return searchAllProjectsResult(ctx, svc, in)
+	}
+	req := search.Request{Project: in.Project, Query: in.Query, TopK: in.TopK}
+	if resp, ok := scopeConflictResponse(ctx, in); ok {
+		return resp, nil
+	}
+	if scope, ok := scopeFromContext(ctx); ok && !scope.IsZero() {
+		req.Project = scope.Project
+		req.Identity = scope.Identity
+		req.Worktree = scope.Worktree
+	}
+	resp, err := svc.Search(ctx, req)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("search failed: %v", err)), nil
+	}
+	return formatScopedSearchResponse(resp), nil
+}
+
+func scopeConflictResponse(ctx context.Context, in searchInput) (fantasy.ToolResponse, bool) {
+	scope, ok := scopeFromContext(ctx)
+	if !ok || scope.IsZero() || scope.All || in.Project == "" || scope.Matches(in.Project) {
+		return fantasy.ToolResponse{}, false
+	}
+	return fantasy.NewTextErrorResponse(fmt.Sprintf(
+		"this chat is scoped to project %q; omit \"project\" to search it (refusing %q)",
+		scope.Label(), in.Project)), true
+}
+
+func formatScopedSearchResponse(resp *search.Response) fantasy.ToolResponse {
+	type hit struct {
+		File      string  `json:"file"`
+		StartLine int     `json:"start_line"`
+		EndLine   int     `json:"end_line"`
+		Score     float64 `json:"score"`
+		Content   string  `json:"content"`
+	}
+	hits := make([]hit, 0, len(resp.Results))
+	for _, r := range resp.Results {
+		hits = append(hits, hit{
+			File: r.FilePath, StartLine: r.StartLine, EndLine: r.EndLine,
+			Score: r.Score, Content: truncate(r.Content, 200),
+		})
+	}
+	return fantasy.NewTextResponse(JSONResult(map[string]any{
+		"results": hits,
+		"total":   len(hits),
+		"project": resp.Project.Name,
+		"keyword": resp.Keyword,
+	}))
 }
 
 // searchAllProjectsResult runs a cross-project search for a global (all-projects)

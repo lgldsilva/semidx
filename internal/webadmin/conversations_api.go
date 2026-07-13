@@ -10,6 +10,11 @@ import (
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
+const (
+	msgInvalidConversationID = "invalid conversation id"
+	msgConversationNotFound  = "conversation not found"
+)
+
 // conversations persistence is optional (PgStore only). convStore returns the
 // store as a ConversationStore, or writes a 501 and reports false.
 func (a *Admin) convStore(w http.ResponseWriter) (store.ConversationStore, bool) {
@@ -84,12 +89,12 @@ func (a *Admin) apiGetConversation(w http.ResponseWriter, r *http.Request, ac *a
 	}
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid conversation id")
+		writeJSONErr(w, http.StatusBadRequest, msgInvalidConversationID)
 		return
 	}
 	conv, err := cs.GetConversation(r.Context(), ac.user.ID, id)
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "conversation not found")
+		writeJSONErr(w, http.StatusNotFound, msgConversationNotFound)
 		return
 	}
 	if err != nil {
@@ -119,7 +124,7 @@ func (a *Admin) apiRenameConversation(w http.ResponseWriter, r *http.Request, ac
 	}
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid conversation id")
+		writeJSONErr(w, http.StatusBadRequest, msgInvalidConversationID)
 		return
 	}
 	var body struct {
@@ -131,7 +136,7 @@ func (a *Admin) apiRenameConversation(w http.ResponseWriter, r *http.Request, ac
 	}
 	switch err := cs.RenameConversation(r.Context(), ac.user.ID, id, strings.TrimSpace(body.Title)); {
 	case errors.Is(err, store.ErrNotFound):
-		writeJSONErr(w, http.StatusNotFound, "conversation not found")
+		writeJSONErr(w, http.StatusNotFound, msgConversationNotFound)
 	case err != nil:
 		a.log.Error("rename conversation failed", "err", err)
 		writeJSONErr(w, http.StatusInternalServerError, "could not rename conversation")
@@ -147,12 +152,12 @@ func (a *Admin) apiDeleteConversation(w http.ResponseWriter, r *http.Request, ac
 	}
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid conversation id")
+		writeJSONErr(w, http.StatusBadRequest, msgInvalidConversationID)
 		return
 	}
 	switch err := cs.DeleteConversation(r.Context(), ac.user.ID, id); {
 	case errors.Is(err, store.ErrNotFound):
-		writeJSONErr(w, http.StatusNotFound, "conversation not found")
+		writeJSONErr(w, http.StatusNotFound, msgConversationNotFound)
 	case err != nil:
 		a.log.Error("delete conversation failed", "err", err)
 		writeJSONErr(w, http.StatusInternalServerError, "could not delete conversation")
@@ -168,7 +173,7 @@ func (a *Admin) apiAddConversationMessage(w http.ResponseWriter, r *http.Request
 	}
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "invalid conversation id")
+		writeJSONErr(w, http.StatusBadRequest, msgInvalidConversationID)
 		return
 	}
 	var body struct {
@@ -186,7 +191,7 @@ func (a *Admin) apiAddConversationMessage(w http.ResponseWriter, r *http.Request
 	}
 	// Ownership check: the conversation must belong to the caller.
 	if _, err := cs.GetConversation(r.Context(), ac.user.ID, id); errors.Is(err, store.ErrNotFound) {
-		writeJSONErr(w, http.StatusNotFound, "conversation not found")
+		writeJSONErr(w, http.StatusNotFound, msgConversationNotFound)
 		return
 	} else if err != nil {
 		a.log.Error("get conversation failed", "err", err)

@@ -37,38 +37,44 @@ type searchToolResult struct {
 // also reports whether any search fell back to keyword ranking, so callers can
 // set an accurate fallback flag instead of guessing.
 func SourcesFromTrace(trace []ToolCallRecord) (hits []SearchHit, fallback bool) {
-	type spanKey struct {
-		path       string
-		start, end int
-	}
 	seen := make(map[spanKey]int)
 	hits = []SearchHit{}
 	for _, tc := range trace {
-		if tc.Tool != "semantic_search" || tc.Error != "" || tc.Result == "" {
-			continue
-		}
-		var r searchToolResult
-		if err := json.Unmarshal([]byte(tc.Result), &r); err != nil {
-			continue
-		}
-		if r.Keyword {
-			fallback = true
-		}
-		for _, h := range r.Results {
-			k := spanKey{h.File, h.StartLine, h.EndLine}
-			if idx, ok := seen[k]; ok {
-				if h.Score > hits[idx].Score {
-					hits[idx].Score = h.Score
-				}
-				continue
+		hits, fallback = mergeTraceSearchHits(tc, seen, hits, fallback)
+	}
+	return hits, fallback
+}
+
+type spanKey struct {
+	path       string
+	start, end int
+}
+
+func mergeTraceSearchHits(tc ToolCallRecord, seen map[spanKey]int, hits []SearchHit, fallback bool) ([]SearchHit, bool) {
+	if tc.Tool != "semantic_search" || tc.Error != "" || tc.Result == "" {
+		return hits, fallback
+	}
+	var r searchToolResult
+	if err := json.Unmarshal([]byte(tc.Result), &r); err != nil {
+		return hits, fallback
+	}
+	if r.Keyword {
+		fallback = true
+	}
+	for _, h := range r.Results {
+		k := spanKey{h.File, h.StartLine, h.EndLine}
+		if idx, ok := seen[k]; ok {
+			if h.Score > hits[idx].Score {
+				hits[idx].Score = h.Score
 			}
-			seen[k] = len(hits)
-			hits = append(hits, SearchHit{
-				File: h.File, StartLine: h.StartLine, EndLine: h.EndLine,
-				Content: h.Content, Score: h.Score, Keyword: r.Keyword,
-				Project: h.Project,
-			})
+			continue
 		}
+		seen[k] = len(hits)
+		hits = append(hits, SearchHit{
+			File: h.File, StartLine: h.StartLine, EndLine: h.EndLine,
+			Content: h.Content, Score: h.Score, Keyword: r.Keyword,
+			Project: h.Project,
+		})
 	}
 	return hits, fallback
 }
