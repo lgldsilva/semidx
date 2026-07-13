@@ -33,6 +33,11 @@ const (
 	// explicit BaseURL (e.g. OpenCode Zen, DeepInfra, Together, a local
 	// llama.cpp/vLLM server). BaseURL is required.
 	ProviderOpenAICompat ProviderType = "openai-compatible"
+	// ProviderCopilot targets GitHub Copilot's OpenAI-compatible chat API. The
+	// APIKey is a GitHub token that is exchanged at request time for a
+	// short-lived Copilot token (see copilot.go); BaseURL defaults to the Copilot
+	// API host.
+	ProviderCopilot ProviderType = "copilot"
 )
 
 // groqDefaultBaseURL is Groq's OpenAI-compatible endpoint. Groq has no native
@@ -103,6 +108,24 @@ func BuildProvider(cfg ProviderConfig) (fantasy.Provider, error) {
 		}
 		if cfg.APIKey != "" {
 			opts = append(opts, openaicompat.WithAPIKey(cfg.APIKey))
+		}
+		return openaicompat.New(opts...)
+
+	case ProviderCopilot:
+		if cfg.APIKey == "" {
+			return nil, fmt.Errorf("llm: %s provider requires a GitHub token (SEMIDX_COPILOT_TOKEN or SEMIDX_GITHUB_TOKEN)", cfg.Type)
+		}
+		base := cfg.BaseURL
+		if base == "" {
+			base = copilotDefaultAPIBase
+		}
+		// The bearer token and integration headers are injected per request by
+		// copilotDoer; WithAPIKey is a placeholder the doer overrides.
+		opts := []openaicompat.Option{
+			openaicompat.WithName(string(cfg.Type)),
+			openaicompat.WithBaseURL(base),
+			openaicompat.WithAPIKey("copilot"),
+			openaicompat.WithHTTPClient(newCopilotDoer(cfg.APIKey, "", nil)),
 		}
 		return openaicompat.New(opts...)
 
