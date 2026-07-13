@@ -96,6 +96,40 @@ func TestIntegration_Zen_toolCall(t *testing.T) {
 	t.Logf("Zen tool-call answer: %q (trace=%v)", ans.Content, ans.Trace)
 }
 
+// TestIntegration_Zen_streaming checks F5.B end to end: a real model streams
+// text deltas through the callback, and the accumulated deltas equal the final
+// assembled answer (with token usage reported).
+func TestIntegration_Zen_streaming(t *testing.T) {
+	r := NewRunner(zenModel(t), nil, RunnerConfig{
+		SystemPrompt: "You are a terse assistant.",
+		MaxSteps:     3,
+	})
+	var sb strings.Builder
+	deltas := 0
+	ans, err := r.Stream(t.Context(), "Count from 1 to 5, one number per line.", nil, StreamCallbacks{
+		OnText: func(d string) {
+			sb.WriteString(d)
+			if d != "" {
+				deltas++
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if strings.TrimSpace(sb.String()) == "" {
+		t.Fatal("expected streamed text from the model")
+	}
+	if strings.TrimSpace(sb.String()) != strings.TrimSpace(ans.Content) {
+		t.Errorf("streamed text != final answer:\n streamed=%q\n final=%q", sb.String(), ans.Content)
+	}
+	// Token usage during streaming is provider-dependent: OpenAI-compatible
+	// gateways (Zen, Groq) only report it when the server sets
+	// stream_options.include_usage, so we do NOT require it here (the
+	// non-streaming Ask path always has usage). Just record what we got.
+	t.Logf("Zen stream: %d deltas, %d chars, usage %+v", deltas, sb.Len(), ans.Usage)
+}
+
 // TestIntegration_Zen_multiTurnToolMemory is the decisive live check for F5.A:
 // turn 1 calls a tool; the assistant tool_call and its result are carried into
 // the conversation. Turn 2 runs a Runner with NO tools at all, yet must answer
