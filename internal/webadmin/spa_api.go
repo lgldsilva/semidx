@@ -427,7 +427,7 @@ func jobErrorSummary(raw string) string {
 		case strings.Contains(l, "cannot run ssh") || strings.Contains(l, "unable to fork"):
 			return "git clone failed: the server has no SSH client — register the repo with an https:// URL"
 		case strings.Contains(l, "ssl certificate") || strings.Contains(l, "certificate problem") || strings.Contains(l, "unable to get local issuer"):
-			return "git clone failed: TLS certificate not trusted (self-signed?) — see server logs"
+			return "git clone failed: TLS certificate not trusted (self-signed?) — set SEMIDX_GIT_SSL_NO_VERIFY=true on the server for self-signed hosts"
 		case strings.Contains(l, "authentication failed") || strings.Contains(l, "could not read username") || strings.Contains(l, "invalid username or password") || strings.Contains(l, "403"):
 			return "git clone failed: authentication required or invalid — check the repo credentials"
 		case strings.Contains(l, "not found") || strings.Contains(l, "404"):

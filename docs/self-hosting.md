@@ -77,6 +77,15 @@ directory is also honored; real environment variables win over it).
 | `SEMIDX_JWT_SECRET` | *(unset)* | HS256 signing key for JWT control tokens. When empty, control tokens are disabled and the UI hides the feature. |
 | `SEMIDX_CSRF_KEY` | *(auto)* | HMAC key for web-admin CSRF tokens. When empty, a random key is generated on each restart. Set it to a persistent value so tokens survive server restarts. |
 
+### Server-side git sync (`repo add` / reindex)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SEMIDX_GIT_SSL_NO_VERIFY` | `false` | When `true`, disables TLS verification for server-side `git clone`/`pull` (self-signed homelab Gitea). Prefer installing a real CA when possible. |
+| `SEMIDX_GIT_TOKEN` | *(unset)* | PAT for private HTTPS clones; injected as an Authorization header (not stored in the repo URL). Falls back to `SEMIDX_GITHUB_TOKEN`. |
+| `SEMIDX_GIT_USER` | `x-access-token` | Basic-auth username paired with `SEMIDX_GIT_TOKEN` (Gitea/GitHub default). |
+| `SEMIDX_GIT_ALLOW_FILE` | `false` | When `true`, permits `file://` git URLs for server-side sync. |
+
 ### Indexing & extraction
 
 | Variable | Default | Purpose |

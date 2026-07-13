@@ -127,15 +127,16 @@ func (a *Admin) handleChatStream(w http.ResponseWriter, r *http.Request, name st
 		writeJSONErr(w, http.StatusServiceUnavailable, "chat is not configured — set GEMINI_API_KEY or OPENROUTER_API_KEY on the server")
 		return
 	}
+	// Check Flusher before reading the body so a non-stream fallback can still
+	// parse the request (instrument() historically broke Flusher promotion).
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		a.handleChatAsk(w, r, name)
+		return
+	}
 	body, err := parseChatBody(r)
 	if err != nil || body.Question == "" {
 		writeJSONErr(w, http.StatusBadRequest, "question is required")
-		return
-	}
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeJSONErr(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 

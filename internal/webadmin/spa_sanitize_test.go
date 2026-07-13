@@ -39,6 +39,21 @@ func TestJobToJSONFailedErrorIsSafeSummary(t *testing.T) {
 	if strings.Contains(msg, "/var/lib/semidx") {
 		t.Errorf("raw clone path leaked via API: %q", msg)
 	}
+
+	// Self-signed TLS failures must mention SEMIDX_GIT_SSL_NO_VERIFY so the admin
+	// can fix reindex without reading server logs.
+	got = jobToJSON(&store.Job{
+		ID:     44,
+		Status: "failed",
+		Error:  "git clone: exit status 128: fatal: unable to access 'https://gitea.example/x.git/': SSL certificate problem: self signed certificate",
+	})
+	msg, _ = got["error"].(string)
+	if !strings.Contains(msg, "SEMIDX_GIT_SSL_NO_VERIFY") {
+		t.Errorf("TLS clone failure should mention SEMIDX_GIT_SSL_NO_VERIFY, got %q", msg)
+	}
+	if strings.Contains(msg, "gitea.example") {
+		t.Errorf("raw host leaked via API: %q", msg)
+	}
 }
 
 func TestJobToJSONKeepsNonFailedErrorAsIs(t *testing.T) {
