@@ -51,3 +51,26 @@ func TestSearchMulti_noIdentities(t *testing.T) {
 		t.Error("SearchMulti with no identities should error")
 	}
 }
+
+// TestSearchMulti_aggregatesKeywordFlag is the audit regression (MÉDIA #4):
+// SearchMulti must propagate the sub-searches' Keyword/Fallback flags instead of
+// zeroing them, so a client isn't handed keyword ranking labeled as semantic.
+func TestSearchMulti_aggregatesKeywordFlag(t *testing.T) {
+	st := &fakeStore{
+		project:    &store.Project{ID: 1, Name: "app", Identity: "proj-app", Model: "bge-m3"},
+		simResults: []store.SearchResult{{FilePath: "a.go", Content: "x", Score: 0.9}},
+	}
+	svc := NewService(st, &fakeEmbedder{vec: []float32{1, 2, 3}, dims: 3})
+	resp, err := svc.SearchMulti(context.Background(), MultiScopeRequest{
+		Identities:  []string{"proj-app"},
+		Query:       "main",
+		TopK:        5,
+		KeywordOnly: true, // forces the keyword path → resp.Keyword on each sub-search
+	})
+	if err != nil {
+		t.Fatalf("SearchMulti: %v", err)
+	}
+	if !resp.Keyword {
+		t.Error("MultiResponse.Keyword must aggregate the sub-search keyword flag")
+	}
+}

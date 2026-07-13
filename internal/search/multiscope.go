@@ -50,6 +50,10 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 	}
 
 	var allResults []store.SearchResult
+	// Aggregate the per-search flags: if any sub-search fell back to keyword or
+	// reported a keyword ranking, the fused response must say so — a client
+	// mustn't receive keyword/fallback results silently labeled as semantic.
+	var anyFallback, anyKeyword bool
 
 	for _, ident := range req.Identities {
 		// Search one project at a time.
@@ -67,6 +71,12 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 			slog.Warn("search failed for project", "identity", ident, "error", err)
 			continue
 		}
+		if resp.Fallback {
+			anyFallback = true
+		}
+		if resp.Keyword {
+			anyKeyword = true
+		}
 
 		// Tag results with project label using null-byte separator so
 		// identities containing ':' (e.g. "path:/abs/path") or '/' are safe.
@@ -77,7 +87,7 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 	}
 
 	if len(allResults) == 0 {
-		return &MultiResponse{}, nil
+		return &MultiResponse{Fallback: anyFallback, Keyword: anyKeyword}, nil
 	}
 
 	// Fuse by score descending with diversity caps. True cross-project RRF
@@ -114,7 +124,7 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 		results[i] = MultiResult{SearchResult: r, Project: proj}
 	}
 
-	return &MultiResponse{Results: results}, nil
+	return &MultiResponse{Results: results, Fallback: anyFallback, Keyword: anyKeyword}, nil
 }
 
 // applyDiversity caps results per file and per project (identified by prefix

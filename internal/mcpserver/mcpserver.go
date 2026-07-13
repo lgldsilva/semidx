@@ -423,6 +423,15 @@ func multiSearchHandler(b MultiSearchBackend) mcp.ToolHandlerFor[multiSearchInpu
 		if req.TopK <= 0 {
 			req.TopK = 5
 		}
+		// Apply the published diversity defaults when the client omits them —
+		// otherwise SearchMulti treats 0/0 as "no caps", letting one file or
+		// project dominate, contrary to the tool's documented behavior.
+		if req.MaxPerFile <= 0 {
+			req.MaxPerFile = 3
+		}
+		if req.MaxPerProject <= 0 {
+			req.MaxPerProject = 10
+		}
 		out, err := b.SearchMulti(ctx, req)
 		if err != nil {
 			return errorResult(err), nil, nil
