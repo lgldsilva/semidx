@@ -118,6 +118,9 @@ func (a *Admin) apiSystem(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	if _, ok := a.store.(store.ConversationStore); ok {
 		caps = append(caps, "conversations")
 	}
+	if a.credMgr().Supported() && a.secrets != nil && a.secrets.Enabled() {
+		caps = append(caps, "git_credentials")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"product":      "semidx",
 		"mode":         "server",
@@ -138,12 +141,13 @@ func (a *Admin) apiSystem(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 // --- projects / jobs / search JSON -------------------------------------------
 
 type createProjectBody struct {
-	Name       string `json:"name"`
-	Model      string `json:"model"`
-	SourceType string `json:"source_type"`
-	GitURL     string `json:"git_url"`
-	Branch     string `json:"branch"`
-	Index      bool   `json:"index"`
+	Name       string                   `json:"name"`
+	Model      string                   `json:"model"`
+	SourceType string                   `json:"source_type"`
+	GitURL     string                   `json:"git_url"`
+	Branch     string                   `json:"branch"`
+	Index      bool                     `json:"index"`
+	Credential *inlineProjectCredential `json:"credential"`
 }
 
 // normalizeCreateProjectBody validates and normalizes a create-project payload.
@@ -199,7 +203,6 @@ func validateProjectName(name string) (string, int, string) {
 }
 
 func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *authCtx) {
-	_ = ac
 	var body createProjectBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSONBody)
@@ -210,6 +213,16 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 		writeJSONErr(w, status, msg)
 		return
 	}
+	if body.Credential != nil && strings.TrimSpace(body.Credential.Secret) != "" {
+		if ac.user.Role != "admin" {
+			writeJSONErr(w, http.StatusForbidden, "admin role required to set a git credential")
+			return
+		}
+		if body.SourceType != "git" {
+			writeJSONErr(w, http.StatusBadRequest, "credential is only supported for source_type=git")
+			return
+		}
+	}
 
 	proj, err := a.store.CreateProject(r.Context(), name, body.Model, body.SourceType, body.GitURL, body.Branch, 0)
 	if errors.Is(err, store.ErrProjectExists) {
@@ -219,6 +232,11 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 	if err != nil {
 		a.log.Error("create project failed", "err", err)
 		writeJSONErr(w, http.StatusInternalServerError, "could not create project")
+		return
+	}
+
+	if err := a.createInlineProjectCredential(r.Context(), proj.ID, body.Credential); err != nil {
+		writeGitCredErr(w, a.log, "create project credential", err)
 		return
 	}
 

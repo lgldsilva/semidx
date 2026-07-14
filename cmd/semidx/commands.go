@@ -765,6 +765,7 @@ func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server, showBoot
 		adminUI.SetChat(pipeline)
 	}
 	adminUI.SetGitHub(d.cfg.GithubToken, "")
+	adminUI.SetSecretBox(box)
 	return nil
 }
 
