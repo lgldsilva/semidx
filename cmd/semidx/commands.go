@@ -690,7 +690,7 @@ without that auth in front.`,
 				fmt.Fprintln(os.Stderr, "MCP Streamable HTTP endpoint enabled at /mcp (bearer auth required)")
 			}
 
-			if err := d.bootstrapServer(cmd.Context(), srv, showBootstrapToken); err != nil {
+			if err := d.bootstrapServer(cmd.Context(), srv, box, showBootstrapToken); err != nil {
 				return err
 			}
 			srv.StartWorkers(cmd.Context(), d.cfg.IndexWorkers, d.cfg.DataDir)
@@ -725,7 +725,7 @@ func envTruthy(key string) bool {
 // token is written to a file inside DataDir (bootstrap-token.txt) so it never
 // leaks to stderr/systemd/journald; pass showBootstrapToken=true to also print
 // it to stderr for interactive use.
-func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server, showBootstrapToken bool) error {
+func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server, box *secretbox.Box, showBootstrapToken bool) error {
 	token, err := srv.EnsureBootstrapToken(ctx, d.cfg.BootstrapToken)
 	if err != nil {
 		return fmt.Errorf("bootstrap token: %w", err)
@@ -765,6 +765,7 @@ func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server, showBoot
 		adminUI.SetChat(pipeline)
 	}
 	adminUI.SetGitHub(d.cfg.GithubToken, "")
+	adminUI.SetSecretBox(box)
 	return nil
 }
 
