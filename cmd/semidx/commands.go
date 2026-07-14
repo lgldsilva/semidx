@@ -50,6 +50,11 @@ func (d *deps) modelDims(ctx context.Context, model string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if info.Dims <= 0 {
+		// A zero/negative dims would silently create a broken chunk table
+		// (EnsureChunksTable is a no-op on SQLite); fail early instead.
+		return 0, fmt.Errorf("embedding model %q reports %d dims; check the model name (semidx models) or the provider", model, info.Dims)
+	}
 	return info.Dims, nil
 }
 
