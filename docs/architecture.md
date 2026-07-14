@@ -190,15 +190,19 @@ The credentials above are all **inbound** (clients proving themselves to
 semidx) and therefore stored as one-way hashes. Server-side git-sync needs the
 opposite: credentials semidx presents **to a remote git host**, which must be
 recoverable in cleartext. Those live in a separate vault
-(`internal/secretbox`): AES-256-GCM under a key derived (HKDF-SHA256,
-versioned for rotation) from the operator's `SEMIDX_SECRET_KEY` master key.
-Each credential is scoped to a **project** or to a **host** (HTTPS
-token/password or SSH private key + optional pinned `known_hosts`); when a
-repo is synced the server resolves project → host → the global
-`SEMIDX_GIT_TOKEN` env fallback. SSH transport needs `openssh-client` in the image (the Dockerfile
-installs it); the key is materialised as an ephemeral `0600` file only while
-the git command runs. With `SEMIDX_SECRET_KEY` unset the vault is disabled and
-only the env-token fallback applies.
+(`internal/secretbox` + `store.GitCredentialStore`): AES-256-GCM under a key
+derived (HKDF-SHA256, versioned for rotation) from the operator's
+`SEMIDX_SECRET_KEY` master key. Each stored credential is scoped to a
+**project** or a **host** (HTTPS token/password or SSH private key + optional
+pinned `known_hosts`).
+
+**Current sync path** still uses only the global `SEMIDX_GIT_TOKEN` /
+`SEMIDX_GIT_USER` env (see self-hosting). Project → host → env resolution in the
+job runner is a follow-up on top of this vault. SSH transport needs
+`openssh-client` in the image (the Dockerfile installs it alongside `git`);
+when an SSH credential is used, the key is materialised as an ephemeral `0600`
+file only while the git command runs. With `SEMIDX_SECRET_KEY` unset the vault
+is disabled.
 
 ## Durable indexing jobs
 

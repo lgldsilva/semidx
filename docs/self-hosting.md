@@ -25,7 +25,7 @@ docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 The image (`Dockerfile`) builds a static binary and runs it on Alpine with
-`git` and `openssh-client` (for server-side git-sync over HTTPS and SSH) and
+`git` and `openssh-client` (HTTPS/SSH tooling for server-side git-sync) and
 CA certificates (for cloud embedders). The container entrypoint is
 `semidx serve`.
 
@@ -88,30 +88,27 @@ directory is also honored; real environment variables win over it).
 | `SEMIDX_GIT_USER` | `x-access-token` | Basic-auth username paired with `SEMIDX_GIT_TOKEN` (Gitea/GitHub default). |
 | `SEMIDX_GIT_ALLOW_FILE` | `false` | When `true`, permits `file://` git URLs for server-side sync. |
 
-#### Stored git credentials (per project / per host)
+#### Stored git credentials (vault + SSH tooling)
 
-Beyond the single global `SEMIDX_GIT_TOKEN`, the server can store **individual
-git credentials** — an HTTPS token/password or an SSH private key — scoped
-either to one project or to a whole host (e.g. everything on
-`gitea.example.com`). Resolution order when a repo needs to be cloned/pulled:
-the project's own credential, then the credential registered for its host,
-then the global `SEMIDX_GIT_TOKEN` env fallback.
+Today, server-side git sync uses the global `SEMIDX_GIT_TOKEN` /
+`SEMIDX_GIT_USER` from the table above. Separately, the codebase already has a
+**recoverable credential vault** (`internal/secretbox` +
+`store.GitCredentialStore`) for HTTPS tokens or SSH private keys scoped to a
+project or a host — encrypted at rest with AES-256-GCM under
+`SEMIDX_SECRET_KEY` (HKDF-SHA256–derived data key, versioned for rotation).
 
-Stored credentials must be recoverable (the server has to hand them to `git`),
-so they are encrypted at rest with **AES-256-GCM** in a vault keyed by
-`SEMIDX_SECRET_KEY` (the master key never encrypts directly — the data key is
-derived via HKDF-SHA256, versioned for future rotation). Requirements:
+Wiring that vault into the sync job runner (project → host → env-token
+resolution) lands in a follow-up; until then, setting `SEMIDX_SECRET_KEY`
+alone does **not** change clone/pull behavior. Still set it now if you plan to
+store credentials, and keep it stable — losing it makes every vaulted secret
+unreadable. Without it the vault stays disabled; the global env token still
+works.
 
-- Set `SEMIDX_SECRET_KEY` to a 32-byte key (`openssl rand -hex 32`) and keep
-  it stable — losing it makes every stored credential unreadable. Without it,
-  the vault (and credential registration) is disabled; the global env token
-  still works.
-- SSH credentials additionally need the `ssh` binary in the server image — the
-  official image ships `openssh-client` (and `git`) for exactly this. SSH keys
-  are written to an ephemeral `0600` file only for the duration of the git
-  command; an optional `known_hosts` entry per credential pins the host key
-  (otherwise it is recorded on first contact under
-  `SEMIDX_DATA_DIR/ssh/known_hosts.d/<host>`).
+For SSH once that resolution is wired: the official image ships
+`openssh-client` (and `git`). Keys are written to an ephemeral `0600` file only
+for the duration of the git command; an optional per-credential `known_hosts`
+pins the host key (otherwise first-contact under
+`SEMIDX_DATA_DIR/ssh/known_hosts.d/<host>`).
 
 ### Indexing & extraction
 
