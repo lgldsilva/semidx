@@ -19,19 +19,21 @@ Be concise and precise.`
 // executing them directly. Included when the agent has tool-calling capability.
 const AgentPrompt = `You are a workspace agent with tools for searching code, checking git state, and proposing index/reindex actions. When you have enough information to answer, respond directly. Cite whether facts came from git (live) or the semidx index. For actions: propose what you would do and ask for confirmation before proceeding.`
 
+// systemContent combines the RAG instructions and the assembled context into a
+// single system prompt. One message, not two: some LLM providers (e.g. Gemini)
+// handle multiple system messages poorly.
+func systemContent(contextStr string) string {
+	if contextStr == "" {
+		return systemPrompt
+	}
+	return systemPrompt + "\n\nHere is the relevant context from the indexed files:\n\n" + contextStr
+}
+
 // assemblePrompt builds the full chat messages for the LLM.
 // It returns: [system_msg (instructions + context combined), history..., user_question].
-// Instructions and context are combined into a single system message to avoid
-// confusing some LLM providers (e.g. Gemini) that handle multiple system messages poorly.
 func assemblePrompt(question string, contextStr string, history []chat.Message) []chat.Message {
 	messages := make([]chat.Message, 0, 2+len(history))
-
-	// Single system message combining instructions and context.
-	systemContent := systemPrompt
-	if contextStr != "" {
-		systemContent += "\n\nHere is the relevant context from the indexed files:\n\n" + contextStr
-	}
-	messages = append(messages, chat.Message{Role: "system", Content: systemContent})
+	messages = append(messages, chat.Message{Role: "system", Content: systemContent(contextStr)})
 
 	// Conversation history.
 	messages = append(messages, history...)
