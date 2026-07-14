@@ -53,6 +53,10 @@ services:
       SEMIDX_BOOTSTRAP_ADMIN_PASSWORD: ${SEMIDX_BOOTSTRAP_ADMIN_PASSWORD:-}
       # JWT secret for revocable control tokens (optional; disabled when empty).
       SEMIDX_JWT_SECRET: ${SEMIDX_JWT_SECRET:-}
+      # Master key for the AES-256-GCM vault that stores per-project/host git
+      # credentials (optional; the feature is disabled when empty). Generate
+      # with: openssl rand -hex 32 — and NEVER hardcode it here.
+      SEMIDX_SECRET_KEY: ${SEMIDX_SECRET_KEY:-}
       # Embedding providers (set what you use). Ollama example:
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
