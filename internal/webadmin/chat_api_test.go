@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -177,6 +178,35 @@ func TestChatAPIUpstreamError(t *testing.T) {
 	code, body := postAdminJSON(t, c, srv.URL+"/admin/api/projects/demo/chat", csrf, map[string]any{"question": "x"})
 	if code != 502 || !strings.Contains(body, "upstream failed") {
 		t.Fatalf("upstream error = %d body=%s", code, body)
+	}
+}
+
+// nonFlusherRW deliberately does not implement http.Flusher.
+type nonFlusherRW struct{ http.ResponseWriter }
+
+func TestChatStreamFallsBackWhenNoFlusher(t *testing.T) {
+	fs := newFakeStore()
+	fs.addUser("admin", "supersecret", "admin")
+	a, err := New(fs, fakeEmbedder{}, nil, true, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetChat(fakeChat{})
+
+	// Call handleChatStream with a writer that has no Flush — must degrade to JSON Ask.
+	body := strings.NewReader(`{"question":"hi"}`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/projects/demo/chat/stream", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	a.handleChatStream(&nonFlusherRW{rr}, req, "demo")
+	if rr.Code != 200 {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"content":"answer"`) {
+		t.Fatalf("expected non-stream fallback body, got %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Header().Get("Content-Type"), "text/event-stream") {
+		t.Fatal("fallback must not use event-stream")
 	}
 }
 

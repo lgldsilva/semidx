@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -322,5 +323,46 @@ func TestEnsureBootstrapAdminSkipCases(t *testing.T) {
 	got, err = srv2.EnsureBootstrapAdmin(context.Background(), "admin", "password")
 	if err != nil || got != "" {
 		t.Errorf("existing users: got=%q err=%v, want empty", got, err)
+	}
+}
+
+// flushRecorder is a ResponseWriter that implements http.Flusher for tests.
+type flushRecorder struct {
+	*httptest.ResponseRecorder
+	flushed int
+}
+
+func (f *flushRecorder) Flush() { f.flushed++ }
+
+func TestStatusRecorderImplementsFlusher(t *testing.T) {
+	inner := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+	rec := &statusRecorder{ResponseWriter: inner, status: http.StatusOK}
+
+	flusher, ok := any(rec).(http.Flusher)
+	if !ok {
+		t.Fatal("statusRecorder must implement http.Flusher so SSE chat works under instrument()")
+	}
+	flusher.Flush()
+	if inner.flushed != 1 {
+		t.Fatalf("Flush not forwarded to underlying writer: flushed=%d", inner.flushed)
+	}
+	if rec.Unwrap() != inner {
+		t.Fatal("Unwrap should return the embedded ResponseWriter")
+	}
+}
+
+func TestInstrumentPreservesFlusher(t *testing.T) {
+	// instrument wraps the ResponseWriter; chat stream does w.(http.Flusher).
+	// This is the production failure mode for "streaming not supported".
+	s := New(&fakeStore{}, nil, nil)
+	var sawFlusher bool
+	h := s.instrument(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, sawFlusher = w.(http.Flusher)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/admin/api/chat/stream", nil))
+	if !sawFlusher {
+		t.Fatal("handler under instrument() must still see http.Flusher")
 	}
 }
