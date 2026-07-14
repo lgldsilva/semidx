@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   api,
+  ApiError,
   type ChatStreamEvent,
   type ChatStreamOptions,
   type SystemInfo,
@@ -21,6 +22,8 @@ const SYSTEM: SystemInfo = {
 
 function mockSystem() {
   vi.spyOn(api, 'system').mockResolvedValue(SYSTEM)
+  // Default: no /chat/config endpoint (older server) — selector hidden.
+  vi.spyOn(api, 'chatConfig').mockRejectedValue(new ApiError(404, 'not found'))
 }
 
 // mockNonStream guards the non-stream fallback: tests assert it is NOT hit.
@@ -63,6 +66,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  window.localStorage.clear() // don't leak mode/model prefs across tests
 })
 
 describe('ChatPanel streaming', () => {
@@ -156,6 +160,47 @@ describe('ChatPanel streaming', () => {
     expect(chat).not.toHaveBeenCalled()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.getByText('partial answer')).toBeInTheDocument()
+  })
+})
+
+describe('ChatPanel mode/model selector', () => {
+  it('hides the selector when /chat/config is missing (404)', async () => {
+    mockSystem()
+    mockNonStream()
+    mockStream([{ type: 'chunk', content: 'ok' }, { type: 'done' }])
+    render(<ChatPanel project="demo" seedQuestion="" onOpenFile={vi.fn()} />)
+    await screen.findByPlaceholderText(/How does authentication work/)
+    expect(screen.queryByLabelText('mode')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('model')).not.toBeInTheDocument()
+  })
+
+  it('sends the selected mode and model with chatStream', async () => {
+    vi.spyOn(api, 'system').mockResolvedValue(SYSTEM)
+    vi.spyOn(api, 'chatConfig').mockResolvedValue({
+      enabled: true,
+      modes: ['rag', 'agent'],
+      models: ['model-a', 'model-b'],
+    })
+    mockNonStream()
+    const stream = mockStream([{ type: 'chunk', content: 'ok' }, { type: 'done' }])
+    render(<ChatPanel project="demo" seedQuestion="" onOpenFile={vi.fn()} />)
+    fireEvent.change(await screen.findByLabelText('mode'), {
+      target: { value: 'agent' },
+    })
+    fireEvent.change(screen.getByLabelText('model'), {
+      target: { value: 'model-b' },
+    })
+    fireEvent.change(screen.getByPlaceholderText(/How does authentication work/), {
+      target: { value: 'q' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await screen.findByText('ok')
+    expect(stream).toHaveBeenCalledWith(
+      'demo',
+      'q',
+      expect.anything(),
+      expect.objectContaining({ mode: 'agent', model: 'model-b' }),
+    )
   })
 })
 
