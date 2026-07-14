@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -226,5 +227,47 @@ func TestFirstNonEmptyLine(t *testing.T) {
 		if got := firstNonEmptyLine(in); got != want {
 			t.Errorf("firstNonEmptyLine(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestDegradedNotice(t *testing.T) {
+	if got := DegradedNotice(&Response{}); got != "" {
+		t.Errorf("non-degraded notice = %q, want empty", got)
+	}
+	resp := &Response{Degraded: true, Fallback: true, Keyword: true, RetryAfter: 2500 * time.Millisecond}
+	got := DegradedNotice(resp)
+	if !strings.Contains(got, "retry in ~3s") || !strings.Contains(got, "keyword results") {
+		t.Errorf("degraded notice = %q", got)
+	}
+}
+
+func TestRetrySeconds(t *testing.T) {
+	cases := map[int64]int64{0: 1, -5: 1, 999: 1, 1000: 1, 1001: 2, 30000: 30}
+	for ms, want := range cases {
+		if got := RetrySeconds(ms); got != want {
+			t.Errorf("RetrySeconds(%d) = %d, want %d", ms, got, want)
+		}
+	}
+}
+
+func TestJSONFormatterDegraded(t *testing.T) {
+	var buf bytes.Buffer
+	resp := sampleResponse()
+	resp.Fallback = true
+	resp.Keyword = true
+	resp.Degraded = true
+	resp.RetryAfter = 1500 * time.Millisecond
+	if err := (JSONFormatter{}).Format(&buf, resp); err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Degraded     bool  `json:"degraded"`
+		RetryAfterMS int64 `json:"retry_after_ms"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	if !out.Degraded || out.RetryAfterMS != 1500 {
+		t.Errorf("degraded=%v retry_after_ms=%d, want true/1500", out.Degraded, out.RetryAfterMS)
 	}
 }

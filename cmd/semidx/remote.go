@@ -34,10 +34,12 @@ func remoteToResponse(cr *client.SearchResponse) *search.Response {
 		})
 	}
 	return &search.Response{
-		Project:  &store.Project{Name: cr.Project},
-		Model:    cr.Model,
-		Results:  results,
-		Fallback: cr.Fallback,
+		Project:    &store.Project{Name: cr.Project},
+		Model:      cr.Model,
+		Results:    results,
+		Fallback:   cr.Fallback,
+		Degraded:   cr.Degraded,
+		RetryAfter: time.Duration(cr.RetryAfterMS) * time.Millisecond,
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/lgldsilva/semidx/internal/projectref"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -36,6 +37,30 @@ type MultiResponse struct {
 	Results  []MultiResult
 	Fallback bool
 	Keyword  bool
+	// Degraded is true when at least one sub-search degraded to keyword results
+	// because the embedding circuit was open. RetryAfter is the largest recovery
+	// hint across degraded sub-searches.
+	Degraded   bool
+	RetryAfter time.Duration
+}
+
+// aggFlags accumulates the response-level flags across sub-searches so the
+// fused response reports fallback/keyword/degraded honestly — a client mustn't
+// receive keyword or degraded results silently labeled as semantic.
+type aggFlags struct {
+	fallback, keyword, degraded bool
+	retryAfter                  time.Duration
+}
+
+func (f *aggFlags) absorb(resp *Response) {
+	f.fallback = f.fallback || resp.Fallback
+	f.keyword = f.keyword || resp.Keyword
+	if resp.Degraded {
+		f.degraded = true
+		if resp.RetryAfter > f.retryAfter {
+			f.retryAfter = resp.RetryAfter
+		}
+	}
 }
 
 // SearchMulti searches across multiple project identities and fuses results
@@ -51,10 +76,7 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 	}
 
 	var allResults []store.SearchResult
-	// Aggregate the per-search flags: if any sub-search fell back to keyword or
-	// reported a keyword ranking, the fused response must say so — a client
-	// mustn't receive keyword/fallback results silently labeled as semantic.
-	var anyFallback, anyKeyword bool
+	var flags aggFlags
 
 	for _, ident := range req.Identities {
 		// Search one project at a time.
@@ -72,12 +94,7 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 			slog.Warn("search failed for project", "identity", ident, "error", err)
 			continue
 		}
-		if resp.Fallback {
-			anyFallback = true
-		}
-		if resp.Keyword {
-			anyKeyword = true
-		}
+		flags.absorb(resp)
 
 		// Tag results with project label using null-byte separator so
 		// identities containing ':' (e.g. "path:/abs/path") or '/' are safe.
@@ -91,7 +108,7 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 	// requires rank maps per identity and is deferred to a follow-up.
 	// Note: each sub-search does NOT call applyQueryRouting — if routing
 	// gains real weight, SearchMulti must route per sub-search too.
-	return fuseResults(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK, anyFallback, anyKeyword), nil
+	return fuseResults(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK, flags), nil
 }
 
 // SearchAllProjects searches every indexed project (deduped by identity) and
@@ -113,7 +130,7 @@ func (s *Service) SearchAllProjects(ctx context.Context, req MultiScopeRequest) 
 	}
 
 	var allResults []store.SearchResult
-	var anyFallback, anyKeyword bool
+	var flags aggFlags
 	for _, p := range projects {
 		one := Request{
 			Query:         req.Query,
@@ -134,27 +151,28 @@ func (s *Service) SearchAllProjects(ctx context.Context, req MultiScopeRequest) 
 			slog.Warn("search failed for project", "project", p.Name, "error", err)
 			continue
 		}
-		if resp.Fallback {
-			anyFallback = true
-		}
-		if resp.Keyword {
-			anyKeyword = true
-		}
+		flags.absorb(resp)
 		for i := range resp.Results {
 			resp.Results[i].FilePath = fmt.Sprintf("%s\x00%s", label, resp.Results[i].FilePath)
 		}
 		allResults = append(allResults, resp.Results...)
 	}
-	return fuseResults(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK, anyFallback, anyKeyword), nil
+	return fuseResults(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK, flags), nil
 }
 
 // fuseResults sorts the tagged results by score, applies diversity caps, and
 // splits the internal "identity\x00path" provenance prefix back into an explicit
 // Project field and a clean FilePath (the \x00 label must never leak). Shared by
 // SearchMulti and SearchAllProjects.
-func fuseResults(allResults []store.SearchResult, maxPerFile, maxPerProject, topK int, anyFallback, anyKeyword bool) *MultiResponse {
+func fuseResults(allResults []store.SearchResult, maxPerFile, maxPerProject, topK int, flags aggFlags) *MultiResponse {
+	out := &MultiResponse{
+		Fallback:   flags.fallback,
+		Keyword:    flags.keyword,
+		Degraded:   flags.degraded,
+		RetryAfter: flags.retryAfter,
+	}
 	if len(allResults) == 0 {
-		return &MultiResponse{Fallback: anyFallback, Keyword: anyKeyword}
+		return out
 	}
 	slices.SortFunc(allResults, func(a, b store.SearchResult) int {
 		if a.Score > b.Score {
@@ -178,7 +196,8 @@ func fuseResults(allResults []store.SearchResult, maxPerFile, maxPerProject, top
 		r.FilePath = file
 		results[i] = MultiResult{SearchResult: r, Project: proj}
 	}
-	return &MultiResponse{Results: results, Fallback: anyFallback, Keyword: anyKeyword}
+	out.Results = results
+	return out
 }
 
 // applyDiversity caps results per file and per project (identified by prefix
