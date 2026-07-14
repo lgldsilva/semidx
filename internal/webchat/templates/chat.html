@@ -70,6 +70,15 @@
         });
     }
 
+    function deleteConversation(id) {
+        fetch('/api/conversations/' + id, {method: 'DELETE'})
+            .then(function() {
+                if (convId === id) { clearChat(); }
+                return refreshConversations();
+            })
+            .catch(function(err) { console.debug('delete conversation failed', err); });
+    }
+
     function renderConvList(convs) {
         convList.innerHTML = '';
         convs.forEach(function(c) {
@@ -90,12 +99,7 @@
             del.textContent = '×';
             del.addEventListener('click', function(e) {
                 e.stopPropagation();
-                fetch('/api/conversations/' + c.id, {method: 'DELETE'})
-                    .then(function() {
-                        if (convId === c.id) { clearChat(); }
-                        return refreshConversations();
-                    })
-                    .catch(function(err) { console.debug('delete conversation failed', err); });
+                deleteConversation(c.id);
             });
             li.appendChild(del);
 
@@ -141,13 +145,13 @@
     // never break the chat itself.
     function persistTurn(question, answer) {
         if (!convsEnabled) return;
-        var ready = convId !== null
-            ? Promise.resolve(convId)
-            : apiJSON('/api/conversations', {
+        var ready = convId === null
+            ? apiJSON('/api/conversations', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({project: project, title: question.slice(0, 60)})
-            }).then(function(c) { convId = c.id; return c.id; });
+            }).then(function(c) { convId = c.id; return c.id; })
+            : Promise.resolve(convId);
         ready.then(function(id) {
             return postTurnMessage(id, 'user', question).then(function() {
                 return postTurnMessage(id, 'assistant', answer);

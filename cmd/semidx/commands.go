@@ -909,57 +909,7 @@ func newMCPInstallCmd() *cobra.Command {
 			"  semidx mcp install --client codex --env SEMIDX_LOCAL_INDEX=1 --apply\n  semidx mcp install --all --apply\n" +
 			"  semidx mcp install --client claude-code --transport http --url https://semidx.lan/mcp --bearer-env SEMIDX_TOKEN --apply",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if list {
-				fmt.Print(mcpinstall.ClientList())
-				return nil
-			}
-			env, err := mcpinstall.ParseEnv(envPairs)
-			if err != nil {
-				return err
-			}
-			warnSecretEnvKeys(cmd.ErrOrStderr(), env)
-			exe, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("resolve semidx path: %w", err)
-			}
-			if abs, aerr := filepath.Abs(exe); aerr == nil {
-				exe = abs
-			}
-			home, _ := os.UserHomeDir()
-			configDir, _ := os.UserConfigDir()
-			project, _ := os.Getwd()
-			base := mcpinstall.Options{
-				Name:      name,
-				ExePath:   exe,
-				Home:      home,
-				ConfigDir: configDir,
-				Project:   project,
-				Env:       env,
-				Transport: transport,
-				URL:       serverURL,
-				BearerEnv: bearerEnv,
-			}
-			if all {
-				return installAll(base, apply)
-			}
-			opts := base
-			opts.Client = clientID
-			opts.FilePath = configFile
-			path, snippet, err := mcpinstall.Snippet(opts)
-			if err != nil {
-				return err
-			}
-			if !apply {
-				fmt.Printf("# %s — add to %s:\n\n%s\n", clientID, path, snippet)
-				fmt.Print("Re-run with --apply to write this automatically.\n")
-				return nil
-			}
-			written, err := mcpinstall.Apply(opts)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Registered MCP server %q for %s in %s\n", name, clientID, written)
-			return nil
+			return runMCPInstall(cmd, list, envPairs, name, clientID, configFile, transport, serverURL, bearerEnv, apply, all)
 		},
 	}
 	cmd.Flags().StringVar(&clientID, "client", "claude-code", "target agent client (see --list)")
@@ -973,6 +923,60 @@ func newMCPInstallCmd() *cobra.Command {
 	cmd.Flags().StringVar(&serverURL, "url", "", "the remote server's /mcp endpoint (required with --transport http)")
 	cmd.Flags().StringVar(&bearerEnv, "bearer-env", "", "env var name the client reads the Authorization Bearer token from (--transport http)")
 	return cmd
+}
+
+func runMCPInstall(cmd *cobra.Command, list bool, envPairs []string, name, clientID, configFile, transport, serverURL, bearerEnv string, apply, all bool) error {
+	if list {
+		fmt.Print(mcpinstall.ClientList())
+		return nil
+	}
+	env, err := mcpinstall.ParseEnv(envPairs)
+	if err != nil {
+		return err
+	}
+	warnSecretEnvKeys(cmd.ErrOrStderr(), env)
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve semidx path: %w", err)
+	}
+	if abs, aerr := filepath.Abs(exe); aerr == nil {
+		exe = abs
+	}
+	home, _ := os.UserHomeDir()
+	configDir, _ := os.UserConfigDir()
+	project, _ := os.Getwd()
+	base := mcpinstall.Options{
+		Name:      name,
+		ExePath:   exe,
+		Home:      home,
+		ConfigDir: configDir,
+		Project:   project,
+		Env:       env,
+		Transport: transport,
+		URL:       serverURL,
+		BearerEnv: bearerEnv,
+	}
+	if all {
+		return installAll(base, apply)
+	}
+	opts := base
+	opts.Client = clientID
+	opts.FilePath = configFile
+	path, snippet, err := mcpinstall.Snippet(opts)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		fmt.Printf("# %s — add to %s:\n\n%s\n", clientID, path, snippet)
+		fmt.Print("Re-run with --apply to write this automatically.\n")
+		return nil
+	}
+	written, err := mcpinstall.Apply(opts)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Registered MCP server %q for %s in %s\n", name, clientID, written)
+	return nil
 }
 
 // warnSecretEnvKeys prints a stderr warning for env keys that look like
