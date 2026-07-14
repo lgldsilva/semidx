@@ -75,6 +75,10 @@ export type SearchHit = {
 export type SearchResponse = {
   results: SearchHit[]
   fallback: boolean
+  /** True when the embed circuit is open and only keyword results are served. */
+  degraded?: boolean
+  /** Hint (ms) for when the embedding provider may be retried. */
+  retry_after_ms?: number
   project_count?: number
   resolved_project?: string
 }
