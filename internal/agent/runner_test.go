@@ -215,6 +215,73 @@ func TestRunner_streamTextDeltas(t *testing.T) {
 	}
 }
 
+// streamToolModel replays a tool-call step then a text step, so Stream fires
+// the tool callbacks. Unlike fakeModel it advances between Stream calls.
+type streamToolModel struct {
+	fakeModel
+	scripts [][]fantasy.StreamPart
+	call    int
+}
+
+func (m *streamToolModel) Stream(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+	var parts []fantasy.StreamPart
+	if m.call < len(m.scripts) {
+		parts = m.scripts[m.call]
+		m.call++
+	}
+	return func(yield func(fantasy.StreamPart) bool) {
+		for _, p := range parts {
+			if !yield(p) {
+				return
+			}
+		}
+	}, nil
+}
+
+// TestRunner_streamToolCallbacks: OnToolCall/OnToolResult receive fantasy's
+// tool-call id so callers can correlate a call with its result.
+func TestRunner_streamToolCallbacks(t *testing.T) {
+	fm := &streamToolModel{scripts: [][]fantasy.StreamPart{
+		{
+			{Type: fantasy.StreamPartTypeToolCall, ID: "call_1", ToolCallName: "echo", ToolCallInput: `{"q":"x"}`},
+			{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls},
+		},
+		{
+			{Type: fantasy.StreamPartTypeTextStart, ID: "t1"},
+			{Type: fantasy.StreamPartTypeTextDelta, ID: "t1", Delta: "ok"},
+			{Type: fantasy.StreamPartTypeTextEnd, ID: "t1"},
+			{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop},
+		},
+	}}
+	r := NewRunner(fm, []fantasy.AgentTool{echoTool(`{"results":[]}`)}, RunnerConfig{})
+
+	var events []string
+	ans, err := r.Stream(context.Background(), "hi", nil, StreamCallbacks{
+		OnToolCall: func(id, name, input string) {
+			events = append(events, "call/"+id+"/"+name+"/"+input)
+		},
+		OnToolResult: func(id, name, result string, isError bool) {
+			if isError {
+				t.Errorf("unexpected tool error for %s", id)
+			}
+			events = append(events, "result/"+id+"/"+name+"/"+result)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	want := []string{
+		`call/call_1/echo/{"q":"x"}`,
+		`result/call_1/echo/{"results":[]}`,
+	}
+	if len(events) != len(want) || events[0] != want[0] || events[1] != want[1] {
+		t.Errorf("tool events = %v, want %v", events, want)
+	}
+	if ans.Content != "ok" {
+		t.Errorf("Content = %q, want ok", ans.Content)
+	}
+}
+
 func TestRunner_CompactHistory(t *testing.T) {
 	// Under budget → unchanged, no model call needed.
 	r := NewRunner(&fakeModel{}, nil, RunnerConfig{})

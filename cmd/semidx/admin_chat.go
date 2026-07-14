@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	"charm.land/fantasy"
 
@@ -153,6 +155,18 @@ func chatSources(hits []agent.SearchHit) []chat.Source {
 	return out
 }
 
+// Stream sanitization bounds: tool-call argument string values and tool-result
+// previews are truncated before leaving the server (frozen SSE contract caps
+// the preview at 500 runes).
+const (
+	toolArgValueMaxRunes = 200
+	toolPreviewMaxRunes  = 500
+)
+
+// chatBackendErrMsg is the only error text the stream ever shows a client. The
+// real error goes to slog: provider failures can embed base URLs or keys.
+const chatBackendErrMsg = "chat backend failed — check server logs"
+
 func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project string, history []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
 	// Real streaming: the agent loop runs in a goroutine and each assistant
 	// text delta is pushed onto the channel as it arrives (replacing the old
@@ -166,31 +180,64 @@ func (a *agentChatPipeline) StreamAsk(ctx context.Context, question, project str
 	msgs := a.runner.CompactHistory(ctx, adminHistoryToMessages(history))
 	go func() {
 		defer close(ch)
+		send := func(c chat.StreamChunk) {
+			select {
+			case ch <- c:
+			case <-ctx.Done():
+			}
+		}
+		// Per-call start times keyed by tool-call id: parallel tools interleave,
+		// and the callbacks may run on concurrent tool goroutines.
+		var (
+			toolMu     sync.Mutex
+			toolStarts = map[string]time.Time{}
+		)
 		cb := agent.StreamCallbacks{
-			OnText: func(delta string) {
-				select {
-				case ch <- chat.StreamChunk{Content: delta}:
-				case <-ctx.Done():
+			OnText: func(delta string) { send(chat.StreamChunk{Content: delta}) },
+			OnToolCall: func(id, name, input string) {
+				toolMu.Lock()
+				toolStarts[id] = time.Now()
+				toolMu.Unlock()
+				send(chat.StreamChunk{Tool: &chat.ToolEvent{
+					Kind: chat.ToolEventCall, ID: id, Name: name,
+					Args: agent.SanitizeToolArgs(input, toolArgValueMaxRunes),
+				}})
+			},
+			OnToolResult: func(id, name, result string, isError bool) {
+				var elapsed int64
+				toolMu.Lock()
+				if t0, ok := toolStarts[id]; ok {
+					elapsed = time.Since(t0).Milliseconds()
+					delete(toolStarts, id)
 				}
+				toolMu.Unlock()
+				preview, truncated := agent.PreviewToolResult(result, toolPreviewMaxRunes)
+				send(chat.StreamChunk{Tool: &chat.ToolEvent{
+					Kind: chat.ToolEventResult, ID: id, Name: name,
+					Preview: preview, IsError: isError,
+					ElapsedMS: elapsed, Truncated: truncated,
+				}})
 			},
 		}
 		done := chat.StreamChunk{Done: true, Model: model}
 		answer, err := a.runner.Stream(ctx, question, msgs, cb)
-		if err != nil {
-			// The channel contract has no error field and the SSE headers are
-			// already sent by the time tokens stream, so we can't fail the
-			// request here — log and terminate the stream cleanly.
+		switch {
+		case err != nil:
+			// The SSE headers are already sent by the time tokens stream, so we
+			// can't fail the request — log the real error and surface only a
+			// generic message. A canceled request is the client going away, not
+			// a backend failure: terminate silently.
 			slog.Error("admin agent stream failed", "error", err, "project", project)
-		} else if answer != nil {
+			if ctx.Err() == nil {
+				done.Err = chatBackendErrMsg
+			}
+		case answer != nil:
 			// Deliver citations on the terminal chunk (known only after tool calls).
 			hits, fb := agent.SourcesFromTrace(answer.Trace)
 			done.Sources = chatSources(hits)
 			done.Fallback = fb
 		}
-		select {
-		case ch <- done:
-		case <-ctx.Done():
-		}
+		send(done)
 	}()
 	return ch, nil, model, false, nil
 }
