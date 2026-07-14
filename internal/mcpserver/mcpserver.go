@@ -40,8 +40,13 @@ type Hit struct {
 type SearchOutput struct {
 	Project  string
 	Fallback bool
-	TookMS   int64
-	Results  []Hit
+	// Degraded is true when the embedding circuit was open and the backend
+	// served keyword results instead of failing; RetryAfterMS hints when the
+	// embedding provider may recover.
+	Degraded     bool
+	RetryAfterMS int64
+	TookMS       int64
+	Results      []Hit
 }
 
 // ProjectInfo is a backend-neutral project summary.
@@ -459,12 +464,16 @@ func formatStatus(info *StatusInfo) string {
 }
 
 func formatSearchText(out *SearchOutput) string {
-	if len(out.Results) == 0 {
-		return fmt.Sprintf("No results in project %q for that query.", out.Project)
-	}
 	var b strings.Builder
-	if out.Fallback {
+	if out.Degraded {
+		fmt.Fprintf(&b, "*[degraded: embedding temporarily unavailable — keyword results; retry in ~%ds]*\n\n",
+			search.RetrySeconds(out.RetryAfterMS))
+	} else if out.Fallback {
 		b.WriteString("[warning] embedding was unavailable — results come from keyword search, not semantic ranking.\n\n")
+	}
+	if len(out.Results) == 0 {
+		fmt.Fprintf(&b, "No results in project %q for that query.", out.Project)
+		return b.String()
 	}
 	for i, r := range out.Results {
 		var loc string
@@ -530,20 +539,21 @@ type structuredHit struct {
 
 // structuredOutput is the JSON envelope for structured search results.
 type structuredOutput struct {
-	Results     []structuredHit `json:"results"`
-	Fallback    bool            `json:"fallback"`
-	Total       int             `json:"total_results"`
-	QueryTimeMS int64           `json:"query_time_ms"`
+	Results      []structuredHit `json:"results"`
+	Fallback     bool            `json:"fallback"`
+	Degraded     bool            `json:"degraded"`
+	RetryAfterMS int64           `json:"retry_after_ms"`
+	Total        int             `json:"total_results"`
+	QueryTimeMS  int64           `json:"query_time_ms"`
 }
 
 func formatSearchStructured(out *SearchOutput) string {
+	envelope := structuredOutput{
+		Fallback: out.Fallback, Degraded: out.Degraded, RetryAfterMS: out.RetryAfterMS,
+		QueryTimeMS: out.TookMS,
+	}
 	if len(out.Results) == 0 {
-		data, _ := json.Marshal(struct {
-			Results     []structuredHit `json:"results"`
-			Fallback    bool            `json:"fallback"`
-			Total       int             `json:"total_results"`
-			QueryTimeMS int64           `json:"query_time_ms"`
-		}{Total: 0, QueryTimeMS: out.TookMS})
+		data, _ := json.Marshal(envelope)
 		return string(data)
 	}
 	hits := make([]structuredHit, len(out.Results))
@@ -562,8 +572,9 @@ func formatSearchStructured(out *SearchOutput) string {
 			Project:   out.Project,
 		}
 	}
-	outJSON := structuredOutput{Results: hits, Fallback: out.Fallback, Total: len(hits), QueryTimeMS: out.TookMS}
-	data, _ := json.Marshal(outJSON)
+	envelope.Results = hits
+	envelope.Total = len(hits)
+	data, _ := json.Marshal(envelope)
 	return string(data)
 }
 
@@ -581,13 +592,15 @@ type minimalHit struct {
 type minimalOutput struct {
 	R  []minimalHit `json:"r"`  // results
 	Fb bool         `json:"fb"` // fallback
+	Dg bool         `json:"dg"` // degraded (embed circuit open, keyword results)
+	Ra int64        `json:"ra"` // retry-after hint in ms (when degraded)
 	T  int          `json:"t"`  // total
 	Ms int64        `json:"ms"` // query time ms
 }
 
 func formatSearchMinimal(out *SearchOutput) string {
 	if len(out.Results) == 0 {
-		data, _ := json.Marshal(minimalOutput{T: 0, Ms: out.TookMS})
+		data, _ := json.Marshal(minimalOutput{Fb: out.Fallback, Dg: out.Degraded, Ra: out.RetryAfterMS, T: 0, Ms: out.TookMS})
 		return string(data)
 	}
 	hits := make([]minimalHit, len(out.Results))
@@ -603,7 +616,7 @@ func formatSearchMinimal(out *SearchOutput) string {
 			C: preview(r.Content, 120),
 		}
 	}
-	outJSON := minimalOutput{R: hits, Fb: out.Fallback, T: len(hits), Ms: out.TookMS}
+	outJSON := minimalOutput{R: hits, Fb: out.Fallback, Dg: out.Degraded, Ra: out.RetryAfterMS, T: len(hits), Ms: out.TookMS}
 	data, _ := json.Marshal(outJSON)
 	return string(data)
 }

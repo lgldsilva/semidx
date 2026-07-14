@@ -21,16 +21,22 @@ func RenderSearchJSON(w io.Writer, results []NamedResult, took []time.Duration) 
 		Content string  `json:"content"`
 	}
 	type proj struct {
-		Project  string `json:"project"`
-		Model    string `json:"model"`
-		Fallback bool   `json:"fallback"`
-		Results  []row  `json:"results"`
+		Project      string `json:"project"`
+		Model        string `json:"model"`
+		Fallback     bool   `json:"fallback"`
+		Degraded     bool   `json:"degraded"`
+		RetryAfterMS int64  `json:"retry_after_ms"`
+		Results      []row  `json:"results"`
 	}
 	out := struct {
 		Projects []proj `json:"projects"`
 	}{Projects: []proj{}}
 	for _, ps := range results {
-		p := proj{Project: ps.Name, Model: ps.Resp.Model, Fallback: ps.Resp.Fallback, Results: []row{}}
+		p := proj{
+			Project: ps.Name, Model: ps.Resp.Model, Fallback: ps.Resp.Fallback,
+			Degraded: ps.Resp.Degraded, RetryAfterMS: ps.Resp.RetryAfter.Milliseconds(),
+			Results: []row{},
+		}
 		for _, r := range ps.Resp.Results {
 			p.Results = append(p.Results, row{File: r.FilePath, Score: r.Score, Content: r.Content})
 		}

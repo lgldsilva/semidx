@@ -399,7 +399,9 @@ func renderProjectSearch(query string, ps projSearch, multi bool, noLineNums boo
 	} else {
 		fmt.Printf("Searching project: %s (model: %s)\nQuery: %s\n\n", ps.resp.Project.Name, ps.resp.Model, query)
 	}
-	if ps.resp.Fallback {
+	if notice := search.DegradedNotice(ps.resp); notice != "" {
+		fmt.Fprintf(os.Stderr, "%s\n\n", notice)
+	} else if ps.resp.Fallback {
 		fmt.Fprint(os.Stderr, "[warn] embedding unavailable — used keyword search\n\n")
 	}
 	fmt.Printf("Found %d results in %v\n\n", len(ps.resp.Results), ps.took)
@@ -430,6 +432,7 @@ they stay correct even when searching across multiple projects.`,
 			if asJSON {
 				return renderSearchJSON(os.Stdout, results)
 			}
+			warnSgrepDegraded(results)
 			// Single project: keep the exact classic anchoring (protects the sgrep
 			// golden).
 			if len(results) == 1 {
@@ -458,6 +461,18 @@ func (d *deps) sgrepProjectPath(ctx context.Context, stored string) string {
 		return wt
 	}
 	return stored
+}
+
+// warnSgrepDegraded prints one degraded warning to stderr (never stdout — the
+// grep-style stream must stay pipeable) when any searched project degraded to
+// keyword results because the embedding circuit was open.
+func warnSgrepDegraded(results []projSearch) {
+	for _, ps := range results {
+		if notice := search.DegradedNotice(ps.resp); notice != "" {
+			fmt.Fprintf(os.Stderr, "%s\n", notice)
+			return
+		}
+	}
 }
 
 // renderSgrepMulti prints grep-style output across projects, anchoring each
