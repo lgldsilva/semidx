@@ -1,8 +1,7 @@
 // Package webadmin is the server's management UI, mounted at /admin by
-// `semidx serve`. Product surfaces (projects, search, CLI guide) are a React SPA
-// embedded from internal/webui; account/keys/tokens/users remain html/template
-// pages. Auth is a cookie-backed server-side session; mutating requests carry a
-// CSRF token (form field or X-CSRF-Token header).
+// `semidx serve`. The product UI is a React SPA embedded from internal/webui;
+// JSON APIs under /admin/api/* back the SPA. Auth is a cookie-backed
+// server-side session; mutating requests carry a CSRF token (X-CSRF-Token header).
 package webadmin
 
 import (
@@ -11,10 +10,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"embed"
 	"encoding/hex"
 	"fmt"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -27,9 +24,6 @@ import (
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 )
-
-//go:embed templates/*.html
-var templatesFS embed.FS
 
 const (
 	sessionCookie = "semidx_session"
@@ -82,7 +76,6 @@ type Admin struct {
 	store   store.Store
 	emb     embedpkg.Embedder
 	search  *search.Service
-	tmpl    *template.Template
 	log     *slog.Logger
 	secure  bool // set the Secure flag on cookies (serve behind HTTPS)
 	csrfKey []byte
@@ -104,17 +97,6 @@ func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies 
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(discard{}, nil))
 	}
-	tmpl, err := template.New("").Funcs(template.FuncMap{
-		"fmtTime": func(t time.Time) string {
-			if t.IsZero() {
-				return "—"
-			}
-			return t.Format("2006-01-02 15:04")
-		},
-	}).ParseFS(templatesFS, "templates/*.html")
-	if err != nil {
-		return nil, err
-	}
 	var key []byte
 	if csrfKeyHex != "" {
 		var err error
@@ -134,7 +116,6 @@ func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies 
 		store:   st,
 		emb:     emb,
 		search:  search.NewService(st, emb),
-		tmpl:    tmpl,
 		log:     log,
 		secure:  secureCookies,
 		csrfKey: key,
@@ -154,9 +135,8 @@ func (a *Admin) SetGitHub(token, baseURL string) {
 	a.githubBaseURL = baseURL
 }
 
-// Handler returns a mux serving the /admin/* routes: JSON SPA APIs, legacy
-// HTML admin pages (keys/tokens/users), and the embedded React SPA for the
-// product surfaces (projects, search, CLI guide).
+// Handler returns a mux serving the /admin/* routes: JSON SPA APIs and the
+// embedded React SPA for all product surfaces (projects, search, settings, …).
 func (a *Admin) Handler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -216,24 +196,14 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/api/projects/{project}/dead-code", a.protectAPI("", a.apiProjectDeadCode))
 	mux.HandleFunc("GET /admin/api/projects/{project}/sbom", a.protectAPI("", a.apiProjectSbom))
 
-	// --- Legacy form auth (POST) for older HTML pages; SPA uses /admin/api/* ---
-	// GET /admin/login is served by the SPA (client route), not the HTML form.
-	mux.HandleFunc("POST /admin/login", a.loginSubmit)
-	mux.HandleFunc("POST /admin/logout", a.protect("", a.logout))
-	mux.HandleFunc("GET /admin/keys", a.protect("", a.keysList))
-	mux.HandleFunc("POST /admin/keys", a.protect("", a.keysCreate))
-	mux.HandleFunc("POST /admin/keys/revoke", a.protect("", a.keysRevoke))
-	mux.HandleFunc("GET /admin/tokens", a.protect("", a.tokensList))
-	mux.HandleFunc("POST /admin/tokens", a.protect("", a.tokensCreate))
-	mux.HandleFunc("POST /admin/tokens/revoke", a.protect("", a.tokensRevoke))
-	mux.HandleFunc("GET /admin/account", a.protect("", a.accountForm))
-	mux.HandleFunc("POST /admin/account", a.protect("", a.accountChangePassword))
-	mux.HandleFunc("GET /admin/users", a.protect("admin", a.usersList))
-	mux.HandleFunc("POST /admin/users", a.protect("admin", a.usersCreate))
-	mux.HandleFunc("POST /admin/users/disable", a.protect("admin", a.usersDisable))
+	// Legacy settings URLs → SPA settings route.
+	mux.HandleFunc("GET /admin/keys", spaSettingsRedirect)
+	mux.HandleFunc("GET /admin/tokens", spaSettingsRedirect)
+	mux.HandleFunc("GET /admin/users", spaSettingsRedirect)
+	mux.HandleFunc("GET /admin/account", spaSettingsRedirect)
 
-	// --- React SPA (projects, search, cli guide) + static assets ---------------
-	// More specific /admin/api and legacy routes above win; this catches the rest.
+	// --- React SPA + static assets ---------------------------------------------
+	// More specific /admin/api routes above win; this catches the rest.
 	spa := spaFileServer()
 	mux.Handle("GET /admin/{$}", spa)
 	mux.Handle("GET /admin/", spa)
@@ -242,12 +212,11 @@ func (a *Admin) Handler() http.Handler {
 
 // securityHeaders wraps the admin/SPA handler with defence-in-depth response
 // headers. The CSP matches the Vite build: scripts and styles are served from
-// /admin/assets (self); React sets inline style attributes, so styles also need
-// 'unsafe-inline'. frame-ancestors 'none' blocks clickjacking.
+// /admin/assets (self). frame-ancestors 'none' blocks clickjacking.
 func securityHeaders(next http.Handler) http.Handler {
 	const csp = "default-src 'self'; " +
 		"script-src 'self'; " +
-		"style-src 'self' 'unsafe-inline'; " +
+		"style-src 'self'; " +
 		"img-src 'self' data:; " +
 		"font-src 'self'; " +
 		"connect-src 'self'; " +

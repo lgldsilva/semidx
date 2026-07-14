@@ -11,8 +11,8 @@ import (
 )
 
 // spaFileServer serves the embedded React SPA under /admin/, falling back to
-// index.html for client-side routes. API and legacy form auth paths are
-// registered separately on the mux and take precedence.
+// index.html for client-side routes. API paths are registered separately on
+// the mux and take precedence.
 func spaFileServer() http.Handler {
 	sub, err := fs.Sub(webui.Dist, "dist")
 	if err != nil {

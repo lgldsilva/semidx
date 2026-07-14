@@ -6,9 +6,9 @@ import (
 )
 
 // TestUserRoutesRequireAdmin locks the admin-only boundary for user management:
-// a logged-in member is refused on every /admin user route (JSON + legacy HTML),
-// while an admin is allowed. This is the one role gate in the admin UI, so a
-// regression here would silently let members manage accounts.
+// a logged-in member is refused on every /admin/api/users route, while an admin
+// is allowed. This is the one role gate in the admin UI, so a regression here
+// would silently let members manage accounts.
 func TestUserRoutesRequireAdmin(t *testing.T) {
 	adminOnly := []struct {
 		method, path string
@@ -16,9 +16,6 @@ func TestUserRoutesRequireAdmin(t *testing.T) {
 		{http.MethodGet, "/admin/api/users"},
 		{http.MethodPost, "/admin/api/users"},
 		{http.MethodPost, "/admin/api/users/1/disabled"},
-		{http.MethodGet, "/admin/users"},
-		{http.MethodPost, "/admin/users"},
-		{http.MethodPost, "/admin/users/disable"},
 	}
 
 	// --- member is refused everywhere ---
