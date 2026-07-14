@@ -15,7 +15,8 @@ import (
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
-const gitCredPathDesc = "Requires semidx login with an admin-scoped API token"
+// Help text for commands that talk to the server vault — not a secret value.
+const gitCredPathDesc = "Requires semidx login with an admin-scoped API key" // #nosec G101 -- operator help text, not a credential
 
 func newRepoCredCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
