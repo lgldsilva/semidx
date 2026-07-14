@@ -1,0 +1,82 @@
+/* highlight.js theme wired to the light-dark() token palette (styles/theme.css).
+   Loaded with the code-split Markdown chunk (rehype-highlight emits hljs-*
+   spans). Every color resolves per scheme via light-dark() or a theme token,
+   so chat code blocks follow the light/dark toggle with no extra CSS. */
+
+:root {
+  --hl-keyword: light-dark(#9333ea, #c4b5fd);
+  --hl-string: light-dark(#15803d, #86efac);
+  --hl-type: light-dark(#0e7490, #67e8f9);
+  --hl-variable: light-dark(#be185d, #f9a8d4);
+}
+
+.hljs {
+  color: var(--code-fg);
+  background: transparent;
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-meta {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-doctag,
+.hljs-tag {
+  color: var(--hl-keyword);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition {
+  color: var(--hl-string);
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-attr,
+.hljs-attribute {
+  color: var(--warning);
+}
+
+.hljs-title,
+.hljs-name,
+.hljs-section,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--accent);
+}
+
+.hljs-built_in,
+.hljs-type,
+.hljs-class {
+  color: var(--hl-type);
+}
+
+.hljs-variable,
+.hljs-template-variable,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-property {
+  color: var(--hl-variable);
+}
+
+.hljs-deletion {
+  color: var(--danger);
+}
+
+.hljs-link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 700;
+}
