@@ -193,7 +193,6 @@ func (failingEmbedder) ListModels(_ context.Context) ([]string, error) {
 // Tests
 // ---------------------------------------------------------------------------
 
-
 func TestSearchAdapter_ConvertsTypes(t *testing.T) {
 	project := &store.Project{
 		ID:         1,
