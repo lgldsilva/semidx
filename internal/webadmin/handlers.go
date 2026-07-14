@@ -122,8 +122,28 @@ type searchData struct {
 	Top             int
 	Results         []adminSearchHit
 	Fallback        bool
+	Degraded        bool          // embed circuit open — keyword results served
+	RetryAfter      time.Duration // recovery hint, set when Degraded
 	Ran             bool
 	ProjectCount    int // set when AllProjects ran
+}
+
+// searchFlags aggregates the response-level flags across per-project searches
+// so the merged all-projects response reports fallback/degraded honestly.
+type searchFlags struct {
+	Fallback   bool
+	Degraded   bool
+	RetryAfter time.Duration
+}
+
+func (f *searchFlags) absorb(resp *search.Response) {
+	f.Fallback = f.Fallback || resp.Fallback
+	if resp.Degraded {
+		f.Degraded = true
+		if resp.RetryAfter > f.RetryAfter {
+			f.RetryAfter = resp.RetryAfter
+		}
+	}
 }
 
 func parseSearchData(r *http.Request) (searchData, int) {
@@ -161,18 +181,20 @@ func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) 
 		return fmt.Errorf("no indexed projects")
 	}
 	d.ProjectCount = len(projects)
-	merged, fallback, err := a.mergeProjectSearches(ctx, projects, d.Query, topK)
+	merged, flags, err := a.mergeProjectSearches(ctx, projects, d.Query, topK)
 	if err != nil {
 		return err
 	}
 	d.Results = merged
-	d.Fallback = fallback
+	d.Fallback = flags.Fallback
+	d.Degraded = flags.Degraded
+	d.RetryAfter = flags.RetryAfter
 	return nil
 }
 
-func (a *Admin) mergeProjectSearches(ctx context.Context, projects []store.Project, query string, topK int) ([]adminSearchHit, bool, error) {
+func (a *Admin) mergeProjectSearches(ctx context.Context, projects []store.Project, query string, topK int) ([]adminSearchHit, searchFlags, error) {
 	var merged []adminSearchHit
-	fallback := false
+	var flags searchFlags
 	perProject := topK * 3
 	if perProject < 10 {
 		perProject = 10
@@ -181,12 +203,12 @@ func (a *Admin) mergeProjectSearches(ctx context.Context, projects []store.Proje
 		perProject = 100
 	}
 	for _, proj := range projects {
-		hits, fb, serr := a.searchProjectHits(ctx, proj, query, perProject)
+		hits, resp, serr := a.searchProjectHits(ctx, proj, query, perProject)
 		if serr != nil {
-			return nil, false, serr
+			return nil, searchFlags{}, serr
 		}
-		if fb {
-			fallback = true
+		if resp != nil {
+			flags.absorb(resp)
 		}
 		merged = append(merged, hits...)
 	}
@@ -194,10 +216,10 @@ func (a *Admin) mergeProjectSearches(ctx context.Context, projects []store.Proje
 	if len(merged) > topK {
 		merged = merged[:topK]
 	}
-	return merged, fallback, nil
+	return merged, flags, nil
 }
 
-func (a *Admin) searchProjectHits(ctx context.Context, proj store.Project, query string, topK int) ([]adminSearchHit, bool, error) {
+func (a *Admin) searchProjectHits(ctx context.Context, proj store.Project, query string, topK int) ([]adminSearchHit, *search.Response, error) {
 	req := search.Request{Query: query, TopK: topK}
 	if proj.Identity != "" {
 		req.Identity = proj.Identity
@@ -207,18 +229,18 @@ func (a *Admin) searchProjectHits(ctx context.Context, proj store.Project, query
 	resp, err := a.search.Search(ctx, req)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, false, nil
+			return nil, nil, nil
 		}
 		// Never propagate the raw error to the all-projects response body
 		// (REQ-SRCH-08): log the detail, return the sanitized sentinel.
 		a.log.Error("search failed", "project", proj.Name, "err", err)
-		return nil, false, errSearchFailed
+		return nil, nil, errSearchFailed
 	}
 	hits := make([]adminSearchHit, 0, len(resp.Results))
 	for _, hit := range resp.Results {
 		hits = append(hits, adminSearchHit{Project: resp.Project.Name, SearchResult: hit})
 	}
-	return hits, resp.Fallback, nil
+	return hits, resp, nil
 }
 
 // --- API keys ----------------------------------------------------------------

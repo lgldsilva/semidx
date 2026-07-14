@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -356,22 +355,21 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusNotFound, "project not found")
 			return
 		}
-		var re interface{ RetryAfter() time.Duration }
-		if errors.As(err, &re) {
-			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(re.RetryAfter().Seconds()))))
-			writeJSONError(w, http.StatusServiceUnavailable, "embedding provider temporarily unavailable")
-			return
-		}
+		// An open embedding circuit no longer reaches here: the search service
+		// degrades to keyword results (Degraded + RetryAfterMS in the response)
+		// instead of propagating the RetryableError.
 		writeJSONError(w, http.StatusInternalServerError, "search failed")
 		return
 	}
 
 	out := client.SearchResponse{
-		Project:  resp.Project.Name,
-		Model:    resp.Model,
-		Fallback: resp.Fallback,
-		TookMS:   time.Since(start).Milliseconds(),
-		Results:  make([]client.SearchHit, 0, len(resp.Results)),
+		Project:      resp.Project.Name,
+		Model:        resp.Model,
+		Fallback:     resp.Fallback,
+		Degraded:     resp.Degraded,
+		RetryAfterMS: resp.RetryAfter.Milliseconds(),
+		TookMS:       time.Since(start).Milliseconds(),
+		Results:      make([]client.SearchHit, 0, len(resp.Results)),
 	}
 	for _, hit := range resp.Results {
 		out.Results = append(out.Results, client.SearchHit{

@@ -3,9 +3,13 @@ package webadmin
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -13,6 +17,14 @@ type offlineEmbedder struct{ fakeEmbedder }
 
 func (offlineEmbedder) EmbedSingle(context.Context, string, string) ([]float32, error) {
 	return nil, errors.New("offline")
+}
+
+// degradedEmbedder simulates an open embedding circuit: query embedding fails
+// with a RetryableError, so searches must degrade to keyword results.
+type degradedEmbedder struct{ fakeEmbedder }
+
+func (degradedEmbedder) EmbedSingle(context.Context, string, string) ([]float32, error) {
+	return nil, &embed.RetryableError{Err: errors.New("circuit open"), After: 2 * time.Second}
 }
 
 func TestParseSearchData(t *testing.T) {
@@ -39,9 +51,9 @@ func TestMergeProjectSearchesUsesIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	merged, fallback, err := a.mergeProjectSearches(context.Background(), fs.projects, "q", 5)
-	if err != nil || fallback || len(merged) != 1 || merged[0].FilePath != "main.go" {
-		t.Fatalf("merge = %+v fallback=%v err=%v", merged, fallback, err)
+	merged, flags, err := a.mergeProjectSearches(context.Background(), fs.projects, "q", 5)
+	if err != nil || flags.Fallback || len(merged) != 1 || merged[0].FilePath != "main.go" {
+		t.Fatalf("merge = %+v flags=%+v err=%v", merged, flags, err)
 	}
 }
 
@@ -91,9 +103,29 @@ func TestMergeProjectSearchesSetsFallbackFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	merged, fallback, err := a.mergeProjectSearches(context.Background(), fs.projects, "offline embed query", 5)
-	if err != nil || !fallback || len(merged) != 1 {
-		t.Fatalf("merge fallback = %+v flag=%v err=%v", merged, fallback, err)
+	merged, flags, err := a.mergeProjectSearches(context.Background(), fs.projects, "offline embed query", 5)
+	if err != nil || !flags.Fallback || len(merged) != 1 {
+		t.Fatalf("merge fallback = %+v flags=%+v err=%v", merged, flags, err)
+	}
+	if flags.Degraded {
+		t.Fatal("a plain (non-retryable) embed failure must not flag Degraded")
+	}
+}
+
+func TestMergeProjectSearchesSetsDegradedFlag(t *testing.T) {
+	fs := newFakeStore()
+	fs.projects = []store.Project{{ID: 1, Name: "alpha", Model: "bge-m3"}}
+	fs.searchResults = []store.SearchResult{{FilePath: "a.go", Content: "x", Score: 0.5}}
+	a, err := New(fs, degradedEmbedder{}, nil, false, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged, flags, err := a.mergeProjectSearches(context.Background(), fs.projects, "degraded embed query", 5)
+	if err != nil || len(merged) != 1 {
+		t.Fatalf("merge degraded = %+v err=%v", merged, err)
+	}
+	if !flags.Degraded || !flags.Fallback || flags.RetryAfter != 2*time.Second {
+		t.Fatalf("flags = %+v, want degraded+fallback with 2s hint", flags)
 	}
 }
 
@@ -107,5 +139,42 @@ func TestMergeProjectSearchesPropagatesError(t *testing.T) {
 	}
 	if _, _, err := a.mergeProjectSearches(context.Background(), fs.projects, "q", 5); err == nil {
 		t.Fatal("expected search error")
+	}
+}
+
+// TestAPISearchDegraded: when the embedding circuit is open, /admin/api/search
+// answers 200 with keyword results plus degraded=true and a retry_after_ms
+// hint, both for a single project and for all=true.
+func TestAPISearchDegraded(t *testing.T) {
+	srv, fs := newAdminWith(t, degradedEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.projects = []store.Project{{ID: 1, Name: "demo", Model: "bge-m3", Dims: 3}}
+	fs.searchProject = &store.Project{ID: 1, Name: "demo", Model: "bge-m3", Dims: 3}
+	fs.searchResults = []store.SearchResult{{FilePath: "a.go", StartLine: 1, EndLine: 2, Content: "func main", Score: 0.5}}
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+
+	code, body := postAdminJSON(t, c, srv.URL+"/admin/api/search", csrf, map[string]any{
+		"query": "main function", "project": "demo", "top": 5,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("degraded search = %d body=%s (want 200)", code, body)
+	}
+	if !strings.Contains(body, `"degraded":true`) || !strings.Contains(body, `"retry_after_ms":2000`) {
+		t.Fatalf("degraded search body missing flags: %s", body)
+	}
+	if !strings.Contains(body, `"a.go"`) {
+		t.Fatalf("degraded search body missing keyword results: %s", body)
+	}
+
+	code, body = postAdminJSON(t, c, srv.URL+"/admin/api/search", csrf, map[string]any{
+		"query": "main function", "all": true, "top": 5,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("degraded all-projects search = %d body=%s (want 200)", code, body)
+	}
+	if !strings.Contains(body, `"degraded":true`) || !strings.Contains(body, `"retry_after_ms":2000`) {
+		t.Fatalf("degraded all-projects body missing flags: %s", body)
 	}
 }

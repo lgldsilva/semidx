@@ -5,7 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -97,6 +99,54 @@ func TestSearchAllProjects_tagsAndFuses(t *testing.T) {
 	}
 	if r.FilePath != "cmd/main.go" || r.Project != "proj-app" {
 		t.Errorf("result = %+v, want clean path tagged proj-app", r)
+	}
+}
+
+// TestSearchMulti_aggregatesDegraded: a degraded sub-search (embed circuit
+// open) must mark the fused response degraded and carry the retry hint.
+func TestSearchMulti_aggregatesDegraded(t *testing.T) {
+	st := &fakeStore{
+		project:   &store.Project{ID: 1, Name: "app", Identity: "proj-app", Model: "bge-m3"},
+		kwResults: []store.SearchResult{{FilePath: "a.go", Content: "x", Score: 0.5}},
+	}
+	emb := &fakeEmbedder{embedErr: &embed.RetryableError{Err: errors.New("circuit open"), After: 3 * time.Second}, dims: 3}
+	svc := NewService(st, emb)
+
+	resp, err := svc.SearchMulti(context.Background(), MultiScopeRequest{
+		Identities: []string{"proj-app"},
+		Query:      "find the main handler",
+		TopK:       5,
+	})
+	if err != nil {
+		t.Fatalf("SearchMulti: %v", err)
+	}
+	if !resp.Degraded || resp.RetryAfter != 3*time.Second {
+		t.Errorf("degraded=%v retryAfter=%v, want true/3s", resp.Degraded, resp.RetryAfter)
+	}
+	if !resp.Fallback || !resp.Keyword {
+		t.Errorf("Degraded must imply Fallback and Keyword, got %v/%v", resp.Fallback, resp.Keyword)
+	}
+	if len(resp.Results) != 1 {
+		t.Errorf("degraded search should still carry keyword results, got %+v", resp.Results)
+	}
+}
+
+// TestSearchAllProjects_aggregatesDegraded mirrors the SearchMulti test for the
+// global (cross-project) search path.
+func TestSearchAllProjects_aggregatesDegraded(t *testing.T) {
+	st := &fakeStore{
+		project:   &store.Project{ID: 1, Name: "app", Identity: "proj-app", Model: "bge-m3"},
+		kwResults: []store.SearchResult{{FilePath: "a.go", Content: "x", Score: 0.5}},
+	}
+	emb := &fakeEmbedder{embedErr: &embed.RetryableError{Err: errors.New("circuit open"), After: time.Second}, dims: 3}
+	svc := NewService(st, emb)
+
+	resp, err := svc.SearchAllProjects(context.Background(), MultiScopeRequest{Query: "find the main handler", TopK: 5})
+	if err != nil {
+		t.Fatalf("SearchAllProjects: %v", err)
+	}
+	if !resp.Degraded || resp.RetryAfter != time.Second {
+		t.Errorf("degraded=%v retryAfter=%v, want true/1s", resp.Degraded, resp.RetryAfter)
 	}
 }
 

@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"math"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -468,7 +466,7 @@ func TestFilesBatchValidation(t *testing.T) {
 }
 
 // retryableEmbedder returns a RetryableError from EmbedSingle, simulating a
-// circuit breaker open for testing the 503 + Retry-After response path.
+// circuit breaker open for testing the degraded keyword-fallback response.
 type retryableEmbedder struct {
 	embed.Embedder
 	after time.Duration
@@ -485,23 +483,35 @@ func (r *retryableEmbedder) ModelInfo(_ context.Context, m string) (*embed.Model
 	return &embed.ModelInfo{Name: m, Dims: 3}, nil
 }
 
+// TestSearchRetryableError: an open embedding circuit degrades the search to
+// keyword results (200 + degraded/retry_after_ms) instead of failing with 503.
 func TestSearchRetryableError(t *testing.T) {
 	after := 5 * time.Second
 	emb := &retryableEmbedder{after: after}
 	srv := New(&fakeStore{
 		token:   &store.Token{Scopes: []string{"read"}},
 		project: &store.Project{ID: 1, Name: "proj", Model: "m"},
+		results: []store.SearchResult{{FilePath: "a.go", StartLine: 1, Content: "x"}},
 	}, emb, nil)
 
 	rec := do(t, srv, "POST", "/api/v1/projects/proj/search", "tok", `{"query":"retryable embed failure"}`)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected degraded 200, got %d; body=%s", rec.Code, rec.Body.String())
 	}
-	want := strconv.Itoa(int(math.Ceil(after.Seconds())))
-	if ra := rec.Header().Get("Retry-After"); ra != want {
-		t.Errorf("Retry-After = %q, want %q", ra, want)
+	var out client.SearchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("bad JSON: %v", err)
 	}
-	if !strings.Contains(rec.Body.String(), "embedding provider temporarily unavailable") {
+	if !out.Degraded || !out.Fallback {
+		t.Errorf("degraded=%v fallback=%v, want both true", out.Degraded, out.Fallback)
+	}
+	if out.RetryAfterMS != after.Milliseconds() {
+		t.Errorf("retry_after_ms = %d, want %d", out.RetryAfterMS, after.Milliseconds())
+	}
+	if len(out.Results) != 1 || out.Results[0].Path != "a.go" {
+		t.Errorf("results = %+v, want the keyword hit", out.Results)
+	}
+	if strings.Contains(rec.Body.String(), "circuit breaker open for test") {
 		t.Errorf("body should not leak internal error; got %s", rec.Body.String())
 	}
 }

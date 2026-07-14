@@ -107,6 +107,21 @@ func TestFormatSearch(t *testing.T) {
 	if !strings.Contains(fbGot, "warning") || !strings.Contains(fbGot, "keyword") {
 		t.Errorf("formatSearchText fallback missing warning: %q", fbGot)
 	}
+
+	// Degraded (embed circuit open): the markdown warning with the retry hint.
+	degradedOut := &SearchOutput{
+		Project:      "proj",
+		Fallback:     true,
+		Degraded:     true,
+		RetryAfterMS: 4200,
+		Results: []Hit{
+			{Path: "a.go", StartLine: 1, Score: 0.5, Content: "package a"},
+		},
+	}
+	dgGot := formatSearchText(degradedOut)
+	if !strings.Contains(dgGot, "*[degraded: embedding temporarily unavailable — keyword results; retry in ~5s]*") {
+		t.Errorf("formatSearchText degraded missing warning: %q", dgGot)
+	}
 }
 
 func TestFormatSearchStructuredAndMinimal(t *testing.T) {
@@ -127,6 +142,23 @@ func TestFormatSearchStructuredAndMinimal(t *testing.T) {
 	minimal := formatSearchMinimal(out)
 	if !strings.Contains(minimal, `"f":"main.go"`) || !strings.Contains(minimal, `"l":"3-5"`) {
 		t.Fatalf("minimal=%s", minimal)
+	}
+
+	// Degraded flags flow into both envelopes (structured and abbreviated).
+	out.Degraded = true
+	out.Fallback = true
+	out.RetryAfterMS = 1500
+	structured = formatSearchStructured(out)
+	if !strings.Contains(structured, `"degraded":true`) || !strings.Contains(structured, `"retry_after_ms":1500`) {
+		t.Fatalf("structured degraded=%s", structured)
+	}
+	minimal = formatSearchMinimal(out)
+	if !strings.Contains(minimal, `"dg":true`) || !strings.Contains(minimal, `"ra":1500`) {
+		t.Fatalf("minimal degraded=%s", minimal)
+	}
+	emptyDegraded := formatSearchStructured(&SearchOutput{Project: "p", Degraded: true, Fallback: true, RetryAfterMS: 500})
+	if !strings.Contains(emptyDegraded, `"degraded":true`) || !strings.Contains(emptyDegraded, `"retry_after_ms":500`) {
+		t.Fatalf("structured empty degraded=%s", emptyDegraded)
 	}
 }
 
@@ -477,8 +509,10 @@ func TestClientBackendSearchAndProjects(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal"})
 			return
 		}
+		degraded := r.PathValue("project") == "deg"
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"project": r.PathValue("project"), "model": "bge-m3", "fallback": false,
+			"project": r.PathValue("project"), "model": "bge-m3", "fallback": degraded,
+			"degraded": degraded, "retry_after_ms": map[bool]int64{true: 1500, false: 0}[degraded],
 			"results": []map[string]any{
 				{"path": "main.go", "start_line": 1, "score": 0.95, "content": "func main()"},
 			},
@@ -515,6 +549,18 @@ func TestClientBackendSearchAndProjects(t *testing.T) {
 	}
 	if out.Project != "app" || len(out.Results) != 1 || out.Results[0].Path != "main.go" {
 		t.Errorf("search output = %+v", out)
+	}
+	if out.Degraded || out.RetryAfterMS != 0 {
+		t.Errorf("non-degraded search output = %+v", out)
+	}
+
+	// Degraded search: the client backend must copy the server's flags.
+	out, err = b.Search(context.Background(), "deg", "main func", "", 5, false, 0)
+	if err != nil {
+		t.Fatalf("clientBackend.Search (degraded): %v", err)
+	}
+	if !out.Degraded || !out.Fallback || out.RetryAfterMS != 1500 {
+		t.Errorf("degraded search output = %+v", out)
 	}
 
 	// Search error.
