@@ -1,5 +1,15 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../../api'
+import { Alert } from '../../components/Alert'
+import { Badge } from '../../components/Badge'
+import { Button } from '../../components/Button'
+import { Card } from '../../components/Card'
+import { Input } from '../../components/Input'
+import { Code, Snippet } from '../../components/Snippet'
+import { Table } from '../../components/Table'
+
+const H2 = 'mb-2 text-[1.1rem] font-bold'
+const LIST = 'my-2 list-disc pl-5'
 
 export function AnalyzePanel({
   project,
@@ -108,215 +118,218 @@ export function AnalyzePanel({
   }
 
   return (
-    <div className="workspace-grid">
-      <div className="card full">
-        <h2>Dependency graph & explain</h2>
-        <p className="muted">
-          Graph uses <code>file_dependencies</code>. Explain uses disk when available, else index chunks.
+    <div className="grid gap-3.5 md:grid-cols-2">
+      <Card className="md:col-span-2">
+        <h2 className={H2}>Dependency graph &amp; explain</h2>
+        <p className="m-0 text-muted">
+          Graph uses <Code>file_dependencies</Code>. Explain uses disk when available, else index chunks.
         </p>
-        {err && <div className="alert error">{err}</div>}
-        <div className="row">
-          <label className="grow">
+        {err && <Alert kind="error">{err}</Alert>}
+        <div className="mt-2 flex flex-wrap items-end gap-3.5">
+          <label htmlFor="analyze-path" className="block min-w-[180px] flex-1 text-sm font-medium">
             File path
-            <input
+            <Input
+              id="analyze-path"
+              className="mt-1"
               value={path}
               onChange={(e) => setPath(e.target.value)}
               placeholder="internal/auth/token.go"
             />
           </label>
-          <label>
+          <label htmlFor="analyze-line" className="block text-sm font-medium">
             Line
-            <input
+            <Input
+              id="analyze-line"
               type="number"
               min={1}
+              className="mt-1 w-20"
               value={line}
               onChange={(e) => setLine(Number(e.target.value) || 1)}
-              style={{ width: '5rem' }}
             />
           </label>
-          <button type="button" disabled={!!busy} onClick={() => void runExplain()}>
+          <Button disabled={!!busy} onClick={() => void runExplain()}>
             {busy === 'explain' ? '…' : 'Explain'}
-          </button>
-          <button type="button" disabled={!!busy} onClick={() => void runGraph()}>
+          </Button>
+          <Button disabled={!!busy} onClick={() => void runGraph()}>
             {busy === 'graph' ? '…' : 'Callers + deps'}
-          </button>
-          <button type="button" disabled={!!busy} onClick={() => void runDead()}>
+          </Button>
+          <Button disabled={!!busy} onClick={() => void runDead()}>
             {busy === 'dead' ? '…' : 'Dead code scan'}
-          </button>
-          <button type="button" disabled={!!busy} onClick={() => void runSbom()}>
+          </Button>
+          <Button disabled={!!busy} onClick={() => void runSbom()}>
             {busy === 'sbom' ? '…' : 'SBOM'}
-          </button>
-          <button type="button" disabled={!!busy} onClick={() => void runGraphStats()}>
+          </Button>
+          <Button disabled={!!busy} onClick={() => void runGraphStats()}>
             {busy === 'graphstats' ? '…' : 'Graph overview'}
-          </button>
+          </Button>
         </div>
         {explain && (
-          <div className="card" style={{ marginTop: '0.75rem' }}>
-            <h3>
+          <Card className="mt-3">
+            <h3 className="mb-1 font-bold">
               {(explain.symbol as string) || path}
               {explain.kind ? ` — ${String(explain.kind)}` : ''}
             </h3>
-            <p className="muted small">
+            <p className="m-0 text-xs text-muted">
               source: {String(explain.source || '—')} · lines{' '}
               {String(explain.start_line ?? '?')}–{String(explain.end_line ?? '?')}
             </p>
             {Array.isArray(explain.dependencies) && (
-              <p>
+              <p className="my-1">
                 <strong>Dependencies:</strong>{' '}
                 {(explain.dependencies as string[]).join(', ') || '(none)'}
               </p>
             )}
             {Array.isArray(explain.importers) && (
-              <p>
+              <p className="my-1">
                 <strong>Imported by:</strong>{' '}
                 {(explain.importers as string[]).length
                   ? (explain.importers as string[]).map((imp) => (
-                      <button
+                      <Button
                         key={imp}
-                        type="button"
-                        className="link"
-                        style={{ marginRight: '0.5rem' }}
+                        variant="link"
+                        size="sm"
+                        className="mr-2"
                         onClick={() => onOpenFile(imp)}
                       >
                         {imp}
-                      </button>
+                      </Button>
                     ))
                   : '(none)'}
               </p>
             )}
             {Array.isArray(explain.tests) && (
-              <p>
+              <p className="my-1">
                 <strong>Tests:</strong>{' '}
                 {(explain.tests as string[]).join(', ') || '(none)'}
               </p>
             )}
             {typeof explain.snippet === 'string' && (
-              <pre className="snippet">{explain.snippet as string}</pre>
+              <Snippet>{explain.snippet as string}</Snippet>
             )}
-          </div>
+          </Card>
         )}
-      </div>
-      <div className="card">
-        <h2>Callers ({callers.length})</h2>
+      </Card>
+      <Card>
+        <h2 className={H2}>Callers ({callers.length})</h2>
         {callers.length === 0 ? (
-          <p className="muted">No importers (or not run yet).</p>
+          <p className="text-muted">No importers (or not run yet).</p>
         ) : (
-          <ul>
+          <ul className={LIST}>
             {callers.map((c) => (
               <li key={c}>
-                <button type="button" className="link" onClick={() => onOpenFile(c)}>
+                <Button variant="link" size="sm" onClick={() => onOpenFile(c)}>
                   {c}
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
         )}
-      </div>
-      <div className="card">
-        <h2>Dependencies ({deps.length})</h2>
+      </Card>
+      <Card>
+        <h2 className={H2}>Dependencies ({deps.length})</h2>
         {deps.length === 0 ? (
-          <p className="muted">No outbound edges (or not run yet).</p>
+          <p className="text-muted">No outbound edges (or not run yet).</p>
         ) : (
-          <ul>
+          <ul className={LIST}>
             {deps.map((d) => (
               <li key={d}>
-                <code>{d}</code>
+                <Code>{d}</Code>
               </li>
             ))}
           </ul>
         )}
-      </div>
+      </Card>
       {graphStats && (
-        <div className="card full">
-          <h2>
+        <Card className="md:col-span-2">
+          <h2 className={H2}>
             Graph overview — {graphStats.nodes} nodes · {graphStats.edges} edges
           </h2>
-          <p className="muted small">
+          <p className="m-0 text-xs text-muted">
             Progressive-disclosure summary of the dependency graph (no external
             viz library, CSP-safe). Click a node to open it.
           </p>
-          <div className="workspace-grid">
-            <div className="card">
-              <h3>Most dependencies (out-degree)</h3>
+          <div className="mt-3 grid gap-3.5 md:grid-cols-2">
+            <Card>
+              <h3 className="mb-1 font-bold">Most dependencies (out-degree)</h3>
               {graphStats.top_depends.length === 0 ? (
-                <p className="muted">No edges.</p>
+                <p className="text-muted">No edges.</p>
               ) : (
-                <ul>
+                <ul className={LIST}>
                   {graphStats.top_depends.map((e) => (
                     <li key={e.node}>
-                      <button type="button" className="link" onClick={() => onOpenFile(e.node)}>
+                      <Button variant="link" size="sm" onClick={() => onOpenFile(e.node)}>
                         {e.node}
-                      </button>{' '}
-                      <span className="pill">{e.degree}</span>
+                      </Button>{' '}
+                      <Badge tone="neutral">{e.degree}</Badge>
                     </li>
                   ))}
                 </ul>
               )}
-            </div>
-            <div className="card">
-              <h3>Most depended-upon (in-degree)</h3>
+            </Card>
+            <Card>
+              <h3 className="mb-1 font-bold">Most depended-upon (in-degree)</h3>
               {graphStats.top_depended.length === 0 ? (
-                <p className="muted">No edges.</p>
+                <p className="text-muted">No edges.</p>
               ) : (
-                <ul>
+                <ul className={LIST}>
                   {graphStats.top_depended.map((e) => (
                     <li key={e.node}>
-                      <button type="button" className="link" onClick={() => onOpenFile(e.node)}>
+                      <Button variant="link" size="sm" onClick={() => onOpenFile(e.node)}>
                         {e.node}
-                      </button>{' '}
-                      <span className="pill">{e.degree}</span>
+                      </Button>{' '}
+                      <Badge tone="neutral">{e.degree}</Badge>
                     </li>
                   ))}
                 </ul>
               )}
-            </div>
+            </Card>
           </div>
-        </div>
+        </Card>
       )}
-      <div className="card full">
-        <h2>CLI-only analysis tools</h2>
-        <p className="muted">
+      <Card className="md:col-span-2">
+        <h2 className={H2}>CLI-only analysis tools</h2>
+        <p className="m-0 text-muted">
           These run on your machine against the same index (or a server checkout). Use the
           project name shown in the workspace header.
         </p>
-        <ul>
+        <ul className={LIST}>
           <li>
-            <code>semidx sbom generate --project {project}</code> — dependency SBOM (also available
+            <Code>semidx sbom generate --project {project}</Code> — dependency SBOM (also available
             via the SBOM button above)
           </li>
           <li>
-            <code>semidx diff --project {project}</code> — compare index vs working tree
+            <Code>semidx diff --project {project}</Code> — compare index vs working tree
           </li>
           <li>
-            <code>semidx alerts list --project {project}</code> — saved search alerts (local JSON)
+            <Code>semidx alerts list --project {project}</Code> — saved search alerts (local JSON)
           </li>
           <li>
-            <code>semidx insights show</code> — query trend charts (local JSON)
+            <Code>semidx insights show</Code> — query trend charts (local JSON)
           </li>
         </ul>
         {sbom && (
-          <p>
-            Last SBOM: <span className="pill">{sbom.format}</span>{' '}
+          <p className="my-1">
+            Last SBOM: <Badge tone="neutral">{sbom.format}</Badge>{' '}
             <strong>{sbom.component_count}</strong> components — CLI:{' '}
-            <code>{sbom.cli_equivalent}</code>
+            <Code>{sbom.cli_equivalent}</Code>
           </p>
         )}
-      </div>
-      <div className="card full">
-        <h2>
+      </Card>
+      <Card className="md:col-span-2">
+        <h2 className={H2}>
           Dead code
           {deadStats
             ? ` — ${deadStats.total} findings (${deadStats.confirmed} confirmed, ${deadStats.public_api} public-api)`
             : ''}
         </h2>
-        <p className="muted">
+        <p className="m-0 text-muted">
           Requires project path on the server disk (git checkout / docs path). Same as{' '}
-          <code>semidx dead-code</code>.
+          <Code>semidx dead-code</Code>.
         </p>
         {dead.length === 0 ? (
-          <p className="muted">No findings yet — run scan.</p>
+          <p className="text-muted">No findings yet — run scan.</p>
         ) : (
-          <table>
+          <Table className="mt-2">
             <thead>
               <tr>
                 <th>Symbol</th>
@@ -329,27 +342,27 @@ export function AnalyzePanel({
               {dead.map((f, i) => (
                 <tr key={i}>
                   <td>
-                    <code>{f.symbol}</code>
+                    <Code>{f.symbol}</Code>
                   </td>
                   <td>{f.kind}</td>
                   <td>
-                    <button
-                      type="button"
-                      className="link"
+                    <Button
+                      variant="link"
+                      size="sm"
                       onClick={() => onOpenFile(f.file, f.start_line)}
                     >
                       {f.file}:{f.start_line}
-                    </button>
+                    </Button>
                   </td>
                   <td>
-                    <span className="pill">{f.confidence}</span>
+                    <Badge tone="neutral">{f.confidence}</Badge>
                   </td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         )}
-      </div>
+      </Card>
     </div>
   )
 }

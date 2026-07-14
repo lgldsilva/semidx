@@ -15,8 +15,8 @@ function Private({ children }: Readonly<{ children: React.ReactNode }>) {
   const { user, loading } = useAuth()
   if (loading) {
     return (
-      <div className="centered">
-        <p className="muted">Loading…</p>
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <p className="text-muted">Loading…</p>
       </div>
     )
   }
