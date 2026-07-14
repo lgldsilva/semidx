@@ -96,21 +96,31 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "could not create project")
 		return
 	}
-	if body.Credential != nil && strings.TrimSpace(body.Credential.Secret) != "" {
-		if ok, err := s.bearerHasAdminScope(r); err != nil {
-			s.log.Error("credential scope check", "err", err)
-			writeJSONError(w, http.StatusInternalServerError, "auth check failed")
-			return
-		} else if !ok {
-			writeJSONError(w, http.StatusForbidden, "admin scope required to set a git credential")
-			return
-		}
-		if err := s.createProjectCredential(r.Context(), p.ID, body.Credential); err != nil {
-			writeGitCredAPIError(w, s.log, "create project credential", err)
-			return
-		}
+	if !s.attachCreateProjectCredential(w, r, p.ID, body.Credential) {
+		return
 	}
 	writeJSON(w, http.StatusCreated, toProjectView(p))
+}
+
+func (s *Server) attachCreateProjectCredential(w http.ResponseWriter, r *http.Request, projectID int, cred *projectCredentialBody) bool {
+	if cred == nil || strings.TrimSpace(cred.Secret) == "" {
+		return true
+	}
+	ok, err := s.bearerHasAdminScope(r)
+	if err != nil {
+		s.log.Error("credential scope check", "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "auth check failed")
+		return false
+	}
+	if !ok {
+		writeJSONError(w, http.StatusForbidden, "admin scope required to set a git credential")
+		return false
+	}
+	if err := s.createProjectCredential(r.Context(), projectID, cred); err != nil {
+		writeGitCredAPIError(w, s.log, "create project credential", err)
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {

@@ -202,6 +202,21 @@ func validateProjectName(name string) (string, int, string) {
 	return name, 0, ""
 }
 
+func validateCreateProjectCredential(w http.ResponseWriter, ac *authCtx, body *createProjectBody) bool {
+	if body.Credential == nil || strings.TrimSpace(body.Credential.Secret) == "" {
+		return true
+	}
+	if ac.user.Role != "admin" {
+		writeJSONErr(w, http.StatusForbidden, "admin role required to set a git credential")
+		return false
+	}
+	if body.SourceType != "git" {
+		writeJSONErr(w, http.StatusBadRequest, "credential is only supported for source_type=git")
+		return false
+	}
+	return true
+}
+
 func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	var body createProjectBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -213,15 +228,8 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 		writeJSONErr(w, status, msg)
 		return
 	}
-	if body.Credential != nil && strings.TrimSpace(body.Credential.Secret) != "" {
-		if ac.user.Role != "admin" {
-			writeJSONErr(w, http.StatusForbidden, "admin role required to set a git credential")
-			return
-		}
-		if body.SourceType != "git" {
-			writeJSONErr(w, http.StatusBadRequest, "credential is only supported for source_type=git")
-			return
-		}
+	if !validateCreateProjectCredential(w, ac, &body) {
+		return
 	}
 
 	proj, err := a.store.CreateProject(r.Context(), name, body.Model, body.SourceType, body.GitURL, body.Branch, 0)

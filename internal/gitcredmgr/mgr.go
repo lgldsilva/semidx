@@ -141,6 +141,34 @@ func (s *Service) CreateForProject(ctx context.Context, projectID int, in Create
 	return s.Create(ctx, in)
 }
 
+// applyUpdateSecret resolves kind and optionally re-seals the secret for Update.
+func (s *Service) applyUpdateSecret(existing *store.GitCredential, in UpdateInput) (kind string, secretEnc []byte, keyVersion int, err error) {
+	kind = strings.TrimSpace(in.Kind)
+	if kind == "" {
+		kind = existing.Kind
+	} else if kind != "https" && kind != "ssh" {
+		return "", nil, 0, errors.New("kind must be https or ssh")
+	}
+	secretEnc = existing.SecretEnc
+	keyVersion = existing.KeyVersion
+	secret := strings.TrimSpace(in.Secret)
+	if secret != "" {
+		if err := validateSecret(kind, secret); err != nil {
+			return "", nil, 0, err
+		}
+		secretEnc, err = s.secrets.Seal([]byte(secret))
+		if err != nil {
+			return "", nil, 0, err
+		}
+		keyVersion = s.secrets.KeyVersion()
+		return kind, secretEnc, keyVersion, nil
+	}
+	if kind != existing.Kind {
+		return "", nil, 0, errors.New("secret is required when changing credential kind")
+	}
+	return kind, secretEnc, keyVersion, nil
+}
+
 // Update replaces mutable fields of the credential id.
 func (s *Service) Update(ctx context.Context, id int, in UpdateInput) (*PublicCredential, error) {
 	gcs, err := s.gcs()
@@ -157,30 +185,13 @@ func (s *Service) Update(ctx context.Context, id int, in UpdateInput) (*PublicCr
 	if err != nil {
 		return nil, err
 	}
-	kind := strings.TrimSpace(in.Kind)
-	if kind == "" {
-		kind = existing.Kind
-	} else if kind != "https" && kind != "ssh" {
-		return nil, errors.New("kind must be https or ssh")
+	kind, secretEnc, keyVersion, err := s.applyUpdateSecret(existing, in)
+	if err != nil {
+		return nil, err
 	}
 	username := strings.TrimSpace(in.Username)
 	label := strings.TrimSpace(in.Label)
 	knownHosts := strings.TrimSpace(in.SSHKnownHosts)
-	secretEnc := existing.SecretEnc
-	keyVersion := existing.KeyVersion
-	secret := strings.TrimSpace(in.Secret)
-	if secret != "" {
-		if err := validateSecret(kind, secret); err != nil {
-			return nil, err
-		}
-		secretEnc, err = s.secrets.Seal([]byte(secret))
-		if err != nil {
-			return nil, err
-		}
-		keyVersion = s.secrets.KeyVersion()
-	} else if kind != existing.Kind {
-		return nil, errors.New("secret is required when changing credential kind")
-	}
 	updated := &store.GitCredential{
 		ID: id, Kind: kind, Username: username, SecretEnc: secretEnc,
 		KeyVersion: keyVersion, SSHKnownHosts: knownHosts, Label: label,
