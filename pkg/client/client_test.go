@@ -294,6 +294,60 @@ func TestWaitForJob(t *testing.T) {
 	})
 }
 
+func TestStatus(t *testing.T) {
+	c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requireAuth(t, r)
+		if r.Method != "GET" || r.URL.Path != "/api/v1/projects/proj/status" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(StatusResponse{
+			Name: "proj", Identity: "git:example/proj", SourceType: "git",
+			Status: "ready", Model: "bge-m3", TotalFiles: 42,
+		})
+	})
+	defer done()
+
+	st, err := c.Status(context.Background(), "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := StatusResponse{
+		Name: "proj", Identity: "git:example/proj", SourceType: "git",
+		Status: "ready", Model: "bge-m3", TotalFiles: 42,
+	}
+	if *st != want {
+		t.Errorf("status = %+v, want %+v", *st, want)
+	}
+}
+
+func TestStatusNotFound(t *testing.T) {
+	c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "project not found"})
+	})
+	defer done()
+
+	_, err := c.Status(context.Background(), "ghost")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("err type = %T, want *APIError", err)
+	}
+	if apiErr.Status != 404 || !strings.Contains(apiErr.Message, "not found") {
+		t.Errorf("apiErr = %+v", apiErr)
+	}
+}
+
+func TestStatusInvalidJSON(t *testing.T) {
+	c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("{not json"))
+	})
+	defer done()
+
+	if _, err := c.Status(context.Background(), "proj"); err == nil {
+		t.Fatal("expected a JSON decode error for a malformed body")
+	}
+}
+
 func TestAPIErrorMapping(t *testing.T) {
 	c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(404)
