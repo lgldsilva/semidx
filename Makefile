@@ -1,12 +1,18 @@
 GOTOOLCHAIN := go1.26.5
 export GOTOOLCHAIN
 
-.PHONY: all build test bench lint fmt gosec vulncheck docker-build clean help
+.PHONY: all build web-build test bench lint fmt gosec vulncheck docker-build clean help
 
 all: build test lint
 
 build:
 	go build ./...
+
+# Rebuild the admin SPA and write into internal/webui/dist (Node 22).
+# CI also runs `git diff --exit-code internal/webui/dist` after npm run build
+# so a stale committed bundle fails the gate.
+web-build:
+	cd web && npm ci && npm run build
 
 test:
 	go test -race -shuffle=on -count=1 ./...
