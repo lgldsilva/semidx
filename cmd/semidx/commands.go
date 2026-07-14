@@ -885,19 +885,28 @@ func newMCPInstallCmd() *cobra.Command {
 		list       bool
 		all        bool
 		envPairs   []string
+		transport  string
+		serverURL  string
+		bearerEnv  string
 	)
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Register the semidx MCP server in an agent's config (Claude Code, Cursor, Gemini CLI, VS Code, OpenCode, Codex)",
-		Long: "Register semidx's stdio MCP server in a coding agent's configuration.\n\n" +
+		Long: "Register semidx's MCP server in a coding agent's configuration.\n\n" +
 			"By default it PRINTS the config snippet and its target path; pass --apply to\n" +
 			"merge it in place (a timestamped .bak is written first and other servers are\n" +
 			"preserved). Pass --all to apply to every supported client at once.\n" +
 			"Pass --env KEY=VAL (repeatable) to add environment variables to the entry\n" +
 			"(\"env\" block; \"environment\" for OpenCode; inline env table for Codex).\n\n" +
+			"--transport http registers a REMOTE server instead: the config points at a\n" +
+			"running `semidx serve --mcp-http` endpoint (--url, e.g. https://host/mcp) and\n" +
+			"authenticates with \"Authorization: Bearer\" read from the env var named by\n" +
+			"--bearer-env, so no token is written to the config file. Clients whose config\n" +
+			"format has no HTTP/SSE support are skipped with a warning.\n\n" +
 			"Supported clients:\n\n" + mcpinstall.ClientList(),
 		Example: "  semidx mcp install --list\n  semidx mcp install --client claude-code --apply\n" +
-			"  semidx mcp install --client codex --env SEMIDX_LOCAL_INDEX=1 --apply\n  semidx mcp install --all --apply",
+			"  semidx mcp install --client codex --env SEMIDX_LOCAL_INDEX=1 --apply\n  semidx mcp install --all --apply\n" +
+			"  semidx mcp install --client claude-code --transport http --url https://semidx.lan/mcp --bearer-env SEMIDX_TOKEN --apply",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if list {
 				fmt.Print(mcpinstall.ClientList())
@@ -918,19 +927,23 @@ func newMCPInstallCmd() *cobra.Command {
 			home, _ := os.UserHomeDir()
 			configDir, _ := os.UserConfigDir()
 			project, _ := os.Getwd()
-			if all {
-				return installAll(exe, home, configDir, project, name, env, apply)
-			}
-			opts := mcpinstall.Options{
-				Client:    clientID,
+			base := mcpinstall.Options{
 				Name:      name,
 				ExePath:   exe,
 				Home:      home,
 				ConfigDir: configDir,
 				Project:   project,
-				FilePath:  configFile,
 				Env:       env,
+				Transport: transport,
+				URL:       serverURL,
+				BearerEnv: bearerEnv,
 			}
+			if all {
+				return installAll(base, apply)
+			}
+			opts := base
+			opts.Client = clientID
+			opts.FilePath = configFile
 			path, snippet, err := mcpinstall.Snippet(opts)
 			if err != nil {
 				return err
@@ -955,6 +968,9 @@ func newMCPInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&list, "list", false, "list supported clients and exit")
 	cmd.Flags().BoolVar(&all, "all", false, "apply to every supported client at once (implies --apply)")
 	cmd.Flags().StringArrayVar(&envPairs, "env", nil, "environment variable for the server entry (KEY=VAL, repeatable)")
+	cmd.Flags().StringVar(&transport, "transport", mcpinstall.TransportStdio, "server transport: stdio (local process) or http (remote Streamable HTTP endpoint)")
+	cmd.Flags().StringVar(&serverURL, "url", "", "the remote server's /mcp endpoint (required with --transport http)")
+	cmd.Flags().StringVar(&bearerEnv, "bearer-env", "", "env var name the client reads the Authorization Bearer token from (--transport http)")
 	return cmd
 }
 
@@ -968,26 +984,21 @@ func warnSecretEnvKeys(w io.Writer, env map[string]string) {
 	}
 }
 
-// installAll applies the MCP server entry to every applyable client.
-func installAll(exe, home, configDir, project, name string, env map[string]string, apply bool) error {
+// installAll applies the MCP server entry to every applyable client. Clients
+// that cannot take the requested transport (e.g. --transport http on a
+// stdio-only client) are skipped with a warning on stderr.
+func installAll(base mcpinstall.Options, apply bool) error {
 	clients := mcpinstall.ApplyableClients()
 	for _, c := range clients {
-		opts := mcpinstall.Options{
-			Client:    c.ID,
-			Name:      name,
-			ExePath:   exe,
-			Home:      home,
-			ConfigDir: configDir,
-			Project:   project,
-			Env:       env,
-		}
+		opts := base
+		opts.Client = c.ID
 		if apply {
 			written, err := mcpinstall.Apply(opts)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "skipping %s: %v\n", c.ID, err)
 				continue
 			}
-			fmt.Printf("Registered MCP server %q for %s in %s\n", name, c.ID, written)
+			fmt.Printf("Registered MCP server %q for %s in %s\n", base.Name, c.ID, written)
 		} else {
 			path, snippet, err := mcpinstall.Snippet(opts)
 			if err != nil {
