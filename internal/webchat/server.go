@@ -27,7 +27,7 @@ const allowPublicEnv = "SEMIDX_CHATRAG_ALLOW_PUBLIC"
 var templatesFS embed.FS
 
 // ChatPipeline is the interface the web chat server uses to answer questions.
-// Implemented by rag.Pipeline in production, or a test mock.
+// Implemented by rag.FantasyPipeline in production, or a test mock.
 type ChatPipeline interface {
 	Ask(ctx context.Context, question, project string, history []chat.Message) (*rag.Answer, error)
 
