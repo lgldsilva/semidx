@@ -24,9 +24,10 @@ export SEMIDX_BOOTSTRAP_TOKEN='semidx_your_choice'   # optional
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-The image (`Dockerfile`) builds a static binary and runs it on Alpine with `git`
-(for server-side git-sync) and CA certificates (for cloud embedders). The
-container entrypoint is `semidx serve`.
+The image (`Dockerfile`) builds a static binary and runs it on Alpine with
+`git` and `openssh-client` (HTTPS/SSH tooling for server-side git-sync) and
+CA certificates (for cloud embedders). The container entrypoint is
+`semidx serve`.
 
 > Note: `deploy/docker-compose.yml` is the server deployment. The
 > `docker-compose.yml` at the repo root is a **development-only** database (it
@@ -76,6 +77,7 @@ directory is also honored; real environment variables win over it).
 | `SEMIDX_COOKIE_SECURE` | `true` | Sets the `Secure` flag on admin cookies. Set to `false` **only** for plain-HTTP local testing. |
 | `SEMIDX_JWT_SECRET` | *(unset)* | HS256 signing key for JWT control tokens. When empty, control tokens are disabled and the UI hides the feature. |
 | `SEMIDX_CSRF_KEY` | *(auto)* | HMAC key for web-admin CSRF tokens. When empty, a random key is generated on each restart. Set it to a persistent value so tokens survive server restarts. |
+| `SEMIDX_SECRET_KEY` | *(unset)* | Master key for the AES-256-GCM vault that encrypts stored git credentials (see below). Exactly 32 bytes, hex or base64. When empty, the credential vault is disabled. Generate with `openssl rand -hex 32`. |
 
 ### Server-side git sync (`repo add` / reindex)
 
@@ -85,6 +87,28 @@ directory is also honored; real environment variables win over it).
 | `SEMIDX_GIT_TOKEN` | *(unset)* | PAT for private HTTPS clones; injected as an Authorization header (not stored in the repo URL). Falls back to `SEMIDX_GITHUB_TOKEN`. |
 | `SEMIDX_GIT_USER` | `x-access-token` | Basic-auth username paired with `SEMIDX_GIT_TOKEN` (Gitea/GitHub default). |
 | `SEMIDX_GIT_ALLOW_FILE` | `false` | When `true`, permits `file://` git URLs for server-side sync. |
+
+#### Stored git credentials (vault + SSH tooling)
+
+Today, server-side git sync uses the global `SEMIDX_GIT_TOKEN` /
+`SEMIDX_GIT_USER` from the table above. Separately, the codebase already has a
+**recoverable credential vault** (`internal/secretbox` +
+`store.GitCredentialStore`) for HTTPS tokens or SSH private keys scoped to a
+project or a host — encrypted at rest with AES-256-GCM under
+`SEMIDX_SECRET_KEY` (HKDF-SHA256–derived data key, versioned for rotation).
+
+Wiring that vault into the sync job runner (project → host → env-token
+resolution) lands in a follow-up; until then, setting `SEMIDX_SECRET_KEY`
+alone does **not** change clone/pull behavior. Still set it now if you plan to
+store credentials, and keep it stable — losing it makes every vaulted secret
+unreadable. Without it the vault stays disabled; the global env token still
+works.
+
+For SSH once that resolution is wired: the official image ships
+`openssh-client` (and `git`). Keys are written to an ephemeral `0600` file only
+for the duration of the git command; an optional per-credential `known_hosts`
+pins the host key (otherwise first-contact under
+`SEMIDX_DATA_DIR/ssh/known_hosts.d/<host>`).
 
 ### Indexing & extraction
 
