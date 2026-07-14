@@ -179,3 +179,56 @@ func TestResolveChatLLM_explicitGoogleFallsBackToEmbeddingKey(t *testing.T) {
 		t.Errorf("google fallback = %+v", sel)
 	}
 }
+
+func TestChatModelAllowlist(t *testing.T) {
+	// No chat provider → nil (chat disabled, no allowlist).
+	if got := (&Config{}).ChatModelAllowlist(); got != nil {
+		t.Errorf("no provider allowlist = %v, want nil", got)
+	}
+
+	// Default only: the resolved chat model comes first with Default=true.
+	c := &Config{GeminiAPIKey: "g"}
+	got := c.ChatModelAllowlist()
+	if len(got) != 1 || got[0].Model != "gemini-2.5-flash" || got[0].Provider != "google" || !got[0].Default {
+		t.Fatalf("default-only allowlist = %+v", got)
+	}
+
+	// Extras: "provider/model" entries append after the default; the model id
+	// may itself contain slashes (Cut on the FIRST separator); malformed and
+	// duplicate entries are skipped.
+	c = &Config{
+		GeminiAPIKey: "g",
+		ChatModels: []string{
+			"openrouter/deepseek/deepseek-chat", // model id with a slash
+			"google/gemini-2.5-flash",           // duplicate of the default → skipped
+			"groq/llama-3.3-70b",
+			"no-slash",       // malformed → skipped
+			"/only-model",    // empty provider → skipped
+			"only-provider/", // empty model → skipped
+		},
+	}
+	got = c.ChatModelAllowlist()
+	if len(got) != 3 {
+		t.Fatalf("allowlist = %+v, want default + 2 extras", got)
+	}
+	if got[1].Provider != "openrouter" || got[1].Model != "deepseek/deepseek-chat" || got[1].Default {
+		t.Errorf("extra[0] = %+v", got[1])
+	}
+	if got[2].Provider != "groq" || got[2].Model != "llama-3.3-70b" {
+		t.Errorf("extra[1] = %+v", got[2])
+	}
+}
+
+func TestLoadChatModels(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg := LoadWithLookup(mapLookup(map[string]string{
+		"SEMIDX_CHAT_MODELS": "google/gemini-2.5-flash, openrouter/x/y",
+	}))
+	if len(cfg.ChatModels) != 2 || cfg.ChatModels[0] != "google/gemini-2.5-flash" || cfg.ChatModels[1] != "openrouter/x/y" {
+		t.Errorf("ChatModels = %v", cfg.ChatModels)
+	}
+	if len(LoadWithLookup(mapLookup(nil)).ChatModels) != 0 {
+		t.Error("unset SEMIDX_CHAT_MODELS must yield an empty list")
+	}
+}

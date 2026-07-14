@@ -13,6 +13,8 @@ import (
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/rag"
+	"github.com/lgldsilva/semidx/internal/webadmin"
 )
 
 // stubEmbedder is a no-op embed.Embedder for wiring tests (no network).
@@ -47,8 +49,8 @@ func TestBuildAdminChatPipeline_anyProvider(t *testing.T) {
 	if p == nil {
 		t.Fatal("openai-compatible provider must enable the admin chat (gate removed)")
 	}
-	if _, ok := p.(*agentChatPipeline); !ok {
-		t.Errorf("want the agent chat pipeline, got %T", p)
+	if _, ok := p.(*adminChat); !ok {
+		t.Errorf("want the per-request adminChat factory, got %T", p)
 	}
 
 	// No chat provider at all → nil (chat unavailable).
@@ -74,6 +76,123 @@ func TestBuildAdminChatPipeline_anyProvider(t *testing.T) {
 	// nil cfg/emb → nil.
 	if (&deps{}).buildAdminChatPipeline() != nil {
 		t.Error("nil cfg/emb should yield nil chat")
+	}
+}
+
+// multiModelDeps builds deps with an openai-compatible default chat provider
+// plus a Gemini key backing an extra allowlist entry (SEMIDX_CHAT_MODELS).
+func multiModelDeps() *deps {
+	return &deps{
+		emb: stubEmbedder{},
+		cfg: &config.Config{
+			ChatProvider:  "openai-compatible",
+			ChatModel:     "deepseek-v4-flash-free",
+			ChatAPIKey:    "k",
+			ChatBaseURL:   "https://opencode.ai/zen/v1",
+			GeminiAPIKey:  "g",
+			GeminiBaseURL: "https://generativelanguage.googleapis.com",
+			ChatModels:    []string{"google/gemini-2.5-flash", "malformed-entry"},
+			AgentActions:  "off",
+		},
+	}
+}
+
+// TestAdminChatConfigContract asserts the factory's Config() matches the frozen
+// GET /admin/api/chat/config contract fields.
+func TestAdminChatConfigContract(t *testing.T) {
+	p, ok := multiModelDeps().buildAdminChatPipeline().(*adminChat)
+	if !ok {
+		t.Fatal("expected the adminChat factory")
+	}
+	cfg := p.Config()
+	if !cfg.Enabled || cfg.DefaultMode != "agent" || cfg.DefaultModel != "deepseek-v4-flash-free" {
+		t.Errorf("config = %+v", cfg)
+	}
+	if len(cfg.Modes) != 2 || cfg.Modes[0] != "agent" || cfg.Modes[1] != "rag" {
+		t.Errorf("modes = %v", cfg.Modes)
+	}
+	if cfg.AgentActions != "off" {
+		t.Errorf("agent_actions = %q", cfg.AgentActions)
+	}
+	// The malformed SEMIDX_CHAT_MODELS entry is dropped; the default is first
+	// and flagged, the Gemini extra follows.
+	if len(cfg.Models) != 2 {
+		t.Fatalf("models = %+v", cfg.Models)
+	}
+	if cfg.Models[0].ID != "deepseek-v4-flash-free" || !cfg.Models[0].Default ||
+		cfg.Models[0].Provider != "openai-compatible" {
+		t.Errorf("models[0] = %+v", cfg.Models[0])
+	}
+	if cfg.Models[1].ID != "gemini-2.5-flash" || cfg.Models[1].Provider != "google" || cfg.Models[1].Default {
+		t.Errorf("models[1] = %+v", cfg.Models[1])
+	}
+}
+
+// TestAdminChatBackendFor covers the per-request routing: default/agent mode →
+// the tool-loop pipeline, rag mode → the FantasyPipeline, unknown mode/model →
+// error; and the model cache returns the same resolved instance.
+func TestAdminChatBackendFor(t *testing.T) {
+	p, ok := multiModelDeps().buildAdminChatPipeline().(*adminChat)
+	if !ok {
+		t.Fatal("expected the adminChat factory")
+	}
+	ctx := context.Background()
+
+	be, err := p.backendFor(ctx, webadmin.ChatOptions{})
+	if err != nil {
+		t.Fatalf("default mode: %v", err)
+	}
+	if _, ok := be.(*agentChatPipeline); !ok {
+		t.Errorf("default mode backend = %T, want agentChatPipeline", be)
+	}
+	be, err = p.backendFor(ctx, webadmin.ChatOptions{Mode: "rag", Model: "gemini-2.5-flash"})
+	if err != nil {
+		t.Fatalf("rag mode: %v", err)
+	}
+	if _, ok := be.(*rag.FantasyPipeline); !ok {
+		t.Errorf("rag mode backend = %T, want FantasyPipeline", be)
+	}
+	if _, err := p.backendFor(ctx, webadmin.ChatOptions{Mode: "weird"}); err == nil {
+		t.Error("unknown mode must error (defense-in-depth behind the 400)")
+	}
+	if _, err := p.backendFor(ctx, webadmin.ChatOptions{Model: "not-listed"}); err == nil {
+		t.Error("model outside the allowlist must error")
+	}
+
+	// Cache: resolving the same model id twice yields the same instance.
+	m1, err := p.modelFor(ctx, "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("modelFor: %v", err)
+	}
+	m2, err := p.modelFor(ctx, "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("modelFor (cached): %v", err)
+	}
+	if m1 != m2 {
+		t.Error("model cache must return the same resolved instance")
+	}
+}
+
+// TestChatLLMFor: credentials resolve per allowlist entry — the explicit
+// SEMIDX_CHAT_API_KEY belongs to the configured provider only and must not
+// leak onto other providers, which fall back to their embedding keys.
+func TestChatLLMFor(t *testing.T) {
+	d := multiModelDeps()
+	sel, ok := d.chatLLMFor(config.ChatModelSpec{Provider: "google", Model: "gemini-2.5-flash"})
+	if !ok {
+		t.Fatal("google entry must resolve via GEMINI_API_KEY")
+	}
+	if sel.APIKey != "g" || sel.Provider != "google" || sel.Model != "gemini-2.5-flash" {
+		t.Errorf("sel = %+v (explicit chat key must not leak)", sel)
+	}
+	// Same provider as the configured one keeps the explicit key.
+	sel, ok = d.chatLLMFor(config.ChatModelSpec{Provider: "openai-compatible", Model: "other"})
+	if !ok || sel.APIKey != "k" || sel.BaseURL != "https://opencode.ai/zen/v1" {
+		t.Errorf("configured-provider sel = %+v ok=%v", sel, ok)
+	}
+	// A provider with no credentials anywhere does not resolve.
+	if _, ok := d.chatLLMFor(config.ChatModelSpec{Provider: "anthropic", Model: "claude-x"}); ok {
+		t.Error("provider without any key must not resolve")
 	}
 }
 
