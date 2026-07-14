@@ -36,6 +36,42 @@ func TestDefaultLocalIndexPath(t *testing.T) {
 	})
 }
 
+func TestClone(t *testing.T) {
+	orig := &Config{GeminiAPIKey: "g", OllamaURLs: []string{"http://a", "http://b"}}
+	cp := orig.Clone()
+	if cp.GeminiAPIKey != "g" || !slicesEqual(cp.OllamaURLs, orig.OllamaURLs) {
+		t.Errorf("Clone() = %+v, want a copy of %+v", cp, orig)
+	}
+	// Mutating the clone's slice must not affect the original.
+	cp.OllamaURLs[0] = "http://mutated"
+	if orig.OllamaURLs[0] != "http://a" {
+		t.Error("Clone shares the OllamaURLs backing array with the original")
+	}
+	// A nil slice stays nil (no spurious allocation).
+	if cp := (&Config{}).Clone(); cp.OllamaURLs != nil {
+		t.Errorf("Clone of nil OllamaURLs = %v, want nil", cp.OllamaURLs)
+	}
+}
+
+func TestFloatDefault(t *testing.T) {
+	cases := []struct {
+		in   string
+		def  float64
+		want float64
+	}{
+		{"", 0.3, 0.3},         // empty → default
+		{"0", 0.3, 0},          // explicit zero is honored
+		{"-1.5", 0.3, -1.5},    // negatives are explicit values
+		{"0.7", 0.3, 0.7},      // plain parse
+		{"nonsense", 0.3, 0.3}, // invalid → default
+	}
+	for _, tc := range cases {
+		if got := floatDefault(tc.in, tc.def); got != tc.want {
+			t.Errorf("floatDefault(%q, %v) = %v, want %v", tc.in, tc.def, got, tc.want)
+		}
+	}
+}
+
 // TestFirstResolvesLegacyKeyFromDotEnv covers resolver.first's lowest branch:
 // the legacy key present only in the .env file.
 func TestFirstResolvesLegacyKeyFromDotEnv(t *testing.T) {

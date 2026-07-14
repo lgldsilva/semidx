@@ -25,9 +25,77 @@ func TestResolveChatLLM_autoDetect(t *testing.T) {
 		t.Errorf("openrouter with model = %+v ok=%v", sel, ok)
 	}
 
+	// Groq with a model → usable (same shape as OpenRouter).
+	c = &Config{GroqAPIKey: "q", ChatModel: "llama-3.3-70b"}
+	sel, ok = c.ResolveChatLLM()
+	if !ok || sel.Provider != "groq" || sel.Model != "llama-3.3-70b" || sel.APIKey != "q" {
+		t.Errorf("groq with model = %+v ok=%v", sel, ok)
+	}
+
 	// Nothing configured → not usable.
 	if _, ok := (&Config{}).ResolveChatLLM(); ok {
 		t.Error("empty config must not yield a chat provider")
+	}
+}
+
+func TestResolveChatLLM_autoDetectAnthropic(t *testing.T) {
+	// Anthropic key alone → anthropic with the default model.
+	c := &Config{AnthropicAPIKey: "ant", ChatTemperature: 0.3}
+	sel, ok := c.ResolveChatLLM()
+	if !ok {
+		t.Fatal("expected a usable selection from an Anthropic key")
+	}
+	if sel.Provider != "anthropic" || sel.Model != defaultAnthropicChatModel || sel.APIKey != "ant" {
+		t.Errorf("auto anthropic = %+v", sel)
+	}
+
+	// Anthropic + Gemini → anthropic wins: the Gemini key is an embedding key
+	// reused for chat, while ANTHROPIC_API_KEY is chat-only intent.
+	c = &Config{AnthropicAPIKey: "ant", GeminiAPIKey: "g", GeminiBaseURL: "https://gem"}
+	sel, ok = c.ResolveChatLLM()
+	if !ok || sel.Provider != "anthropic" || sel.APIKey != "ant" {
+		t.Errorf("anthropic must win over gemini, got %+v ok=%v", sel, ok)
+	}
+
+	// An explicit chat model overrides the anthropic default.
+	c = &Config{AnthropicAPIKey: "ant", ChatModel: "claude-opus-4-8"}
+	sel, _ = c.ResolveChatLLM()
+	if sel.Model != "claude-opus-4-8" {
+		t.Errorf("anthropic model override = %q", sel.Model)
+	}
+}
+
+func TestResolveChatLLM_explicitAnthropic(t *testing.T) {
+	// Explicit anthropic provider with a custom model; the Anthropic key fills
+	// the empty ChatAPIKey.
+	c := &Config{ChatProvider: "anthropic", AnthropicAPIKey: "ant", ChatModel: "claude-opus-4-8"}
+	sel, ok := c.ResolveChatLLM()
+	if !ok {
+		t.Fatal("expected a usable explicit anthropic selection")
+	}
+	if sel.Provider != "anthropic" || sel.Model != "claude-opus-4-8" || sel.APIKey != "ant" {
+		t.Errorf("explicit anthropic = %+v", sel)
+	}
+
+	// Without SEMIDX_CHAT_MODEL the default model applies; an explicit
+	// SEMIDX_CHAT_API_KEY wins over ANTHROPIC_API_KEY.
+	c = &Config{ChatProvider: "anthropic", AnthropicAPIKey: "ant", ChatAPIKey: "chat"}
+	sel, _ = c.ResolveChatLLM()
+	if sel.Model != defaultAnthropicChatModel || sel.APIKey != "chat" {
+		t.Errorf("explicit anthropic defaults = %+v", sel)
+	}
+}
+
+func TestResolveChatLLM_explicitGoogleBeatsAnthropicAutoDetect(t *testing.T) {
+	// SEMIDX_CHAT_PROVIDER=google with both keys present → google, giving users
+	// affected by the anthropic-first auto-detect their old default back.
+	c := &Config{ChatProvider: "google", AnthropicAPIKey: "ant", GeminiAPIKey: "gem", GeminiBaseURL: "https://gem"}
+	sel, ok := c.ResolveChatLLM()
+	if !ok {
+		t.Fatal("expected a usable google selection")
+	}
+	if sel.Provider != "google" || sel.APIKey != "gem" || sel.Model != "gemini-2.5-flash" {
+		t.Errorf("explicit google = %+v", sel)
 	}
 }
 
@@ -76,6 +144,27 @@ func TestResolveChatLLM_explicitCopilot(t *testing.T) {
 	c = &Config{ChatProvider: "copilot"}
 	if _, ok := c.ResolveChatLLM(); ok {
 		t.Error("copilot without a token must not be usable")
+	}
+}
+
+func TestResolveChatLLM_explicitGroqAndOpenRouter(t *testing.T) {
+	// Explicit groq: the embedding key fills the empty ChatAPIKey; there is no
+	// default model, so a model is required for the selection to be usable.
+	c := &Config{ChatProvider: "groq", GroqAPIKey: "q", GroqBaseURL: "https://groq"}
+	if _, ok := c.ResolveChatLLM(); ok {
+		t.Error("explicit groq without a model must not be usable")
+	}
+	c.ChatModel = "llama-3.3-70b"
+	sel, ok := c.ResolveChatLLM()
+	if !ok || sel.Provider != "groq" || sel.APIKey != "q" || sel.BaseURL != "https://groq" {
+		t.Errorf("explicit groq = %+v ok=%v", sel, ok)
+	}
+
+	// Explicit openrouter behaves the same way.
+	c = &Config{ChatProvider: "openrouter", OpenRouterAPIKey: "o", OpenRouterBaseURL: "https://or", ChatModel: "x/y"}
+	sel, ok = c.ResolveChatLLM()
+	if !ok || sel.Provider != "openrouter" || sel.APIKey != "o" || sel.BaseURL != "https://or" {
+		t.Errorf("explicit openrouter = %+v ok=%v", sel, ok)
 	}
 }
 
