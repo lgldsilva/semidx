@@ -94,9 +94,6 @@ h2 {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
   margin: 0.9rem 0;
 }
-.card.narrow {
-  width: min(380px, 92vw);
-}
 
 label {
   display: block;
@@ -362,9 +359,6 @@ pre.snippet {
   white-space: pre-wrap;
 }
 
-.search-hero {
-  margin-bottom: 1rem;
-}
 .search-form {
   background: var(--card);
   border: 1px solid var(--border);
@@ -397,26 +391,10 @@ pre.snippet {
 .result-card {
   border-left: 4px solid var(--border);
 }
-.result-card.score-high {
-  border-left-color: var(--ok);
-}
-.result-card.score-mid {
-  border-left-color: #d97706;
-}
-.result-card.score-low {
-  border-left-color: var(--muted);
-}
 .result-header {
   display: flex;
   justify-content: space-between;
   gap: 0.75rem;
-}
-.result-project {
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--accent);
 }
 .result-path {
   font-size: 0.88rem;
@@ -431,25 +409,6 @@ pre.snippet {
   border-radius: 99px;
   background: #f3f4f6;
   color: var(--muted);
-}
-.score-badge.score-high {
-  background: #dcfce7;
-  color: var(--ok);
-}
-.score-badge.score-mid {
-  background: #fef3c7;
-  color: #b45309;
-}
-
-.user-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.88rem;
-}
-
-.login-card h1 {
-  margin-bottom: 0.25rem;
 }
 
 /* Project workspace */
@@ -784,8 +743,6 @@ td.table-actions .btn-more:hover {
 .pill-running,
 .pill-queued,
 .score-badge,
-.score-badge.score-high,
-.score-badge.score-mid,
 .tree-file:hover,
 .tree-file.active {
   --fg: #1a1a2e;

@@ -1,38 +1,49 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api, ApiError, type TokenRow, type UserRow } from '../api'
+import { Alert } from '../components/Alert'
+import { Button } from '../components/Button'
+import { Card } from '../components/Card'
+import { Checkbox, Input, Select } from '../components/Input'
+import { Code } from '../components/Snippet'
+import { Table } from '../components/Table'
+import { Tabs, type TabItem } from '../components/Tabs'
 import { useAuth } from '../auth'
+
+type SettingsTab = 'keys' | 'tokens' | 'account' | 'users'
+
+const BASE_TABS: ReadonlyArray<TabItem<SettingsTab>> = [
+  { id: 'keys', label: 'API keys' },
+  { id: 'tokens', label: 'Control tokens' },
+  { id: 'account', label: 'Account' },
+]
+
+const H2 = 'mb-2 text-[1.1rem] font-bold'
+const LABEL = 'block text-sm font-medium'
+const FORM_ROW = 'flex flex-wrap items-end gap-3.5'
+// Red text link for destructive row actions (Button's `link` variant is accent).
+const DANGER_LINK =
+  'cursor-pointer border-0 bg-transparent px-1 py-0.5 text-sm font-medium text-danger hover:underline'
 
 export function SettingsPage() {
   const { user } = useAuth()
-  const [tab, setTab] = useState<'keys' | 'tokens' | 'account' | 'users'>('keys')
+  const [tab, setTab] = useState<SettingsTab>('keys')
+
+  const tabs: ReadonlyArray<TabItem<SettingsTab>> =
+    user?.role === 'admin' ? [...BASE_TABS, { id: 'users', label: 'Users' }] : BASE_TABS
 
   return (
     <div>
-      <h1>Settings</h1>
-      <p className="muted">
-        API keys for <code>semidx login</code>, control tokens, account, and users.
+      <h1 className="mb-1 text-[1.45rem] font-bold">Settings</h1>
+      <p className="m-0 text-muted">
+        API keys for <Code>semidx login</Code>, control tokens, account, and users.
       </p>
-      <div className="tab-nav" role="tablist" aria-label="Settings sections">
-        {(
-          [
-            ['keys', 'API keys'],
-            ['tokens', 'Control tokens'],
-            ['account', 'Account'],
-            ...(user?.role === 'admin' ? [['users', 'Users'] as const] : []),
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={tab === id}
-            className={`tab-btn ${tab === id ? 'active' : ''}`}
-            onClick={() => setTab(id)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        tabs={tabs}
+        active={tab}
+        onSelect={setTab}
+        label="Settings sections"
+        className="mt-3 mb-4"
+      />
       {tab === 'keys' && <KeysPanel />}
       {tab === 'tokens' && <TokensPanel />}
       {tab === 'account' && <AccountPanel />}
@@ -57,16 +68,14 @@ function ScopePicker({
   }
   const all = allowAdmin ? ['read', 'write', 'admin'] : ['read', 'write']
   return (
-    <div className="row-actions">
+    <div className="my-2 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
       {all.map((s) => (
-        <label key={s} className="checkbox">
-          <input
-            type="checkbox"
-            checked={scopes.includes(s)}
-            onChange={() => toggle(s)}
-          />
-          {s}
-        </label>
+        <Checkbox
+          key={s}
+          label={s}
+          checked={scopes.includes(s)}
+          onChange={() => toggle(s)}
+        />
       ))}
     </div>
   )
@@ -106,23 +115,25 @@ function KeysPanel() {
   }
 
   return (
-    <div className="card">
-      <h2>API keys</h2>
-      <p className="muted">
-        Opaque tokens for CLI: <code>semidx login &lt;url&gt; --token …</code>
+    <Card className="my-3.5">
+      <h2 className={H2}>API keys</h2>
+      <p className="m-0 text-muted">
+        Opaque tokens for CLI: <Code>semidx login &lt;url&gt; --token …</Code>
       </p>
-      {err && <div className="alert error">{err}</div>}
-      {flash && <div className="alert ok">{flash}</div>}
-      {fresh && (
-        <code className="key" style={{ display: 'block', margin: '0.5rem 0' }}>
-          {fresh}
-        </code>
-      )}
-      <form onSubmit={(e) => void create(e)} className="create-form">
-        <div className="row">
-          <label className="grow">
+      {err && <Alert kind="error">{err}</Alert>}
+      {flash && <Alert kind="success">{flash}</Alert>}
+      {fresh && <Code className="my-2 block w-fit break-all">{fresh}</Code>}
+      <form onSubmit={(e) => void create(e)}>
+        <div className={FORM_ROW}>
+          <label htmlFor="key-name" className={`${LABEL} min-w-[180px] flex-1`}>
             Name
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
+            <Input
+              id="key-name"
+              className="mt-1"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
           </label>
         </div>
         <ScopePicker
@@ -130,9 +141,9 @@ function KeysPanel() {
           setScopes={setScopes}
           allowAdmin={user?.role === 'admin'}
         />
-        <button type="submit">Create key</button>
+        <Button type="submit">Create key</Button>
       </form>
-      <table>
+      <Table className="mt-3">
         <thead>
           <tr>
             <th>Name</th>
@@ -148,7 +159,7 @@ function KeysPanel() {
               <td>
                 <button
                   type="button"
-                  className="link danger-text"
+                  className={DANGER_LINK}
                   onClick={() =>
                     void api.revokeKey(k.id).then(reload).catch((e) =>
                       setErr(e instanceof ApiError ? e.message : 'revoke failed'),
@@ -161,8 +172,8 @@ function KeysPanel() {
             </tr>
           ))}
         </tbody>
-      </table>
-    </div>
+      </Table>
+    </Card>
   )
 }
 
@@ -190,12 +201,12 @@ function TokensPanel() {
 
   if (!enabled) {
     return (
-      <div className="card">
-        <h2>Control tokens</h2>
-        <p className="muted">
-          Disabled. Set <code>SEMIDX_JWT_SECRET</code> on the server to enable JWT control tokens.
+      <Card className="my-3.5">
+        <h2 className={H2}>Control tokens</h2>
+        <p className="m-0 text-muted">
+          Disabled. Set <Code>SEMIDX_JWT_SECRET</Code> on the server to enable JWT control tokens.
         </p>
-      </div>
+      </Card>
     )
   }
 
@@ -213,23 +224,26 @@ function TokensPanel() {
   }
 
   return (
-    <div className="card">
-      <h2>Control tokens (JWT)</h2>
-      {err && <div className="alert error">{err}</div>}
-      {fresh && (
-        <code className="key" style={{ display: 'block', margin: '0.5rem 0' }}>
-          {fresh}
-        </code>
-      )}
+    <Card className="my-3.5">
+      <h2 className={H2}>Control tokens (JWT)</h2>
+      {err && <Alert kind="error">{err}</Alert>}
+      {fresh && <Code className="my-2 block w-fit break-all">{fresh}</Code>}
       <form onSubmit={(e) => void create(e)}>
-        <div className="row">
-          <label className="grow">
+        <div className={FORM_ROW}>
+          <label htmlFor="token-name" className={`${LABEL} min-w-[180px] flex-1`}>
             Name
-            <input value={name} onChange={(e) => setName(e.target.value)} />
+            <Input
+              id="token-name"
+              className="mt-1"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
           </label>
-          <label>
+          <label htmlFor="token-ttl" className={LABEL}>
             TTL days (0=never)
-            <input
+            <Input
+              id="token-ttl"
+              className="mt-1"
               type="number"
               value={ttl}
               onChange={(e) => setTtl(Number(e.target.value))}
@@ -241,9 +255,9 @@ function TokensPanel() {
           setScopes={setScopes}
           allowAdmin={user?.role === 'admin'}
         />
-        <button type="submit">Mint token</button>
+        <Button type="submit">Mint token</Button>
       </form>
-      <table>
+      <Table className="mt-3">
         <thead>
           <tr>
             <th>Name</th>
@@ -259,7 +273,7 @@ function TokensPanel() {
               <td>
                 <button
                   type="button"
-                  className="link danger-text"
+                  className={DANGER_LINK}
                   onClick={() =>
                     void api.revokeToken(t.id).then(reload).catch((e) =>
                       setErr(e instanceof ApiError ? e.message : 'revoke failed'),
@@ -272,8 +286,8 @@ function TokensPanel() {
             </tr>
           ))}
         </tbody>
-      </table>
-    </div>
+      </Table>
+    </Card>
   )
 }
 
@@ -298,31 +312,39 @@ function AccountPanel() {
   }
 
   return (
-    <form className="card narrow" onSubmit={(e) => void save(e)}>
-      <h2>Change password</h2>
-      {err && <div className="alert error">{err}</div>}
-      {ok && <div className="alert ok">{ok}</div>}
-      <label>
-        Current
-        <input
-          type="password"
-          value={current}
-          onChange={(e) => setCurrent(e.target.value)}
-          required
-        />
-      </label>
-      <label>
-        New (≥8 chars)
-        <input
-          type="password"
-          value={next}
-          onChange={(e) => setNext(e.target.value)}
-          required
-          minLength={8}
-        />
-      </label>
-      <button type="submit">Update</button>
-    </form>
+    <Card className="my-3.5 w-[min(380px,92vw)]">
+      <form onSubmit={(e) => void save(e)}>
+        <h2 className={H2}>Change password</h2>
+        {err && <Alert kind="error">{err}</Alert>}
+        {ok && <Alert kind="success">{ok}</Alert>}
+        <label htmlFor="password-current" className={`${LABEL} my-2`}>
+          Current
+          <Input
+            id="password-current"
+            className="mt-1"
+            type="password"
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+            required
+          />
+        </label>
+        <label htmlFor="password-next" className={`${LABEL} my-2`}>
+          New (≥8 chars)
+          <Input
+            id="password-next"
+            className="mt-1"
+            type="password"
+            value={next}
+            onChange={(e) => setNext(e.target.value)}
+            required
+            minLength={8}
+          />
+        </label>
+        <Button type="submit" className="mt-1">
+          Update
+        </Button>
+      </form>
+    </Card>
   )
 }
 
@@ -357,17 +379,25 @@ function UsersPanel() {
   }
 
   return (
-    <div className="card">
-      <h2>Users</h2>
-      {err && <div className="alert error">{err}</div>}
-      <form onSubmit={(e) => void create(e)} className="row">
-        <label>
+    <Card className="my-3.5">
+      <h2 className={H2}>Users</h2>
+      {err && <Alert kind="error">{err}</Alert>}
+      <form onSubmit={(e) => void create(e)} className={FORM_ROW}>
+        <label htmlFor="user-name" className={LABEL}>
           Username
-          <input value={username} onChange={(e) => setUsername(e.target.value)} required />
+          <Input
+            id="user-name"
+            className="mt-1"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+          />
         </label>
-        <label>
+        <label htmlFor="user-password" className={LABEL}>
           Password
-          <input
+          <Input
+            id="user-password"
+            className="mt-1"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -375,16 +405,21 @@ function UsersPanel() {
             minLength={8}
           />
         </label>
-        <label>
+        <label htmlFor="user-role" className={LABEL}>
           Role
-          <select value={role} onChange={(e) => setRole(e.target.value)}>
+          <Select
+            id="user-role"
+            className="mt-1"
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+          >
             <option value="member">member</option>
             <option value="admin">admin</option>
-          </select>
+          </Select>
         </label>
-        <button type="submit">Create user</button>
+        <Button type="submit">Create user</Button>
       </form>
-      <table>
+      <Table className="mt-3">
         <thead>
           <tr>
             <th>User</th>
@@ -400,9 +435,9 @@ function UsersPanel() {
               <td>{u.role}</td>
               <td>{u.disabled ? 'disabled' : 'active'}</td>
               <td>
-                <button
-                  type="button"
-                  className="link"
+                <Button
+                  variant="link"
+                  size="sm"
                   onClick={() =>
                     void api
                       .setUserDisabled(u.id, !u.disabled)
@@ -413,12 +448,12 @@ function UsersPanel() {
                   }
                 >
                   {u.disabled ? 'Enable' : 'Disable'}
-                </button>
+                </Button>
               </td>
             </tr>
           ))}
         </tbody>
-      </table>
-    </div>
+      </Table>
+    </Card>
   )
 }
