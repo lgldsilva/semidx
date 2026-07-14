@@ -2,7 +2,9 @@ package webadmin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,7 +25,15 @@ func (fakeChat) Ask(_ context.Context, _ string, _ string, _ []chat.Message) (*r
 }
 
 func (fakeChat) StreamAsk(_ context.Context, _ string, _ string, _ []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
-	ch := make(chan chat.StreamChunk, 2)
+	ch := make(chan chat.StreamChunk, 4)
+	ch <- chat.StreamChunk{Tool: &chat.ToolEvent{
+		Kind: chat.ToolEventCall, ID: "call_abc", Name: "semantic_search",
+		Args: json.RawMessage(`{"query":"auth","top_k":5}`),
+	}}
+	ch <- chat.StreamChunk{Tool: &chat.ToolEvent{
+		Kind: chat.ToolEventResult, ID: "call_abc", Name: "semantic_search",
+		Preview: "match preview", ElapsedMS: 412, Truncated: true,
+	}}
 	ch <- chat.StreamChunk{Content: "hi"}
 	ch <- chat.StreamChunk{Done: true}
 	close(ch)
@@ -207,6 +217,140 @@ func TestChatStreamFallsBackWhenNoFlusher(t *testing.T) {
 	}
 	if strings.Contains(rr.Header().Get("Content-Type"), "text/event-stream") {
 		t.Fatal("fallback must not use event-stream")
+	}
+}
+
+// sseEvents fetches an SSE chat stream and decodes every data frame in order.
+func sseEvents(t *testing.T, c *http.Client, url, csrf string) []map[string]any {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(`{"question":"hi"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("stream = %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []map[string]any
+	for _, frame := range strings.Split(string(raw), "\n\n") {
+		frame = strings.TrimSpace(frame)
+		if frame == "" {
+			continue
+		}
+		data, ok := strings.CutPrefix(frame, "data: ")
+		if !ok {
+			t.Fatalf("unexpected SSE frame: %q", frame)
+		}
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			t.Fatalf("bad event JSON %q: %v", data, err)
+		}
+		events = append(events, ev)
+	}
+	return events
+}
+
+// eventTypes projects the "type" field of each event, in order.
+func eventTypes(events []map[string]any) []string {
+	out := make([]string, len(events))
+	for i, ev := range events {
+		out[i], _ = ev["type"].(string)
+	}
+	return out
+}
+
+// TestChatStreamToolEvents asserts the frozen SSE contract ordering —
+// sources → tool_call → tool_result → chunk → done — and the tool payloads.
+func TestChatStreamToolEvents(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	a, _ := New(fs, fakeEmbedder{}, nil, true, nil, "")
+	a.SetChat(fakeChat{})
+	srv.Config.Handler = a.Handler()
+
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+
+	events := sseEvents(t, c, srv.URL+"/admin/api/projects/demo/chat/stream", csrf)
+	got := eventTypes(events)
+	want := []string{"sources", "tool_call", "tool_result", "chunk", "done"}
+	if len(got) != len(want) {
+		t.Fatalf("event types = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("event[%d] = %q, want %q (all: %v)", i, got[i], want[i], got)
+		}
+	}
+
+	call := events[1]
+	if call["id"] != "call_abc" || call["name"] != "semantic_search" {
+		t.Errorf("tool_call payload = %v", call)
+	}
+	args, ok := call["args"].(map[string]any)
+	if !ok || args["query"] != "auth" {
+		t.Errorf("tool_call args must be the sanitized JSON object, got %v", call["args"])
+	}
+
+	res := events[2]
+	if res["id"] != "call_abc" || res["name"] != "semantic_search" {
+		t.Errorf("tool_result payload = %v", res)
+	}
+	if res["preview"] != "match preview" || res["is_error"] != false ||
+		res["elapsed_ms"] != float64(412) || res["truncated"] != true {
+		t.Errorf("tool_result fields = %v", res)
+	}
+}
+
+// failedStreamChat ends its stream with a terminal chunk carrying a sanitized
+// error message (the agent path when runner.Stream fails mid-flight).
+type failedStreamChat struct{ fakeChat }
+
+func (failedStreamChat) StreamAsk(context.Context, string, string, []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
+	ch := make(chan chat.StreamChunk, 2)
+	ch <- chat.StreamChunk{Content: "partial"}
+	ch <- chat.StreamChunk{Done: true, Err: "chat backend failed — check server logs"}
+	close(ch)
+	return ch, nil, "test-model", false, nil
+}
+
+// TestChatStreamErrorEvent asserts a failed stream emits the error event with
+// the generic message BEFORE the done event.
+func TestChatStreamErrorEvent(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	a, _ := New(fs, fakeEmbedder{}, nil, true, nil, "")
+	a.SetChat(failedStreamChat{})
+	srv.Config.Handler = a.Handler()
+
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+
+	events := sseEvents(t, c, srv.URL+"/admin/api/projects/demo/chat/stream", csrf)
+	types := eventTypes(events)
+	errIdx, doneIdx := -1, -1
+	for i, typ := range types {
+		if typ == "error" && errIdx == -1 {
+			errIdx = i
+		}
+		if typ == "done" {
+			doneIdx = i
+		}
+	}
+	if errIdx == -1 || doneIdx == -1 || errIdx >= doneIdx {
+		t.Fatalf("want error before done, got %v", types)
+	}
+	if msg, _ := events[errIdx]["message"].(string); msg != "chat backend failed — check server logs" {
+		t.Errorf("error message = %q, want the generic contract message", msg)
 	}
 }
 
