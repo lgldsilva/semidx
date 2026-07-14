@@ -24,6 +24,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/pending"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/searchtargets"
+	"github.com/lgldsilva/semidx/internal/secretbox"
 	"github.com/lgldsilva/semidx/internal/server"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -664,6 +665,11 @@ first run it generates a one-time bootstrap admin token. Requires Postgres
 			srv := server.New(db, d.emb, log)
 			srv.SetGitAllowFile(d.cfg.GitAllowFile)
 			srv.SetGitAuth(d.cfg.GitSSLNoVerify, d.cfg.GitToken, d.cfg.GitUser)
+			box, err := secretbox.New(d.cfg.SecretKey)
+			if err != nil {
+				return fmt.Errorf("SEMIDX_SECRET_KEY: %w", err)
+			}
+			srv.SetSecretBox(box)
 			srv.SetMetricsToken(d.cfg.MetricsToken)
 			srv.SetIndexLimits(server.IndexLimits{
 				MaxFileSize:         d.cfg.MaxFileSize,

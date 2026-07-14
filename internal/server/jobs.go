@@ -27,6 +27,11 @@ func (s *Server) StartWorkers(ctx context.Context, n int, dataDir string) {
 	if n < 1 {
 		n = 1
 	}
+	// Reclaim ephemeral credential material (SSH keys, pinned known_hosts, CA
+	// bundles) left behind by syncs that died before their deferred cleanup ran.
+	if err := gitsync.SweepTempKeys(dataDir); err != nil {
+		s.log.Warn("sweep leftover git credential temp files", "err", err)
+	}
 	notifyCh := s.openJobNotify(ctx)
 	for i := 0; i < n; i++ {
 		go s.worker(ctx, dataDir, notifyCh)
@@ -127,11 +132,13 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 
 	path := proj.Path
 	if proj.SourceType == "git" {
-		p, err := gitsync.SyncWithOptions(ctx, gitsync.Options{
-			DataDir: dataDir, Name: proj.Name, URL: proj.GitURL, Branch: proj.Branch,
-			AllowFileURL: s.gitAllowFile, SSLNoVerify: s.gitSSLNoVerify,
-			Token: s.gitToken, TokenUser: s.gitUser,
-		})
+		gitOpts, err := s.resolveGitOptions(ctx, proj, dataDir)
+		if err != nil {
+			// Already curated (no secret material) — safe to persist on the job.
+			fail(err.Error())
+			return
+		}
+		p, err := gitsync.SyncWithOptions(ctx, gitOpts)
 		if err != nil {
 			fail(err.Error())
 			return
