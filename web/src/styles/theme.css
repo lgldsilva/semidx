@@ -1,0 +1,55 @@
+/* Design tokens — single palette resolved per scheme via light-dark().
+   `data-theme` on <html> (set by theme-init.js / ThemeProvider) pins the
+   scheme; without it the OS preference wins. */
+:root {
+  color-scheme: light dark;
+
+  --bg: light-dark(#f6f7fb, #0b0e14);
+  --surface: light-dark(#ffffff, #151a23);
+  --surface-2: light-dark(#f1f5f9, #1d242f);
+  --fg: light-dark(#1a1a2e, #e6e9f0);
+  --muted: light-dark(#6b7280, #9aa3b2);
+  --border: light-dark(#e5e7eb, #262e3d);
+  --accent: light-dark(#3b5bdb, #7c96ff);
+  --accent-fg: light-dark(#ffffff, #0b0e14);
+  --success: light-dark(#166534, #4ade80);
+  --warning: light-dark(#b45309, #fbbf24);
+  --danger: light-dark(#b91c1c, #f87171);
+  --code-bg: light-dark(#f1f5f9, #10151d);
+  --code-fg: light-dark(#1a1a2e, #d7dce5);
+
+  /* Aliases for legacy CSS not yet migrated (index.css uses these names). */
+  --card: var(--surface);
+  --ok: var(--success);
+  --err: var(--danger);
+
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.5;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-code-bg: var(--code-bg);
+  --color-code-fg: var(--code-fg);
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
