@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -53,16 +51,6 @@ func newAdminWith(t *testing.T, emb embedpkg.Embedder, jwt *jwtauth.Issuer) (*ht
 	return srv, fs
 }
 
-// post issues a form POST and returns the status code and body.
-func post(t *testing.T, c *http.Client, urlStr string, form url.Values) (int, string) {
-	t.Helper()
-	resp, err := c.PostForm(urlStr, form)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return readAll(resp)
-}
-
 // --- login form & logout -----------------------------------------------------
 
 func TestLoginForm(t *testing.T) {
@@ -96,17 +84,17 @@ func TestLogout(t *testing.T) {
 		t.Fatalf("expected an active session, got %d", len(fs.sessions))
 	}
 
-	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
-	code, _ := post(t, c, srv.URL+"/admin/logout", url.Values{"csrf_token": {csrf}})
-	if code != http.StatusSeeOther {
-		t.Errorf("logout = %d, want 303", code)
+	csrf := csrfFrom(t, c, srv.URL+"/admin/api/me")
+	code, _ := postAdminJSON(t, c, srv.URL+"/admin/api/logout", csrf, map[string]any{})
+	if code != http.StatusOK {
+		t.Errorf("logout = %d, want 200", code)
 	}
 	if len(fs.sessions) != 0 {
 		t.Errorf("session not deleted on logout: %d remain", len(fs.sessions))
 	}
 }
 
-// --- login submit edge cases -------------------------------------------------
+// --- login submit edge cases (SPA JSON API) -----------------------------------
 
 func TestLoginSubmitEdgeCases(t *testing.T) {
 	t.Run("disabled user cannot log in", func(t *testing.T) {
@@ -114,9 +102,11 @@ func TestLoginSubmitEdgeCases(t *testing.T) {
 		u := fs.addUser("dave", "supersecret", "member")
 		u.Disabled = true
 		c := newClient(t, srv)
-		code, _ := post(t, c, srv.URL+"/admin/login", url.Values{"username": {"dave"}, "password": {"supersecret"}})
-		if code != http.StatusOK { // re-renders the form, no session
-			t.Errorf("disabled login = %d, want 200", code)
+		code, _ := postAdminJSON(t, c, srv.URL+"/admin/api/login", "", map[string]any{
+			"username": "dave", "password": "supersecret",
+		})
+		if code != http.StatusUnauthorized {
+			t.Errorf("disabled login = %d, want 401", code)
 		}
 		if len(fs.sessions) != 0 {
 			t.Error("disabled user got a session")
@@ -127,12 +117,15 @@ func TestLoginSubmitEdgeCases(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
 		c := newClient(t, srv)
+		var lastCode int
 		var lastBody string
 		for i := 0; i < loginMaxTries+1; i++ {
-			_, lastBody = post(t, c, srv.URL+"/admin/login", url.Values{"username": {"admin"}, "password": {"wrong"}})
+			lastCode, lastBody = postAdminJSON(t, c, srv.URL+"/admin/api/login", "", map[string]any{
+				"username": "admin", "password": "wrong",
+			})
 		}
-		if !strings.Contains(lastBody, "too many attempts") {
-			t.Errorf("expected rate-limit message after %d tries; body=%q", loginMaxTries+1, lastBody)
+		if lastCode != http.StatusTooManyRequests || !strings.Contains(lastBody, "too many attempts") {
+			t.Errorf("expected rate-limit after %d tries; code=%d body=%q", loginMaxTries+1, lastCode, lastBody)
 		}
 	})
 
@@ -140,7 +133,9 @@ func TestLoginSubmitEdgeCases(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.getUserErr = errors.New("db down")
 		c := newClient(t, srv)
-		code, _ := post(t, c, srv.URL+"/admin/login", url.Values{"username": {"x"}, "password": {"y"}})
+		code, _ := postAdminJSON(t, c, srv.URL+"/admin/api/login", "", map[string]any{
+			"username": "x", "password": "y",
+		})
 		if code != http.StatusInternalServerError {
 			t.Errorf("lookup error login = %d, want 500", code)
 		}
@@ -151,7 +146,9 @@ func TestLoginSubmitEdgeCases(t *testing.T) {
 		fs.addUser("admin", "supersecret", "admin")
 		fs.createSessErr = errors.New("insert failed")
 		c := newClient(t, srv)
-		code, _ := post(t, c, srv.URL+"/admin/login", url.Values{"username": {"admin"}, "password": {"supersecret"}})
+		code, _ := postAdminJSON(t, c, srv.URL+"/admin/api/login", "", map[string]any{
+			"username": "admin", "password": "supersecret",
+		})
 		if code != http.StatusInternalServerError {
 			t.Errorf("session-create error = %d, want 500", code)
 		}
@@ -421,281 +418,7 @@ func TestSearchAPIShowsResolvedProject(t *testing.T) {
 	}
 }
 
-// --- account (password change) ------------------------------------------------
-
-func TestAccount(t *testing.T) {
-	srv, fs := newTestAdmin(t)
-	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "admin", "supersecret")
-
-	if code, _ := getBody(t, c, srv.URL+"/admin/account"); code != 200 {
-		t.Fatalf("account form = %d, want 200", code)
-	}
-
-	csrf := csrfFrom(t, c, srv.URL+"/admin/account")
-
-	// Wrong current password.
-	if _, body := post(t, c, srv.URL+"/admin/account", url.Values{
-		"csrf_token": {csrf}, "current": {"nope"}, "new": {"newpassword"},
-	}); !strings.Contains(body, "current password is incorrect") {
-		t.Errorf("wrong current password not reported; body=%q", body)
-	}
-
-	// New password too short.
-	if _, body := post(t, c, srv.URL+"/admin/account", url.Values{
-		"csrf_token": {csrf}, "current": {"supersecret"}, "new": {"short"},
-	}); !strings.Contains(body, "at least 8 characters") {
-		t.Errorf("short password not reported; body=%q", body)
-	}
-
-	// Successful change.
-	if _, body := post(t, c, srv.URL+"/admin/account", url.Values{
-		"csrf_token": {csrf}, "current": {"supersecret"}, "new": {"newpassword"},
-	}); !strings.Contains(body, "Password updated") {
-		t.Errorf("password change not confirmed; body=%q", body)
-	}
-}
-
-func TestAccountStoreError(t *testing.T) {
-	srv, fs := newTestAdmin(t)
-	fs.addUser("admin", "supersecret", "admin")
-	fs.setPwErr = errors.New("write failed")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "admin", "supersecret")
-	csrf := csrfFrom(t, c, srv.URL+"/admin/account")
-	if _, body := post(t, c, srv.URL+"/admin/account", url.Values{
-		"csrf_token": {csrf}, "current": {"supersecret"}, "new": {"newpassword"},
-	}); !strings.Contains(body, "could not update password") {
-		t.Errorf("store error not reported; body=%q", body)
-	}
-}
-
-// --- keys error paths ---------------------------------------------------------
-
-func TestKeysErrorPaths(t *testing.T) {
-	srv, fs := newTestAdmin(t)
-	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "admin", "supersecret")
-
-	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
-
-	// Empty name.
-	if _, body := post(t, c, srv.URL+"/admin/keys", url.Values{"csrf_token": {csrf}, "name": {""}}); !strings.Contains(body, "a key name is required") {
-		t.Errorf("empty key name not reported; body=%q", body)
-	}
-
-	// Revoke with a non-numeric id.
-	if _, body := post(t, c, srv.URL+"/admin/keys/revoke", url.Values{"csrf_token": {csrf}, "id": {"abc"}}); !strings.Contains(body, "invalid key id") {
-		t.Errorf("invalid key id not reported; body=%q", body)
-	}
-
-	// Revoke a key that isn't owned → not found.
-	if _, body := post(t, c, srv.URL+"/admin/keys/revoke", url.Values{"csrf_token": {csrf}, "id": {"999"}}); !strings.Contains(body, "key not found") {
-		t.Errorf("missing key not reported; body=%q", body)
-	}
-
-	// Store error on create.
-	fs.createTokErr = errors.New("insert failed")
-	if _, body := post(t, c, srv.URL+"/admin/keys", url.Values{"csrf_token": {csrf}, "name": {"laptop"}}); !strings.Contains(body, "could not create key") {
-		t.Errorf("create error not reported; body=%q", body)
-	}
-	fs.createTokErr = nil
-
-	// Store error on revoke.
-	fs.revokeErr = errors.New("delete failed")
-	if _, body := post(t, c, srv.URL+"/admin/keys/revoke", url.Values{"csrf_token": {csrf}, "id": {"1"}}); !strings.Contains(body, "could not revoke key") {
-		t.Errorf("revoke error not reported; body=%q", body)
-	}
-	fs.revokeErr = nil
-
-	// List error surfaces on the keys page.
-	fs.listTokensErr = errors.New("query failed")
-	if _, body := getBody(t, c, srv.URL+"/admin/keys"); !strings.Contains(body, "could not load keys") {
-		t.Errorf("list error not reported; body=%q", body)
-	}
-}
-
-// --- users error paths --------------------------------------------------------
-
-func TestUsersErrorPaths(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test with argon2 hashing in short mode")
-	}
-	srv, fs := newTestAdmin(t)
-	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "admin", "supersecret")
-
-	csrf := csrfFrom(t, c, srv.URL+"/admin/users")
-
-	// Validation: short password.
-	if _, body := post(t, c, srv.URL+"/admin/users", url.Values{
-		"csrf_token": {csrf}, "username": {"eve"}, "password": {"short"}, "role": {"member"},
-	}); !strings.Contains(body, "at least 8 characters") {
-		t.Errorf("short password not reported; body=%q", body)
-	}
-
-	// Duplicate username.
-	fs.addUser("frank", "supersecret", "member")
-	if _, body := post(t, c, srv.URL+"/admin/users", url.Values{
-		"csrf_token": {csrf}, "username": {"frank"}, "password": {"supersecret"}, "role": {"member"},
-	}); !strings.Contains(body, "already exists") {
-		t.Errorf("duplicate user not reported; body=%q", body)
-	}
-
-	// Generic create error.
-	fs.createUserErr = errors.New("insert failed")
-	if _, body := post(t, c, srv.URL+"/admin/users", url.Values{
-		"csrf_token": {csrf}, "username": {"grace"}, "password": {"supersecret"}, "role": {"admin"},
-	}); !strings.Contains(body, "could not create user") {
-		t.Errorf("create error not reported; body=%q", body)
-	}
-	fs.createUserErr = nil
-
-	// Disable: invalid id.
-	if _, body := post(t, c, srv.URL+"/admin/users/disable", url.Values{"csrf_token": {csrf}, "id": {"abc"}}); !strings.Contains(body, "invalid user id") {
-		t.Errorf("invalid user id not reported; body=%q", body)
-	}
-
-	// Disable: unknown id → not found.
-	if _, body := post(t, c, srv.URL+"/admin/users/disable", url.Values{"csrf_token": {csrf}, "id": {"9999"}, "disabled": {"true"}}); !strings.Contains(body, "user not found") {
-		t.Errorf("unknown user disable not reported; body=%q", body)
-	}
-
-	// Disable: success on another user.
-	other := fs.addUser("heidi", "supersecret", "member")
-	if _, body := post(t, c, srv.URL+"/admin/users/disable", url.Values{
-		"csrf_token": {csrf}, "id": {strconv.Itoa(other.ID)}, "disabled": {"true"},
-	}); !strings.Contains(body, "User updated") {
-		t.Errorf("disable success not reported; body=%q", body)
-	}
-	if !fs.users[other.ID].Disabled {
-		t.Error("target user was not disabled")
-	}
-
-	// Disable: generic store error.
-	fs.setDisabledErr = errors.New("update failed")
-	if _, body := post(t, c, srv.URL+"/admin/users/disable", url.Values{
-		"csrf_token": {csrf}, "id": {strconv.Itoa(other.ID)}, "disabled": {"false"},
-	}); !strings.Contains(body, "could not update user") {
-		t.Errorf("disable store error not reported; body=%q", body)
-	}
-	fs.setDisabledErr = nil
-
-	// List error surfaces on the users page.
-	fs.listUsersErr = errors.New("query failed")
-	if _, body := getBody(t, c, srv.URL+"/admin/users"); !strings.Contains(body, "could not load users") {
-		t.Errorf("list error not reported; body=%q", body)
-	}
-}
-
-// --- control-token error paths ------------------------------------------------
-
-func TestTokensErrorPaths(t *testing.T) {
-	srv, fs := newTestAdmin(t)
-	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "admin", "supersecret")
-
-	csrf := csrfFrom(t, c, srv.URL+"/admin/tokens")
-
-	// Empty name.
-	if _, body := post(t, c, srv.URL+"/admin/tokens", url.Values{"csrf_token": {csrf}, "name": {""}}); !strings.Contains(body, "a token name is required") {
-		t.Errorf("empty token name not reported; body=%q", body)
-	}
-
-	// Success with an explicit TTL (exercises parseTTLDays and admin scope).
-	if _, body := post(t, c, srv.URL+"/admin/tokens", url.Values{
-		"csrf_token": {csrf}, "name": {"ci"}, "scopes": {"read", "admin"}, "ttl_days": {"30"},
-	}); !strings.Contains(body, "Control token created") {
-		t.Errorf("token create with ttl not confirmed; body=%q", body)
-	}
-
-	// Store error on create.
-	fs.createJWTErr = errors.New("insert failed")
-	if _, body := post(t, c, srv.URL+"/admin/tokens", url.Values{"csrf_token": {csrf}, "name": {"boom"}}); !strings.Contains(body, "could not create token") {
-		t.Errorf("token create error not reported; body=%q", body)
-	}
-	fs.createJWTErr = nil
-
-	// Revoke: invalid id.
-	if _, body := post(t, c, srv.URL+"/admin/tokens/revoke", url.Values{"csrf_token": {csrf}, "id": {"abc"}}); !strings.Contains(body, "invalid token id") {
-		t.Errorf("invalid token id not reported; body=%q", body)
-	}
-
-	// Revoke: unowned id → not found.
-	if _, body := post(t, c, srv.URL+"/admin/tokens/revoke", url.Values{"csrf_token": {csrf}, "id": {"9999"}}); !strings.Contains(body, "token not found") {
-		t.Errorf("unknown token revoke not reported; body=%q", body)
-	}
-
-	// Revoke: generic store error.
-	fs.revokeErr = errors.New("delete failed")
-	if _, body := post(t, c, srv.URL+"/admin/tokens/revoke", url.Values{"csrf_token": {csrf}, "id": {"1"}}); !strings.Contains(body, "could not revoke token") {
-		t.Errorf("token revoke error not reported; body=%q", body)
-	}
-	fs.revokeErr = nil
-
-	// List error surfaces on the tokens page.
-	fs.listTokensErr = errors.New("query failed")
-	if _, body := getBody(t, c, srv.URL+"/admin/tokens"); !strings.Contains(body, "could not load control tokens") {
-		t.Errorf("token list error not reported; body=%q", body)
-	}
-}
-
-func TestTokensNonAdminAdminScope(t *testing.T) {
-	srv, fs := newTestAdmin(t)
-	fs.addUser("bob", "supersecret", "member")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "bob", "supersecret")
-	csrf := csrfFrom(t, c, srv.URL+"/admin/tokens")
-	if _, body := post(t, c, srv.URL+"/admin/tokens", url.Values{
-		"csrf_token": {csrf}, "name": {"x"}, "scopes": {"admin"},
-	}); !strings.Contains(body, "only admins can issue admin-scoped tokens") {
-		t.Errorf("member issuing admin token not blocked; body=%q", body)
-	}
-}
-
-func TestKeysNonAdminAdminScope(t *testing.T) {
-	srv, fs := newTestAdmin(t)
-	fs.addUser("bob", "supersecret", "member")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "bob", "supersecret")
-	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
-	if _, body := post(t, c, srv.URL+"/admin/keys", url.Values{
-		"csrf_token": {csrf}, "name": {"laptop"}, "scopes": {"admin"},
-	}); !strings.Contains(body, "only admins can issue admin-scoped tokens") {
-		t.Errorf("member issuing admin API key not blocked; body=%q", body)
-	}
-}
-
-func TestKeysInvalidScope(t *testing.T) {
-	srv, fs := newTestAdmin(t)
-	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "admin", "supersecret")
-	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
-	if _, body := post(t, c, srv.URL+"/admin/keys", url.Values{
-		"csrf_token": {csrf}, "name": {"x"}, "scopes": {"superuser"},
-	}); !strings.Contains(body, "invalid scope") {
-		t.Errorf("invalid scope not reported; body=%q", body)
-	}
-}
-
-func TestTokensDisabled(t *testing.T) {
-	// jwt nil → control tokens feature is off.
-	srv, fs := newAdminWith(t, nil, nil)
-	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "admin", "supersecret")
-	csrf := csrfFrom(t, c, srv.URL+"/admin/tokens")
-	if code, _ := post(t, c, srv.URL+"/admin/tokens", url.Values{"csrf_token": {csrf}, "name": {"x"}}); code != http.StatusForbidden {
-		t.Errorf("tokensCreate with JWT disabled = %d, want 403", code)
-	}
-}
-
-// --- protect: CSRF, session lookup error, expired session ---------------------
+// --- protect: CSRF, session lookup error, stale session ---------------------
 
 func TestProtectEdgeCases(t *testing.T) {
 	t.Run("wrong CSRF token is rejected", func(t *testing.T) {
@@ -703,7 +426,8 @@ func TestProtectEdgeCases(t *testing.T) {
 		fs.addUser("admin", "supersecret", "admin")
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
-		if code, _ := post(t, c, srv.URL+"/admin/keys", url.Values{"csrf_token": {"deadbeef"}, "name": {"x"}}); code != http.StatusForbidden {
+		code, _ := postAdminJSON(t, c, srv.URL+"/admin/api/keys", "deadbeef", map[string]any{"name": "x"})
+		if code != http.StatusForbidden {
 			t.Errorf("wrong CSRF = %d, want 403", code)
 		}
 	})
@@ -714,41 +438,45 @@ func TestProtectEdgeCases(t *testing.T) {
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
 		fs.sessionErr = errors.New("db down")
-		// SPA shell is static; protected HTML routes still enforce sessions.
-		if code, _ := getBody(t, c, srv.URL+"/admin/keys"); code != http.StatusInternalServerError {
+		if code, _ := getBody(t, c, srv.URL+"/admin/api/me"); code != http.StatusInternalServerError {
 			t.Errorf("session lookup error = %d, want 500", code)
 		}
 	})
 
-	t.Run("stale session redirects to login and clears the cookie", func(t *testing.T) {
+	t.Run("stale session returns 401 on API and clears the cookie", func(t *testing.T) {
 		srv, fs := newTestAdmin(t)
 		fs.addUser("admin", "supersecret", "admin")
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
-		// Drop the session server-side; the cookie is now stale.
 		fs.sessions = map[string]int{}
-		resp, err := c.Get(srv.URL + "/admin/keys")
+		resp, err := c.Get(srv.URL + "/admin/api/me")
 		if err != nil {
 			t.Fatal(err)
 		}
 		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusSeeOther {
-			t.Errorf("stale session dashboard = %d, want 303", resp.StatusCode)
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("stale session api/me = %d, want 401", resp.StatusCode)
 		}
 	})
 }
 
 // --- session cookie hardening -------------------------------------------------
 
-// loginRaw performs a login and returns the *http.Cookie the server set (or nil).
 func loginCookie(t *testing.T, srv *httptest.Server, user, pass string) *http.Cookie {
 	t.Helper()
 	c := newClient(t, srv)
-	resp, err := c.PostForm(srv.URL+"/admin/login", url.Values{"username": {user}, "password": {pass}})
+	raw, err := json.Marshal(map[string]any{"username": user, "password": pass})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Post(srv.URL+"/admin/api/login", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login = %d", resp.StatusCode)
+	}
 	for _, ck := range resp.Cookies() {
 		if ck.Name == sessionCookie {
 			return ck
@@ -787,12 +515,23 @@ func TestSessionCookieAttributes(t *testing.T) {
 		fs.addUser("admin", "supersecret", "admin")
 		c := newClient(t, srv)
 		login(t, c, srv.URL, "admin", "supersecret")
-		csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
-		resp, err := c.PostForm(srv.URL+"/admin/logout", url.Values{"csrf_token": {csrf}})
+		csrf := csrfFrom(t, c, srv.URL+"/admin/api/me")
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/admin/api/logout", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-CSRF-Token", csrf)
+		resp, err := c.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("logout = %d", resp.StatusCode)
+		}
+		if len(fs.sessions) != 0 {
+			t.Error("logout did not delete the server-side session")
+		}
 		var cleared bool
 		for _, ck := range resp.Cookies() {
 			if ck.Name == sessionCookie && ck.MaxAge < 0 {
