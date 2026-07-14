@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, ApiError, type ProjectDetail } from '../api'
+import { Alert } from '../components/Alert'
+import { Badge } from '../components/Badge'
+import { Button } from '../components/Button'
+import { Spinner } from '../components/Spinner'
+import { Tabs } from '../components/Tabs'
 import { JobAlert } from '../features/jobs/JobAlert'
 import { useJobPoll } from '../features/jobs/useJobPoll'
 import { AnalyzePanel } from '../features/project/AnalyzePanel'
@@ -12,7 +17,14 @@ import { OverviewPanel } from '../features/project/OverviewPanel'
 
 type Tab = 'overview' | 'files' | 'explore' | 'analyze' | 'chat' | 'ingest'
 
-const TABS: Tab[] = ['overview', 'files', 'ingest', 'explore', 'analyze', 'chat']
+const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'files', label: 'Files' },
+  { id: 'ingest', label: 'Ingest' },
+  { id: 'explore', label: 'Explore' },
+  { id: 'analyze', label: 'Analyze' },
+  { id: 'chat', label: 'Chat' },
+]
 
 export function ProjectWorkspace() {
   const { name = '' } = useParams()
@@ -86,13 +98,19 @@ export function ProjectWorkspace() {
   }
 
   if (loading && !detail) {
-    return <p className="muted">Loading project…</p>
+    return (
+      <p className="flex items-center gap-2 text-muted">
+        <Spinner /> Loading project…
+      </p>
+    )
   }
   if (err && !detail) {
     return (
       <div>
-        <div className="alert error">{err}</div>
-        <Link to="/">← Projects</Link>
+        <Alert kind="error">{err}</Alert>
+        <Link to="/" className="text-accent hover:underline">
+          ← Projects
+        </Link>
       </div>
     )
   }
@@ -100,53 +118,40 @@ export function ProjectWorkspace() {
   const p = detail.project
 
   return (
-    <div className="workspace">
-      <div className="workspace-head">
+    <div>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <Link to="/" className="muted small">
+          <Link to="/" className="text-xs text-muted hover:underline">
             ← Projects
           </Link>
-          <h1>{p.name}</h1>
-          <p className="muted">
-            <span className="pill">{p.status}</span>
-            {p.source_type && <span className="pill">{p.source_type}</span>}
-            {p.model && <span className="muted"> · {p.model}</span>}
-            {typeof p.total_files === 'number' && (
-              <span className="muted"> · {p.total_files} files</span>
-            )}
-            {typeof p.total_chunks === 'number' && (
-              <span className="muted"> · {p.total_chunks} chunks</span>
-            )}
+          <h1 className="mb-1 text-[1.45rem] font-bold">{p.name}</h1>
+          <p className="m-0 flex flex-wrap items-center gap-1.5 text-muted">
+            <Badge>{p.status}</Badge>
+            {p.source_type && <Badge tone="neutral">{p.source_type}</Badge>}
+            {p.model && <span>· {p.model}</span>}
+            {typeof p.total_files === 'number' && <span>· {p.total_files} files</span>}
+            {typeof p.total_chunks === 'number' && <span>· {p.total_chunks} chunks</span>}
           </p>
         </div>
-        <div className="row-actions">
-          <button type="button" onClick={() => void onReindex()}>
-            Reindex
-          </button>
-          <button type="button" className="link danger-text" onClick={() => void onDelete()}>
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+          <Button onClick={() => void onReindex()}>Reindex</Button>
+          <Button variant="link" className="text-danger" onClick={() => void onDelete()}>
             Delete
-          </button>
+          </Button>
         </div>
       </div>
 
-      {err && <div className="alert error">{err}</div>}
+      {err && <Alert kind="error">{err}</Alert>}
       {job && <JobAlert job={job} />}
-      {pollErr && <div className="alert error">{pollErr}</div>}
+      {pollErr && <Alert kind="error">{pollErr}</Alert>}
 
-      <div className="tab-nav" role="tablist" aria-label="Project sections">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            type="button"
-            role="tab"
-            aria-selected={tab === t}
-            className={`tab-btn ${tab === t ? 'active' : ''}`}
-            onClick={() => setTab(t)}
-          >
-            {t[0].toUpperCase() + t.slice(1)}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        tabs={TABS}
+        active={tab}
+        onSelect={setTab}
+        label="Project sections"
+        className="mb-4"
+      />
 
       {tab === 'overview' && (
         <OverviewPanel
