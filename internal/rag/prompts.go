@@ -3,8 +3,6 @@ package rag
 import (
 	"fmt"
 	"strings"
-
-	"github.com/lgldsilva/semidx/internal/chat"
 )
 
 const systemPrompt = `You are a helpful AI assistant that answers questions about a codebase or document collection. 
@@ -27,21 +25,6 @@ func systemContent(contextStr string) string {
 		return systemPrompt
 	}
 	return systemPrompt + "\n\nHere is the relevant context from the indexed files:\n\n" + contextStr
-}
-
-// assemblePrompt builds the full chat messages for the LLM.
-// It returns: [system_msg (instructions + context combined), history..., user_question].
-func assemblePrompt(question string, contextStr string, history []chat.Message) []chat.Message {
-	messages := make([]chat.Message, 0, 2+len(history))
-	messages = append(messages, chat.Message{Role: "system", Content: systemContent(contextStr)})
-
-	// Conversation history.
-	messages = append(messages, history...)
-
-	// Current user question.
-	messages = append(messages, chat.Message{Role: "user", Content: question})
-
-	return messages
 }
 
 // formatSourceBlock formats a single source as a block for inclusion in
