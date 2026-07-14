@@ -1,9 +1,6 @@
-/* Entry stylesheet. Layer order (lowest → highest priority): legacy, theme,
-   utilities — so Tailwind utilities win over the legacy stylesheet while the
-   pages are migrated one by one. Preflight is intentionally NOT imported yet:
-   legacy pages still rely on browser default element styles. */
-@layer legacy;
-@import 'tailwindcss/theme' layer(theme);
-@import 'tailwindcss/utilities' layer(utilities);
+/* Entry stylesheet: full Tailwind v4 (preflight + theme + utilities) plus
+   local design tokens. Pages use utility classes for headings/links; the
+   legacy index.css dump is gone. */
+@import 'tailwindcss';
 @import './theme.css';
-@import '../index.css' layer(legacy);
+@import './hljs.css';
