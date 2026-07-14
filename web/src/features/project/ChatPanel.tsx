@@ -345,8 +345,8 @@ export function ChatPanel({
                     >
                       <option value="">default</option>
                       {prefs.config?.models?.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
+                        <option key={m.id} value={m.id}>
+                          {m.provider ? `${m.id} (${m.provider})` : m.id}
                         </option>
                       ))}
                     </Select>
