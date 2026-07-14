@@ -32,18 +32,18 @@ type AskSource struct {
 }
 
 type askInput struct {
-	Project  string `json:"project" jsonschema:"the registered project to ask about"`
+	Project  string `json:"project,omitempty" jsonschema:"the registered project to ask about (optional when a default project is configured)"`
 	Question string `json:"question" jsonschema:"the natural-language question"`
 	TopK     int    `json:"top_k,omitempty" jsonschema:"number of chunks to retrieve (default 5)"`
 }
 
-func askHandler(b AskBackend) mcp.ToolHandlerFor[askInput, any] {
+func askHandler(b AskBackend, defaultProject string) mcp.ToolHandlerFor[askInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in askInput) (*mcp.CallToolResult, any, error) {
 		topK := in.TopK
 		if topK == 0 {
 			topK = 5
 		}
-		out, err := b.Ask(ctx, in.Project, in.Question, topK)
+		out, err := b.Ask(ctx, resolveProject(in.Project, defaultProject), in.Question, topK)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
