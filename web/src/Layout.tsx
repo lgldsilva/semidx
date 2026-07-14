@@ -1,7 +1,17 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { api, type SystemInfo } from './api'
+import { Badge } from './components/Badge'
+import { Button } from './components/Button'
+import { ThemeToggle } from './components/ThemeToggle'
+import { cx } from './lib/cx'
 import { useAuth } from './auth'
+
+const NAV_LINK = 'no-underline hover:underline'
+
+function navClass({ isActive }: { isActive: boolean }) {
+  return cx(NAV_LINK, isActive ? 'font-semibold text-accent' : 'text-fg')
+}
 
 export function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
   const { user, logout } = useAuth()
@@ -12,41 +22,52 @@ export function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
   }, [])
 
   return (
-    <div className="app-shell">
-      <header className="nav">
-        <span className="brand">semidx</span>
-        <NavLink to="/" end>
+    <div className="min-h-screen">
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-surface px-5 py-3 text-sm max-sm:px-3.5">
+        <span className="font-bold">semidx</span>
+        <NavLink to="/" end className={navClass}>
           Projects
         </NavLink>
-        <NavLink to="/search">Search</NavLink>
-        <NavLink to="/chat">Chat</NavLink>
-        <NavLink to="/jobs">Jobs</NavLink>
-        <NavLink to="/settings">Settings</NavLink>
-        <NavLink to="/cli">CLI guide</NavLink>
-        <span className="spacer" />
+        <NavLink to="/search" className={navClass}>
+          Search
+        </NavLink>
+        <NavLink to="/chat" className={navClass}>
+          Chat
+        </NavLink>
+        <NavLink to="/jobs" className={navClass}>
+          Jobs
+        </NavLink>
+        <NavLink to="/settings" className={navClass}>
+          Settings
+        </NavLink>
+        <NavLink to="/cli" className={navClass}>
+          CLI guide
+        </NavLink>
+        <span className="flex-1" />
+        <ThemeToggle />
         {user && (
-          <span className="muted user-chip">
+          <span className="inline-flex items-center gap-1.5 text-muted">
             {user.username}
-            <span className="pill">{user.role}</span>
+            <Badge>{user.role}</Badge>
           </span>
         )}
-        <button type="button" className="link" onClick={() => void logout()}>
+        <Button variant="link" size="sm" onClick={() => void logout()}>
           Log out
-        </button>
+        </Button>
       </header>
 
       {sys && (
-        <div className="system-banner">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-accent/20 bg-accent/10 px-5 py-2 text-sm max-sm:px-3.5">
           <strong>Server mode</strong>
-          <span className="pill">{sys.mode}</span>
-          <span className="muted">{sys.storage}</span>
-          <span className="muted caps">
-            caps: {sys.caps.join(', ')}
-          </span>
+          <Badge>{sys.mode}</Badge>
+          <span className="text-muted">{sys.storage}</span>
+          <span className="ml-auto text-muted max-sm:ml-0">caps: {sys.caps.join(', ')}</span>
         </div>
       )}
 
-      <main className="content">{children}</main>
+      <main className="mx-auto my-[1.4rem] max-w-[1100px] px-[1.2rem] pb-10 max-sm:mt-4 max-sm:px-3 max-sm:pb-8">
+        {children}
+      </main>
     </div>
   )
 }
