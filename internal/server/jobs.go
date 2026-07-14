@@ -130,20 +130,10 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 		return
 	}
 
-	path := proj.Path
-	if proj.SourceType == "git" {
-		gitOpts, err := s.resolveGitOptions(ctx, proj, dataDir)
-		if err != nil {
-			// Already curated (no secret material) — safe to persist on the job.
-			fail(err.Error())
-			return
-		}
-		p, err := gitsync.SyncWithOptions(ctx, gitOpts)
-		if err != nil {
-			fail(err.Error())
-			return
-		}
-		path = p
+	path, failMsg := s.resolveJobIndexPath(ctx, proj, dataDir)
+	if failMsg != "" {
+		fail(failMsg)
+		return
 	}
 	if path == "" {
 		fail("project has no indexable source path (push projects upload via files/batch)")
@@ -178,6 +168,24 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 	s.jobsTotal.WithLabelValues(job.Type, "succeeded").Inc()
 	s.log.Info("index job done", "job", job.ID, "project", proj.Name,
 		"files", stats.FilesIndexed, "chunks", stats.ChunksCreated)
+}
+
+// resolveJobIndexPath returns the filesystem path to index for proj.
+// failMsg is non-empty when git sync failed (safe to persist on the job).
+func (s *Server) resolveJobIndexPath(ctx context.Context, proj *store.Project, dataDir string) (path, failMsg string) {
+	path = proj.Path
+	if proj.SourceType != "git" {
+		return path, ""
+	}
+	gitOpts, err := s.resolveGitOptions(ctx, proj, dataDir)
+	if err != nil {
+		return "", err.Error()
+	}
+	p, err := gitsync.SyncWithOptions(ctx, gitOpts)
+	if err != nil {
+		return "", err.Error()
+	}
+	return p, ""
 }
 
 // runBatchJob processes a batch (push) job: deserialises the JSON payload
