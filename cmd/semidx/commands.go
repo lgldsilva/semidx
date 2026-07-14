@@ -685,16 +685,12 @@ without that auth in front.`,
 				MaxFilesPerProject:  d.cfg.MaxFilesPerProject,
 			})
 
-<<<<<<< HEAD
 			if mcpHTTP || envTruthy("SEMIDX_MCP_HTTP") {
 				srv.EnableMCPHTTP()
 				fmt.Fprintln(os.Stderr, "MCP Streamable HTTP endpoint enabled at /mcp (bearer auth required)")
 			}
 
-			if err := d.bootstrapServer(cmd.Context(), srv, showBootstrapToken); err != nil {
-=======
 			if err := d.bootstrapServer(cmd.Context(), srv, box, showBootstrapToken); err != nil {
->>>>>>> 512a51dd (fix(cli): pass secretbox into bootstrapServer for admin vault)
 				return err
 			}
 			srv.StartWorkers(cmd.Context(), d.cfg.IndexWorkers, d.cfg.DataDir)
