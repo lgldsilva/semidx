@@ -309,3 +309,305 @@ func TestApplyableClientsAndIsApplyable(t *testing.T) {
 		t.Errorf("expected some print-only clients; applyable=%d total=%d", len(applyable), len(Clients))
 	}
 }
+
+func TestSnippetEnvPerFormat(t *testing.T) {
+	env := map[string]string{"SEMIDX_LOCAL_INDEX": "1", "SEMIDX_OLLAMA_URL": "http://gpu:11434"}
+	cases := map[string][]string{
+		"claude-code": {`"env"`, `"SEMIDX_LOCAL_INDEX": "1"`},
+		"vscode":      {`"env"`, `"SEMIDX_OLLAMA_URL": "http://gpu:11434"`},
+		"crush":       {`"env"`, `"SEMIDX_LOCAL_INDEX": "1"`},
+		"opencode":    {`"environment"`, `"SEMIDX_LOCAL_INDEX": "1"`},
+		"codex":       {`env = { SEMIDX_LOCAL_INDEX = "1", SEMIDX_OLLAMA_URL = "http://gpu:11434" }`},
+		"cagent":      {"    env:\n", `      SEMIDX_LOCAL_INDEX: "1"`},
+	}
+	for id, wants := range cases {
+		_, snip, err := Snippet(Options{Client: id, Name: "semidx", ExePath: "/opt/semidx", Env: env})
+		if err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		for _, w := range wants {
+			if !strings.Contains(snip, w) {
+				t.Errorf("%s: snippet missing %q:\n%s", id, w, snip)
+			}
+		}
+	}
+	// opencode must NOT use "env" (its key is "environment").
+	_, snip, err := Snippet(Options{Client: "opencode", Name: "semidx", ExePath: "/opt/semidx", Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(snip, `"env"`) {
+		t.Errorf("opencode snippet must use \"environment\", not \"env\":\n%s", snip)
+	}
+}
+
+func TestSnippetWithoutEnvHasNoEnvBlock(t *testing.T) {
+	for _, marker := range []string{`"env":`, `"environment":`, "env = {", "    env:"} {
+		for _, id := range []string{"claude-code", "vscode", "opencode", "crush", "codex", "cagent"} {
+			_, snip, err := Snippet(Options{Client: id, Name: "semidx", ExePath: "/opt/semidx"})
+			if err != nil {
+				t.Fatalf("%s: %v", id, err)
+			}
+			if strings.Contains(snip, marker) {
+				t.Errorf("%s: snippet without Env must not contain %q:\n%s", id, marker, snip)
+			}
+		}
+	}
+}
+
+func TestEnvKeyOrderingIsStable(t *testing.T) {
+	env := map[string]string{"ZZZ": "3", "AAA": "1", "MMM": "2"}
+	// TOML inline table: sorted keys.
+	_, toml, err := Snippet(Options{Client: "codex", Name: "semidx", ExePath: "/x", Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(toml, `env = { AAA = "1", MMM = "2", ZZZ = "3" }`) {
+		t.Errorf("codex env keys not sorted:\n%s", toml)
+	}
+	// YAML: sorted keys, one per line.
+	_, yaml, err := Snippet(Options{Client: "cagent", Name: "semidx", ExePath: "/x", Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, m, z := strings.Index(yaml, "AAA:"), strings.Index(yaml, "MMM:"), strings.Index(yaml, "ZZZ:")
+	if a < 0 || m < 0 || z < 0 || a >= m || m >= z {
+		t.Errorf("cagent env keys not sorted (AAA@%d MMM@%d ZZZ@%d):\n%s", a, m, z, yaml)
+	}
+	// JSON: encoding/json sorts map keys on marshal.
+	_, js, err := Snippet(Options{Client: "cursor", Name: "semidx", ExePath: "/x", Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, m, z = strings.Index(js, `"AAA"`), strings.Index(js, `"MMM"`), strings.Index(js, `"ZZZ"`)
+	if a < 0 || m < 0 || z < 0 || a >= m || m >= z {
+		t.Errorf("cursor env keys not sorted (AAA@%d MMM@%d ZZZ@%d):\n%s", a, m, z, js)
+	}
+	// EnvKeys itself.
+	got := EnvKeys(env)
+	if len(got) != 3 || got[0] != "AAA" || got[1] != "MMM" || got[2] != "ZZZ" {
+		t.Errorf("EnvKeys = %v; want [AAA MMM ZZZ]", got)
+	}
+}
+
+func TestApplyEnvPreservesOtherServersEnv(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "mcp.json")
+	seed := `{"mcpServers":{"other":{"command":"other-bin","env":{"OTHER_TOKEN":"keep-me"}}}}`
+	if err := os.WriteFile(cfg, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{Client: "cursor", Name: "semidx", ExePath: "/opt/semidx", FilePath: cfg,
+		Env: map[string]string{"SEMIDX_LOCAL_INDEX": "1"}}
+	if _, err := Apply(opts); err != nil {
+		t.Fatal(err)
+	}
+	// Re-apply: idempotent, no duplication, other server's env intact.
+	if _, err := Apply(opts); err != nil {
+		t.Fatal(err)
+	}
+	m := decodeJSON(t, cfg)
+	servers := m["mcpServers"].(map[string]any)
+	if len(servers) != 2 {
+		t.Fatalf("expected 2 servers after re-apply, got %d: %v", len(servers), servers)
+	}
+	otherEnv, ok := servers["other"].(map[string]any)["env"].(map[string]any)
+	if !ok || otherEnv["OTHER_TOKEN"] != "keep-me" {
+		t.Errorf("other server's env was not preserved: %v", servers["other"])
+	}
+	semidxEnv, ok := servers["semidx"].(map[string]any)["env"].(map[string]any)
+	if !ok || semidxEnv["SEMIDX_LOCAL_INDEX"] != "1" {
+		t.Errorf("semidx env missing/wrong: %v", servers["semidx"])
+	}
+}
+
+func TestApplyEnvReplacesStaleEnv(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "mcp.json")
+	opts := Options{Client: "cursor", Name: "semidx", ExePath: "/opt/semidx", FilePath: cfg,
+		Env: map[string]string{"OLD_VAR": "old"}}
+	if _, err := Apply(opts); err != nil {
+		t.Fatal(err)
+	}
+	opts.Env = map[string]string{"NEW_VAR": "new"}
+	if _, err := Apply(opts); err != nil {
+		t.Fatal(err)
+	}
+	m := decodeJSON(t, cfg)
+	env := m["mcpServers"].(map[string]any)["semidx"].(map[string]any)["env"].(map[string]any)
+	if _, stale := env["OLD_VAR"]; stale {
+		t.Errorf("stale OLD_VAR survived re-apply: %v", env)
+	}
+	if env["NEW_VAR"] != "new" {
+		t.Errorf("NEW_VAR missing: %v", env)
+	}
+}
+
+func TestApplyCodexTOMLWithEnv(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	// Pre-existing semidx section (stale env) in the MIDDLE, followed by another
+	// section that must survive untouched.
+	seed := "[mcp_servers.semidx]\ncommand = \"/old/semidx\"\nargs = [\"mcp\"]\nenv = { STALE = \"x\" }\n\n" +
+		"[mcp_servers.ai-memory]\nurl = \"http://localhost/mcp\"\n"
+	if err := os.WriteFile(cfg, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{Client: "codex", Name: "semidx", ExePath: "/opt/semidx", FilePath: cfg,
+		Env: map[string]string{"SEMIDX_OLLAMA_URL": "http://gpu:11434", "SEMIDX_LOCAL_INDEX": "1"}}
+	if _, err := Apply(opts); err != nil {
+		t.Fatal(err)
+	}
+	// Idempotency: apply twice.
+	if _, err := Apply(opts); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(b)
+	if strings.Count(content, "[mcp_servers.semidx]") != 1 {
+		t.Errorf("semidx section duplicated:\n%s", content)
+	}
+	if !strings.Contains(content, `env = { SEMIDX_LOCAL_INDEX = "1", SEMIDX_OLLAMA_URL = "http://gpu:11434" }`) {
+		t.Errorf("sorted env inline table missing:\n%s", content)
+	}
+	if strings.Contains(content, "STALE") {
+		t.Errorf("stale env survived the section replace:\n%s", content)
+	}
+	if !strings.Contains(content, "[mcp_servers.ai-memory]") || !strings.Contains(content, `url = "http://localhost/mcp"`) {
+		t.Errorf("following ai-memory section lost:\n%s", content)
+	}
+	if !strings.Contains(content, `command = "/opt/semidx"`) || strings.Contains(content, "/old/semidx") {
+		t.Errorf("command not replaced:\n%s", content)
+	}
+}
+
+func TestTomlKeyQuotesNonBareKeys(t *testing.T) {
+	env := map[string]string{"MY.DOTTED KEY": "v"}
+	_, snip, err := Snippet(Options{Client: "codex", Name: "semidx", ExePath: "/x", Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(snip, `"MY.DOTTED KEY" = "v"`) {
+		t.Errorf("non-bare TOML key not quoted:\n%s", snip)
+	}
+}
+
+func TestParseEnv(t *testing.T) {
+	t.Run("empty input is nil", func(t *testing.T) {
+		if env, err := ParseEnv(nil); err != nil || env != nil {
+			t.Errorf("ParseEnv(nil) = %v, %v; want nil, nil", env, err)
+		}
+	})
+	t.Run("valid pairs, value may contain =", func(t *testing.T) {
+		env, err := ParseEnv([]string{"A=1", "DSN=postgres://u:p@h/db?sslmode=disable", "EMPTY="})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if env["A"] != "1" || env["DSN"] != "postgres://u:p@h/db?sslmode=disable" || env["EMPTY"] != "" {
+			t.Errorf("ParseEnv = %v", env)
+		}
+	})
+	t.Run("missing = errors", func(t *testing.T) {
+		if _, err := ParseEnv([]string{"NOVALUE"}); err == nil {
+			t.Error("want error for pair without '='")
+		}
+	})
+	t.Run("empty key errors", func(t *testing.T) {
+		if _, err := ParseEnv([]string{"=v"}); err == nil {
+			t.Error("want error for empty key")
+		}
+	})
+}
+
+func TestLooksLikeSecret(t *testing.T) {
+	secret := []string{"GEMINI_API_KEY", "MY_TOKEN", "clientSecret", "DB_PASSWORD", "ApiKey", "token"}
+	for _, k := range secret {
+		if !LooksLikeSecret(k) {
+			t.Errorf("LooksLikeSecret(%q) = false; want true", k)
+		}
+	}
+	plain := []string{"SEMIDX_LOCAL_INDEX", "PATH", "OLLAMA_HOST", "DEBUG"}
+	for _, k := range plain {
+		if LooksLikeSecret(k) {
+			t.Errorf("LooksLikeSecret(%q) = true; want false", k)
+		}
+	}
+}
+
+func TestApplyUnknownClient(t *testing.T) {
+	if _, err := Apply(Options{Client: "nope"}); err == nil {
+		t.Error("Apply with unknown client should error")
+	}
+}
+
+func TestApplyRejectsRelativePathOutsideProject(t *testing.T) {
+	opts := Options{Client: "cursor", Name: "semidx", ExePath: "/x",
+		FilePath: filepath.Join("relative", "mcp.json"), Project: "/proj"}
+	if _, err := Apply(opts); err == nil {
+		t.Error("relative config path outside the project should error")
+	}
+}
+
+func TestApplyMkdirFailsWhenParentIsFile(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{Client: "cursor", Name: "semidx", ExePath: "/x",
+		FilePath: filepath.Join(blocker, "sub", "mcp.json")}
+	if _, err := Apply(opts); err == nil {
+		t.Error("MkdirAll under a regular file should error")
+	}
+}
+
+func TestApplyCodexTOMLCreatesFileWithEnv(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	opts := Options{Client: "codex", Name: "semidx", ExePath: "/opt/semidx", FilePath: cfg,
+		Env: map[string]string{"A": "1"}}
+	if _, err := Apply(opts); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(b)
+	if !strings.HasPrefix(content, "[mcp_servers.semidx]\n") || !strings.Contains(content, `env = { A = "1" }`) {
+		t.Errorf("fresh codex config wrong:\n%s", content)
+	}
+}
+
+func TestMergeTomlCodexHeaderWithTrailingComment(t *testing.T) {
+	// Header followed by a space (inline comment) still matches for replacement.
+	seed := "[mcp_servers.semidx] # managed\ncommand = \"/old\"\n\n[other]\nk = 1\n"
+	out := string(mergeTomlCodex([]byte(seed), "semidx", "/new", map[string]string{"B": "2"}))
+	if strings.Contains(out, "/old") || !strings.Contains(out, `command = "/new"`) {
+		t.Errorf("section with trailing comment not replaced:\n%s", out)
+	}
+	if !strings.Contains(out, "[other]") || !strings.Contains(out, "k = 1") {
+		t.Errorf("following section lost:\n%s", out)
+	}
+	if !strings.Contains(out, `env = { B = "2" }`) {
+		t.Errorf("env line missing:\n%s", out)
+	}
+}
+
+func TestMergeTomlCodexAppendsToFileWithoutTrailingNewline(t *testing.T) {
+	seed := "[other]\nk = 1" // no trailing newline
+	out := string(mergeTomlCodex([]byte(seed), "semidx", "/x", nil))
+	if !strings.Contains(out, "k = 1\n") || !strings.Contains(out, "[mcp_servers.semidx]") {
+		t.Errorf("append to newline-less file broken:\n%s", out)
+	}
+}
+
+func TestWriteConfigFileRenameFails(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeConfigFile(filepath.Join(dir, "missing", "f.json"), []byte("x"), 0o600); err == nil {
+		t.Error("rename into a missing directory should error")
+	}
+}

@@ -79,13 +79,14 @@ func clientByID(id string) (Client, bool) {
 
 // Options configures a render/apply.
 type Options struct {
-	Client    string // client id
-	Name      string // server entry name (default "semidx")
-	ExePath   string // absolute path to the semidx binary
-	Home      string // user home (for HOME-scoped clients)
-	ConfigDir string // per-user config dir, os.UserConfigDir (for XDG-scoped clients)
-	Project   string // project/workspace dir (for workspace-scoped clients)
-	FilePath  string // override the config file path
+	Client    string            // client id
+	Name      string            // server entry name (default "semidx")
+	ExePath   string            // absolute path to the semidx binary
+	Home      string            // user home (for HOME-scoped clients)
+	ConfigDir string            // per-user config dir, os.UserConfigDir (for XDG-scoped clients)
+	Project   string            // project/workspace dir (for workspace-scoped clients)
+	FilePath  string            // override the config file path
+	Env       map[string]string // extra environment variables for the server entry
 }
 
 func (o Options) resolve() (Client, string, error) {
@@ -107,7 +108,7 @@ func Snippet(o Options) (path, snippet string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	return p, render(c.kind, o.Name, o.ExePath), nil
+	return p, render(c.kind, o.Name, o.ExePath, o.Env), nil
 }
 
 // Apply merges the semidx entry into the client's config file idempotently,
@@ -140,9 +141,9 @@ func Apply(o Options) (string, error) {
 	var merged []byte
 	var merr error
 	if c.kind == tomlCodex {
-		merged = mergeTomlCodex(existing, o.Name, o.ExePath)
+		merged = mergeTomlCodex(existing, o.Name, o.ExePath, o.Env)
 	} else {
-		merged, merr = mergeJSON(c.kind, existing, o.Name, o.ExePath)
+		merged, merr = mergeJSON(c.kind, existing, o.Name, o.ExePath, o.Env)
 	}
 	if merr != nil {
 		return "", merr
@@ -191,14 +192,58 @@ func writeConfigFile(path string, data []byte, perm os.FileMode) error {
 // timestamp is injectable for tests (Date.now is unavailable; callers set it).
 var timestamp = func() string { return time.Now().UTC().Format("20060102-150405") }
 
-func serverEntry(exe string) map[string]any {
-	return map[string]any{"command": exe, "args": []string{"mcp"}}
+func serverEntry(exe string, env map[string]string) map[string]any {
+	e := map[string]any{"command": exe, "args": []string{"mcp"}}
+	if len(env) > 0 {
+		e["env"] = env
+	}
+	return e
+}
+
+// EnvKeys returns the env map's keys in sorted order, so every rendered format
+// (JSON already sorts on marshal; TOML/YAML are built by hand) is deterministic.
+func EnvKeys(env map[string]string) []string {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// ParseEnv parses repeated --env KEY=VAL values into a map. The value may
+// contain '='; a missing '=' or an empty key is an error.
+func ParseEnv(pairs []string) (map[string]string, error) {
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	env := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		k, v, ok := strings.Cut(p, "=")
+		if !ok || k == "" {
+			return nil, fmt.Errorf("invalid --env %q: want KEY=VAL", p)
+		}
+		env[k] = v
+	}
+	return env, nil
+}
+
+// LooksLikeSecret reports whether an env key name suggests a credential, so
+// callers can warn that its value will land in a plain-text config file.
+func LooksLikeSecret(key string) bool {
+	k := strings.ToLower(key)
+	for _, w := range []string{"key", "token", "secret", "password"} {
+		if strings.Contains(k, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeJSON inserts/replaces the semidx entry under the client's servers key,
-// preserving every other key and server. tomlCodex is not JSON and is rejected
-// (Apply guards it via applyable=false).
-func mergeJSON(k kind, existing []byte, name, exe string) ([]byte, error) {
+// preserving every other key and server (including their env blocks). tomlCodex
+// is not JSON and is rejected (Apply guards it via applyable=false).
+func mergeJSON(k kind, existing []byte, name, exe string, env map[string]string) ([]byte, error) {
 	root := map[string]any{}
 	if len(existing) > 0 {
 		if err := json.Unmarshal(existing, &root); err != nil {
@@ -209,15 +254,23 @@ func mergeJSON(k kind, existing []byte, name, exe string) ([]byte, error) {
 	var entry any
 	switch k {
 	case jsonMCPServers:
-		key, entry = "mcpServers", serverEntry(exe)
+		key, entry = "mcpServers", serverEntry(exe, env)
 	case jsonServers:
-		key, entry = "servers", serverEntry(exe)
+		key, entry = "servers", serverEntry(exe, env)
 	case jsonOpenCode:
 		key = "mcp"
-		entry = map[string]any{"type": "local", "command": []string{exe, "mcp"}, "enabled": true}
+		oc := map[string]any{"type": "local", "command": []string{exe, "mcp"}, "enabled": true}
+		if len(env) > 0 {
+			oc["environment"] = env // opencode.json names the env block "environment"
+		}
+		entry = oc
 	case jsonCrush:
 		key = "mcp"
-		entry = map[string]any{"type": "stdio", "command": exe, "args": []string{"mcp"}}
+		cr := map[string]any{"type": "stdio", "command": exe, "args": []string{"mcp"}}
+		if len(env) > 0 {
+			cr["env"] = env
+		}
+		entry = cr
 	default:
 		return nil, fmt.Errorf("client format is not JSON-mergeable")
 	}
@@ -230,11 +283,34 @@ func mergeJSON(k kind, existing []byte, name, exe string) ([]byte, error) {
 	return json.MarshalIndent(root, "", "  ")
 }
 
+// tomlEnvLine renders `env = { K = "V", … }` with sorted keys, or "" when empty.
+// Keys that are not TOML bare keys ([A-Za-z0-9_-]) are quoted.
+func tomlEnvLine(env map[string]string) string {
+	if len(env) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(env))
+	for _, k := range EnvKeys(env) {
+		parts = append(parts, fmt.Sprintf("%s = %q", tomlKey(k), env[k]))
+	}
+	return "env = { " + strings.Join(parts, ", ") + " }\n"
+}
+
+func tomlKey(k string) string {
+	for _, r := range k {
+		bare := (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-'
+		if !bare {
+			return fmt.Sprintf("%q", k)
+		}
+	}
+	return k
+}
+
 // mergeTomlCodex inserts/replaces the [mcp_servers.<name>] section in a TOML
 // config and preserves every other section and key.
-func mergeTomlCodex(existing []byte, name, exe string) []byte {
+func mergeTomlCodex(existing []byte, name, exe string, env map[string]string) []byte {
 	header := fmt.Sprintf("[mcp_servers.%s]", name)
-	entry := fmt.Sprintf("%s\ncommand = %q\nargs = [\"mcp\"]\n", header, exe)
+	entry := fmt.Sprintf("%s\ncommand = %q\nargs = [\"mcp\"]\n%s", header, exe, tomlEnvLine(env))
 	if len(existing) == 0 {
 		return []byte(entry)
 	}
@@ -264,16 +340,24 @@ func mergeTomlCodex(existing []byte, name, exe string) []byte {
 }
 
 // render produces the human-facing snippet for a client (dry-run).
-func render(k kind, name, exe string) string {
+func render(k kind, name, exe string, env map[string]string) string {
 	switch k {
 	case tomlCodex:
-		return fmt.Sprintf("[mcp_servers.%s]\ncommand = %q\nargs = [\"mcp\"]\n", name, exe)
+		return fmt.Sprintf("[mcp_servers.%s]\ncommand = %q\nargs = [\"mcp\"]\n%s", name, exe, tomlEnvLine(env))
 	case yamlCagent:
 		// cagent has no global config; add this toolset to the agent's YAML.
-		return fmt.Sprintf("# add under the agent's `toolsets:` in your cagent YAML\ntoolsets:\n  - type: mcp\n    command: %q\n    args: [\"mcp\"]\n", exe)
+		var b strings.Builder
+		fmt.Fprintf(&b, "# add under the agent's `toolsets:` in your cagent YAML\ntoolsets:\n  - type: mcp\n    command: %q\n    args: [\"mcp\"]\n", exe)
+		if len(env) > 0 {
+			b.WriteString("    env:\n")
+			for _, key := range EnvKeys(env) {
+				fmt.Fprintf(&b, "      %s: %q\n", key, env[key])
+			}
+		}
+		return b.String()
 	default:
-		b, _ := mergeJSON(k, nil, name, exe)
-		return string(b) + "\n"
+		out, _ := mergeJSON(k, nil, name, exe, env)
+		return string(out) + "\n"
 	}
 }
 
