@@ -562,9 +562,3 @@ func TestCSRFRequiredForMutations(t *testing.T) {
 		t.Errorf("POST without CSRF = %d; want 403", code)
 	}
 }
-
-func readAll(resp *http.Response) (int, string) {
-	defer func() { _ = resp.Body.Close() }()
-	b, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, string(b)
-}

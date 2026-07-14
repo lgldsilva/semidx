@@ -249,14 +249,8 @@ type authCtx struct {
 
 type authedHandler func(http.ResponseWriter, *http.Request, *authCtx)
 
-// protect resolves the session, enforces CSRF on unsafe methods, and checks the
-// role before invoking fn. An unauthenticated GET redirects to the login page.
-func (a *Admin) protect(role string, fn authedHandler) http.HandlerFunc {
-	return a.protectMode(role, fn, false)
-}
-
-// protectAPI is like protect but returns JSON 401/403 instead of HTML redirects,
-// for the React SPA.
+// protectAPI resolves the session, enforces CSRF on unsafe methods, and checks
+// the role before invoking fn. Errors are JSON 401/403 for the React SPA.
 func (a *Admin) protectAPI(role string, fn authedHandler) http.HandlerFunc {
 	return a.protectMode(role, fn, true)
 }
