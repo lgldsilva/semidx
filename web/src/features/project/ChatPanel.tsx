@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type KeyboardEvent } from 'react'
 import { api, ApiError, type ChatMessage } from '../../api'
 
 export function ChatPanel({
@@ -37,6 +37,22 @@ export function ChatPanel({
   useEffect(() => {
     setInput(seedQuestion)
   }, [seedQuestion])
+
+  async function applyAssistant(content: string, sources?: ChatMessage['sources']) {
+    setMessages((m) => [
+      ...m.filter((x, i) => !(i === m.length - 1 && x.role === 'assistant' && !x.content)),
+      { role: 'assistant', content, sources },
+    ])
+    onPersist?.({ role: 'assistant', content, sources })
+  }
+
+  async function sendNonStream(
+    q: string,
+    history: { role: string; content: string }[],
+  ) {
+    const res = await api.chat(project, q, history)
+    await applyAssistant(res.content, res.sources)
+  }
 
   async function send(e?: { preventDefault(): void }) {
     e?.preventDefault()
@@ -81,20 +97,27 @@ export function ChatPanel({
         }
       }
       if (!assistant) {
-        // fallback non-stream
-        const res = await api.chat(project, q, history)
-        setMessages((m) => [
-          ...m.filter((x, i) => !(i === m.length - 1 && x.role === 'assistant' && !x.content)),
-          { role: 'assistant', content: res.content, sources: res.sources },
-        ])
-        onPersist?.({ role: 'assistant', content: res.content, sources: res.sources })
+        // empty stream body — fall back to non-stream
+        await sendNonStream(q, history)
       } else {
         onPersist?.({ role: 'assistant', content: assistant, sources })
       }
     } catch (ex) {
-      setErr(ex instanceof ApiError ? ex.message : 'chat failed')
+      // Stream endpoint failed (e.g. older server, proxy) — try non-stream once.
+      try {
+        await sendNonStream(q, history)
+      } catch {
+        setErr(ex instanceof ApiError ? ex.message : 'chat failed')
+      }
     } finally {
       setBusy(false)
+    }
+  }
+
+  function onComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      void send()
     }
   }
 
@@ -169,7 +192,8 @@ export function ChatPanel({
           rows={3}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="How does authentication work in this project?"
+          onKeyDown={onComposerKeyDown}
+          placeholder="How does authentication work in this project? (Ctrl/⌘+Enter to send)"
         />
         <button type="submit" disabled={busy || !input.trim()}>
           {busy ? 'Thinking…' : 'Send'}

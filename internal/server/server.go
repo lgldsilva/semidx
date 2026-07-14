@@ -292,7 +292,9 @@ func (s *Server) Handler() http.Handler {
 
 // Run serves until ctx is cancelled, then shuts down gracefully.
 func (s *Server) Run(ctx context.Context, addr string) error {
-	srv := &http.Server{Addr: addr, Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
+	// WriteTimeout is 120s (not 30s) so SSE admin chat streams can complete;
+	// webchat uses the same budget. ReadTimeout still caps request body reads.
+	srv := &http.Server{Addr: addr, Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 120 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -450,6 +452,20 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Flush forwards to the underlying ResponseWriter when it supports streaming
+// (SSE chat). Embedding http.ResponseWriter does not promote Flush, so without
+// this method instrument() breaks w.(http.Flusher) for every /admin request.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap exposes the underlying writer for http.ResponseController and similar.
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

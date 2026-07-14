@@ -52,6 +52,11 @@ services:
       SEMIDX_BOOTSTRAP_ADMIN_PASSWORD: ${SEMIDX_BOOTSTRAP_ADMIN_PASSWORD:-}
       SEMIDX_JWT_SECRET: ${SEMIDX_JWT_SECRET:-}
       SEMIDX_COOKIE_SECURE: ${SEMIDX_COOKIE_SECURE:-true}
+      # Homelab Gitea typically uses a self-signed cert; without this, server-side
+      # git clone/reindex fails with "TLS certificate not trusted".
+      SEMIDX_GIT_SSL_NO_VERIFY: ${SEMIDX_GIT_SSL_NO_VERIFY:-true}
+      SEMIDX_GIT_TOKEN: ${SEMIDX_GIT_TOKEN:-}
+      SEMIDX_GITHUB_TOKEN: ${SEMIDX_GITHUB_TOKEN:-}
       GOMEMLIMIT: ${GOMEMLIMIT:-900MiB}
       # Optional cloud embedding providers (the chain falls back to local Ollama).
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
