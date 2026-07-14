@@ -53,8 +53,33 @@ func (s *Server) authed(scope string, h http.HandlerFunc) http.Handler {
 			writeJSONError(w, http.StatusForbidden, "token missing required scope: "+scope)
 			return
 		}
-		h(w, r)
+		// Expose the token's scopes downstream so multiplexed handlers (the
+		// /mcp endpoint routes several tools through one HTTP route) can apply
+		// finer-grained checks than the route-level scope.
+		h(w, r.WithContext(contextWithScopes(r.Context(), scopes)))
 	})
+}
+
+// scopesKey is the context key under which authed stores the bearer's scopes.
+type scopesKey struct{}
+
+// contextWithScopes returns ctx carrying the authenticated token's scopes.
+func contextWithScopes(ctx context.Context, scopes []string) context.Context {
+	return context.WithValue(ctx, scopesKey{}, scopes)
+}
+
+// ScopesFromContext returns the scopes authed stored for this request, or nil
+// when the context did not pass through authed.
+func ScopesFromContext(ctx context.Context) []string {
+	scopes, _ := ctx.Value(scopesKey{}).([]string)
+	return scopes
+}
+
+// hasScope reports whether the context's token carries the scope (or "admin",
+// which grants everything) — the same rule authed applies at the route level.
+func hasScope(ctx context.Context, scope string) bool {
+	scopes := ScopesFromContext(ctx)
+	return slices.Contains(scopes, scope) || slices.Contains(scopes, "admin")
 }
 
 // resolveScopes authenticates a bearer and returns its scopes. A JWT control

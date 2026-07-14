@@ -172,6 +172,10 @@ type Options struct {
 	// skipped with a warning on stderr — an allowlist narrows the tool set, it
 	// cannot grant a capability the backend does not have.
 	AllowedTools []string
+	// DefaultProject is used when a tool call omits its "project" argument
+	// (clientconfig.DefaultProject / SEMIDX_DEFAULT_PROJECT). Empty keeps the
+	// previous behavior: the backend decides what a missing project means.
+	DefaultProject string
 }
 
 // New builds an MCP server whose tools call the given backend, exposing every
@@ -179,7 +183,7 @@ type Options struct {
 func New(b Backend) *mcp.Server {
 	// resolveAllowedTools never fails on an empty allowlist.
 	allowed, _, _ := resolveAllowedTools(nil)
-	return build(b, allowed, false)
+	return build(b, allowed, false, "")
 }
 
 // NewWithOptions is New with an Options-controlled tool subset. It fails fast
@@ -190,7 +194,26 @@ func NewWithOptions(b Backend, o Options) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return build(b, allowed, explicit), nil
+	return build(b, allowed, explicit, strings.TrimSpace(o.DefaultProject)), nil
+}
+
+// resolveProject returns the request's project when provided, else the
+// configured default. With neither, it returns "" and the backend keeps its
+// existing missing-project behavior (clear error or all-projects search).
+func resolveProject(reqProject, defaultProject string) string {
+	if strings.TrimSpace(reqProject) != "" {
+		return reqProject
+	}
+	return defaultProject
+}
+
+// projectToolDescription appends the configured default-project hint to a
+// project-taking tool's description, so agents know "project" may be omitted.
+func projectToolDescription(base, defaultProject string) string {
+	if defaultProject == "" {
+		return base
+	}
+	return fmt.Sprintf("%s If \"project\" is omitted, the configured default project %q is used.", base, defaultProject)
 }
 
 // resolveAllowedTools maps the requested allowlist to a lookup set. An empty
@@ -221,15 +244,17 @@ func resolveAllowedTools(names []string) (allowed map[string]bool, explicit bool
 }
 
 // build assembles the server: allowlisted tools ∩ backend capabilities, plus
-// the (never-gated) resources.
-func build(b Backend, allowed map[string]bool, explicit bool) *mcp.Server {
+// the (never-gated) resources. defaultProject, when non-empty, backs the
+// omitted "project" argument of every project-taking tool and is advertised in
+// their descriptions.
+func build(b Backend, allowed map[string]bool, explicit bool, defaultProject string) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "semidx", Version: version}, nil)
 
 	if allowed[toolSemanticSearch] {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolSemanticSearch,
-			Description: "Search a registered project's indexed code semantically with a natural-language query. Returns ranked file:line matches with a content preview. Prefer this over plain grep when the query is about intent or behavior rather than an exact string.",
-		}, searchHandler(b))
+			Description: projectToolDescription("Search a registered project's indexed code semantically with a natural-language query. Returns ranked file:line matches with a content preview. Prefer this over plain grep when the query is about intent or behavior rather than an exact string.", defaultProject),
+		}, searchHandler(b, defaultProject))
 	}
 
 	if allowed[toolSemanticProjects] {
@@ -242,20 +267,20 @@ func build(b Backend, allowed map[string]bool, explicit bool) *mcp.Server {
 	if allowed[toolSemanticReindex] {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolSemanticReindex,
-			Description: "Queue a re-index job for a project already registered on the server. Only registered projects can be re-indexed; arbitrary paths are not accepted. In standalone (local) mode, reindex via the `semidx index` CLI instead.",
-		}, reindexHandler(b))
+			Description: projectToolDescription("Queue a re-index job for a project already registered on the server. Only registered projects can be re-indexed; arbitrary paths are not accepted. In standalone (local) mode, reindex via the `semidx index` CLI instead.", defaultProject),
+		}, reindexHandler(b, defaultProject))
 	}
 
 	if allowed[toolSemanticStatus] {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolSemanticStatus,
-			Description: "Get the indexing status of a registered project. Reports file count, status, and model.",
-		}, statusHandler(b))
+			Description: projectToolDescription("Get the indexing status of a registered project. Reports file count, status, and model.", defaultProject),
+		}, statusHandler(b, defaultProject))
 	}
 
-	registerGitTools(s, b, allowed, explicit)
+	registerGitTools(s, b, allowed, explicit, defaultProject)
 	registerMultiSearchTool(s, b, allowed, explicit)
-	registerAskTool(s, b, allowed, explicit)
+	registerAskTool(s, b, allowed, explicit, defaultProject)
 	registerResources(s, b)
 	return s
 }
@@ -263,7 +288,7 @@ func build(b Backend, allowed map[string]bool, explicit bool) *mcp.Server {
 // registerGitTools registers the git tools when the backend (or a backend it
 // wraps) implements GitBackend — an ask wrapper must not hide the local
 // backend's git tools.
-func registerGitTools(s *mcp.Server, b Backend, allowed map[string]bool, explicit bool) {
+func registerGitTools(s *mcp.Server, b Backend, allowed map[string]bool, explicit bool, defaultProject string) {
 	gitB, ok := asGitBackend(b)
 	if !ok {
 		if explicit {
@@ -274,20 +299,20 @@ func registerGitTools(s *mcp.Server, b Backend, allowed map[string]bool, explici
 	if allowed[toolRepoWorktrees] {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolRepoWorktrees,
-			Description: "List all worktrees of a repository (requires local git access). On server mode, returns unsupported.",
-		}, gitWorktreesHandler(gitB))
+			Description: projectToolDescription("List all worktrees of a repository (requires local git access). On server mode, returns unsupported.", defaultProject),
+		}, gitWorktreesHandler(gitB, defaultProject))
 	}
 	if allowed[toolRepoBranches] {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolRepoBranches,
-			Description: "List branches of a repository. Includes remote branches when --remote is true.",
-		}, gitBranchesHandler(gitB))
+			Description: projectToolDescription("List branches of a repository. Includes remote branches when --remote is true.", defaultProject),
+		}, gitBranchesHandler(gitB, defaultProject))
 	}
 	if allowed[toolRepoStatus] {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolRepoStatus,
-			Description: "Show the repository working tree status (dirty, current branch, HEAD SHA).",
-		}, gitStatusHandler(gitB))
+			Description: projectToolDescription("Show the repository working tree status (dirty, current branch, HEAD SHA).", defaultProject),
+		}, gitStatusHandler(gitB, defaultProject))
 	}
 }
 
@@ -311,7 +336,7 @@ func registerMultiSearchTool(s *mcp.Server, b Backend, allowed map[string]bool, 
 
 // registerAskTool registers semantic_ask only when the backend also
 // implements AskBackend (a configured chat LLM).
-func registerAskTool(s *mcp.Server, b Backend, allowed map[string]bool, explicit bool) {
+func registerAskTool(s *mcp.Server, b Backend, allowed map[string]bool, explicit bool, defaultProject string) {
 	askBackend, ok := b.(AskBackend)
 	if !ok {
 		if explicit {
@@ -322,8 +347,8 @@ func registerAskTool(s *mcp.Server, b Backend, allowed map[string]bool, explicit
 	if allowed[toolSemanticAsk] {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolSemanticAsk,
-			Description: "Ask a question about a registered project — RAG-augmented chat over indexed code. Returns an answer with cited source chunks.",
-		}, askHandler(askBackend))
+			Description: projectToolDescription("Ask a question about a registered project — RAG-augmented chat over indexed code. Returns an answer with cited source chunks.", defaultProject),
+		}, askHandler(askBackend, defaultProject))
 	}
 }
 
@@ -429,7 +454,7 @@ func RunWithOptions(ctx context.Context, b Backend, o Options) error {
 }
 
 type searchInput struct {
-	Project    string `json:"project" jsonschema:"the registered project name to search"`
+	Project    string `json:"project,omitempty" jsonschema:"the registered project name to search (optional when a default project is configured)"`
 	Query      string `json:"query" jsonschema:"the natural-language search query"`
 	Model      string `json:"model,omitempty" jsonschema:"optional embedding model override (defaults to the project's model)"`
 	TopK       int    `json:"top_k,omitempty" jsonschema:"number of results to return (default 5)"`
@@ -438,7 +463,7 @@ type searchInput struct {
 	Format     string `json:"format,omitempty" jsonschema:"output format: structured (default, JSON), text (legacy plain text), or minimal (compact JSON with abbreviated keys)"`
 }
 
-func searchHandler(b Backend) mcp.ToolHandlerFor[searchInput, any] {
+func searchHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[searchInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, any, error) {
 		topK := in.TopK
 		if topK == 0 {
@@ -446,7 +471,7 @@ func searchHandler(b Backend) mcp.ToolHandlerFor[searchInput, any] {
 		}
 		graphDepth := search.ClampGraphDepth(in.GraphDepth)
 		start := time.Now()
-		out, err := b.Search(ctx, in.Project, in.Query, in.Model, topK, in.Graph, graphDepth)
+		out, err := b.Search(ctx, resolveProject(in.Project, defaultProject), in.Query, in.Model, topK, in.Graph, graphDepth)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
@@ -476,17 +501,17 @@ func projectsHandler(b Backend) mcp.ToolHandlerFor[projectsInput, any] {
 }
 
 type reindexInput struct {
-	Project string `json:"project" jsonschema:"the registered project to re-index"`
+	Project string `json:"project,omitempty" jsonschema:"the registered project to re-index (optional when a default project is configured)"`
 	Type    string `json:"type,omitempty" jsonschema:"job type: full or git_history (default full)"`
 }
 
-func reindexHandler(b Backend) mcp.ToolHandlerFor[reindexInput, any] {
+func reindexHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[reindexInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in reindexInput) (*mcp.CallToolResult, any, error) {
 		jobType := in.Type
 		if jobType == "" {
 			jobType = "full"
 		}
-		msg, err := b.Reindex(ctx, in.Project, jobType)
+		msg, err := b.Reindex(ctx, resolveProject(in.Project, defaultProject), jobType)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
@@ -495,12 +520,12 @@ func reindexHandler(b Backend) mcp.ToolHandlerFor[reindexInput, any] {
 }
 
 type statusInput struct {
-	Project string `json:"project" jsonschema:"the registered project name to check status for"`
+	Project string `json:"project,omitempty" jsonschema:"the registered project name to check status for (optional when a default project is configured)"`
 }
 
-func statusHandler(b Backend) mcp.ToolHandlerFor[statusInput, any] {
+func statusHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[statusInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in statusInput) (*mcp.CallToolResult, any, error) {
-		info, err := b.Status(ctx, in.Project)
+		info, err := b.Status(ctx, resolveProject(in.Project, defaultProject))
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
@@ -511,12 +536,12 @@ func statusHandler(b Backend) mcp.ToolHandlerFor[statusInput, any] {
 // ---- Git tool handlers ----
 
 type gitWorktreesInput struct {
-	Project string `json:"project" jsonschema:"the registered project name"`
+	Project string `json:"project,omitempty" jsonschema:"the registered project name (optional when a default project is configured)"`
 }
 
-func gitWorktreesHandler(b GitBackend) mcp.ToolHandlerFor[gitWorktreesInput, any] {
+func gitWorktreesHandler(b GitBackend, defaultProject string) mcp.ToolHandlerFor[gitWorktreesInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in gitWorktreesInput) (*mcp.CallToolResult, any, error) {
-		wts, err := b.Worktrees(ctx, in.Project)
+		wts, err := b.Worktrees(ctx, resolveProject(in.Project, defaultProject))
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
@@ -526,13 +551,13 @@ func gitWorktreesHandler(b GitBackend) mcp.ToolHandlerFor[gitWorktreesInput, any
 }
 
 type gitBranchesInput struct {
-	Project string `json:"project" jsonschema:"the registered project name"`
+	Project string `json:"project,omitempty" jsonschema:"the registered project name (optional when a default project is configured)"`
 	Remote  bool   `json:"remote,omitempty" jsonschema:"include remote branches (default false)"`
 }
 
-func gitBranchesHandler(b GitBackend) mcp.ToolHandlerFor[gitBranchesInput, any] {
+func gitBranchesHandler(b GitBackend, defaultProject string) mcp.ToolHandlerFor[gitBranchesInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in gitBranchesInput) (*mcp.CallToolResult, any, error) {
-		branches, err := b.Branches(ctx, in.Project, in.Remote)
+		branches, err := b.Branches(ctx, resolveProject(in.Project, defaultProject), in.Remote)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
@@ -542,12 +567,12 @@ func gitBranchesHandler(b GitBackend) mcp.ToolHandlerFor[gitBranchesInput, any] 
 }
 
 type gitStatusInput struct {
-	Project string `json:"project" jsonschema:"the registered project name"`
+	Project string `json:"project,omitempty" jsonschema:"the registered project name (optional when a default project is configured)"`
 }
 
-func gitStatusHandler(b GitBackend) mcp.ToolHandlerFor[gitStatusInput, any] {
+func gitStatusHandler(b GitBackend, defaultProject string) mcp.ToolHandlerFor[gitStatusInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in gitStatusInput) (*mcp.CallToolResult, any, error) {
-		status, err := b.GitStatus(ctx, in.Project)
+		status, err := b.GitStatus(ctx, resolveProject(in.Project, defaultProject))
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
