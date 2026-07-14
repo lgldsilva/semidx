@@ -45,6 +45,8 @@ type GitCredentialStore interface {
 	// GetGitCredentialForHost matches the host case-insensitively.
 	GetGitCredentialForHost(ctx context.Context, host string) (*GitCredential, error)
 	ListGitCredentials(ctx context.Context) ([]GitCredential, error)
+	// GetGitCredentialByID returns the credential with id, or ErrNotFound.
+	GetGitCredentialByID(ctx context.Context, id int) (*GitCredential, error)
 	// UpdateGitCredential replaces the mutable fields (kind, username, secret,
 	// key version, known hosts, label) of the credential identified by c.ID and
 	// bumps updated_at. The scope (project/host) is immutable.
@@ -131,6 +133,21 @@ func (s *PgStore) GetGitCredentialForHost(ctx context.Context, host string) (*Gi
 		SELECT `+gitCredentialColumns+` FROM git_credentials
 		WHERE project_id IS NULL AND lower(host) = lower($1)`,
 		host).Scan(c.scanFields()...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// GetGitCredentialByID returns the credential with id, or ErrNotFound.
+func (s *PgStore) GetGitCredentialByID(ctx context.Context, id int) (*GitCredential, error) {
+	var c GitCredential
+	err := s.pool.QueryRow(ctx,
+		`SELECT `+gitCredentialColumns+` FROM git_credentials WHERE id = $1`, id).
+		Scan(c.scanFields()...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
