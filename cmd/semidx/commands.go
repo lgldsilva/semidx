@@ -877,19 +877,23 @@ func wrapMCPServerWithAgent(ctx context.Context, d *deps, db store.IndexStore, s
 // newMCPInstallCmd registers semidx's stdio MCP server in an agent's config,
 // modeled on ai-memory's `install-mcp`: print a snippet by default, or --apply
 // it idempotently (backup + replace the named entry, preserving the rest).
+// mcpInstallOpts groups flags for `semidx mcp install` (keeps runMCPInstall
+// under the Sonar S107 parameter limit).
+type mcpInstallOpts struct {
+	clientID   string
+	name       string
+	configFile string
+	transport  string
+	serverURL  string
+	bearerEnv  string
+	envPairs   []string
+	apply      bool
+	list       bool
+	all        bool
+}
+
 func newMCPInstallCmd() *cobra.Command {
-	var (
-		clientID   string
-		name       string
-		apply      bool
-		configFile string
-		list       bool
-		all        bool
-		envPairs   []string
-		transport  string
-		serverURL  string
-		bearerEnv  string
-	)
+	var opts mcpInstallOpts
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Register the semidx MCP server in an agent's config (Claude Code, Cursor, Gemini CLI, VS Code, OpenCode, Codex)",
@@ -909,28 +913,28 @@ func newMCPInstallCmd() *cobra.Command {
 			"  semidx mcp install --client codex --env SEMIDX_LOCAL_INDEX=1 --apply\n  semidx mcp install --all --apply\n" +
 			"  semidx mcp install --client claude-code --transport http --url https://semidx.lan/mcp --bearer-env SEMIDX_TOKEN --apply",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runMCPInstall(cmd, list, envPairs, name, clientID, configFile, transport, serverURL, bearerEnv, apply, all)
+			return runMCPInstall(cmd, opts)
 		},
 	}
-	cmd.Flags().StringVar(&clientID, "client", "claude-code", "target agent client (see --list)")
-	cmd.Flags().StringVar(&name, "name", "semidx", "server entry name in the client config")
-	cmd.Flags().BoolVar(&apply, "apply", false, "write the config in place (default: print the snippet)")
-	cmd.Flags().StringVar(&configFile, "config-file", "", "override the client's config file path")
-	cmd.Flags().BoolVar(&list, "list", false, "list supported clients and exit")
-	cmd.Flags().BoolVar(&all, "all", false, "apply to every supported client at once (implies --apply)")
-	cmd.Flags().StringArrayVar(&envPairs, "env", nil, "environment variable for the server entry (KEY=VAL, repeatable)")
-	cmd.Flags().StringVar(&transport, "transport", mcpinstall.TransportStdio, "server transport: stdio (local process) or http (remote Streamable HTTP endpoint)")
-	cmd.Flags().StringVar(&serverURL, "url", "", "the remote server's /mcp endpoint (required with --transport http)")
-	cmd.Flags().StringVar(&bearerEnv, "bearer-env", "", "env var name the client reads the Authorization Bearer token from (--transport http)")
+	cmd.Flags().StringVar(&opts.clientID, "client", "claude-code", "target agent client (see --list)")
+	cmd.Flags().StringVar(&opts.name, "name", "semidx", "server entry name in the client config")
+	cmd.Flags().BoolVar(&opts.apply, "apply", false, "write the config in place (default: print the snippet)")
+	cmd.Flags().StringVar(&opts.configFile, "config-file", "", "override the client's config file path")
+	cmd.Flags().BoolVar(&opts.list, "list", false, "list supported clients and exit")
+	cmd.Flags().BoolVar(&opts.all, "all", false, "apply to every supported client at once (implies --apply)")
+	cmd.Flags().StringArrayVar(&opts.envPairs, "env", nil, "environment variable for the server entry (KEY=VAL, repeatable)")
+	cmd.Flags().StringVar(&opts.transport, "transport", mcpinstall.TransportStdio, "server transport: stdio (local process) or http (remote Streamable HTTP endpoint)")
+	cmd.Flags().StringVar(&opts.serverURL, "url", "", "the remote server's /mcp endpoint (required with --transport http)")
+	cmd.Flags().StringVar(&opts.bearerEnv, "bearer-env", "", "env var name the client reads the Authorization Bearer token from (--transport http)")
 	return cmd
 }
 
-func runMCPInstall(cmd *cobra.Command, list bool, envPairs []string, name, clientID, configFile, transport, serverURL, bearerEnv string, apply, all bool) error {
-	if list {
+func runMCPInstall(cmd *cobra.Command, o mcpInstallOpts) error {
+	if o.list {
 		fmt.Print(mcpinstall.ClientList())
 		return nil
 	}
-	env, err := mcpinstall.ParseEnv(envPairs)
+	env, err := mcpinstall.ParseEnv(o.envPairs)
 	if err != nil {
 		return err
 	}
@@ -946,28 +950,28 @@ func runMCPInstall(cmd *cobra.Command, list bool, envPairs []string, name, clien
 	configDir, _ := os.UserConfigDir()
 	project, _ := os.Getwd()
 	base := mcpinstall.Options{
-		Name:      name,
+		Name:      o.name,
 		ExePath:   exe,
 		Home:      home,
 		ConfigDir: configDir,
 		Project:   project,
 		Env:       env,
-		Transport: transport,
-		URL:       serverURL,
-		BearerEnv: bearerEnv,
+		Transport: o.transport,
+		URL:       o.serverURL,
+		BearerEnv: o.bearerEnv,
 	}
-	if all {
-		return installAll(base, apply)
+	if o.all {
+		return installAll(base, o.apply)
 	}
 	opts := base
-	opts.Client = clientID
-	opts.FilePath = configFile
+	opts.Client = o.clientID
+	opts.FilePath = o.configFile
 	path, snippet, err := mcpinstall.Snippet(opts)
 	if err != nil {
 		return err
 	}
-	if !apply {
-		fmt.Printf("# %s — add to %s:\n\n%s\n", clientID, path, snippet)
+	if !o.apply {
+		fmt.Printf("# %s — add to %s:\n\n%s\n", o.clientID, path, snippet)
 		fmt.Print("Re-run with --apply to write this automatically.\n")
 		return nil
 	}
@@ -975,7 +979,7 @@ func runMCPInstall(cmd *cobra.Command, list bool, envPairs []string, name, clien
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Registered MCP server %q for %s in %s\n", name, clientID, written)
+	fmt.Printf("Registered MCP server %q for %s in %s\n", o.name, o.clientID, written)
 	return nil
 }
 
