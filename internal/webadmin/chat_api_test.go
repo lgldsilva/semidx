@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/lgldsilva/semidx/internal/chat"
@@ -16,7 +17,7 @@ import (
 
 type fakeChat struct{}
 
-func (fakeChat) Ask(_ context.Context, _ string, _ string, _ []chat.Message) (*rag.Answer, error) {
+func (fakeChat) Ask(_ context.Context, _ string, _ string, _ []chat.Message, _ ChatOptions) (*rag.Answer, error) {
 	return &rag.Answer{
 		Content: "answer",
 		Model:   "test-model",
@@ -24,7 +25,21 @@ func (fakeChat) Ask(_ context.Context, _ string, _ string, _ []chat.Message) (*r
 	}, nil
 }
 
-func (fakeChat) StreamAsk(_ context.Context, _ string, _ string, _ []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
+func (fakeChat) Config() ChatConfig {
+	return ChatConfig{
+		Enabled:      true,
+		Modes:        []string{"agent", "rag"},
+		DefaultMode:  "agent",
+		DefaultModel: "test-model",
+		Models: []ChatModelInfo{
+			{ID: "test-model", Provider: "fake", Default: true},
+			{ID: "other-model", Provider: "fake"},
+		},
+		AgentActions: "off",
+	}
+}
+
+func (fakeChat) StreamAsk(_ context.Context, _ string, _ string, _ []chat.Message, _ ChatOptions) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
 	ch := make(chan chat.StreamChunk, 4)
 	ch <- chat.StreamChunk{Tool: &chat.ToolEvent{
 		Kind: chat.ToolEventCall, ID: "call_abc", Name: "semantic_search",
@@ -150,12 +165,12 @@ func TestChatAPINoConfig(t *testing.T) {
 	}
 }
 
-type errChat struct{}
+type errChat struct{ fakeChat }
 
-func (errChat) Ask(context.Context, string, string, []chat.Message) (*rag.Answer, error) {
+func (errChat) Ask(context.Context, string, string, []chat.Message, ChatOptions) (*rag.Answer, error) {
 	return nil, errors.New("upstream failed")
 }
-func (errChat) StreamAsk(context.Context, string, string, []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
+func (errChat) StreamAsk(context.Context, string, string, []chat.Message, ChatOptions) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
 	return nil, nil, "", false, errors.New("upstream failed")
 }
 
@@ -314,7 +329,7 @@ func TestChatStreamToolEvents(t *testing.T) {
 // error message (the agent path when runner.Stream fails mid-flight).
 type failedStreamChat struct{ fakeChat }
 
-func (failedStreamChat) StreamAsk(context.Context, string, string, []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
+func (failedStreamChat) StreamAsk(context.Context, string, string, []chat.Message, ChatOptions) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
 	ch := make(chan chat.StreamChunk, 2)
 	ch <- chat.StreamChunk{Content: "partial"}
 	ch <- chat.StreamChunk{Done: true, Err: "chat backend failed — check server logs"}
@@ -351,6 +366,170 @@ func TestChatStreamErrorEvent(t *testing.T) {
 	}
 	if msg, _ := events[errIdx]["message"].(string); msg != "chat backend failed — check server logs" {
 		t.Errorf("error message = %q, want the generic contract message", msg)
+	}
+}
+
+// TestChatOptionsFrom covers the pure validation: empty fields always pass,
+// listed values pass, anything else is rejected.
+func TestChatOptionsFrom(t *testing.T) {
+	cfg := fakeChat{}.Config()
+	if _, err := chatOptionsFrom(cfg, chatBody{}); err != nil {
+		t.Errorf("empty opts must pass: %v", err)
+	}
+	opts, err := chatOptionsFrom(cfg, chatBody{Mode: "rag", Model: "other-model"})
+	if err != nil || opts.Mode != "rag" || opts.Model != "other-model" {
+		t.Errorf("valid opts = %+v err=%v", opts, err)
+	}
+	if _, err := chatOptionsFrom(cfg, chatBody{Mode: "bogus"}); err == nil {
+		t.Error("unknown mode must be rejected")
+	}
+	if _, err := chatOptionsFrom(cfg, chatBody{Model: "not-listed"}); err == nil {
+		t.Error("model outside the allowlist must be rejected")
+	}
+}
+
+// TestChatConfigAPI asserts the frozen GET /admin/api/chat/config contract keys.
+func TestChatConfigAPI(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	a, _ := New(fs, fakeEmbedder{}, nil, true, nil, "")
+	a.SetChat(fakeChat{})
+	srv.Config.Handler = a.Handler()
+
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+
+	resp, err := c.Get(srv.URL + "/admin/api/chat/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("config = %d", resp.StatusCode)
+	}
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["enabled"] != true || got["default_mode"] != "agent" ||
+		got["default_model"] != "test-model" || got["agent_actions"] != "off" {
+		t.Errorf("config = %v", got)
+	}
+	modes, _ := got["modes"].([]any)
+	if len(modes) != 2 || modes[0] != "agent" || modes[1] != "rag" {
+		t.Errorf("modes = %v", got["modes"])
+	}
+	models, _ := got["models"].([]any)
+	if len(models) != 2 {
+		t.Fatalf("models = %v", got["models"])
+	}
+	first, _ := models[0].(map[string]any)
+	if first["id"] != "test-model" || first["provider"] != "fake" || first["default"] != true {
+		t.Errorf("models[0] = %v", first)
+	}
+}
+
+// TestChatConfigAPINotConfigured: without a chat pipeline the endpoint answers
+// 404 (the frontend hides the selector).
+func TestChatConfigAPINotConfigured(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+
+	resp, err := c.Get(srv.URL + "/admin/api/chat/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("config without chat = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestChatAPIRejectsBadModeModel: mode/model outside the advertised config must
+// yield 400 on both the ask and stream endpoints.
+func TestChatAPIRejectsBadModeModel(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	a, _ := New(fs, fakeEmbedder{}, nil, true, nil, "")
+	a.SetChat(fakeChat{})
+	srv.Config.Handler = a.Handler()
+
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+
+	code, body := postAdminJSON(t, c, srv.URL+"/admin/api/projects/demo/chat", csrf, map[string]any{
+		"question": "x", "mode": "bogus",
+	})
+	if code != 400 || !strings.Contains(body, "unknown chat mode") {
+		t.Fatalf("bad mode = %d body=%s", code, body)
+	}
+	code, body = postAdminJSON(t, c, srv.URL+"/admin/api/projects/demo/chat", csrf, map[string]any{
+		"question": "x", "model": "not-listed",
+	})
+	if code != 400 || !strings.Contains(body, "not in the chat allowlist") {
+		t.Fatalf("bad model = %d body=%s", code, body)
+	}
+	code, body = postAdminJSON(t, c, srv.URL+"/admin/api/chat/stream", csrf, map[string]any{
+		"question": "x", "model": "not-listed",
+	})
+	if code != 400 || !strings.Contains(body, "not in the chat allowlist") {
+		t.Fatalf("stream bad model = %d body=%s", code, body)
+	}
+}
+
+// recordingChat captures the ChatOptions each call received.
+type recordingChat struct {
+	fakeChat
+	mu   sync.Mutex
+	last ChatOptions
+}
+
+func (r *recordingChat) record(opts ChatOptions) {
+	r.mu.Lock()
+	r.last = opts
+	r.mu.Unlock()
+}
+
+func (r *recordingChat) opts() ChatOptions {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.last
+}
+
+func (r *recordingChat) Ask(ctx context.Context, q, p string, h []chat.Message, opts ChatOptions) (*rag.Answer, error) {
+	r.record(opts)
+	return r.fakeChat.Ask(ctx, q, p, h, opts)
+}
+
+func (r *recordingChat) StreamAsk(ctx context.Context, q, p string, h []chat.Message, opts ChatOptions) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
+	r.record(opts)
+	return r.fakeChat.StreamAsk(ctx, q, p, h, opts)
+}
+
+// TestChatAPIPassesOptions: validated mode/model reach the pipeline untouched.
+func TestChatAPIPassesOptions(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	a, _ := New(fs, fakeEmbedder{}, nil, true, nil, "")
+	rec := &recordingChat{}
+	a.SetChat(rec)
+	srv.Config.Handler = a.Handler()
+
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+
+	code, body := postAdminJSON(t, c, srv.URL+"/admin/api/projects/demo/chat", csrf, map[string]any{
+		"question": "x", "mode": "rag", "model": "other-model",
+	})
+	if code != 200 {
+		t.Fatalf("chat = %d body=%s", code, body)
+	}
+	if got := rec.opts(); got.Mode != "rag" || got.Model != "other-model" {
+		t.Errorf("pipeline received opts %+v", got)
 	}
 }
 

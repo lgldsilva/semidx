@@ -89,6 +89,11 @@ type Config struct {
 	ChatAPIKey      string  // falls back to the matching embedding provider key
 	ChatBaseURL     string  // required for openai-compatible
 	ChatTemperature float64 // default 0.3
+	// ChatModels lists EXTRA chat models the admin chat may switch to per
+	// request, each entry as "provider/model" (SEMIDX_CHAT_MODELS,
+	// comma-separated). The resolved default chat model is always allowed and
+	// need not be repeated here. See ChatModelAllowlist.
+	ChatModels []string
 
 	// AgentActions gates the write/action tools on the non-interactive agent
 	// surfaces (MCP, admin): "off" (default), "propose" (agent describes the
@@ -307,6 +312,38 @@ func orString(v, def string) string {
 	return v
 }
 
+// ChatModelSpec is one entry of the admin chat model allowlist: a provider id
+// plus the model id the SPA may request. Default marks the server's resolved
+// default chat model (always the first entry).
+type ChatModelSpec struct {
+	Provider string
+	Model    string
+	Default  bool
+}
+
+// ChatModelAllowlist returns the chat models the admin SPA may pick per
+// request: the resolved default chat model first (Default=true), then each
+// SEMIDX_CHAT_MODELS entry ("provider/model" — the model id itself may contain
+// slashes, e.g. openrouter/deepseek/deepseek-chat). Malformed or duplicate
+// entries are skipped. Nil when no chat provider resolves (chat disabled).
+func (c *Config) ChatModelAllowlist() []ChatModelSpec {
+	sel, ok := c.ResolveChatLLM()
+	if !ok {
+		return nil
+	}
+	out := []ChatModelSpec{{Provider: sel.Provider, Model: sel.Model, Default: true}}
+	seen := map[string]bool{sel.Model: true}
+	for _, entry := range c.ChatModels {
+		provider, model, found := strings.Cut(entry, "/")
+		if !found || provider == "" || model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		out = append(out, ChatModelSpec{Provider: provider, Model: model})
+	}
+	return out
+}
+
 // DefaultLocalIndexPath is the standalone index location. It uses the OS-native
 // per-user data dir (os.UserCacheDir: %LocalAppData% on Windows, ~/Library/Caches
 // on macOS, $XDG_CACHE_HOME or ~/.cache on Linux), so semidx works cross-platform.
@@ -407,6 +444,7 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 		ChatAPIKey:          env.get("SEMIDX_CHAT_API_KEY", ""),
 		ChatBaseURL:         env.get("SEMIDX_CHAT_BASE_URL", ""),
 		ChatTemperature:     floatDefault(env.get("SEMIDX_CHAT_TEMPERATURE", ""), 0.3),
+		ChatModels:          parseCommaSep(env.get("SEMIDX_CHAT_MODELS", "")),
 		AgentActions:        strings.ToLower(strings.TrimSpace(env.get("SEMIDX_AGENT_ACTIONS", "off"))),
 		Privacy:             env.get("EMBED_PRIVACY", "") == "true",
 		IndexWorkers:        atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
@@ -493,6 +531,7 @@ var KnownKeys = []KeySpec{
 	{"ANTHROPIC_API_KEY", "Anthropic chat key (agent/RAG; chat-only, not embeddings)", true},
 	{"SEMIDX_CHAT_PROVIDER", "Chat provider: google|anthropic|openrouter|groq|openai-compatible|copilot (default: auto-detect from available keys)", false},
 	{"SEMIDX_CHAT_MODEL", "Chat model id (e.g. gemini-2.5-flash, deepseek-v4-flash-free)", false},
+	{"SEMIDX_CHAT_MODELS", "Extra admin-chat models, comma-separated provider/model entries", false},
 	{"SEMIDX_CHAT_API_KEY", "Chat provider API key (falls back to the matching embedding key)", true},
 	{"SEMIDX_CHAT_BASE_URL", "Chat base URL — required for openai-compatible (e.g. OpenCode Zen)", false},
 	{"SEMIDX_CHAT_TEMPERATURE", "Chat sampling temperature (default 0.3)", false},

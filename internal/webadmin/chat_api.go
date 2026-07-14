@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/rag"
@@ -17,6 +19,10 @@ type chatMessageIn struct {
 type chatBody struct {
 	Question string          `json:"question"`
 	History  []chatMessageIn `json:"history"`
+	// Mode/Model optionally override the server defaults for this turn; both
+	// are validated against the pipeline's Config() (unknown values → 400).
+	Mode  string `json:"mode"`
+	Model string `json:"model"`
 }
 
 func parseChatBody(r *http.Request) (chatBody, error) {
@@ -86,9 +92,40 @@ func (a *Admin) apiGlobalChat(w http.ResponseWriter, r *http.Request, ac *authCt
 	a.handleChatAsk(w, r, "")
 }
 
+// chatUnavailableMsg is the 503 body when no chat pipeline is wired. It must
+// guide the user: some providers (OpenRouter, Groq) have no default model, so a
+// bare API key without SEMIDX_CHAT_MODEL still leaves chat disabled.
+const chatUnavailableMsg = "chat is not configured: set a chat provider key — and SEMIDX_CHAT_MODEL for providers without a default model (OpenRouter, Groq) — on the server (see semidx config list)"
+
+// chatOptionsFrom validates the requested mode/model against the pipeline's
+// advertised config and returns the per-request options. Empty fields mean the
+// server defaults and always pass.
+func chatOptionsFrom(cfg ChatConfig, body chatBody) (ChatOptions, error) {
+	opts := ChatOptions{Mode: body.Mode, Model: body.Model}
+	if opts.Mode != "" && !slices.Contains(cfg.Modes, opts.Mode) {
+		return opts, fmt.Errorf("unknown chat mode %q (modes: %s)", opts.Mode, strings.Join(cfg.Modes, ", "))
+	}
+	if opts.Model != "" && !slices.ContainsFunc(cfg.Models, func(m ChatModelInfo) bool { return m.ID == opts.Model }) {
+		return opts, fmt.Errorf("model %q is not in the chat allowlist (see GET /admin/api/chat/config)", opts.Model)
+	}
+	return opts, nil
+}
+
+// apiChatConfig reports the chat capability contract for the SPA selector.
+// 404 when chat is not configured — the frontend hides the selector on 404 or
+// enabled:false.
+func (a *Admin) apiChatConfig(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	_, _ = r, ac
+	if a.chat == nil {
+		writeJSONErr(w, http.StatusNotFound, "chat is not configured")
+		return
+	}
+	writeJSON(w, http.StatusOK, a.chat.Config())
+}
+
 func (a *Admin) handleChatAsk(w http.ResponseWriter, r *http.Request, name string) {
 	if a.chat == nil {
-		writeJSONErr(w, http.StatusServiceUnavailable, "chat is not configured: set a chat provider key on the server (see semidx config list)")
+		writeJSONErr(w, http.StatusServiceUnavailable, chatUnavailableMsg)
 		return
 	}
 	body, err := parseChatBody(r)
@@ -96,7 +133,12 @@ func (a *Admin) handleChatAsk(w http.ResponseWriter, r *http.Request, name strin
 		writeJSONErr(w, http.StatusBadRequest, "question is required")
 		return
 	}
-	ans, err := a.chat.Ask(r.Context(), body.Question, name, historyFrom(body.History))
+	opts, err := chatOptionsFrom(a.chat.Config(), body)
+	if err != nil {
+		writeJSONErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ans, err := a.chat.Ask(r.Context(), body.Question, name, historyFrom(body.History), opts)
 	if err != nil {
 		a.log.Error("chat ask failed", "err", err, "project", name)
 		writeJSONErr(w, http.StatusBadGateway, err.Error())
@@ -124,7 +166,7 @@ func (a *Admin) apiGlobalChatStream(w http.ResponseWriter, r *http.Request, ac *
 
 func (a *Admin) handleChatStream(w http.ResponseWriter, r *http.Request, name string) {
 	if a.chat == nil {
-		writeJSONErr(w, http.StatusServiceUnavailable, "chat is not configured: set a chat provider key on the server (see semidx config list)")
+		writeJSONErr(w, http.StatusServiceUnavailable, chatUnavailableMsg)
 		return
 	}
 	// Check Flusher before reading the body so a non-stream fallback can still
@@ -139,8 +181,13 @@ func (a *Admin) handleChatStream(w http.ResponseWriter, r *http.Request, name st
 		writeJSONErr(w, http.StatusBadRequest, "question is required")
 		return
 	}
+	opts, err := chatOptionsFrom(a.chat.Config(), body)
+	if err != nil {
+		writeJSONErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	ch, sources, model, _, err := a.chat.StreamAsk(r.Context(), body.Question, name, historyFrom(body.History))
+	ch, sources, model, _, err := a.chat.StreamAsk(r.Context(), body.Question, name, historyFrom(body.History), opts)
 	if err != nil {
 		a.log.Error("chat stream failed", "err", err, "project", name)
 		writeJSONErr(w, http.StatusBadGateway, err.Error())

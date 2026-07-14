@@ -39,11 +39,42 @@ const (
 	loginMaxTries = 5
 )
 
-// ChatPipeline is the optional RAG chat backend for the project workspace.
-// Implemented by rag.Pipeline; nil disables chat in the SPA.
+// ChatOptions carries the per-request chat overrides from the SPA. Zero values
+// mean the server defaults; non-zero values are validated by the handlers
+// against Config() before reaching the pipeline (unknown mode/model → 400).
+type ChatOptions struct {
+	Mode  string // "agent" (tool loop) or "rag" (deterministic retrieval)
+	Model string // a model id from Config().Models
+}
+
+// ChatModelInfo is one selectable chat model in the frozen
+// GET /admin/api/chat/config contract.
+type ChatModelInfo struct {
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+	Default  bool   `json:"default"`
+}
+
+// ChatConfig is the frozen GET /admin/api/chat/config contract. The frontend
+// hides the mode/model selector on 404 or enabled:false.
+type ChatConfig struct {
+	Enabled      bool            `json:"enabled"`
+	Modes        []string        `json:"modes"`
+	DefaultMode  string          `json:"default_mode"`
+	DefaultModel string          `json:"default_model"`
+	Models       []ChatModelInfo `json:"models"`
+	AgentActions string          `json:"agent_actions"`
+}
+
+// ChatPipeline is the optional chat backend for the project workspace. The
+// serve wiring implements it as a per-request factory (mode/model come in via
+// opts); nil disables chat in the SPA.
 type ChatPipeline interface {
-	Ask(ctx context.Context, question, project string, history []chat.Message) (*rag.Answer, error)
-	StreamAsk(ctx context.Context, question, project string, history []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error)
+	Ask(ctx context.Context, question, project string, history []chat.Message, opts ChatOptions) (*rag.Answer, error)
+	StreamAsk(ctx context.Context, question, project string, history []chat.Message, opts ChatOptions) (<-chan chat.StreamChunk, []rag.Source, string, bool, error)
+	// Config reports the chat capability contract served at
+	// GET /admin/api/chat/config (modes, model allowlist, agent-actions policy).
+	Config() ChatConfig
 }
 
 // Admin renders and serves the management UI.
@@ -156,6 +187,8 @@ func (a *Admin) Handler() http.Handler {
 	// Global (cross-project) chat: no project binding — searches all projects.
 	mux.HandleFunc("POST /admin/api/chat", a.protectAPI("", a.apiGlobalChat))
 	mux.HandleFunc("POST /admin/api/chat/stream", a.protectAPI("", a.apiGlobalChatStream))
+	// Chat capability contract (modes, model allowlist) for the SPA selector.
+	mux.HandleFunc("GET /admin/api/chat/config", a.protectAPI("", a.apiChatConfig))
 	// Persistent conversations (per-user; PgStore only).
 	mux.HandleFunc("GET /admin/api/conversations", a.protectAPI("", a.apiListConversations))
 	mux.HandleFunc("POST /admin/api/conversations", a.protectAPI("", a.apiCreateConversation))
