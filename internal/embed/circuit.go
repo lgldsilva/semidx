@@ -2,6 +2,7 @@ package embed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -136,7 +137,14 @@ func (ce *circuitEmbedder) ModelInfo(ctx context.Context, model string) (*ModelI
 	}
 	result, err := ce.inner.ModelInfo(ctx, model)
 	if err != nil {
-		ce.cb.recordFailure()
+		// A dims-catalog miss (UnknownModelError) is deterministic and says
+		// nothing about provider health: counting it would open this provider's
+		// breaker for every other model/project whenever an unknown model is
+		// looked up repeatedly. Only real provider failures feed the breaker.
+		var ume *UnknownModelError
+		if !errors.As(err, &ume) {
+			ce.cb.recordFailure()
+		}
 		return nil, err
 	}
 	ce.cb.recordSuccess()

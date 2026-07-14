@@ -31,6 +31,21 @@ type ModelInfo struct {
 	Dims int
 }
 
+// UnknownModelError reports that a provider could not determine the embedding
+// dimensions for a model — a deterministic catalog/metadata miss, not a
+// provider outage. The circuit breaker must not count it as a failure: the
+// same lookup would fail forever and poison the provider for every other
+// model and project (see circuitEmbedder.ModelInfo).
+type UnknownModelError struct {
+	Provider string
+	Model    string
+	Reason   string
+}
+
+func (e *UnknownModelError) Error() string {
+	return fmt.Sprintf("%s: unknown embedding model %q (%s)", e.Provider, e.Model, e.Reason)
+}
+
 // Embedder generates embeddings for a given model.
 type Embedder interface {
 	ModelInfo(ctx context.Context, model string) (*ModelInfo, error)

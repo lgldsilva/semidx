@@ -2,8 +2,10 @@ package embed
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -132,6 +134,90 @@ func TestOpenAISingleErrorPaths(t *testing.T) {
 	}
 }
 
+func TestOpenAIModelInfoUnknownModelErrors(t *testing.T) {
+	c := NewOpenAIClient("http://example.invalid", "k")
+	_, err := c.ModelInfo(context.Background(), "totally-unknown")
+	if err == nil || !strings.Contains(err.Error(), "unknown embedding model") {
+		t.Fatalf("err = %v, want unknown embedding model", err)
+	}
+}
+
+func TestOpenAIListModelsFromEndpoint(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Errorf("path = %q, want /models", r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"text-embedding-3-small"},
+			{"id":"gpt-4o"},
+			{"id":"custom-Embedding-x"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	c := NewOpenAIClient(srv.URL, "sk-test")
+	models, err := c.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	want := []string{"text-embedding-3-small", "custom-Embedding-x"}
+	if len(models) != 2 || models[0] != want[0] || models[1] != want[1] {
+		t.Errorf("models = %v, want %v (only embedding ids)", models, want)
+	}
+	if gotAuth != "Bearer sk-test" {
+		t.Errorf("Authorization = %q, want Bearer sk-test", gotAuth)
+	}
+}
+
+func TestOpenAIListModelsFallsBackToStatic(t *testing.T) {
+	// Error, non-200, malformed JSON, and no-embedding-ids responses all fall
+	// back to the static catalog.
+	cases := map[string]http.HandlerFunc{
+		"http error": func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "nope", http.StatusNotFound)
+		},
+		"malformed json": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{broken`))
+		},
+		"no embedding ids": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4o"}]}`))
+		},
+	}
+	for name, handler := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(handler)
+			defer srv.Close()
+			c := NewOpenAIClient(srv.URL, "k")
+			models, err := c.ListModels(context.Background())
+			if err != nil {
+				t.Fatalf("ListModels: %v", err)
+			}
+			if !slices.Equal(models, staticEmbeddingModels) {
+				t.Errorf("models = %v, want static fallback %v", models, staticEmbeddingModels)
+			}
+		})
+	}
+
+	// Transport error (nothing listening) also falls back.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+	c := NewOpenAIClient(url, "k")
+	models, err := c.ListModels(context.Background())
+	if err != nil || !slices.Equal(models, staticEmbeddingModels) {
+		t.Fatalf("ListModels after transport error = %v, err %v, want static fallback", models, err)
+	}
+
+	// Invalid base URL fails request construction → static fallback.
+	badURL := NewOpenAIClient("://bad-url", "k")
+	models, err = badURL.ListModels(context.Background())
+	if err != nil || len(models) != len(staticEmbeddingModels) {
+		t.Fatalf("ListModels with bad URL = %v, err %v, want static fallback", models, err)
+	}
+}
+
 // --- OllamaClient -----------------------------------------------------------
 
 func TestOllamaTrimsTrailingSlash(t *testing.T) {
@@ -141,11 +227,31 @@ func TestOllamaTrimsTrailingSlash(t *testing.T) {
 	}
 }
 
-func TestOllamaModelInfoDims(t *testing.T) {
+func TestOllamaModelInfoRealDims(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/show" {
 			t.Errorf("path = %q, want /api/show", r.URL.Path)
 		}
+		_, _ = w.Write([]byte(`{"details":{"parameter_size":"334M","family":"bert"},"model_info":{"bert.embedding_length":768,"bert.context_length":512}}`))
+	}))
+	defer srv.Close()
+
+	c := NewOllamaClient(srv.URL)
+	// model_info wins even when the name would infer differently ("bge-m3"
+	// infers 1024), and covers names InferDims does not know at all.
+	for _, model := range []string{"bge-m3", "some-custom-model"} {
+		info, err := c.ModelInfo(context.Background(), model)
+		if err != nil {
+			t.Fatalf("ModelInfo(%q): %v", model, err)
+		}
+		if info.Dims != 768 {
+			t.Errorf("ModelInfo(%q).Dims = %d, want 768 (from model_info)", model, info.Dims)
+		}
+	}
+}
+
+func TestOllamaModelInfoFallsBackToInferDims(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"details":{"parameter_size":"334M","family":"bert"},"model_info":{}}`))
 	}))
 	defer srv.Close()
@@ -155,7 +261,6 @@ func TestOllamaModelInfoDims(t *testing.T) {
 		"nomic-embed-text":  768,
 		"bge-m3":            1024,
 		"mxbai-embed-large": 1024,
-		"some-other-model":  1024, // default
 	}
 	for model, want := range cases {
 		info, err := c.ModelInfo(context.Background(), model)
@@ -165,6 +270,25 @@ func TestOllamaModelInfoDims(t *testing.T) {
 		if info.Dims != want {
 			t.Errorf("ModelInfo(%q).Dims = %d, want %d", model, info.Dims, want)
 		}
+	}
+}
+
+func TestOllamaModelInfoUnknownDimsErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"details":{"family":"bert"},"model_info":{"bert.context_length":512}}`))
+	}))
+	defer srv.Close()
+
+	c := NewOllamaClient(srv.URL)
+	// No *.embedding_length and a name InferDims does not know: no 1024 guess.
+	// The typed error keeps the circuit breaker neutral (deterministic miss).
+	_, err := c.ModelInfo(context.Background(), "some-other-model")
+	var ume *UnknownModelError
+	if !errors.As(err, &ume) {
+		t.Fatalf("err = %v, want *UnknownModelError", err)
+	}
+	if ume.Model != "some-other-model" {
+		t.Errorf("UnknownModelError.Model = %q, want some-other-model", ume.Model)
 	}
 }
 

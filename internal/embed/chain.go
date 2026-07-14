@@ -41,6 +41,12 @@ type ChainConfig struct {
 // appropriate embedder chain (Ollama → Groq → OpenRouter → …). When 2 or more
 // Ollama URLs are configured it returns a ParallelEmbedder for round-robin
 // across Ollama instances with cloud providers as an additional lane.
+//
+// Client-side rate limiting is deliberately NOT implemented here: the
+// per-provider circuit breaker (which a 429 response feeds), the provider's
+// own retry semantics, and the chain's fallback to the next provider already
+// bound request pressure. A local limiter would add latency and a second,
+// drifting source of truth for each provider's quota.
 func NewChainFromConfig(cfg ChainConfig) Embedder {
 	// Pool mode: when 2+ Ollama URLs are configured, create a ParallelEmbedder
 	// with one entry per Ollama instance plus one entry bundling all cloud

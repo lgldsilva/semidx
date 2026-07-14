@@ -105,15 +105,36 @@ func (c *OllamaClient) ModelInfo(ctx context.Context, model string) (*ModelInfo,
 		return nil, err
 	}
 
-	dims := 1024 // default for most models
-	switch {
-	case strings.Contains(model, "nomic-embed-text"):
-		dims = 768
-	case strings.Contains(model, "bge-m3"), strings.Contains(model, "mxbai-embed-large"), strings.Contains(model, "qwen3-embedding:0.6b"):
-		dims = 1024
+	dims := embeddingDimsFromShow(info.ModelInfo)
+	if dims <= 0 {
+		dims = InferDims(model)
+	}
+	if dims <= 0 {
+		// Never guess a default: a wrong dims value silently creates a mismatched
+		// chunk table. Erroring here lets ChainEmbedder.tryEach fall through to
+		// the next provider instead.
+		return nil, &UnknownModelError{
+			Provider: "ollama", Model: model,
+			Reason: "no *.embedding_length in /api/show and not in the known-model catalog",
+		}
 	}
 
 	return &ModelInfo{Name: model, Dims: dims}, nil
+}
+
+// embeddingDimsFromShow extracts the embedding dimension from an /api/show
+// model_info map, whose key is architecture-prefixed (e.g.
+// "bert.embedding_length"). Returns 0 when no positive value is present.
+func embeddingDimsFromShow(modelInfo map[string]interface{}) int {
+	for key, val := range modelInfo {
+		if !strings.HasSuffix(key, ".embedding_length") {
+			continue
+		}
+		if f, ok := val.(float64); ok && f > 0 {
+			return int(f)
+		}
+	}
+	return 0
 }
 
 func (c *OllamaClient) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {
