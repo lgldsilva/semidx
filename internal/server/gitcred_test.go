@@ -54,6 +54,9 @@ func (c *credStore) GetGitCredentialForHost(_ context.Context, host string) (*st
 func (c *credStore) ListGitCredentials(context.Context) ([]store.GitCredential, error) {
 	return nil, nil
 }
+func (c *credStore) GetGitCredentialByID(context.Context, int) (*store.GitCredential, error) {
+	return nil, store.ErrNotFound
+}
 func (c *credStore) UpdateGitCredential(context.Context, *store.GitCredential) error { return nil }
 func (c *credStore) DeleteGitCredential(context.Context, int) error                  { return nil }
 
