@@ -739,26 +739,50 @@ func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server, showBoot
 }
 
 func newMCPCmd(d *deps) *cobra.Command {
+	var tools []string
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run the MCP server over stdio (proxying to a server, or over the local index)",
 		Long: `Run the Model Context Protocol server over stdio so AI agents can call
 semantic_search / semantic_projects / semantic_reindex. Proxies a configured
 server, or serves the local index directly. Use "semidx mcp install" to wire it
-into an agent client. (stdout carries the protocol — logs go to stderr.)`,
+into an agent client. (stdout carries the protocol — logs go to stderr.)
+
+Restrict the exposed tools with --tools (repeatable or comma-separated) or the
+SEMIDX_MCP_TOOLS env var (comma-separated; the flag wins). Valid tool names:
+` + strings.Join(mcpserver.ToolNames(), ", ") + `.
+Capability-gated tools (repo_*, semantic_search_multi, semantic_ask) are only
+served when the backend supports them, allowlisted or not.`,
 		Example: `  semidx mcp                                  # run the stdio server
+  semidx mcp --tools semantic_search,semantic_status
   semidx mcp install --client claude-code --apply`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runMCPServer(cmd.Context(), d)
+			return runMCPServer(cmd.Context(), d, mcpToolAllowlist(cmd.Flags().Changed("tools"), tools, d.cfg))
 		},
 	}
+	cmd.Flags().StringSliceVar(&tools, "tools", nil,
+		"expose only these MCP tools (comma-separated or repeated; default: all)")
 	cmd.AddCommand(newMCPInstallCmd())
 	return cmd
 }
 
-func runMCPServer(ctx context.Context, d *deps) error {
+// mcpToolAllowlist resolves the effective MCP tool allowlist: the --tools flag
+// when passed (even if empty — an explicit reset), else SEMIDX_MCP_TOOLS from
+// the layered config (env > .env > user config file).
+func mcpToolAllowlist(flagSet bool, flagValues []string, cfg *config.Config) []string {
+	if flagSet {
+		return flagValues
+	}
+	if cfg != nil {
+		return cfg.MCPTools
+	}
+	return nil
+}
+
+func runMCPServer(ctx context.Context, d *deps, allowedTools []string) error {
+	opts := mcpserver.Options{AllowedTools: allowedTools}
 	if d.remote() {
-		return mcpserver.Run(ctx, mcpserver.NewClientBackend(d.apiClient()))
+		return mcpserver.RunWithOptions(ctx, mcpserver.NewClientBackend(d.apiClient()), opts)
 	}
 	db, err := d.indexStore(ctx)
 	if err != nil {
@@ -780,7 +804,7 @@ func runMCPServer(ctx context.Context, d *deps) error {
 	if chatOK {
 		backend = wrapMCPServerWithAgent(ctx, d, db, svc, sel, backend)
 	}
-	return mcpserver.Run(ctx, backend)
+	return mcpserver.RunWithOptions(ctx, backend, opts)
 }
 
 func wrapMCPServerWithAgent(ctx context.Context, d *deps, db store.IndexStore, svc *search.Service, sel config.ChatLLM, backend mcpserver.Backend) mcpserver.Backend {

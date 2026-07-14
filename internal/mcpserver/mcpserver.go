@@ -11,7 +11,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -134,67 +136,211 @@ func asMultiSearchBackend(b Backend) (MultiSearchBackend, bool) {
 	return nil, false
 }
 
-// New builds an MCP server whose tools call the given backend.
+// Canonical tool names. toolNames below is the single source the allowlist
+// validation checks against: when you register a new tool in NewWithOptions,
+// add its name here too, and the validation error message (and the CLI help
+// via ToolNames) stays correct automatically.
+const (
+	toolSemanticSearch      = "semantic_search"
+	toolSemanticProjects    = "semantic_projects"
+	toolSemanticReindex     = "semantic_reindex"
+	toolSemanticStatus      = "semantic_status"
+	toolRepoWorktrees       = "repo_worktrees"
+	toolRepoBranches        = "repo_branches"
+	toolRepoStatus          = "repo_status"
+	toolSemanticSearchMulti = "semantic_search_multi"
+	toolSemanticAsk         = "semantic_ask"
+)
+
+// toolNames is the canonical list of every tool this server can register,
+// capability-gated ones included.
+var toolNames = []string{
+	toolSemanticSearch, toolSemanticProjects, toolSemanticReindex, toolSemanticStatus,
+	toolRepoWorktrees, toolRepoBranches, toolRepoStatus,
+	toolSemanticSearchMulti, toolSemanticAsk,
+}
+
+// ToolNames returns the canonical list of registrable tool names. Used by the
+// CLI to document the --tools / SEMIDX_MCP_TOOLS allowlist.
+func ToolNames() []string { return slices.Clone(toolNames) }
+
+// Options configures how the MCP server is built.
+type Options struct {
+	// AllowedTools restricts which tools get registered. Empty means all tools
+	// (subject to backend capabilities, as always). An unknown name is a
+	// construction error; a known name whose capability the backend lacks is
+	// skipped with a warning on stderr — an allowlist narrows the tool set, it
+	// cannot grant a capability the backend does not have.
+	AllowedTools []string
+}
+
+// New builds an MCP server whose tools call the given backend, exposing every
+// tool the backend supports.
 func New(b Backend) *mcp.Server {
+	// resolveAllowedTools never fails on an empty allowlist.
+	allowed, _, _ := resolveAllowedTools(nil)
+	return build(b, allowed, false)
+}
+
+// NewWithOptions is New with an Options-controlled tool subset. It fails fast
+// on unknown tool names so a typo in --tools/SEMIDX_MCP_TOOLS aborts the
+// command instead of silently exposing the wrong tool set.
+func NewWithOptions(b Backend, o Options) (*mcp.Server, error) {
+	allowed, explicit, err := resolveAllowedTools(o.AllowedTools)
+	if err != nil {
+		return nil, err
+	}
+	return build(b, allowed, explicit), nil
+}
+
+// resolveAllowedTools maps the requested allowlist to a lookup set. An empty
+// (or effectively empty: blank entries only) list means "all tools"; explicit
+// reports whether the caller actually narrowed the set, which gates the
+// missing-capability warnings in build.
+func resolveAllowedTools(names []string) (allowed map[string]bool, explicit bool, err error) {
+	requested := make([]string, 0, len(names))
+	for _, raw := range names {
+		if n := strings.TrimSpace(raw); n != "" {
+			requested = append(requested, n)
+		}
+	}
+	allowed = make(map[string]bool, len(toolNames))
+	if len(requested) == 0 {
+		for _, n := range toolNames {
+			allowed[n] = true
+		}
+		return allowed, false, nil
+	}
+	for _, n := range requested {
+		if !slices.Contains(toolNames, n) {
+			return nil, false, fmt.Errorf("unknown MCP tool %q (valid tools: %s)", n, strings.Join(toolNames, ", "))
+		}
+		allowed[n] = true
+	}
+	return allowed, true, nil
+}
+
+// build assembles the server: allowlisted tools ∩ backend capabilities, plus
+// the (never-gated) resources.
+func build(b Backend, allowed map[string]bool, explicit bool) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "semidx", Version: version}, nil)
 
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "semantic_search",
-		Description: "Search a registered project's indexed code semantically with a natural-language query. Returns ranked file:line matches with a content preview. Prefer this over plain grep when the query is about intent or behavior rather than an exact string.",
-	}, searchHandler(b))
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "semantic_projects",
-		Description: "List the projects registered in this semidx index, with their indexing status.",
-	}, projectsHandler(b))
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "semantic_reindex",
-		Description: "Queue a re-index job for a project already registered on the server. Only registered projects can be re-indexed; arbitrary paths are not accepted. In standalone (local) mode, reindex via the `semidx index` CLI instead.",
-	}, reindexHandler(b))
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "semantic_status",
-		Description: "Get the indexing status of a registered project. Reports file count, status, and model.",
-	}, statusHandler(b))
-
-	// Register git tools when the backend (or a backend it wraps) implements
-	// GitBackend — an ask wrapper must not hide the local backend's git tools.
-	if gitB, ok := asGitBackend(b); ok {
+	if allowed[toolSemanticSearch] {
 		mcp.AddTool(s, &mcp.Tool{
-			Name:        "repo_worktrees",
+			Name:        toolSemanticSearch,
+			Description: "Search a registered project's indexed code semantically with a natural-language query. Returns ranked file:line matches with a content preview. Prefer this over plain grep when the query is about intent or behavior rather than an exact string.",
+		}, searchHandler(b))
+	}
+
+	if allowed[toolSemanticProjects] {
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        toolSemanticProjects,
+			Description: "List the projects registered in this semidx index, with their indexing status.",
+		}, projectsHandler(b))
+	}
+
+	if allowed[toolSemanticReindex] {
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        toolSemanticReindex,
+			Description: "Queue a re-index job for a project already registered on the server. Only registered projects can be re-indexed; arbitrary paths are not accepted. In standalone (local) mode, reindex via the `semidx index` CLI instead.",
+		}, reindexHandler(b))
+	}
+
+	if allowed[toolSemanticStatus] {
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        toolSemanticStatus,
+			Description: "Get the indexing status of a registered project. Reports file count, status, and model.",
+		}, statusHandler(b))
+	}
+
+	registerGitTools(s, b, allowed, explicit)
+	registerMultiSearchTool(s, b, allowed, explicit)
+	registerAskTool(s, b, allowed, explicit)
+	registerResources(s, b)
+	return s
+}
+
+// registerGitTools registers the git tools when the backend (or a backend it
+// wraps) implements GitBackend — an ask wrapper must not hide the local
+// backend's git tools.
+func registerGitTools(s *mcp.Server, b Backend, allowed map[string]bool, explicit bool) {
+	gitB, ok := asGitBackend(b)
+	if !ok {
+		if explicit {
+			warnUnavailable(allowed, "local git access", toolRepoWorktrees, toolRepoBranches, toolRepoStatus)
+		}
+		return
+	}
+	if allowed[toolRepoWorktrees] {
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        toolRepoWorktrees,
 			Description: "List all worktrees of a repository (requires local git access). On server mode, returns unsupported.",
 		}, gitWorktreesHandler(gitB))
-
+	}
+	if allowed[toolRepoBranches] {
 		mcp.AddTool(s, &mcp.Tool{
-			Name:        "repo_branches",
+			Name:        toolRepoBranches,
 			Description: "List branches of a repository. Includes remote branches when --remote is true.",
 		}, gitBranchesHandler(gitB))
-
+	}
+	if allowed[toolRepoStatus] {
 		mcp.AddTool(s, &mcp.Tool{
-			Name:        "repo_status",
+			Name:        toolRepoStatus,
 			Description: "Show the repository working tree status (dirty, current branch, HEAD SHA).",
 		}, gitStatusHandler(gitB))
 	}
+}
 
-	// Register multi-scope search when the backend (or one it wraps) implements
-	// MultiSearchBackend.
-	if msB, ok := asMultiSearchBackend(b); ok {
+// registerMultiSearchTool registers multi-scope search when the backend (or
+// one it wraps) implements MultiSearchBackend.
+func registerMultiSearchTool(s *mcp.Server, b Backend, allowed map[string]bool, explicit bool) {
+	msB, ok := asMultiSearchBackend(b)
+	if !ok {
+		if explicit {
+			warnUnavailable(allowed, "multi-project search", toolSemanticSearchMulti)
+		}
+		return
+	}
+	if allowed[toolSemanticSearchMulti] {
 		mcp.AddTool(s, &mcp.Tool{
-			Name:        "semantic_search_multi",
+			Name:        toolSemanticSearchMulti,
 			Description: "Search across multiple projects in one query, with fused results and project labels.",
 		}, multiSearchHandler(msB))
 	}
+}
 
-	// Register the semantic_ask tool only when the backend also implements AskBackend.
-	if askBackend, ok := b.(AskBackend); ok {
+// registerAskTool registers semantic_ask only when the backend also
+// implements AskBackend (a configured chat LLM).
+func registerAskTool(s *mcp.Server, b Backend, allowed map[string]bool, explicit bool) {
+	askBackend, ok := b.(AskBackend)
+	if !ok {
+		if explicit {
+			warnUnavailable(allowed, "a configured chat LLM", toolSemanticAsk)
+		}
+		return
+	}
+	if allowed[toolSemanticAsk] {
 		mcp.AddTool(s, &mcp.Tool{
-			Name:        "semantic_ask",
+			Name:        toolSemanticAsk,
 			Description: "Ask a question about a registered project — RAG-augmented chat over indexed code. Returns an answer with cited source chunks.",
 		}, askHandler(askBackend))
 	}
+}
 
-	// ---- Resources ----
+// warnUnavailable logs (to stderr — stdout carries the MCP protocol) every
+// explicitly requested tool the backend cannot serve. The tool is skipped,
+// not an error: the final tool set is allowlist ∩ capabilities.
+func warnUnavailable(allowed map[string]bool, requires string, tools ...string) {
+	for _, name := range tools {
+		if allowed[name] {
+			slog.Warn("requested MCP tool is unavailable on this backend; skipping",
+				"tool", name, "requires", requires)
+		}
+	}
+}
+
+// registerResources adds the (never allowlist-gated) MCP resources.
+func registerResources(s *mcp.Server, b Backend) {
 	s.AddResource(&mcp.Resource{
 		URI:         "semidx://projects",
 		Name:        "Projects",
@@ -264,14 +410,22 @@ func New(b Backend) *mcp.Server {
 			}},
 		}, nil
 	})
-
-	return s
 }
 
 // Run serves the MCP protocol over stdio until the client disconnects or ctx is
 // cancelled.
 func Run(ctx context.Context, b Backend) error {
-	return New(b).Run(ctx, &mcp.StdioTransport{})
+	return RunWithOptions(ctx, b, Options{})
+}
+
+// RunWithOptions is Run with construction Options (e.g. a tool allowlist). It
+// returns before serving when the options are invalid.
+func RunWithOptions(ctx context.Context, b Backend, o Options) error {
+	s, err := NewWithOptions(b, o)
+	if err != nil {
+		return err
+	}
+	return s.Run(ctx, &mcp.StdioTransport{})
 }
 
 type searchInput struct {
