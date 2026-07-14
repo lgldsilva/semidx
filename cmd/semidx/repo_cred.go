@@ -17,9 +17,9 @@ import (
 
 const (
 	// Help text for commands that talk to the server vault — not a secret value.
-	gitCredPathDesc       = "Requires semidx login with an admin-scoped API key" // #nosec G101 -- operator help text, not a credential
-	errRepoCredNeedsLogin = "repo cred requires a server: run `semidx login` first"
-	errListGitCredsFmt    = "list git credentials: %w"
+	gitCredPathDesc       = "Requires an admin-scoped remote session"               // #nosec G101 -- operator help, not a credential
+	errRepoCredNeedsLogin = "repo cred needs a remote session — authenticate first" // #nosec G101 -- error text, not a credential
+	errListGitCredsFmt    = "list stored git auth entries: %w"                      // #nosec G101 -- error format, not a credential
 )
 
 func newRepoCredCmd(d *deps) *cobra.Command {
