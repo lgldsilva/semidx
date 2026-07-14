@@ -37,4 +37,10 @@ func TestSecurityHeaders(t *testing.T) {
 	if !strings.Contains(csp, "script-src 'self'") {
 		t.Errorf("CSP missing script-src 'self': %q", csp)
 	}
+	if !strings.Contains(csp, "style-src 'self'") {
+		t.Errorf("CSP missing style-src 'self': %q", csp)
+	}
+	if strings.Contains(csp, "unsafe-inline") {
+		t.Errorf("CSP must not allow unsafe-inline: %q", csp)
+	}
 }

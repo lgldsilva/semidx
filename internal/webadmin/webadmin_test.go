@@ -2,14 +2,12 @@ package webadmin
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"net/url"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -435,8 +433,6 @@ func (f *fakeStore) InsertEmbeddingCache(context.Context, []string, string, [][]
 
 // --- helpers -----------------------------------------------------------------
 
-var csrfRe = regexp.MustCompile(`name="csrf_token" value="([0-9a-f]+)"`)
-
 func newTestAdmin(t *testing.T) (*httptest.Server, *fakeStore) {
 	t.Helper()
 	fs := newFakeStore()
@@ -463,14 +459,31 @@ func newClient(t *testing.T, srv *httptest.Server) *http.Client {
 
 func login(t *testing.T, c *http.Client, base, user, pass string) {
 	t.Helper()
-	resp, err := c.PostForm(base+"/admin/login", url.Values{"username": {user}, "password": {pass}})
-	if err != nil {
-		t.Fatal(err)
+	code, body := postAdminJSON(t, c, base+"/admin/api/login", "", map[string]any{
+		"username": user, "password": pass,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("login status = %d; want 200, body=%s", code, body)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("login status = %d; want 303", resp.StatusCode)
+}
+
+func extractJSONField(t *testing.T, body, key string) string {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		return ""
 	}
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func adminAPIBase(urlStr string) string {
+	if i := strings.Index(urlStr, "/admin"); i >= 0 {
+		return urlStr[:i+len("/admin")]
+	}
+	return urlStr
 }
 
 func getBody(t *testing.T, c *http.Client, urlStr string) (int, string) {
@@ -486,12 +499,12 @@ func getBody(t *testing.T, c *http.Client, urlStr string) (int, string) {
 
 func csrfFrom(t *testing.T, c *http.Client, urlStr string) string {
 	t.Helper()
-	_, body := getBody(t, c, urlStr)
-	m := csrfRe.FindStringSubmatch(body)
-	if m == nil {
-		t.Fatalf("no csrf token in %s", urlStr)
+	_, body := getBody(t, c, adminAPIBase(urlStr)+"/api/me")
+	csrf := extractJSONField(t, body, "csrf")
+	if csrf == "" {
+		t.Fatalf("no csrf token in /admin/api/me")
 	}
-	return m[1]
+	return csrf
 }
 
 // --- tests -------------------------------------------------------------------
@@ -505,19 +518,36 @@ func TestLoginFlowAndSession(t *testing.T) {
 	if code, body := getBody(t, c, srv.URL+"/admin/"); code != http.StatusOK || !strings.Contains(body, "root") {
 		t.Errorf("unauth SPA shell = %d; want 200 with #root", code)
 	}
-	// Bad password does not create a session (legacy form POST still supported).
-	resp, _ := c.PostForm(srv.URL+"/admin/login", url.Values{"username": {"admin"}, "password": {"wrong"}})
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("bad login = %d; want 200 (form re-render)", resp.StatusCode)
+	// Bad password does not create a session.
+	code, _ := postAdminJSON(t, c, srv.URL+"/admin/api/login", "", map[string]any{
+		"username": "admin", "password": "wrong",
+	})
+	if code != http.StatusUnauthorized {
+		t.Errorf("bad login = %d; want 401", code)
 	}
-	// Correct login → session → SPA + keys page still work.
+	// Correct login → session → SPA still works.
 	login(t, c, srv.URL, "admin", "supersecret")
 	if code, body := getBody(t, c, srv.URL+"/admin/"); code != http.StatusOK || !strings.Contains(body, "root") {
 		t.Errorf("SPA after login = %d body has root? %v", code, strings.Contains(body, "root"))
 	}
-	if code, body := getBody(t, c, srv.URL+"/admin/keys"); code != http.StatusOK || !strings.Contains(body, "API") {
-		t.Errorf("keys page after login = %d", code)
+}
+
+func TestLegacySettingsRedirects(t *testing.T) {
+	srv, fs := newTestAdmin(t)
+	fs.addUser("admin", "supersecret", "admin")
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+
+	for _, path := range []string{"/admin/keys", "/admin/tokens", "/admin/users", "/admin/account"} {
+		resp, err := c.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loc := resp.Header.Get("Location")
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusSeeOther || loc != "/admin/settings" {
+			t.Errorf("GET %s = %d Location=%q; want 303 → /admin/settings", path, resp.StatusCode, loc)
+		}
 	}
 }
 
@@ -527,123 +557,10 @@ func TestCSRFRequiredForMutations(t *testing.T) {
 	c := newClient(t, srv)
 	login(t, c, srv.URL, "admin", "supersecret")
 
-	// POST without a CSRF token is rejected.
-	resp, _ := c.PostForm(srv.URL+"/admin/keys", url.Values{"name": {"x"}})
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("POST without CSRF = %d; want 403", resp.StatusCode)
+	code, _ := postAdminJSON(t, c, srv.URL+"/admin/api/keys", "", map[string]any{"name": "x"})
+	if code != http.StatusForbidden {
+		t.Errorf("POST without CSRF = %d; want 403", code)
 	}
-}
-
-func TestAPIKeyLifecycle(t *testing.T) {
-	srv, fs := newTestAdmin(t)
-	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "admin", "supersecret")
-
-	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
-	resp, _ := c.PostForm(srv.URL+"/admin/keys", url.Values{
-		"csrf_token": {csrf}, "name": {"laptop"}, "scopes": {"read", "write"},
-	})
-	_, body := readAll(resp)
-	if !strings.Contains(body, "semidx_") {
-		t.Fatalf("created-key page did not show the plaintext key")
-	}
-	// The key now appears in the list; revoke it.
-	if len(fs.tokens) != 1 {
-		t.Fatalf("expected 1 token, got %d", len(fs.tokens))
-	}
-	var id int
-	for tid := range fs.tokens {
-		id = tid
-	}
-	csrf = csrfFrom(t, c, srv.URL+"/admin/keys")
-	resp, _ = c.PostForm(srv.URL+"/admin/keys/revoke", url.Values{"csrf_token": {csrf}, "id": {strconv.Itoa(id)}})
-	_ = resp.Body.Close()
-	if len(fs.tokens) != 0 {
-		t.Errorf("token not revoked: %d remain", len(fs.tokens))
-	}
-}
-
-func TestMemberCannotAccessUsers(t *testing.T) {
-	srv, fs := newTestAdmin(t)
-	fs.addUser("bob", "supersecret", "member")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "bob", "supersecret")
-
-	if code, _ := getBody(t, c, srv.URL+"/admin/users"); code != http.StatusForbidden {
-		t.Errorf("member GET /admin/users = %d; want 403", code)
-	}
-}
-
-func TestAdminCreatesMemberAndDisable(t *testing.T) {
-	srv, fs := newTestAdmin(t)
-	admin := fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "admin", "supersecret")
-
-	csrf := csrfFrom(t, c, srv.URL+"/admin/users")
-	resp, _ := c.PostForm(srv.URL+"/admin/users", url.Values{
-		"csrf_token": {csrf}, "username": {"carol"}, "password": {"supersecret"}, "role": {"member"},
-	})
-	_ = resp.Body.Close()
-	if _, ok := fs.byName["carol"]; !ok {
-		t.Fatal("member carol was not created")
-	}
-
-	// Admin cannot disable their own account.
-	csrf = csrfFrom(t, c, srv.URL+"/admin/users")
-	resp, _ = c.PostForm(srv.URL+"/admin/users/disable", url.Values{
-		"csrf_token": {csrf}, "id": {strconv.Itoa(admin.ID)}, "disabled": {"true"},
-	})
-	_ = resp.Body.Close()
-	if admin.Disabled {
-		t.Error("admin disabled their own account — should be blocked")
-	}
-}
-
-func TestControlTokenLifecycle(t *testing.T) {
-	srv, fs := newTestAdmin(t)
-	fs.addUser("admin", "supersecret", "admin")
-	c := newClient(t, srv)
-	login(t, c, srv.URL, "admin", "supersecret")
-
-	// Issue a non-expiring control token and confirm the JWT is shown once.
-	csrf := csrfFrom(t, c, srv.URL+"/admin/tokens")
-	resp, _ := c.PostForm(srv.URL+"/admin/tokens", url.Values{
-		"csrf_token": {csrf}, "name": {"deploy"}, "scopes": {"read", "write"},
-	})
-	_, body := readAll(resp)
-	// A JWT has three dot-separated segments.
-	if strings.Count(firstToken(body), ".") != 2 {
-		t.Fatalf("expected a JWT in the response body")
-	}
-	if len(fs.tokens) != 1 {
-		t.Fatalf("expected 1 control token recorded, got %d", len(fs.tokens))
-	}
-
-	// It shows under the jwt list, and revoking removes it.
-	var id int
-	for tid := range fs.tokens {
-		id = tid
-	}
-	csrf = csrfFrom(t, c, srv.URL+"/admin/tokens")
-	resp, _ = c.PostForm(srv.URL+"/admin/tokens/revoke", url.Values{"csrf_token": {csrf}, "id": {strconv.Itoa(id)}})
-	_ = resp.Body.Close()
-	if len(fs.tokens) != 0 {
-		t.Errorf("control token not revoked: %d remain", len(fs.tokens))
-	}
-}
-
-// firstToken returns the first whitespace-delimited chunk containing two dots
-// (a heuristic for pulling the JWT out of the rendered page).
-func firstToken(body string) string {
-	for _, f := range strings.Fields(body) {
-		if strings.Count(f, ".") == 2 && len(f) > 40 {
-			return f
-		}
-	}
-	return ""
 }
 
 func readAll(resp *http.Response) (int, string) {

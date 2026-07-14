@@ -2,7 +2,6 @@ package webadmin
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -140,16 +139,4 @@ func TestIngestArchiveAPI(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(string(respBody), `"indexed":1`) {
 		t.Fatalf("archive ingest = %d body=%s", resp.StatusCode, respBody)
 	}
-}
-
-func extractJSONField(t *testing.T, body, key string) string {
-	t.Helper()
-	var m map[string]any
-	if err := json.Unmarshal([]byte(body), &m); err != nil {
-		return ""
-	}
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
 }
