@@ -46,6 +46,11 @@ func TestGitCredentialCRUD(t *testing.T) {
 		t.Errorf("GetGitCredentialForProject = %+v", got)
 	}
 
+	gotByID, err := s.GetGitCredentialByID(ctx, c.ID)
+	if err != nil || gotByID.ID != c.ID {
+		t.Fatalf("GetGitCredentialByID = %+v, err %v", gotByID, err)
+	}
+
 	// Create a host-scoped credential and list both.
 	h, err := s.CreateGitCredential(ctx, &GitCredential{
 		Host:          "git.example.com",

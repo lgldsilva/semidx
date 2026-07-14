@@ -116,6 +116,19 @@ func bearerToken(r *http.Request) string {
 	return ""
 }
 
+// bearerHasAdminScope reports whether the request bearer carries the admin scope.
+func (s *Server) bearerHasAdminScope(r *http.Request) (bool, error) {
+	raw := bearerToken(r)
+	if raw == "" {
+		return false, nil
+	}
+	scopes, ok, err := s.resolveScopes(r.Context(), raw)
+	if err != nil || !ok {
+		return false, err
+	}
+	return slices.Contains(scopes, "admin"), nil
+}
+
 // EnsureBootstrapToken creates the first admin token on an empty server. If
 // envToken is set it becomes that token; otherwise a random one is generated and
 // returned so the caller can show it once. Returns "" when tokens already exist.

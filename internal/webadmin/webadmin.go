@@ -22,6 +22,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/rag"
 	"github.com/lgldsilva/semidx/internal/search"
+	"github.com/lgldsilva/semidx/internal/secretbox"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -88,6 +89,7 @@ type Admin struct {
 	// API host (GitHub Enterprise, or a test server) — empty uses the default.
 	githubToken   string
 	githubBaseURL string
+	secrets       *secretbox.Box // seals git credentials from the admin API
 }
 
 // New builds the admin UI. secureCookies must be true when the server is reached
@@ -188,6 +190,11 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/api/users", a.protectAPI("admin", a.apiListUsers))
 	mux.HandleFunc("POST /admin/api/users", a.protectAPI("admin", a.apiCreateUser))
 	mux.HandleFunc("POST /admin/api/users/{id}/disabled", a.protectAPI("admin", a.apiSetUserDisabled))
+
+	mux.HandleFunc("GET /admin/api/git-credentials", a.protectAPI("admin", a.apiListGitCredentials))
+	mux.HandleFunc("POST /admin/api/git-credentials", a.protectAPI("admin", a.apiCreateGitCredential))
+	mux.HandleFunc("PUT /admin/api/git-credentials/{id}", a.protectAPI("admin", a.apiUpdateGitCredential))
+	mux.HandleFunc("DELETE /admin/api/git-credentials/{id}", a.protectAPI("admin", a.apiDeleteGitCredential))
 
 	// Analyze
 	mux.HandleFunc("GET /admin/api/projects/{project}/callers", a.protectAPI("", a.apiProjectCallers))
