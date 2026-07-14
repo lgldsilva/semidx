@@ -152,10 +152,10 @@ func handleAgentReply(ctx context.Context, runner *agent.Runner, line string, co
 	fmt.Println()
 	cb := agent.StreamCallbacks{
 		OnText: func(delta string) { fmt.Print(delta) },
-		OnToolCall: func(name, input string) {
+		OnToolCall: func(_, name, input string) {
 			fmt.Printf("\n  ⟳ %s(%s)\n", name, truncateArg(input, 120))
 		},
-		OnToolResult: func(name, result string, isError bool) {
+		OnToolResult: func(_, name, result string, isError bool) {
 			if isError {
 				fmt.Printf("  ✗ %s: %s\n", name, truncateArg(result, 120))
 			}

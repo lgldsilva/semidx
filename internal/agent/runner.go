@@ -118,12 +118,13 @@ func (r *Runner) Ask(ctx context.Context, question string, history []fantasy.Mes
 type StreamCallbacks struct {
 	// OnText is called for each assistant text delta as it arrives.
 	OnText func(delta string)
-	// OnToolCall is called when the model commits to a tool call (name + raw
-	// JSON input), before the tool runs.
-	OnToolCall func(name, input string)
-	// OnToolResult is called when a tool finishes; isError reports whether the
-	// tool returned an error result.
-	OnToolResult func(name, result string, isError bool)
+	// OnToolCall is called when the model commits to a tool call (id + name +
+	// raw JSON input), before the tool runs. id is fantasy's tool-call id, so
+	// callers can correlate the call with its later result.
+	OnToolCall func(id, name, input string)
+	// OnToolResult is called when a tool finishes; id matches the OnToolCall id
+	// and isError reports whether the tool returned an error result.
+	OnToolResult func(id, name, result string, isError bool)
 	// OnStep is called when a loop step finishes, with that step's token usage.
 	OnStep func(usage Usage)
 }
@@ -141,14 +142,14 @@ func (r *Runner) Stream(ctx context.Context, question string, history []fantasy.
 	}
 	if cb.OnToolCall != nil {
 		call.OnToolCall = func(tc fantasy.ToolCallContent) error {
-			cb.OnToolCall(tc.ToolName, tc.Input)
+			cb.OnToolCall(tc.ToolCallID, tc.ToolName, tc.Input)
 			return nil
 		}
 	}
 	if cb.OnToolResult != nil {
 		call.OnToolResult = func(tr fantasy.ToolResultContent) error {
 			res, errMsg := toolResultText(tr)
-			cb.OnToolResult(tr.ToolName, res, errMsg != "")
+			cb.OnToolResult(tr.ToolCallID, tr.ToolName, res, errMsg != "")
 			return nil
 		}
 	}
