@@ -18,7 +18,7 @@
   --code-bg: light-dark(#f1f5f9, #10151d);
   --code-fg: light-dark(#1a1a2e, #d7dce5);
 
-  /* Aliases for legacy CSS not yet migrated (index.css uses these names). */
+  /* Aliases kept for any leftover custom CSS / JS that still names these. */
   --card: var(--surface);
   --ok: var(--success);
   --err: var(--danger);
