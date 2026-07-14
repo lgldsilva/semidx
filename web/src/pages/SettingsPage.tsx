@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { api, ApiError, type TokenRow, type UserRow } from '../api'
+import { api, ApiError, type GitCredentialRow, type TokenRow, type UserRow } from '../api'
 import { Alert } from '../components/Alert'
 import { Button } from '../components/Button'
 import { Card } from '../components/Card'
@@ -9,12 +9,17 @@ import { Table } from '../components/Table'
 import { Tabs, type TabItem } from '../components/Tabs'
 import { useAuth } from '../auth'
 
-type SettingsTab = 'keys' | 'tokens' | 'account' | 'users'
+type SettingsTab = 'keys' | 'tokens' | 'account' | 'users' | 'gitcreds'
 
 const BASE_TABS: ReadonlyArray<TabItem<SettingsTab>> = [
   { id: 'keys', label: 'API keys' },
   { id: 'tokens', label: 'Control tokens' },
   { id: 'account', label: 'Account' },
+]
+
+const ADMIN_TABS: ReadonlyArray<TabItem<SettingsTab>> = [
+  { id: 'users', label: 'Users' },
+  { id: 'gitcreds', label: 'Git credentials' },
 ]
 
 const H2 = 'mb-2 text-[1.1rem] font-bold'
@@ -29,7 +34,7 @@ export function SettingsPage() {
   const [tab, setTab] = useState<SettingsTab>('keys')
 
   const tabs: ReadonlyArray<TabItem<SettingsTab>> =
-    user?.role === 'admin' ? [...BASE_TABS, { id: 'users', label: 'Users' }] : BASE_TABS
+    user?.role === 'admin' ? [...BASE_TABS, ...ADMIN_TABS] : BASE_TABS
 
   return (
     <div>
@@ -48,6 +53,7 @@ export function SettingsPage() {
       {tab === 'tokens' && <TokensPanel />}
       {tab === 'account' && <AccountPanel />}
       {tab === 'users' && user?.role === 'admin' && <UsersPanel />}
+      {tab === 'gitcreds' && user?.role === 'admin' && <GitCredentialsPanel />}
     </div>
   )
 }
@@ -449,6 +455,206 @@ function UsersPanel() {
                 >
                   {u.disabled ? 'Enable' : 'Disable'}
                 </Button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+    </Card>
+  )
+}
+
+function GitCredentialsPanel() {
+  const [rows, setRows] = useState<GitCredentialRow[]>([])
+  const [scope, setScope] = useState<'host' | 'project'>('host')
+  const [host, setHost] = useState('')
+  const [projectId, setProjectId] = useState('')
+  const [kind, setKind] = useState<'https' | 'ssh'>('https')
+  const [username, setUsername] = useState('')
+  const [secret, setSecret] = useState('')
+  const [label, setLabel] = useState('')
+  const [knownHosts, setKnownHosts] = useState('')
+  const [err, setErr] = useState('')
+
+  const reload = useCallback(async () => {
+    setRows(await api.listGitCredentials())
+  }, [])
+
+  useEffect(() => {
+    void reload().catch((e) =>
+      setErr(e instanceof ApiError ? e.message : 'load failed'),
+    )
+  }, [reload])
+
+  async function create(e: FormEvent) {
+    e.preventDefault()
+    setErr('')
+    try {
+      await api.createGitCredential({
+        host: scope === 'host' ? host.trim() : undefined,
+        project_id:
+          scope === 'project' && projectId.trim()
+            ? Number(projectId.trim())
+            : undefined,
+        kind,
+        username: username.trim(),
+        secret,
+        label: label.trim(),
+        ssh_known_hosts: kind === 'ssh' ? knownHosts.trim() : undefined,
+      })
+      setSecret('')
+      await reload()
+    } catch (ex) {
+      setErr(ex instanceof ApiError ? ex.message : 'create failed')
+    }
+  }
+
+  return (
+    <Card className="my-3.5">
+      <h2 className={H2}>Git credentials</h2>
+      <p className="m-0 text-muted">
+        Stored clone/pull secrets for private git repos. Secrets are sealed server-side;
+        only SSH key fingerprints are shown after save.
+      </p>
+      {err && <Alert kind="error">{err}</Alert>}
+      <form onSubmit={(e) => void create(e)} className="mt-3">
+        <div className={FORM_ROW}>
+          <label htmlFor="gc-scope" className={LABEL}>
+            Scope
+            <Select
+              id="gc-scope"
+              className="mt-1"
+              value={scope}
+              onChange={(e) => setScope(e.target.value as 'host' | 'project')}
+            >
+              <option value="host">host (fallback)</option>
+              <option value="project">project</option>
+            </Select>
+          </label>
+          {scope === 'host' ? (
+            <label htmlFor="gc-host" className={`${LABEL} min-w-[180px] flex-1`}>
+              Host
+              <Input
+                id="gc-host"
+                className="mt-1"
+                value={host}
+                onChange={(e) => setHost(e.target.value)}
+                placeholder="github.com"
+                required
+              />
+            </label>
+          ) : (
+            <label htmlFor="gc-project-id" className={`${LABEL} min-w-[120px]`}>
+              Project ID
+              <Input
+                id="gc-project-id"
+                className="mt-1"
+                type="number"
+                value={projectId}
+                onChange={(e) => setProjectId(e.target.value)}
+                required
+              />
+            </label>
+          )}
+          <label htmlFor="gc-kind" className={LABEL}>
+            Kind
+            <Select
+              id="gc-kind"
+              className="mt-1"
+              value={kind}
+              onChange={(e) => setKind(e.target.value as 'https' | 'ssh')}
+            >
+              <option value="https">https (token/password)</option>
+              <option value="ssh">ssh (private key)</option>
+            </Select>
+          </label>
+        </div>
+        <div className={`${FORM_ROW} mt-2`}>
+          <label htmlFor="gc-user" className={`${LABEL} min-w-[140px]`}>
+            Username
+            <Input
+              id="gc-user"
+              className="mt-1"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder={kind === 'ssh' ? 'git' : 'token user'}
+            />
+          </label>
+          <label htmlFor="gc-label" className={`${LABEL} min-w-[140px] flex-1`}>
+            Label
+            <Input
+              id="gc-label"
+              className="mt-1"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+            />
+          </label>
+        </div>
+        <label htmlFor="gc-secret" className={`${LABEL} my-2 block`}>
+          Secret (token or PEM private key)
+          <Input
+            id="gc-secret"
+            className="mt-1 font-mono text-sm"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            required
+            spellCheck={false}
+          />
+        </label>
+        {kind === 'ssh' && (
+          <label htmlFor="gc-known-hosts" className={`${LABEL} my-2 block`}>
+            SSH known_hosts (optional)
+            <Input
+              id="gc-known-hosts"
+              className="mt-1 font-mono text-sm"
+              value={knownHosts}
+              onChange={(e) => setKnownHosts(e.target.value)}
+              spellCheck={false}
+            />
+          </label>
+        )}
+        <Button type="submit">Save credential</Button>
+      </form>
+      <Table className="mt-3">
+        <thead>
+          <tr>
+            <th>Scope</th>
+            <th>Target</th>
+            <th>Kind</th>
+            <th>User</th>
+            <th>Fingerprint</th>
+            <th aria-label="Actions" />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((c) => (
+            <tr key={c.id}>
+              <td>{c.scope}</td>
+              <td>
+                {c.scope === 'host'
+                  ? c.host
+                  : c.project_name
+                    ? `${c.project_name} (#${c.project_id})`
+                    : `#${c.project_id}`}
+              </td>
+              <td>{c.kind}</td>
+              <td>{c.username || '—'}</td>
+              <td className="font-mono text-xs">{c.ssh_fingerprint || '—'}</td>
+              <td>
+                <button
+                  type="button"
+                  className={DANGER_LINK}
+                  onClick={() =>
+                    void api
+                      .deleteGitCredential(c.id)
+                      .then(reload)
+                      .catch((e) =>
+                        setErr(e instanceof ApiError ? e.message : 'delete failed'),
+                      )
+                  }
+                >
+                  Delete
+                </button>
               </td>
             </tr>
           ))}
