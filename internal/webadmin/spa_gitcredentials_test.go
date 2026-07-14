@@ -153,7 +153,7 @@ func TestGitCredentialsSPA_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete = %d", resp.StatusCode)
 	}
