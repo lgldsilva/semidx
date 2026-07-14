@@ -88,7 +88,7 @@ func (a *Admin) apiGlobalChat(w http.ResponseWriter, r *http.Request, ac *authCt
 
 func (a *Admin) handleChatAsk(w http.ResponseWriter, r *http.Request, name string) {
 	if a.chat == nil {
-		writeJSONErr(w, http.StatusServiceUnavailable, "chat is not configured — set GEMINI_API_KEY or OPENROUTER_API_KEY on the server")
+		writeJSONErr(w, http.StatusServiceUnavailable, "chat is not configured: set a chat provider key on the server (see semidx config list)")
 		return
 	}
 	body, err := parseChatBody(r)
@@ -124,7 +124,7 @@ func (a *Admin) apiGlobalChatStream(w http.ResponseWriter, r *http.Request, ac *
 
 func (a *Admin) handleChatStream(w http.ResponseWriter, r *http.Request, name string) {
 	if a.chat == nil {
-		writeJSONErr(w, http.StatusServiceUnavailable, "chat is not configured — set GEMINI_API_KEY or OPENROUTER_API_KEY on the server")
+		writeJSONErr(w, http.StatusServiceUnavailable, "chat is not configured: set a chat provider key on the server (see semidx config list)")
 		return
 	}
 	// Check Flusher before reading the body so a non-stream fallback can still
