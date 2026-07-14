@@ -74,10 +74,15 @@ install_toml_client() {
 # merge must PRINT a snippet matching the pattern and refuse --apply.
 print_only_client() {
   local client="$1" pat="$2"
-  if semidx mcp install --client "$client" 2>/dev/null | grep -q "$pat"; then
+  # Capture stdout+stderr: log noise (e.g. extract: libreoffice) must not hide the
+  # snippet, and dumping the capture on miss makes flaky runner fails diagnosable.
+  local out
+  out="$(semidx mcp install --client "$client" 2>&1 || true)"
+  if printf '%s' "$out" | grep -q "$pat"; then
     pass "$client: prints the expected snippet"
   else
     fail "$client: did not print the expected snippet"
+    printf '%s\n' "$out" | sed 's/^/     /' >&2
   fi
   if semidx mcp install --client "$client" --config-file "$(mktemp -d)/x" --apply >/dev/null 2>&1; then
     fail "$client: --apply should be refused (print-only)"
