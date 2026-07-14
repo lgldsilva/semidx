@@ -139,6 +139,11 @@ type Config struct {
 	// JWTSecret is the HS256 signing key for control tokens
 	// (SEMIDX_JWT_SECRET). When empty, JWT control tokens are disabled.
 	JWTSecret string
+	// SecretKey is the master key for recoverable secrets — git credentials
+	// encrypted at rest by internal/secretbox (SEMIDX_SECRET_KEY; 32 bytes,
+	// hex or base64). When empty, the secret vault is disabled. Not validated
+	// here: secretbox.New rejects a malformed key at serve startup.
+	SecretKey string
 	// CSRFKey is the secret used to derive CSRF tokens for the web admin
 	// (SEMIDX_CSRF_KEY). When empty, a random key is generated on each restart.
 	CSRFKey string
@@ -414,6 +419,7 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 		BootstrapAdminPassword: env.get("SEMIDX_BOOTSTRAP_ADMIN_PASSWORD", ""),
 		CookieSecure:           env.get("SEMIDX_COOKIE_SECURE", "true") != "false",
 		JWTSecret:              env.get("SEMIDX_JWT_SECRET", ""),
+		SecretKey:              env.get("SEMIDX_SECRET_KEY", ""),
 		CSRFKey:                env.get("SEMIDX_CSRF_KEY", ""),
 		// If a Postgres DSN is explicitly configured, it takes precedence over
 		// SEMIDX_LOCAL_INDEX (Postgres (configured) > SQLite > Postgres (default)).
@@ -510,6 +516,7 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_LISTEN_ADDR", "Server bind address, e.g. :8080 (serve)", false},
 	{"SEMIDX_DATA_DIR", "Where the server clones git projects (serve)", false},
 	{"SEMIDX_JWT_SECRET", "HS256 secret enabling JWT control tokens (serve)", true},
+	{"SEMIDX_SECRET_KEY", "Master key for recoverable secrets (git credentials); 32 bytes hex/base64", true},
 	{"SEMIDX_CSRF_KEY", "HMAC key for web-admin CSRF tokens; persistent across restarts (serve)", true},
 	{"SEMIDX_GIT_ALLOW_FILE", "Allow file:// git URLs for server-side git sync (serve)", false},
 	{"SEMIDX_GIT_SSL_NO_VERIFY", "Disable TLS verification for server-side git clone/pull — self-signed hosts (serve)", false},

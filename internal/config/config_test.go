@@ -261,10 +261,13 @@ func TestLoadWithLookupHermetic(t *testing.T) {
 		"SEMIDX_BOOTSTRAP_ADMIN_PASSWORD": "secret",
 		"SEMIDX_COOKIE_SECURE":            "false",
 		"SEMIDX_JWT_SECRET":               "jwt-secret",
-		"SEMIDX_CSRF_KEY":                 "csrf-key",
-		"SEMIDX_OLLAMA_URLS":              "http://ollama1:11434,http://ollama2:11434",
-		"SEMIDX_EMBED_CIRCUIT_THRESHOLD":  "5",
-		"SEMIDX_EMBED_CIRCUIT_COOLDOWN":   "60s",
+		// Load passes the value through unvalidated (secretbox.New validates at
+		// serve startup), so a low-entropy placeholder is fine here.
+		"SEMIDX_SECRET_KEY":              "test-master-key-placeholder",
+		"SEMIDX_CSRF_KEY":                "csrf-key",
+		"SEMIDX_OLLAMA_URLS":             "http://ollama1:11434,http://ollama2:11434",
+		"SEMIDX_EMBED_CIRCUIT_THRESHOLD": "5",
+		"SEMIDX_EMBED_CIRCUIT_COOLDOWN":  "60s",
 	}
 
 	cfg := LoadWithLookup(mapLookup(env))
@@ -292,6 +295,7 @@ func TestLoadWithLookupHermetic(t *testing.T) {
 		{"BootstrapAdminPassword", cfg.BootstrapAdminPassword, "secret"},
 		{"CookieSecure", cfg.CookieSecure, false},
 		{"JWTSecret", cfg.JWTSecret, "jwt-secret"},
+		{"SecretKey", cfg.SecretKey, "test-master-key-placeholder"},
 		{"CSRFKey", cfg.CSRFKey, "csrf-key"},
 		{"KeywordOnly", cfg.KeywordOnly, false},
 		{"EmbedCircuitThreshold", cfg.EmbedCircuitThreshold, 5},
