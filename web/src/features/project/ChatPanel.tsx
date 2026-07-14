@@ -9,10 +9,11 @@ import {
 import { Alert } from '../../components/Alert'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
-import { Textarea } from '../../components/Input'
+import { Select, Textarea } from '../../components/Input'
 import { Markdown } from '../../components/Markdown'
 import { Code } from '../../components/Snippet'
 import { ToolCallChip, type ToolCall } from '../../components/ToolCallChip'
+import { useChatPrefs } from '../../hooks/useChatPrefs'
 
 // UiMessage augments a persisted ChatMessage with per-turn ephemera: the tool
 // activity chips and the model that answered (neither is persisted).
@@ -69,6 +70,7 @@ export function ChatPanel({
   const [err, setErr] = useState('')
   const [chatOk, setChatOk] = useState<boolean | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const prefs = useChatPrefs()
 
   useEffect(() => {
     void api.system().then((s) => setChatOk(!!s.chat_enabled)).catch(() => setChatOk(false))
@@ -135,7 +137,11 @@ export function ChatPanel({
     const sources: ChatSource[] = []
     let tools: ToolCall[] = []
     try {
-      for await (const ev of api.chatStream(project, q, history, { signal: ac.signal })) {
+      for await (const ev of api.chatStream(project, q, history, {
+        signal: ac.signal,
+        mode: prefs.mode || undefined,
+        model: prefs.model || undefined,
+      })) {
         if (ev.type === 'sources') {
           sawEvent = true
           if (ev.model) model = ev.model
@@ -301,6 +307,52 @@ export function ChatPanel({
               <Button variant="secondary" onClick={stop}>
                 Stop
               </Button>
+            )}
+            {prefs.enabled && (
+              <span className="ml-auto flex flex-wrap items-center gap-2">
+                {(prefs.config?.modes?.length ?? 0) > 0 && (
+                  <label
+                    htmlFor="chat-mode"
+                    className="flex items-center gap-1.5 text-xs text-muted"
+                  >
+                    mode
+                    <Select
+                      id="chat-mode"
+                      className="w-auto text-xs"
+                      value={prefs.mode}
+                      onChange={(e) => prefs.setMode(e.target.value)}
+                    >
+                      <option value="">default</option>
+                      {prefs.config?.modes?.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                )}
+                {(prefs.config?.models?.length ?? 0) > 0 && (
+                  <label
+                    htmlFor="chat-model"
+                    className="flex items-center gap-1.5 text-xs text-muted"
+                  >
+                    model
+                    <Select
+                      id="chat-model"
+                      className="w-auto text-xs"
+                      value={prefs.model}
+                      onChange={(e) => prefs.setModel(e.target.value)}
+                    >
+                      <option value="">default</option>
+                      {prefs.config?.models?.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                )}
+              </span>
             )}
           </div>
         </form>

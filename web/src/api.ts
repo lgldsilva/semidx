@@ -135,6 +135,16 @@ export type ChatStreamOptions = {
   mode?: string
 }
 
+/** GET /admin/api/chat/config — selector options for the chat UI. A 404
+ * (older server) or enabled:false hides the mode/model selector entirely. */
+export type ChatConfig = {
+  enabled: boolean
+  modes?: string[]
+  models?: string[]
+  default_mode?: string
+  default_model?: string
+}
+
 export type Conversation = {
   id: number
   project: string
@@ -487,6 +497,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ role, content, sources: sources ?? [] }),
     }),
+  chatConfig: () => request<ChatConfig>('/admin/api/chat/config'),
   chat: (
     name: string,
     question: string,
