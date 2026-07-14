@@ -1,27 +1,36 @@
 {{define "title"}}Chat — {{.Project}}{{end}}
 {{define "body"}}
-<div id="chat" data-project="{{.Project}}" style="display:flex;flex-direction:column;flex:1;">
+<div id="chat" data-project="{{.Project}}" style="display:flex;flex-direction:column;flex:1;min-height:0;">
     <div class="project-header">
         <h1>{{.Project}}</h1>
         <div class="subtitle">Ask questions about your codebase</div>
     </div>
 
-    <div id="messages"></div>
+    <div class="chat-body">
+        <aside id="sidebar">
+            <button type="button" id="new-chat-btn">+ New chat</button>
+            <ul id="conv-list"></ul>
+        </aside>
 
-    <div id="loading">
-        <div class="spinner"></div>
-        <div style="margin-top:0.4rem;">Thinking...</div>
+        <div id="chat-main">
+            <div id="messages"></div>
+
+            <div id="loading">
+                <div class="spinner"></div>
+                <div style="margin-top:0.4rem;">Thinking...</div>
+            </div>
+
+            <div id="error"></div>
+
+            <form id="chat-form">
+                <input type="text" id="question" placeholder="Ask about your codebase..." autofocus>
+                <button type="submit" id="send-btn">Send</button>
+                <button type="button" id="clear-btn">Clear</button>
+            </form>
+
+            <div id="model-info"></div>
+        </div>
     </div>
-
-    <div id="error"></div>
-
-    <form id="chat-form">
-        <input type="text" id="question" placeholder="Ask about your codebase..." autofocus>
-        <button type="submit" id="send-btn">Send</button>
-        <button type="button" id="clear-btn">Clear</button>
-    </form>
-
-    <div id="model-info"></div>
 </div>
 
 <script>
@@ -33,7 +42,133 @@
     var loadingEl = document.getElementById('loading');
     var modelInfo = document.getElementById('model-info');
     var project = document.getElementById('chat').dataset.project;
+    var sidebar = document.getElementById('sidebar');
+    var convList = document.getElementById('conv-list');
     var history = [];
+    var convId = null;       // active persisted conversation (null = unsaved)
+    var convsEnabled = false; // set when GET /api/conversations succeeds
+
+    function apiJSON(url, opts) {
+        return fetch(url, opts).then(function(resp) {
+            if (!resp.ok) { throw new Error('HTTP ' + resp.status); }
+            return resp.json();
+        });
+    }
+
+    function clearChat() {
+        messages.innerHTML = '';
+        modelInfo.textContent = '';
+        errorEl.className = '';
+        history = [];
+        convId = null;
+        markActiveConv();
+    }
+
+    function markActiveConv() {
+        convList.querySelectorAll('.conv-item').forEach(function(item) {
+            item.classList.toggle('active', Number(item.dataset.id) === convId);
+        });
+    }
+
+    function renderConvList(convs) {
+        convList.innerHTML = '';
+        convs.forEach(function(c) {
+            var li = document.createElement('li');
+            li.className = 'conv-item';
+            li.dataset.id = c.id;
+
+            var title = document.createElement('span');
+            title.className = 'conv-title';
+            title.textContent = c.title || 'Untitled';
+            title.title = c.title || 'Untitled';
+            li.appendChild(title);
+
+            var del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'conv-delete';
+            del.title = 'Delete conversation';
+            del.textContent = '×';
+            del.addEventListener('click', function(e) {
+                e.stopPropagation();
+                fetch('/api/conversations/' + c.id, {method: 'DELETE'})
+                    .then(function() {
+                        if (convId === c.id) { clearChat(); }
+                        return refreshConversations();
+                    })
+                    .catch(function(err) { console.debug('delete conversation failed', err); });
+            });
+            li.appendChild(del);
+
+            li.addEventListener('click', function() { loadConversation(c.id); });
+            convList.appendChild(li);
+        });
+        markActiveConv();
+    }
+
+    function refreshConversations() {
+        return apiJSON('/api/conversations').then(function(data) {
+            renderConvList(data.conversations || []);
+        });
+    }
+
+    function loadConversation(id) {
+        apiJSON('/api/conversations/' + id).then(function(data) {
+            messages.innerHTML = '';
+            modelInfo.textContent = '';
+            errorEl.className = '';
+            history = [];
+            convId = id;
+            (data.messages || []).forEach(function(m) {
+                addMessage(m.role, m.content);
+                history.push({role: m.role, content: m.content});
+            });
+            markActiveConv();
+        }).catch(function(err) {
+            showError('Could not load conversation: ' + err.message);
+        });
+    }
+
+    function postTurnMessage(id, role, content) {
+        return apiJSON('/api/conversations/' + id + '/messages', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({role: role, content: content})
+        });
+    }
+
+    // persistTurn saves a completed user/assistant exchange, creating the
+    // conversation on the first turn. Failures only log: persistence must
+    // never break the chat itself.
+    function persistTurn(question, answer) {
+        if (!convsEnabled) return;
+        var ready = convId !== null
+            ? Promise.resolve(convId)
+            : apiJSON('/api/conversations', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({project: project, title: question.slice(0, 60)})
+            }).then(function(c) { convId = c.id; return c.id; });
+        ready.then(function(id) {
+            return postTurnMessage(id, 'user', question).then(function() {
+                return postTurnMessage(id, 'assistant', answer);
+            });
+        })
+        .then(refreshConversations)
+        .catch(function(err) { console.debug('conversation persist failed', err); });
+    }
+
+    // Show the sidebar only when the backend persists conversations (the
+    // endpoint answers 501 otherwise).
+    fetch('/api/conversations').then(function(resp) {
+        if (!resp.ok) return;
+        return resp.json().then(function(data) {
+            convsEnabled = true;
+            sidebar.classList.add('visible');
+            renderConvList(data.conversations || []);
+        });
+    }).catch(function() { /* sidebar stays hidden */ });
+
+    document.getElementById('new-chat-btn').addEventListener('click', clearChat);
 
     function addMessage(role, content) {
         var div = document.createElement('div');
@@ -225,6 +360,7 @@
                 }
                 if (content) {
                     history.push({role: 'user', content: question}, {role: 'assistant', content: content});
+                    persistTurn(question, content);
                 }
             }
 
@@ -258,6 +394,7 @@
                 throw new Error(data.error);
             }
             history.push({role: 'user', content: question}, {role: 'assistant', content: data.content});
+            persistTurn(question, data.content);
             addMessage('assistant', data.content);
             if (data.sources && data.sources.length > 0) {
                 showSources(data.sources);
@@ -268,12 +405,7 @@
         });
     }
 
-    document.getElementById('clear-btn').addEventListener('click', function() {
-        messages.innerHTML = '';
-        modelInfo.textContent = '';
-        errorEl.className = '';
-        history = [];
-    });
+    document.getElementById('clear-btn').addEventListener('click', clearChat);
 })();
 </script>
 {{end}}

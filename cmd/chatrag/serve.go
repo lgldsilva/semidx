@@ -53,6 +53,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("create web chat server: %w", err)
 	}
+	// The SQLite store returned by buildPipeline implements store.ConversationStore,
+	// so wire it in to enable the persistent conversations sidebar. Without this the
+	// /api/conversations endpoints answer 501 and the sidebar self-hides.
+	srv.SetConversationStore(ls)
 
 	fmt.Fprintf(os.Stderr, "ChatRAG web server listening on %s\n", bindAddr)
 	return srv.ListenAndServe()
