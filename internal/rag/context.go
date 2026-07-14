@@ -1,6 +1,29 @@
 package rag
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/lgldsilva/semidx/internal/privacy"
+)
+
+// filterSensitiveSources drops chunks whose path matches the privacy deny-list
+// before they enter the LLM context (same rule the legacy Pipeline applied).
+func filterSensitiveSources(results []SearchResult) []Source {
+	sources := make([]Source, 0, len(results))
+	for _, r := range results {
+		if privacy.IsSensitive(r.FilePath) {
+			continue
+		}
+		sources = append(sources, Source{
+			File:      r.FilePath,
+			StartLine: r.StartLine,
+			EndLine:   r.EndLine,
+			Content:   r.Content,
+			Score:     r.Score,
+		})
+	}
+	return sources
+}
 
 // diversify caps the number of chunks from each file and each project to
 // ensure a balanced context. Works on Source slice (pre-assembleContext).

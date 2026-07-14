@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/lgldsilva/semidx/internal/agent"
-	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
@@ -20,11 +18,10 @@ import (
 	"github.com/lgldsilva/semidx/internal/search"
 )
 
-// buildPipeline constructs the full RAG pipeline and its dependencies.
-// Caller must close the returned SQLiteStore when done.
-// Returns the pipeline, optional agent Runner (nil when tool calling unavailable), store, and resolved project name.
+// buildPipeline constructs the Fantasy RAG pipeline, optional agent Runner, and
+// the local index store. Caller must close the returned SQLiteStore when done.
 // approve is the action-tool approval gate (nil disables the action tools).
-func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, model string, approve permission.Approver) (*rag.Pipeline, *agent.Runner, *localstore.SQLiteStore, string, error) {
+func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, model string, approve permission.Approver) (*rag.FantasyPipeline, *agent.Runner, *localstore.SQLiteStore, string, error) {
 	indexPath = resolveIndexPath(cfg, indexPath)
 	ls, err := openLocalStore(indexPath)
 	if err != nil {
@@ -36,18 +33,17 @@ func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, 
 		return nil, nil, nil, "", err
 	}
 
-	chatModel := model
-	if chatModel == "" {
-		chatModel = defaultChatModel
-	}
-	chatClient := newChatRAGClient(cfg)
 	emb := newEmbedder(cfg)
 	adapter := &searchAdapter{svc: newSearchService(ls, emb)}
-
 	pipelineIdentity, pipelineWorktree := gitScope(ctx)
-	pipeline := rag.NewPipeline(adapter, chatClient, rag.PipelineConfig{
-		TopK: 5, MaxTokens: 4096, Temperature: 0.3, Model: chatModel,
-		Identity: pipelineIdentity, Worktree: pipelineWorktree,
+
+	ragRunner, err := buildToolLessRunner(ctx, cfg, model)
+	if err != nil {
+		ls.Close()
+		return nil, nil, nil, "", err
+	}
+	pipeline := rag.NewFantasyPipeline(adapter, ragRunner, rag.PipelineConfig{
+		TopK: 5, Identity: pipelineIdentity, Worktree: pipelineWorktree,
 	})
 	runner := buildChatRAGRunner(ctx, chatRunnerOpts{
 		cfg: cfg, ls: ls, emb: emb, project: project, model: model,
@@ -79,18 +75,24 @@ func resolveProjectName(ctx context.Context, ls *localstore.SQLiteStore, project
 	return p.Name, nil
 }
 
-func newChatRAGClient(cfg *config.Config) *chat.ChainClient {
-	providers := []chat.NamedClient{{Name: "gemini", Client: chat.NewGoogleClient(cfg.GeminiBaseURL, cfg.GeminiAPIKey)}}
-	if cfg.OpenRouterAPIKey != "" {
-		providers = append(providers, chat.NamedClient{
-			Name: "openrouter", Client: chat.NewOpenRouterClient(cfg.OpenRouterBaseURL, cfg.OpenRouterAPIKey),
-		})
+// buildToolLessRunner resolves the chat LLM for Fantasy RAG (no tools — the
+// pipeline injects retrieval context itself).
+func buildToolLessRunner(ctx context.Context, cfg *config.Config, modelOverride string) (*agent.Runner, error) {
+	sel, ok := cfg.ResolveChatLLM()
+	if !ok {
+		return nil, fmt.Errorf("no chat provider configured — set a provider key and SEMIDX_CHAT_MODEL (or GEMINI_API_KEY)")
 	}
-	chain := chat.NewChain(providers...)
-	chain.OnFallback = func(name string, err error) {
-		fmt.Fprintf(os.Stderr, "[notice] %s unavailable (%v), trying next...\n", name, err)
+	if modelOverride != "" {
+		sel.Model = modelOverride
 	}
-	return chain
+	llmModel, err := llm.ResolveModel(ctx, llm.ProviderConfig{
+		Type: llm.ProviderType(sel.Provider), APIKey: sel.APIKey, BaseURL: sel.BaseURL,
+	}, sel.Model)
+	if err != nil {
+		return nil, fmt.Errorf("resolve chat model: %w", err)
+	}
+	temp := sel.Temperature
+	return agent.NewRunner(llmModel, nil, agent.RunnerConfig{Temperature: &temp}), nil
 }
 
 func gitScope(ctx context.Context) (identity, worktree string) {

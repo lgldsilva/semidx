@@ -52,7 +52,7 @@ func makePromptApprover(scanner *bufio.Scanner) permission.Approver {
 
 // runREPL is the interactive chat loop.
 // When runner is non-nil, the agent loop is used (supports tool calling).
-func runREPL(ctx context.Context, pipeline *rag.Pipeline, runner *agent.Runner, project string, scanner *bufio.Scanner) error {
+func runREPL(ctx context.Context, pipeline *rag.FantasyPipeline, runner *agent.Runner, project string, scanner *bufio.Scanner) error {
 	history := chat.NewHistory(10)     // RAG mode: text-only turns
 	convo := agent.NewConversation(10) // agent mode: full tool_call/tool-result memory
 
@@ -122,7 +122,7 @@ func handleREPLCommand(line string, history *chat.History, convo *agent.Conversa
 // replTurn bundles one REPL question dispatch.
 type replTurn struct {
 	ctx      context.Context
-	pipeline *rag.Pipeline
+	pipeline *rag.FantasyPipeline
 	runner   *agent.Runner
 	project  string
 	line     string
@@ -188,7 +188,7 @@ func truncateArg(s string, max int) string {
 // handleRAGReply processes a RAG-mode answer: calls the pipeline, updates
 // history, and prints the answer and sources. Returns true on error (caller
 // should continue the REPL loop).
-func handleRAGReply(ctx context.Context, pipeline *rag.Pipeline, line, project string, history *chat.History) bool {
+func handleRAGReply(ctx context.Context, pipeline *rag.FantasyPipeline, line, project string, history *chat.History) bool {
 	answer, err := pipeline.Ask(ctx, line, project, history.GetMessages())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", formatError(err))
@@ -223,12 +223,6 @@ func formatUsage(u agent.Usage) string {
 
 // formatError returns a clean, actionable error message for the REPL.
 func formatError(err error) string {
-	// HTTPError from a chat provider — use its user-friendly Error().
-	var httpErr *chat.HTTPError
-	if errors.As(err, &httpErr) {
-		return httpErr.Error()
-	}
-
 	// Context cancellation.
 	if errors.Is(err, context.Canceled) {
 		return "request cancelled"
@@ -239,8 +233,7 @@ func formatError(err error) string {
 		return "project not found — is it indexed? Run: semidx index --project <path>"
 	}
 
-	// For everything else (chain summary, search errors, etc.) the error
-	// message is already actionable because we wrapped it with context.
+	// Fantasy/LLM failures are already wrapped with context by the pipeline.
 	return err.Error()
 }
 
