@@ -241,11 +241,92 @@
             min-height: 1.2rem;
         }
 
+        /* Conversations sidebar (shown only when the backend persists them) */
+        .chat-body {
+            display: flex;
+            flex: 1;
+            gap: 1rem;
+            min-height: 0;
+        }
+        #chat-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        #sidebar {
+            display: none;
+            width: 230px;
+            flex-shrink: 0;
+            flex-direction: column;
+            border-right: 1px solid #2a2a4a;
+            padding: 0.5rem 0.75rem 0.5rem 0;
+        }
+        #sidebar.visible {
+            display: flex;
+        }
+        #new-chat-btn {
+            padding: 0.45rem 0.7rem;
+            border: 1px solid #374151;
+            border-radius: 8px;
+            background: transparent;
+            color: #e0e0e0;
+            font: inherit;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.15s ease;
+        }
+        #new-chat-btn:hover {
+            background: #1f2937;
+        }
+        #conv-list {
+            list-style: none;
+            overflow-y: auto;
+            flex: 1;
+            margin-top: 0.5rem;
+        }
+        .conv-item {
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.35rem 0.5rem;
+            border-radius: 6px;
+            cursor: pointer;
+            color: #9ca3af;
+            font-size: 0.85rem;
+        }
+        .conv-item:hover {
+            background: #16213e;
+        }
+        .conv-item.active {
+            background: #0f3460;
+            color: #e0e0e0;
+        }
+        .conv-item .conv-title {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .conv-delete {
+            background: none;
+            border: none;
+            color: #6b7280;
+            cursor: pointer;
+            font: inherit;
+            font-size: 0.9rem;
+            padding: 0 0.2rem;
+        }
+        .conv-delete:hover {
+            color: #fca5a5;
+        }
+
         /* Responsive */
         @media (max-width: 640px) {
             .container { padding: 0.5rem; }
             .message { max-width: 92%; }
             #messages { max-height: calc(100vh - 220px); }
+            #sidebar.visible { display: none; } /* keep the chat usable on phones */
         }
     </style>
 </head>
