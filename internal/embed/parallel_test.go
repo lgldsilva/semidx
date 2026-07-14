@@ -12,12 +12,17 @@ type stubEmbedder struct {
 	name       string
 	dims       int
 	embedErr   error
+	infoErr    error
+	listErr    error
 	lastModel  string
 	lastInputs []string
 	callCount  int
 }
 
 func (s *stubEmbedder) ModelInfo(ctx context.Context, model string) (*ModelInfo, error) {
+	if s.infoErr != nil {
+		return nil, s.infoErr
+	}
 	return &ModelInfo{Name: s.name, Dims: s.dims}, nil
 }
 
@@ -45,6 +50,9 @@ func (s *stubEmbedder) EmbedSingle(ctx context.Context, model, text string) ([]f
 }
 
 func (s *stubEmbedder) ListModels(ctx context.Context) ([]string, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	return []string{s.name}, nil
 }
 
@@ -178,6 +186,64 @@ func TestParallelEmbedderListModels(t *testing.T) {
 	}
 	if !reflect.DeepEqual(models, []string{"bge-m3"}) {
 		t.Errorf("models = %v, want [bge-m3]", models)
+	}
+}
+
+// ModelInfo must survive a dead first entry: entry[0] fails, entry[1] answers.
+func TestParallelEmbedderModelInfoFallsThrough(t *testing.T) {
+	dead := &stubEmbedder{name: "dead", infoErr: errors.New("conn refused")}
+	alive := &stubEmbedder{name: "alive", dims: 768}
+	pool := NewParallelEmbedder([]Embedder{dead, alive})
+
+	info, err := pool.ModelInfo(context.Background(), "bge-m3")
+	if err != nil {
+		t.Fatalf("ModelInfo: %v", err)
+	}
+	if info.Dims != 768 || info.Name != "alive" {
+		t.Errorf("info = %+v, want alive/768 from the second entry", info)
+	}
+}
+
+// When every entry fails, ModelInfo must wrap the last underlying error.
+func TestParallelEmbedderModelInfoAllFail(t *testing.T) {
+	sentinel := errors.New("last failure")
+	pool := NewParallelEmbedder([]Embedder{
+		&stubEmbedder{name: "a", infoErr: errors.New("first failure")},
+		&stubEmbedder{name: "b", infoErr: sentinel},
+	})
+
+	_, err := pool.ModelInfo(context.Background(), "m")
+	if err == nil {
+		t.Fatal("expected an error when all entries fail")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("error must wrap the last underlying failure, got: %v", err)
+	}
+}
+
+// ListModels is the deduplicated union across entries; failing entries are
+// skipped, and all-failing yields an error.
+func TestParallelEmbedderListModelsUnion(t *testing.T) {
+	pool := NewParallelEmbedder([]Embedder{
+		&stubEmbedder{name: "bge-m3"},
+		&stubEmbedder{name: "broken", listErr: errors.New("down")},
+		&stubEmbedder{name: "nomic-embed-text"},
+		&stubEmbedder{name: "bge-m3"}, // duplicate across entries
+	})
+
+	models, err := pool.ListModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(models, []string{"bge-m3", "nomic-embed-text"}) {
+		t.Errorf("models = %v, want deduped union [bge-m3 nomic-embed-text]", models)
+	}
+
+	allBroken := NewParallelEmbedder([]Embedder{
+		&stubEmbedder{name: "a", listErr: errors.New("down")},
+	})
+	if _, err := allBroken.ListModels(context.Background()); err == nil {
+		t.Error("ListModels should error when no entry lists models")
 	}
 }
 

@@ -78,12 +78,41 @@ func (p *ParallelEmbedder) embedFallback(ctx context.Context, model string, inpu
 	return nil, fmt.Errorf("parallel: all %d entries failed with force-local: %w", len(p.entries), lastErr)
 }
 
+// ModelInfo tries entries in order and returns the first successful answer, so
+// one dead pool member cannot hide the dims the others know.
 func (p *ParallelEmbedder) ModelInfo(ctx context.Context, model string) (*ModelInfo, error) {
-	return p.entries[0].ModelInfo(ctx, model)
+	var lastErr error
+	for _, e := range p.entries {
+		info, err := e.ModelInfo(ctx, model)
+		if err == nil {
+			return info, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("parallel: all %d entries failed to get model info: %w", len(p.entries), lastErr)
 }
 
+// ListModels returns the deduplicated union across all entries (same contract
+// as ChainEmbedder.ListModels); entries that error are skipped.
 func (p *ParallelEmbedder) ListModels(ctx context.Context) ([]string, error) {
-	return p.entries[0].ListModels(ctx)
+	var models []string
+	seen := make(map[string]bool)
+	for _, e := range p.entries {
+		list, err := e.ListModels(ctx)
+		if err != nil {
+			continue
+		}
+		for _, m := range list {
+			if !seen[m] {
+				seen[m] = true
+				models = append(models, m)
+			}
+		}
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("parallel: no embedding model available")
+	}
+	return models, nil
 }
 
 func (p *ParallelEmbedder) nextEntry() int {
