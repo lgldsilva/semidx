@@ -54,6 +54,7 @@ type Server struct {
 	embedDuration   *prometheus.HistogramVec
 	embedInputs     *prometheus.CounterVec
 	admin           http.Handler    // the /admin management UI, nil unless MountAdmin was called
+	mcpHTTP         http.Handler    // the /mcp Streamable HTTP endpoint, nil unless EnableMCPHTTP was called
 	jwt             *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
 
 	apiLimiter     *apiRateLimiter
@@ -285,6 +286,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/projects/{project}/files/batch", s.limited(100<<20, s.authed("write", s.handleFilesBatch)))
 	mux.Handle("GET /api/v1/projects/{project}/jobs/{id}", s.authed("read", s.handleGetProjectJob))
 	mux.Handle("GET /api/v1/jobs/{id}", s.authed("read", s.handleGetJob))
+	if s.mcpHTTP != nil {
+		// MCP over Streamable HTTP (opt-in via EnableMCPHTTP). Same bearer auth
+		// as the REST API; the body cap matches the search endpoint's.
+		mux.Handle("/mcp", s.limited(1<<20, s.authed("read", s.mcpHTTP.ServeHTTP)))
+	}
 	if s.admin != nil {
 		mux.Handle("/admin/", s.admin)
 	}
