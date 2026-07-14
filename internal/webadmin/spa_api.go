@@ -421,9 +421,15 @@ func jobErrorSummary(raw string) string {
 	// "pq: password authentication failed" is NOT mistaken for a git auth error.
 	isGit := strings.Contains(l, "git clone") || strings.Contains(l, "git pull") ||
 		strings.Contains(l, "cloning into") || strings.Contains(l, "fatal:") ||
-		strings.Contains(l, "remote:")
+		strings.Contains(l, "remote:") || strings.Contains(l, "git credential")
 	if isGit {
 		switch {
+		case strings.Contains(l, "git credential"):
+			return "git sync failed: the stored git credential could not be used (SEMIDX_SECRET_KEY missing/changed, or lookup failed) — see server logs"
+		case strings.Contains(l, "host key verification failed"):
+			return "git clone failed: SSH host key verification failed — the remote's host key changed or does not match the credential's known_hosts"
+		case strings.Contains(l, "publickey"):
+			return "git clone failed: SSH key rejected (permission denied, publickey) — check the credential's private key and the repo's access rights"
 		case strings.Contains(l, "cannot run ssh") || strings.Contains(l, "unable to fork"):
 			return "git clone failed: the server has no SSH client — register the repo with an https:// URL"
 		case strings.Contains(l, "ssl certificate") || strings.Contains(l, "certificate problem") || strings.Contains(l, "unable to get local issuer"):
