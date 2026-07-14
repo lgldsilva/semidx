@@ -286,11 +286,18 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/projects/{project}/files/batch", s.limited(100<<20, s.authed("write", s.handleFilesBatch)))
 	mux.Handle("GET /api/v1/projects/{project}/jobs/{id}", s.authed("read", s.handleGetProjectJob))
 	mux.Handle("GET /api/v1/jobs/{id}", s.authed("read", s.handleGetJob))
+<<<<<<< HEAD
 	if s.mcpHTTP != nil {
 		// MCP over Streamable HTTP (opt-in via EnableMCPHTTP). Same bearer auth
 		// as the REST API; the body cap matches the search endpoint's.
 		mux.Handle("/mcp", s.limited(1<<20, s.authed("read", s.mcpHTTP.ServeHTTP)))
 	}
+=======
+	mux.Handle("GET /api/v1/git-credentials", s.authed("admin", s.handleListGitCredentials))
+	mux.Handle("POST /api/v1/git-credentials", s.limited(1<<20, s.authed("admin", s.handleCreateGitCredential)))
+	mux.Handle("PUT /api/v1/git-credentials/{id}", s.limited(1<<20, s.authed("admin", s.handleUpdateGitCredential)))
+	mux.Handle("DELETE /api/v1/git-credentials/{id}", s.authed("admin", s.handleDeleteGitCredential))
+>>>>>>> bebbca70 (feat(server): add bearer git-credentials API and project credential)
 	if s.admin != nil {
 		mux.Handle("/admin/", s.admin)
 	}

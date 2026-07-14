@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -54,6 +55,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 			URL    string `json:"url"`
 			Branch string `json:"branch"`
 		} `json:"source"`
+		Credential *projectCredentialBody `json:"credential"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
@@ -79,6 +81,10 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "source.url is required for git projects")
 		return
 	}
+	if body.Credential != nil && strings.TrimSpace(body.Credential.Secret) != "" && body.Source.Type != "git" {
+		writeJSONError(w, http.StatusBadRequest, "credential is only supported for git projects")
+		return
+	}
 
 	p, err := s.store.CreateProject(r.Context(), body.Name, body.Model, body.Source.Type, body.Source.URL, body.Source.Branch, 0)
 	switch {
@@ -89,6 +95,20 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		s.log.Error("create project", "err", err)
 		writeJSONError(w, http.StatusInternalServerError, "could not create project")
 		return
+	}
+	if body.Credential != nil && strings.TrimSpace(body.Credential.Secret) != "" {
+		if ok, err := s.bearerHasAdminScope(r); err != nil {
+			s.log.Error("credential scope check", "err", err)
+			writeJSONError(w, http.StatusInternalServerError, "auth check failed")
+			return
+		} else if !ok {
+			writeJSONError(w, http.StatusForbidden, "admin scope required to set a git credential")
+			return
+		}
+		if err := s.createProjectCredential(r.Context(), p.ID, body.Credential); err != nil {
+			writeGitCredAPIError(w, s.log, "create project credential", err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusCreated, toProjectView(p))
 }
