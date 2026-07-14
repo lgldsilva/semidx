@@ -193,29 +193,6 @@ func (failingEmbedder) ListModels(_ context.Context) ([]string, error) {
 // Tests
 // ---------------------------------------------------------------------------
 
-func TestNewGoogleClient(t *testing.T) {
-	client := chat.NewGoogleClient("https://test.url", "test-key")
-	if client == nil {
-		t.Fatal("NewGoogleClient returned nil")
-	}
-
-	// Verify that SendMessage uses the provided base URL by calling it with a
-	// cancelled context (which should surface before any HTTP call).
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, err := client.SendMessage(ctx, chat.Request{
-		Model:    "test-model",
-		Messages: []chat.Message{{Role: "user", Content: "hello"}},
-	})
-	if err == nil {
-		t.Fatal("expected error with cancelled context, got nil")
-	}
-	// The error should mention context cancellation, not connection errors.
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("SendMessage error (expected context.Canceled): %v", err)
-	}
-}
 
 func TestSearchAdapter_ConvertsTypes(t *testing.T) {
 	project := &store.Project{

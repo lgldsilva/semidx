@@ -6,21 +6,27 @@ import (
 	"log/slog"
 
 	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/rag"
 )
 
-// chatRAGBackend wraps a Backend and a RAG Pipeline, providing the Ask method
-// by combining search (via the rag.Pipeline) with an LLM call.
-// Backend methods (Search, Projects, Reindex) are auto-delegated to the
-// wrapped backend via embedding.
-type chatRAGBackend struct {
-	Backend
-	pipeline *rag.Pipeline
+// ragAsker is the Ask surface shared by rag.FantasyPipeline (and historically
+// rag.Pipeline). MCP semantic_ask stays single-turn (history nil).
+type ragAsker interface {
+	Ask(ctx context.Context, question, project string, history []chat.Message) (*rag.Answer, error)
 }
 
-// NewChatRAGBackend creates a Backend that also implements AskBackend
-// by wrapping an existing Backend with a RAG pipeline.
-func NewChatRAGBackend(b Backend, pipeline *rag.Pipeline) Backend {
+// chatRAGBackend wraps a Backend and a RAG Asker, providing the Ask method
+// by combining search with an LLM call. Backend methods (Search, Projects,
+// Reindex) are auto-delegated to the wrapped backend via embedding.
+type chatRAGBackend struct {
+	Backend
+	pipeline ragAsker
+}
+
+// NewChatRAGBackend creates a Backend that also implements AskBackend by
+// wrapping an existing Backend with a RAG pipeline (typically Fantasy).
+func NewChatRAGBackend(b Backend, pipeline ragAsker) Backend {
 	return &chatRAGBackend{Backend: b, pipeline: pipeline}
 }
 
