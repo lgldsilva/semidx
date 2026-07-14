@@ -1,5 +1,37 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, ApiError, type Project, type SearchHit } from '../api'
+import { Alert } from '../components/Alert'
+import { Badge, type BadgeTone } from '../components/Badge'
+import { Button } from '../components/Button'
+import { Card } from '../components/Card'
+import { Checkbox, Input, Select } from '../components/Input'
+import { Code, Snippet } from '../components/Snippet'
+import { cx } from '../lib/cx'
+
+const PILL_BTN = 'cursor-pointer rounded-full border px-2.5 py-1 text-[0.82rem] transition-colors'
+const PILL_ON = 'border-accent bg-accent text-accent-fg'
+const PILL_OFF =
+  'border-border bg-transparent text-fg hover:border-accent hover:bg-accent hover:text-accent-fg'
+
+type ScoreGrade = 'high' | 'mid' | 'low'
+
+const SCORE_BORDER: Record<ScoreGrade, string> = {
+  high: 'border-l-success',
+  mid: 'border-l-warning',
+  low: 'border-l-muted',
+}
+
+const SCORE_TONE: Record<ScoreGrade, BadgeTone> = {
+  high: 'success',
+  mid: 'warning',
+  low: 'neutral',
+}
+
+function scoreGrade(scorePct: number): ScoreGrade {
+  if (scorePct >= 75) return 'high'
+  if (scorePct >= 45) return 'mid'
+  return 'low'
+}
 
 export function SearchPage() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -9,6 +41,8 @@ export function SearchPage() {
   const [top, setTop] = useState(10)
   const [results, setResults] = useState<SearchHit[]>([])
   const [fallback, setFallback] = useState(false)
+  const [degraded, setDegraded] = useState(false)
+  const [retryAfterMs, setRetryAfterMs] = useState(0)
   const [ran, setRan] = useState(false)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -38,6 +72,8 @@ export function SearchPage() {
       })
       setResults(res.results ?? [])
       setFallback(res.fallback)
+      setDegraded(res.degraded ?? false)
+      setRetryAfterMs(res.retry_after_ms ?? 0)
       setMeta(
         res.resolved_project
           ? `resolved: ${res.resolved_project}`
@@ -47,107 +83,127 @@ export function SearchPage() {
       )
     } catch (ex) {
       setResults([])
+      setFallback(false)
+      setDegraded(false)
       setErr(ex instanceof ApiError ? ex.message : 'search failed')
     } finally {
       setBusy(false)
     }
   }
 
+  const retrySeconds = Math.round(retryAfterMs / 1000)
+
   return (
     <div>
-      <div className="search-hero">
-        <h1>Search</h1>
-        <p className="muted">
+      <div className="mb-4">
+        <h1 className="mb-1 text-[1.45rem] font-bold">Search</h1>
+        <p className="m-0 text-muted">
           Semantic search on the server index — same engine as{' '}
-          <code>semidx search</code> after <code>semidx login</code>.
+          <Code>semidx search</Code> after <Code>semidx login</Code>.
         </p>
       </div>
 
-      <form className="search-form" onSubmit={(e) => void onSubmit(e)}>
-        <div className="row">
-          <label className="grow">
-            Query
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="where is authentication handled?"
-              required
-            />
-          </label>
-          <label>
-            Project
-            <select
-              value={project}
-              onChange={(e) => setProject(e.target.value)}
-              disabled={all}
-            >
-              <option value="">— select —</option>
-              {projects.map((p) => (
-                <option key={p.name} value={p.name}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button className="search-btn" type="submit" disabled={busy}>
-            {busy ? 'Searching…' : 'Search'}
-          </button>
-        </div>
-        <div className="top-selector">
-          <label className="search-all-toggle">
-            <input
-              type="checkbox"
+      <Card className="mb-5">
+        <form onSubmit={(e) => void onSubmit(e)}>
+          <div className="flex flex-wrap items-end gap-3.5">
+            <label htmlFor="search-query" className="block min-w-[180px] flex-1 text-sm font-medium">
+              Query
+              <Input
+                id="search-query"
+                className="mt-1"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="where is authentication handled?"
+                required
+              />
+            </label>
+            <label htmlFor="search-project" className="block text-sm font-medium">
+              Project
+              <Select
+                id="search-project"
+                className="mt-1"
+                value={project}
+                onChange={(e) => setProject(e.target.value)}
+                disabled={all}
+              >
+                <option value="">— select —</option>
+                {projects.map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.name}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <Button type="submit" disabled={busy}>
+              {busy ? 'Searching…' : 'Search'}
+            </Button>
+          </div>
+          <div className="mt-3.5 flex flex-wrap items-center gap-1.5">
+            <Checkbox
+              label="Search all projects"
               checked={all}
               onChange={(e) => setAll(e.target.checked)}
             />
-            Search all projects
-          </label>
-          <span className="top-selector-sep muted">top</span>
-          {[5, 10, 20, 50].map((n) => (
-            <button
-              key={n}
-              type="button"
-              className={`pill-btn ${top === n ? 'active' : ''}`}
-              onClick={() => setTop(n)}
-            >
-              {n}
-            </button>
-          ))}
-        </div>
-      </form>
+            <span className="ml-2 text-muted">top</span>
+            {[5, 10, 20, 50].map((n) => (
+              <button
+                key={n}
+                type="button"
+                className={cx(PILL_BTN, top === n ? PILL_ON : PILL_OFF)}
+                onClick={() => setTop(n)}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        </form>
+      </Card>
 
-      {err && <div className="alert error">{err}</div>}
-      {fallback && (
-        <div className="alert error">
-          Keyword fallback — embeddings unavailable for this query.
-        </div>
+      {err && <Alert kind="error">{err}</Alert>}
+      {degraded ? (
+        <Alert kind="warning">
+          Keyword results — embedding temporarily unavailable
+          {retrySeconds > 0 ? ` (try again in ~${retrySeconds}s)` : ''}.
+        </Alert>
+      ) : (
+        fallback && (
+          <Alert kind="error">
+            Keyword fallback — embeddings unavailable for this query.
+          </Alert>
+        )
       )}
-      {meta && <p className="muted">{meta}</p>}
+      {meta && <p className="text-muted">{meta}</p>}
 
       {ran && !err && results.length === 0 && (
-        <p className="muted">No matches.</p>
+        <p className="text-muted">No matches.</p>
       )}
 
       {results.map((hit, i) => {
         const scorePct = Math.round(hit.score * 100)
-        const scoreClass =
-          scorePct >= 75 ? 'score-high' : scorePct >= 45 ? 'score-mid' : 'score-low'
+        const grade = scoreGrade(scorePct)
         return (
-          <article key={`${hit.path}-${hit.start_line}-${i}`} className={`card result-card ${scoreClass}`}>
-            <div className="result-header">
-              <div className="result-loc">
+          <Card
+            key={`${hit.path}-${hit.start_line}-${i}`}
+            className={cx('my-3.5 border-l-4', SCORE_BORDER[grade])}
+          >
+            <div className="flex justify-between gap-3 max-sm:flex-wrap">
+              <div>
                 {hit.project && (
-                  <span className="result-project">{hit.project}</span>
+                  <span className="text-xs font-semibold tracking-[0.03em] text-accent uppercase">
+                    {hit.project}
+                  </span>
                 )}
-                <code className="result-path">
+                <Code className="block w-fit font-mono text-sm break-all">
                   {hit.path}:{hit.start_line}
                   {hit.end_line !== hit.start_line ? `-${hit.end_line}` : ''}
-                </code>
+                </Code>
               </div>
-              <span className={`score-badge ${scoreClass}`}>{scorePct}%</span>
+              <Badge tone={SCORE_TONE[grade]} className="shrink-0 self-start font-semibold">
+                {scorePct}%
+              </Badge>
             </div>
-            <pre className="snippet">{hit.content}</pre>
-          </article>
+            <Snippet>{hit.content}</Snippet>
+          </Card>
         )
       })}
     </div>

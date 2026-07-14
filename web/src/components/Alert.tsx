@@ -1,12 +1,13 @@
 import type { HTMLAttributes } from 'react'
 import { cx } from '../lib/cx'
 
-export type AlertKind = 'error' | 'success' | 'info'
+export type AlertKind = 'error' | 'success' | 'info' | 'warning'
 
 const KIND: Record<AlertKind, string> = {
   error: 'bg-danger/10 text-danger',
   success: 'bg-success/10 text-success',
   info: 'bg-accent/10 text-accent',
+  warning: 'bg-warning/10 text-warning',
 }
 
 export interface AlertProps extends HTMLAttributes<HTMLDivElement> {
