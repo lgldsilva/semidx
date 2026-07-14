@@ -15,6 +15,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/rag"
+	"github.com/lgldsilva/semidx/internal/store"
 )
 
 // allowPublicEnv, when set to "1", lets the chat server bind to a non-loopback
@@ -42,7 +43,21 @@ type Server struct {
 	tmpl       *template.Template
 	log        *slog.Logger
 	listenAddr string
+
+	// convs, when non-nil, persists chat conversations (the local SQLite store
+	// implements it). Nil disables the /api/conversations endpoints (501) and
+	// the UI hides its sidebar.
+	//
+	// TODO(follow-up): in remote mode (CLI logged into a semidx server) these
+	// endpoints should proxy the server's /admin/api/conversations API instead
+	// of a local store; nothing would consume that today, so remote backends
+	// simply leave convs nil.
+	convs store.ConversationStore
 }
+
+// SetConversationStore enables persistent conversations, backed by cs. The web
+// chat is single-user, so every conversation is stored under user id 0.
+func (s *Server) SetConversationStore(cs store.ConversationStore) { s.convs = cs }
 
 // New creates a web chat server. pipeline is the RAG pipeline to use, project is
 // the default project name (can be empty), and listenAddr is the HTTP listen
@@ -106,6 +121,11 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("POST /api/chat", s.handleChat)
 	mux.HandleFunc("POST /api/chat/stream", s.handleChatStream)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("GET /api/conversations", s.handleListConversations)
+	mux.HandleFunc("POST /api/conversations", s.handleCreateConversation)
+	mux.HandleFunc("GET /api/conversations/{id}", s.handleGetConversation)
+	mux.HandleFunc("DELETE /api/conversations/{id}", s.handleDeleteConversation)
+	mux.HandleFunc("POST /api/conversations/{id}/messages", s.handleAddConversationMessage)
 
 	srv := &http.Server{
 		Addr:         s.listenAddr,
