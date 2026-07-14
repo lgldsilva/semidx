@@ -62,6 +62,15 @@ func TestBuildAdminChatPipeline_anyProvider(t *testing.T) {
 		t.Error("a Gemini key should enable the admin chat")
 	}
 
+	// OPENROUTER_API_KEY without SEMIDX_CHAT_MODEL: OpenRouter has no default
+	// model, so no chat provider resolves and chat must be unavailable — the
+	// legacy non-agent chat.Chain fallback that hid this is gone. The SPA's 503
+	// message guides the user to also set SEMIDX_CHAT_MODEL.
+	dOR := &deps{emb: stubEmbedder{}, cfg: &config.Config{OpenRouterAPIKey: "or-key"}}
+	if got := dOR.buildAdminChatPipeline(); got != nil {
+		t.Errorf("OpenRouter key without SEMIDX_CHAT_MODEL must disable chat, got %T", got)
+	}
+
 	// nil cfg/emb → nil.
 	if (&deps{}).buildAdminChatPipeline() != nil {
 		t.Error("nil cfg/emb should yield nil chat")
