@@ -183,6 +183,21 @@ export type UserRow = {
   disabled: boolean
 }
 
+export type GitCredentialRow = {
+  id: number
+  scope: 'project' | 'host'
+  project_id?: number
+  project_name?: string
+  host?: string
+  kind: 'https' | 'ssh'
+  username: string
+  label: string
+  ssh_known_hosts?: string
+  ssh_fingerprint?: string
+  created_at: string
+  updated_at: string
+}
+
 class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -329,6 +344,39 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ disabled }),
     }),
+  listGitCredentials: () =>
+    request<{ credentials: GitCredentialRow[] }>('/admin/api/git-credentials').then(
+      (r) => r.credentials ?? [],
+    ),
+  createGitCredential: (body: {
+    project_id?: number
+    host?: string
+    kind: string
+    username?: string
+    secret: string
+    label?: string
+    ssh_known_hosts?: string
+  }) =>
+    request<GitCredentialRow>('/admin/api/git-credentials', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateGitCredential: (
+    id: number,
+    body: {
+      kind: string
+      username?: string
+      secret?: string
+      label?: string
+      ssh_known_hosts?: string
+    },
+  ) =>
+    request<GitCredentialRow>(`/admin/api/git-credentials/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  deleteGitCredential: (id: number) =>
+    request<void>(`/admin/api/git-credentials/${id}`, { method: 'DELETE' }),
   projectCallers: (name: string, path: string) =>
     request<{ callers: string[]; count: number; package: string }>(
       `/admin/api/projects/${encodeURIComponent(name)}/callers?path=${encodeURIComponent(path)}`,
