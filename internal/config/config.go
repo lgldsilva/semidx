@@ -73,14 +73,19 @@ type Config struct {
 	OllamaCloudAPIKey  string
 	OllamaCloudBaseURL string
 
+	// AnthropicAPIKey authenticates the Anthropic chat provider
+	// (ANTHROPIC_API_KEY). Chat-only: it never participates in the embedding
+	// chain, so its presence is treated as explicit chat intent.
+	AnthropicAPIKey string
+
 	// Chat LLM selection (agent + RAG answer generation), independent from the
 	// embedding chain. When ChatProvider is empty, the provider is auto-detected
-	// from the embedding keys (Gemini > OpenRouter > Groq) for backward
-	// compatibility. Set SEMIDX_CHAT_PROVIDER=openai-compatible with
-	// SEMIDX_CHAT_BASE_URL + SEMIDX_CHAT_MODEL + SEMIDX_CHAT_API_KEY to use any
-	// OpenAI-compatible gateway (e.g. OpenCode Zen).
+	// from the available keys (Anthropic > Gemini > OpenRouter > Groq). Set
+	// SEMIDX_CHAT_PROVIDER=openai-compatible with SEMIDX_CHAT_BASE_URL +
+	// SEMIDX_CHAT_MODEL + SEMIDX_CHAT_API_KEY to use any OpenAI-compatible
+	// gateway (e.g. OpenCode Zen).
 	ChatProvider    string  // google|anthropic|openrouter|groq|openai-compatible
-	ChatModel       string  // model id; defaults to gemini-2.5-flash only for google
+	ChatModel       string  // model id; defaults only for google and anthropic
 	ChatAPIKey      string  // falls back to the matching embedding provider key
 	ChatBaseURL     string  // required for openai-compatible
 	ChatTemperature float64 // default 0.3
@@ -199,10 +204,15 @@ type ChatLLM struct {
 	Temperature float64
 }
 
+// defaultAnthropicChatModel is the model used when the anthropic chat provider
+// is selected without an explicit SEMIDX_CHAT_MODEL. The fantasy anthropic
+// provider passes the id through verbatim (no fixed catalog).
+const defaultAnthropicChatModel = "claude-sonnet-5"
+
 // ResolveChatLLM picks the chat provider. An explicit SEMIDX_CHAT_PROVIDER wins;
-// otherwise it auto-detects from the embedding keys (Gemini > OpenRouter > Groq)
-// for backward compatibility. ok is false when no usable provider is configured
-// (the caller then degrades to plain RAG / no agent).
+// otherwise it auto-detects from the available keys (Anthropic > Gemini >
+// OpenRouter > Groq). ok is false when no usable provider is configured (the
+// caller then degrades to plain RAG / no agent).
 func (c *Config) ResolveChatLLM() (ChatLLM, bool) {
 	if c.ChatProvider != "" {
 		return c.explicitChatLLM()
@@ -221,6 +231,8 @@ func (c *Config) explicitChatLLM() (ChatLLM, bool) {
 	switch sel.Provider {
 	case "google":
 		sel.applyFallback(c.GeminiAPIKey, c.GeminiBaseURL, "gemini-2.5-flash")
+	case "anthropic":
+		sel.applyFallback(c.AnthropicAPIKey, "", defaultAnthropicChatModel)
 	case "groq":
 		sel.applyFallback(c.GroqAPIKey, c.GroqBaseURL, "")
 	case "openrouter":
@@ -235,6 +247,12 @@ func (c *Config) explicitChatLLM() (ChatLLM, bool) {
 
 func (c *Config) autoChatLLM() (ChatLLM, bool) {
 	switch {
+	// Anthropic wins the auto-detect: GEMINI/OPENROUTER/GROQ are embedding keys
+	// reused for chat, so their presence may only mean "embeddings configured".
+	// ANTHROPIC_API_KEY plays no role in the embedding chain — setting it is an
+	// explicit chat intent.
+	case c.AnthropicAPIKey != "":
+		return ChatLLM{Provider: "anthropic", Model: orString(c.ChatModel, defaultAnthropicChatModel), APIKey: c.AnthropicAPIKey, Temperature: c.ChatTemperature}, true
 	case c.GeminiAPIKey != "":
 		return ChatLLM{Provider: "google", Model: orString(c.ChatModel, "gemini-2.5-flash"), APIKey: c.GeminiAPIKey, BaseURL: c.GeminiBaseURL, Temperature: c.ChatTemperature}, true
 	case c.OpenRouterAPIKey != "" && c.ChatModel != "":
@@ -374,6 +392,7 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 		OpenRouterBaseURL:   env.get("SEMIDX_OPENROUTER_BASE_URL", defaultOpenRouterURL),
 		OllamaCloudAPIKey:   env.get("OLLAMA_CLOUD_API_KEY", ""),
 		OllamaCloudBaseURL:  env.get("SEMIDX_OLLAMA_CLOUD_BASE_URL", defaultOllamaCloudURL),
+		AnthropicAPIKey:     env.get("ANTHROPIC_API_KEY", ""),
 		ChatProvider:        env.get("SEMIDX_CHAT_PROVIDER", ""),
 		ChatModel:           env.get("SEMIDX_CHAT_MODEL", ""),
 		ChatAPIKey:          env.get("SEMIDX_CHAT_API_KEY", ""),
@@ -460,7 +479,8 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_OLLAMA_URL", "Local Ollama endpoint (embedding fallback)", false},
 	{"SEMIDX_OLLAMA_URLS", "Comma-separated Ollama URLs for parallel embedding pool", false},
 	// Chat LLM (agent + RAG answer generation), independent of the embedding chain.
-	{"SEMIDX_CHAT_PROVIDER", "Chat provider: google|anthropic|openrouter|groq|openai-compatible|copilot (default: auto-detect from embedding keys)", false},
+	{"ANTHROPIC_API_KEY", "Anthropic chat key (agent/RAG; chat-only, not embeddings)", true},
+	{"SEMIDX_CHAT_PROVIDER", "Chat provider: google|anthropic|openrouter|groq|openai-compatible|copilot (default: auto-detect from available keys)", false},
 	{"SEMIDX_CHAT_MODEL", "Chat model id (e.g. gemini-2.5-flash, deepseek-v4-flash-free)", false},
 	{"SEMIDX_CHAT_API_KEY", "Chat provider API key (falls back to the matching embedding key)", true},
 	{"SEMIDX_CHAT_BASE_URL", "Chat base URL — required for openai-compatible (e.g. OpenCode Zen)", false},
