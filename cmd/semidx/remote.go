@@ -137,6 +137,7 @@ indexing). Requires "semidx login". See "semidx repo add".`,
 		Example: "  semidx repo add https://github.com/org/project.git",
 	}
 	c.AddCommand(newRepoAddCmd(d))
+	c.AddCommand(newRepoCredCmd(d))
 	c.AddCommand(newRepoWorktreesCmd(d))
 	c.AddCommand(newRepoBranchesCmd(d))
 	c.AddCommand(newRepoInfoCmd(d))
@@ -215,18 +216,26 @@ func resolveSkillsDir(target, dir string) (string, error) {
 func newRepoAddCmd(d *deps) *cobra.Command {
 	var name, branch, model string
 	var index, wait bool
+	var cred repoCredFlags
 	c := &cobra.Command{
 		Use:   "add <git-url>",
 		Short: "Register a git repository and (optionally) start indexing it",
 		Long: `Register a git repository with the server and, unless --index=false, queue a
-full index job the server runs itself. Requires "semidx login".`,
+full index job the server runs itself. Requires "semidx login".
+
+Optional git credentials (admin-scoped token) can be stored inline on the new
+project, or as a host-scoped fallback with --host-credential. Use --git-token -
+to read an HTTPS token from stdin.`,
 		Example: `  semidx repo add https://github.com/org/project.git
   semidx repo add https://github.com/org/project.git --branch main --wait
-  semidx repo add https://github.com/org/project.git --branch main --index=false`,
+  semidx repo add https://github.com/org/private.git --git-user x --git-token -
+  semidx repo add git@github.com:org/private.git --ssh-key ~/.ssh/deploy_ed25519
+  semidx repo add https://gitea.lan/org/repo.git --host-credential --git-token "$TOKEN"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRepoAdd(cmd, d, repoAddOpts{
-				gitURL: args[0], name: name, branch: branch, model: model, index: index, wait: wait,
+				gitURL: args[0], name: name, branch: branch, model: model,
+				index: index, wait: wait, cred: cred,
 			})
 		},
 	}
@@ -235,12 +244,18 @@ full index job the server runs itself. Requires "semidx login".`,
 	c.Flags().StringVar(&model, "model", "bge-m3", "Embedding model")
 	c.Flags().BoolVar(&index, "index", true, "Queue a full index job right away")
 	c.Flags().BoolVar(&wait, "wait", false, "Wait for the queued index job and print live progress")
+	c.Flags().StringVar(&cred.gitUser, "git-user", "", "HTTPS git username for a private repo")
+	c.Flags().StringVar(&cred.gitToken, "git-token", "", "HTTPS token/password (- reads stdin)")
+	c.Flags().StringVar(&cred.sshKey, "ssh-key", "", "SSH private key file (or - for stdin)")
+	c.Flags().StringVar(&cred.sshKnownHosts, "ssh-known-hosts", "", "SSH known_hosts file (or - for stdin)")
+	c.Flags().BoolVar(&cred.hostCredential, "host-credential", false, "Store credential for the repo host instead of the new project")
 	return c
 }
 
 type repoAddOpts struct {
 	gitURL, name, branch, model string
 	index, wait                 bool
+	cred                        repoCredFlags
 }
 
 func runRepoAdd(cmd *cobra.Command, d *deps, o repoAddOpts) error {
@@ -252,7 +267,14 @@ func runRepoAdd(cmd *cobra.Command, d *deps, o repoAddOpts) error {
 	}
 	cli := d.apiClient()
 	ctx := cmd.Context()
-	if _, err := cli.CreateProject(ctx, o.name, o.model, "git", o.gitURL, o.branch); err != nil {
+	inlineCred, err := applyRepoAddCredential(ctx, cli, o.gitURL, o.cred)
+	if err != nil {
+		return err
+	}
+	if _, err := cli.CreateProjectWithParams(ctx, client.CreateProjectParams{
+		Name: o.name, Model: o.model, SourceType: "git", GitURL: o.gitURL, Branch: o.branch,
+		Credential: inlineCred,
+	}); err != nil {
 		return fmt.Errorf("create project: %w", err)
 	}
 	fmt.Printf("Registered git project %q -> %s\n", o.name, o.gitURL)
