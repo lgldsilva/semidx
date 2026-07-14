@@ -222,6 +222,21 @@ func TestLoadLocalIndexFromEnv(t *testing.T) {
 	}
 }
 
+func TestMCPToolsResolution(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	// Absent → nil (all tools).
+	if cfg := LoadWithLookup(mapLookup(map[string]string{})); cfg.MCPTools != nil {
+		t.Errorf("default MCPTools = %v, want nil", cfg.MCPTools)
+	}
+	// Comma-separated, trimmed.
+	cfg := LoadWithLookup(mapLookup(map[string]string{"SEMIDX_MCP_TOOLS": "semantic_search, semantic_status"}))
+	if want := []string{"semantic_search", "semantic_status"}; !slicesEqual(cfg.MCPTools, want) {
+		t.Errorf("MCPTools = %v, want %v", cfg.MCPTools, want)
+	}
+}
+
 func TestAgentActionsResolution(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
