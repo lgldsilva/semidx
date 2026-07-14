@@ -41,3 +41,12 @@ func scopesFromForm(form []string, role string) ([]string, error) {
 	}
 	return scopes, nil
 }
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
