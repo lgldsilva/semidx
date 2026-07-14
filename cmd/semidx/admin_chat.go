@@ -7,8 +7,11 @@ import (
 	"sync"
 	"time"
 
+	"charm.land/fantasy"
+
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/chat"
+	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/llm"
 	"github.com/lgldsilva/semidx/internal/rag"
@@ -17,8 +20,17 @@ import (
 	"github.com/lgldsilva/semidx/internal/webadmin"
 )
 
-// buildAdminChatPipeline wires the admin SPA chat. It uses the fantasy agent
-// Runner for ANY configured chat provider (google/anthropic/openrouter/groq/
+// Admin chat modes (the GET /admin/api/chat/config contract): "agent" runs the
+// tool-calling loop, "rag" runs deterministic server-side retrieval
+// (rag.FantasyPipeline) over a tool-less Runner.
+const (
+	chatModeAgent = "agent"
+	chatModeRAG   = "rag"
+)
+
+// buildAdminChatPipeline wires the admin SPA chat as a PER-REQUEST factory
+// (adminChat): each turn picks its mode/model from the request options. It
+// enables for ANY configured chat provider (google/anthropic/openrouter/groq/
 // openai-compatible/copilot) — the enablement decision is Config.ResolveChatLLM;
 // nil when chat is unavailable (the SPA endpoints then answer 503).
 //
@@ -36,25 +48,14 @@ func (d *deps) buildAdminChatPipeline() webadmin.ChatPipeline {
 		return nil
 	}
 	svc := search.NewService(d.mustSearchStore(), d.emb)
-
-	// The agent Runner for whatever provider ResolveChatLLM picks (explicit
-	// SEMIDX_CHAT_* override, or auto-detected). The tool loop calls
-	// semantic_search / repo_* before answering.
-	model, err := llm.ResolveModel(context.Background(), llm.ProviderConfig{
-		Type:    llm.ProviderType(sel.Provider),
-		APIKey:  sel.APIKey,
-		BaseURL: sel.BaseURL,
-	}, sel.Model)
-	if err != nil {
-		slog.Warn("admin chat: could not resolve chat model", "provider", sel.Provider, "error", err)
-		return nil
-	}
 	idxStore := d.mustSearchStore()
 	// repo tools only when project paths are local; nil resolver omits them.
 	var resolver agent.ScopeResolver
 	if d.db != nil {
 		resolver = agent.NewScopeResolver(idxStore)
 	}
+	// Agent-mode tools are model-independent: build them once and share them
+	// across every per-request Runner.
 	tools := agent.ReadTools(svc, idxStore, resolver)
 	// Action tools are opt-in via SEMIDX_AGENT_ACTIONS (propose/execute);
 	// the path guard still bounds writes to registered project trees.
@@ -68,12 +69,177 @@ func (d *deps) buildAdminChatPipeline() webadmin.ChatPipeline {
 	// External MCP servers (SEMIDX_MCP_CLIENT_CONFIG): the agent uses their
 	// tools as a client. No-op when unconfigured; failures are logged.
 	tools = append(tools, d.mcpClientTools(context.Background())...)
-	temp := sel.Temperature
-	runner := agent.NewRunner(model, tools, agent.RunnerConfig{
-		SystemPrompt: agent.SystemPrompt,
-		Temperature:  &temp,
-	})
-	return &agentChatPipeline{runner: runner}
+
+	p := &adminChat{
+		d:      d,
+		def:    sel,
+		models: d.cfg.ChatModelAllowlist(),
+		svc:    svc,
+		tools:  tools,
+		cache:  map[string]fantasy.LanguageModel{},
+	}
+	// Resolve the default model eagerly so a misconfigured provider disables
+	// chat at startup (503 with guidance) instead of failing every request.
+	if _, err := p.modelFor(context.Background(), ""); err != nil {
+		slog.Warn("admin chat: could not resolve chat model", "provider", sel.Provider, "error", err)
+		return nil
+	}
+	return p
+}
+
+// chatBackend is the per-turn pipeline surface both modes share, implemented
+// by agentChatPipeline (mode "agent") and rag.FantasyPipeline (mode "rag").
+type chatBackend interface {
+	Ask(ctx context.Context, question, project string, history []chat.Message) (*rag.Answer, error)
+	StreamAsk(ctx context.Context, question, project string, history []chat.Message) (<-chan chat.StreamChunk, []rag.Source, string, bool, error)
+}
+
+// adminChat implements webadmin.ChatPipeline as a per-request factory: each
+// turn builds its backend for the requested mode/model (validated upstream by
+// the webadmin handlers against Config()). Resolved fantasy.LanguageModels are
+// cached per provider/model id under mu, so repeated turns reuse the provider
+// while agent.NewRunner (cheap) runs per turn.
+type adminChat struct {
+	d      *deps
+	def    config.ChatLLM
+	models []config.ChatModelSpec
+	svc    *search.Service
+	tools  []fantasy.AgentTool
+
+	mu    sync.Mutex
+	cache map[string]fantasy.LanguageModel
+}
+
+// Config reports the frozen GET /admin/api/chat/config contract.
+func (p *adminChat) Config() webadmin.ChatConfig {
+	models := make([]webadmin.ChatModelInfo, 0, len(p.models))
+	for _, m := range p.models {
+		models = append(models, webadmin.ChatModelInfo{ID: m.Model, Provider: m.Provider, Default: m.Default})
+	}
+	actions := "off"
+	if pol, ok := agent.ParseActionPolicy(p.d.cfg.AgentActions); ok {
+		actions = pol.String()
+	}
+	return webadmin.ChatConfig{
+		Enabled:      true,
+		Modes:        []string{chatModeAgent, chatModeRAG},
+		DefaultMode:  chatModeAgent,
+		DefaultModel: p.def.Model,
+		Models:       models,
+		AgentActions: actions,
+	}
+}
+
+func (p *adminChat) Ask(ctx context.Context, question, project string, history []chat.Message, opts webadmin.ChatOptions) (*rag.Answer, error) {
+	be, err := p.backendFor(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return be.Ask(ctx, question, project, history)
+}
+
+func (p *adminChat) StreamAsk(ctx context.Context, question, project string, history []chat.Message, opts webadmin.ChatOptions) (<-chan chat.StreamChunk, []rag.Source, string, bool, error) {
+	be, err := p.backendFor(ctx, opts)
+	if err != nil {
+		return nil, nil, "", false, err
+	}
+	return be.StreamAsk(ctx, question, project, history)
+}
+
+// backendFor builds the turn's pipeline: mode "rag" wraps a tool-less Runner in
+// the FantasyPipeline (retrieval is server-side); mode "agent" (the default)
+// gives the Runner the shared tool set and system prompt.
+func (p *adminChat) backendFor(ctx context.Context, opts webadmin.ChatOptions) (chatBackend, error) {
+	model, err := p.modelFor(ctx, opts.Model)
+	if err != nil {
+		return nil, err
+	}
+	temp := p.def.Temperature
+	switch opts.Mode {
+	case chatModeRAG:
+		// No tools and no agent system prompt: the FantasyPipeline injects its
+		// own RAG instructions + assembled context as the system message.
+		runner := agent.NewRunner(model, nil, agent.RunnerConfig{Temperature: &temp})
+		return rag.NewFantasyPipeline(&adminSearchAdapter{svc: p.svc}, runner, rag.PipelineConfig{TopK: 8}), nil
+	case "", chatModeAgent:
+		runner := agent.NewRunner(model, p.tools, agent.RunnerConfig{
+			SystemPrompt: agent.SystemPrompt,
+			Temperature:  &temp,
+		})
+		return &agentChatPipeline{runner: runner}, nil
+	default:
+		// The webadmin handler already 400s unknown modes; keep a defensive error.
+		return nil, fmt.Errorf("unknown chat mode %q", opts.Mode)
+	}
+}
+
+// modelFor returns the fantasy model for id, resolving and caching it on first
+// use. An empty id (or the default's id) means the server's default chat model.
+func (p *adminChat) modelFor(ctx context.Context, id string) (fantasy.LanguageModel, error) {
+	sel := p.def
+	if id != "" && id != p.def.Model {
+		spec, ok := p.specFor(id)
+		if !ok {
+			return nil, fmt.Errorf("model %q is not in the chat allowlist", id)
+		}
+		s, ok := p.d.chatLLMFor(spec)
+		if !ok {
+			return nil, fmt.Errorf("no usable provider credentials for chat model %q", id)
+		}
+		sel = s
+	}
+	key := sel.Provider + "/" + sel.Model
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if m, ok := p.cache[key]; ok {
+		return m, nil
+	}
+	m, err := llm.ResolveModel(ctx, llm.ProviderConfig{
+		Type:    llm.ProviderType(sel.Provider),
+		APIKey:  sel.APIKey,
+		BaseURL: sel.BaseURL,
+	}, sel.Model)
+	if err != nil {
+		return nil, err
+	}
+	p.cache[key] = m
+	return m, nil
+}
+
+// specFor finds an allowlist entry by model id.
+func (p *adminChat) specFor(id string) (config.ChatModelSpec, bool) {
+	for _, m := range p.models {
+		if m.Model == id {
+			return m, true
+		}
+	}
+	return config.ChatModelSpec{}, false
+}
+
+// chatLLMFor resolves provider credentials for one allowlist entry, reusing
+// config's explicit-provider fallback logic (embedding keys, provider default
+// base URLs). The explicit SEMIDX_CHAT_API_KEY/BASE_URL pair belongs to the
+// configured default provider only — it must not leak onto other providers.
+// Unlike config.usable() (which tolerates keyless openai-compatible local
+// servers), an allowlist entry for any OTHER provider without a key is
+// rejected here, so a misconfigured entry fails fast instead of surfacing a
+// provider 401 mid-chat.
+func (d *deps) chatLLMFor(spec config.ChatModelSpec) (config.ChatLLM, bool) {
+	c := d.cfg.Clone()
+	if spec.Provider != c.ChatProvider {
+		c.ChatAPIKey = ""
+		c.ChatBaseURL = ""
+	}
+	c.ChatProvider = spec.Provider
+	c.ChatModel = spec.Model
+	sel, ok := c.ResolveChatLLM()
+	if !ok {
+		return sel, false
+	}
+	if sel.APIKey == "" && sel.Provider != string(llm.ProviderOpenAICompat) {
+		return sel, false
+	}
+	return sel, true
 }
 
 // agentChatPipeline drives the admin chat through the fantasy agent Runner.
