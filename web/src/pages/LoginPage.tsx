@@ -1,6 +1,10 @@
 import { useState, type FormEvent } from 'react'
 import { Navigate } from 'react-router-dom'
 import { ApiError } from '../api'
+import { Alert } from '../components/Alert'
+import { Button } from '../components/Button'
+import { Card } from '../components/Card'
+import { Checkbox, Input } from '../components/Input'
 import { useAuth } from '../auth'
 
 export function LoginPage() {
@@ -27,45 +31,49 @@ export function LoginPage() {
   }
 
   return (
-    <div className="centered">
-      <form className="card narrow login-card" onSubmit={(e) => void onSubmit(e)}>
-        <h1>semidx admin</h1>
-        <p className="muted">
-          Same product surface as the CLI — projects, search, reindex — on the
-          server store.
-        </p>
-        {err && <div className="alert error">{err}</div>}
-        <label>
-          Username
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="username"
-            required
-          />
-        </label>
-        <label>
-          Password
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-            required
-          />
-        </label>
-        <label className="checkbox">
-          <input
-            type="checkbox"
+    <div className="flex min-h-screen items-center justify-center p-4">
+      <Card className="w-[min(380px,92vw)]">
+        <form onSubmit={(e) => void onSubmit(e)}>
+          <h1 className="mb-1 text-[1.45rem] font-bold">semidx admin</h1>
+          <p className="m-0 text-muted">
+            Same product surface as the CLI — projects, search, reindex — on the
+            server store.
+          </p>
+          {err && <Alert kind="error">{err}</Alert>}
+          <label htmlFor="login-username" className="my-2 block text-sm font-medium">
+            Username
+            <Input
+              id="login-username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              required
+              className="mt-1"
+            />
+          </label>
+          <label htmlFor="login-password" className="my-2 block text-sm font-medium">
+            Password
+            <Input
+              id="login-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+              className="mt-1"
+            />
+          </label>
+          <Checkbox
+            label="Remember me"
             checked={remember}
             onChange={(e) => setRemember(e.target.checked)}
+            className="my-2.5"
           />
-          Remember me
-        </label>
-        <button type="submit" disabled={busy}>
-          {busy ? 'Signing in…' : 'Sign in'}
-        </button>
-      </form>
+          <Button type="submit" disabled={busy}>
+            {busy ? 'Signing in…' : 'Sign in'}
+          </Button>
+        </form>
+      </Card>
     </div>
   )
 }
