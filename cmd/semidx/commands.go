@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -821,6 +822,7 @@ func newMCPInstallCmd() *cobra.Command {
 		configFile string
 		list       bool
 		all        bool
+		envPairs   []string
 	)
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -828,14 +830,22 @@ func newMCPInstallCmd() *cobra.Command {
 		Long: "Register semidx's stdio MCP server in a coding agent's configuration.\n\n" +
 			"By default it PRINTS the config snippet and its target path; pass --apply to\n" +
 			"merge it in place (a timestamped .bak is written first and other servers are\n" +
-			"preserved). Pass --all to apply to every supported client at once.\n\n" +
+			"preserved). Pass --all to apply to every supported client at once.\n" +
+			"Pass --env KEY=VAL (repeatable) to add environment variables to the entry\n" +
+			"(\"env\" block; \"environment\" for OpenCode; inline env table for Codex).\n\n" +
 			"Supported clients:\n\n" + mcpinstall.ClientList(),
-		Example: "  semidx mcp install --list\n  semidx mcp install --client claude-code --apply\n  semidx mcp install --all --apply",
+		Example: "  semidx mcp install --list\n  semidx mcp install --client claude-code --apply\n" +
+			"  semidx mcp install --client codex --env SEMIDX_LOCAL_INDEX=1 --apply\n  semidx mcp install --all --apply",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if list {
 				fmt.Print(mcpinstall.ClientList())
 				return nil
 			}
+			env, err := mcpinstall.ParseEnv(envPairs)
+			if err != nil {
+				return err
+			}
+			warnSecretEnvKeys(cmd.ErrOrStderr(), env)
 			exe, err := os.Executable()
 			if err != nil {
 				return fmt.Errorf("resolve semidx path: %w", err)
@@ -847,7 +857,7 @@ func newMCPInstallCmd() *cobra.Command {
 			configDir, _ := os.UserConfigDir()
 			project, _ := os.Getwd()
 			if all {
-				return installAll(exe, home, configDir, project, name, apply)
+				return installAll(exe, home, configDir, project, name, env, apply)
 			}
 			opts := mcpinstall.Options{
 				Client:    clientID,
@@ -857,6 +867,7 @@ func newMCPInstallCmd() *cobra.Command {
 				ConfigDir: configDir,
 				Project:   project,
 				FilePath:  configFile,
+				Env:       env,
 			}
 			path, snippet, err := mcpinstall.Snippet(opts)
 			if err != nil {
@@ -881,11 +892,22 @@ func newMCPInstallCmd() *cobra.Command {
 	cmd.Flags().StringVar(&configFile, "config-file", "", "override the client's config file path")
 	cmd.Flags().BoolVar(&list, "list", false, "list supported clients and exit")
 	cmd.Flags().BoolVar(&all, "all", false, "apply to every supported client at once (implies --apply)")
+	cmd.Flags().StringArrayVar(&envPairs, "env", nil, "environment variable for the server entry (KEY=VAL, repeatable)")
 	return cmd
 }
 
+// warnSecretEnvKeys prints a stderr warning for env keys that look like
+// credentials: --apply stores their values in a plain-text config file.
+func warnSecretEnvKeys(w io.Writer, env map[string]string) {
+	for _, k := range mcpinstall.EnvKeys(env) {
+		if mcpinstall.LooksLikeSecret(k) {
+			_, _ = fmt.Fprintf(w, "warning: --env %s looks like a secret; its value will be written in plain text to the client's config file\n", k)
+		}
+	}
+}
+
 // installAll applies the MCP server entry to every applyable client.
-func installAll(exe, home, configDir, project, name string, apply bool) error {
+func installAll(exe, home, configDir, project, name string, env map[string]string, apply bool) error {
 	clients := mcpinstall.ApplyableClients()
 	for _, c := range clients {
 		opts := mcpinstall.Options{
@@ -895,6 +917,7 @@ func installAll(exe, home, configDir, project, name string, apply bool) error {
 			Home:      home,
 			ConfigDir: configDir,
 			Project:   project,
+			Env:       env,
 		}
 		if apply {
 			written, err := mcpinstall.Apply(opts)
