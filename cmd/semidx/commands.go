@@ -648,14 +648,21 @@ func runStatusLocal(ctx context.Context, d *deps, projectPath, branch string) er
 
 func newServeCmd(d *deps) *cobra.Command {
 	var showBootstrapToken bool
+	var mcpHTTP bool
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the HTTP API server",
 		Long: `Run the semidx HTTP API server (and the embedded web admin at /admin). On
 first run it generates a one-time bootstrap admin token. Requires Postgres
-(SEMIDX_DB_DSN); listens on SEMIDX_LISTEN_ADDR.`,
+(SEMIDX_DB_DSN); listens on SEMIDX_LISTEN_ADDR.
+
+--mcp-http (or SEMIDX_MCP_HTTP=1) additionally serves the MCP protocol over
+Streamable HTTP at /mcp, behind the same bearer-token auth as the REST API
+(read scope; semantic_reindex needs write). Never expose the listen address
+without that auth in front.`,
 		Example: `  semidx serve
-  SEMIDX_LISTEN_ADDR=:8080 semidx serve`,
+  SEMIDX_LISTEN_ADDR=:8080 semidx serve
+  SEMIDX_MCP_HTTP=1 semidx serve`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			db, err := d.database(cmd.Context())
 			if err != nil {
@@ -678,6 +685,11 @@ first run it generates a one-time bootstrap admin token. Requires Postgres
 				MaxFilesPerProject:  d.cfg.MaxFilesPerProject,
 			})
 
+			if mcpHTTP || envTruthy("SEMIDX_MCP_HTTP") {
+				srv.EnableMCPHTTP()
+				fmt.Fprintln(os.Stderr, "MCP Streamable HTTP endpoint enabled at /mcp (bearer auth required)")
+			}
+
 			if err := d.bootstrapServer(cmd.Context(), srv, showBootstrapToken); err != nil {
 				return err
 			}
@@ -694,7 +706,18 @@ first run it generates a one-time bootstrap admin token. Requires Postgres
 		},
 	}
 	cmd.Flags().BoolVar(&showBootstrapToken, "show-bootstrap-token", false, "Display the one-time bootstrap admin token (generated on first run)")
+	cmd.Flags().BoolVar(&mcpHTTP, "mcp-http", false, "Serve the MCP protocol over Streamable HTTP at /mcp (authenticated; also SEMIDX_MCP_HTTP=1)")
 	return cmd
+}
+
+// envTruthy reports whether an env var is set to a truthy value (anything but
+// "", "0", "false", "no", case-insensitive).
+func envTruthy(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "", "0", "false", "no":
+		return false
+	}
+	return true
 }
 
 // bootstrapServer runs the one-time server setup: bootstrap admin token + user,
