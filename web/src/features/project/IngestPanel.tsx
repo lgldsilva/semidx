@@ -1,5 +1,11 @@
 import { useState } from 'react'
 import { api, ApiError } from '../../api'
+import { Alert } from '../../components/Alert'
+import { Card } from '../../components/Card'
+import { Code } from '../../components/Snippet'
+
+const FILE_LABEL = 'block text-sm font-medium'
+const FILE_INPUT = 'mt-1 block text-sm text-muted file:mr-2 file:cursor-pointer file:rounded-md file:border-0 file:bg-accent file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-fg'
 
 export function IngestPanel({
   project,
@@ -96,27 +102,34 @@ export function IngestPanel({
   }
 
   return (
-    <div className="card">
-      <h2>Ingest files</h2>
-      <p className="muted">
+    <Card>
+      <h2 className="mb-2 text-[1.1rem] font-bold">Ingest files</h2>
+      <p className="m-0 text-muted">
         Upload text files, a whole folder, or a .zip archive (each file ≤512KiB). Large corpora:{' '}
-        <code>semidx push --project . --name {project}</code>
+        <Code>semidx push --project . --name {project}</Code>
       </p>
-      {status && <div className="alert ok">{status}</div>}
+      {status && <Alert kind="success">{status}</Alert>}
       {err && (
-        <pre className="alert error" style={{ whiteSpace: 'pre-wrap' }}>
+        <Alert kind="error" className="whitespace-pre-wrap">
           {err}
-        </pre>
+        </Alert>
       )}
-      <div className="row-actions">
-        <label>
+      <div className="mt-3 flex flex-wrap items-start gap-x-5 gap-y-2.5">
+        <label className={FILE_LABEL}>
           Files
-          <input type="file" multiple disabled={busy} onChange={(e) => void onPick(e)} />
+          <input
+            type="file"
+            className={FILE_INPUT}
+            multiple
+            disabled={busy}
+            onChange={(e) => void onPick(e)}
+          />
         </label>
-        <label>
+        <label className={FILE_LABEL}>
           Folder
           <input
             type="file"
+            className={FILE_INPUT}
             // @ts-expect-error webkitdirectory is non-standard but widely supported
             webkitdirectory=""
             directory=""
@@ -125,16 +138,17 @@ export function IngestPanel({
             onChange={(e) => void onPick(e)}
           />
         </label>
-        <label>
+        <label className={FILE_LABEL}>
           .zip
           <input
             type="file"
+            className={FILE_INPUT}
             accept=".zip,application/zip"
             disabled={busy}
             onChange={(e) => void onPickArchive(e)}
           />
         </label>
       </div>
-    </div>
+    </Card>
   )
 }

@@ -99,6 +99,52 @@ export type ChatMessage = {
   sources?: ChatSource[]
 }
 
+/** Mid-stream agent tool invocation (SSE `tool_call`). */
+export type ChatToolCallEvent = {
+  type: 'tool_call'
+  id?: string
+  name: string
+  args?: Record<string, unknown>
+}
+
+/** Outcome of a tool invocation (SSE `tool_result`), correlated by id. */
+export type ChatToolResultEvent = {
+  type: 'tool_result'
+  id?: string
+  name: string
+  preview?: string
+  is_error?: boolean
+  elapsed_ms?: number
+  truncated?: boolean
+}
+
+export type ChatStreamEvent =
+  | { type: 'sources'; sources: ChatSource[]; model?: string; fallback?: boolean }
+  | { type: 'chunk'; content: string }
+  | ChatToolCallEvent
+  | ChatToolResultEvent
+  | { type: 'error'; message: string }
+  | { type: 'done' }
+
+export type ChatStreamOptions = {
+  /** Abort the fetch/stream (Stop button). */
+  signal?: AbortSignal
+  /** Preferred chat model (sent only when non-empty). */
+  model?: string
+  /** Chat mode, e.g. rag | agent (sent only when non-empty). */
+  mode?: string
+}
+
+/** GET /admin/api/chat/config — selector options for the chat UI. A 404
+ * (older server) or enabled:false hides the mode/model selector entirely. */
+export type ChatConfig = {
+  enabled: boolean
+  modes?: string[]
+  models?: string[]
+  default_mode?: string
+  default_model?: string
+}
+
 export type Conversation = {
   id: number
   project: string
@@ -451,6 +497,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ role, content, sources: sources ?? [] }),
     }),
+  chatConfig: () => request<ChatConfig>('/admin/api/chat/config'),
   chat: (
     name: string,
     question: string,
@@ -469,12 +516,8 @@ export const api = {
     name: string,
     question: string,
     history: { role: string; content: string }[],
-  ): AsyncGenerator<
-    | { type: 'sources'; sources: ChatSource[]; model?: string }
-    | { type: 'chunk'; content: string }
-    | { type: 'done' }
-    | { type: 'error'; error: string }
-  > {
+    opts: ChatStreamOptions = {},
+  ): AsyncGenerator<ChatStreamEvent> {
     const res = await fetch(
       `${chatBase(name)}/chat/stream`,
       {
@@ -484,7 +527,13 @@ export const api = {
           ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
         },
         credentials: 'same-origin',
-        body: JSON.stringify({ question, history }),
+        signal: opts.signal,
+        body: JSON.stringify({
+          question,
+          history,
+          ...(opts.model ? { model: opts.model } : {}),
+          ...(opts.mode ? { mode: opts.mode } : {}),
+        }),
       },
     )
     if (!res.ok) {

@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, type ChatMessage, type Conversation } from '../api'
+import { Button } from '../components/Button'
+import { Card } from '../components/Card'
 import { ChatPanel } from '../features/project/ChatPanel'
+import { cx } from '../lib/cx'
 
 // ChatPage is the global (cross-project) chat with persistent, multiple
 // conversations. The left panel lists the user's conversations; the right panel
@@ -118,11 +121,9 @@ export function ChatPage() {
     // Conversations unsupported (e.g. non-Postgres store): plain global chat.
     return (
       <div>
-        <div className="page-head">
-          <div>
-            <h1>Chat</h1>
-            <p className="muted">Ask across all indexed projects.</p>
-          </div>
+        <div className="mb-2">
+          <h1 className="mb-1 text-[1.45rem] font-bold">Chat</h1>
+          <p className="m-0 text-muted">Ask across all indexed projects.</p>
         </div>
         <ChatPanel project="" seedQuestion="" onOpenFile={openFile} />
       </div>
@@ -131,68 +132,65 @@ export function ChatPage() {
 
   return (
     <div>
-      <div className="page-head">
+      <div className="mb-2 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1>Chat</h1>
-          <p className="muted">
+          <h1 className="mb-1 text-[1.45rem] font-bold">Chat</h1>
+          <p className="m-0 text-muted">
             Ask across all indexed projects — conversations are saved.
           </p>
         </div>
-        <div className="row-actions">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
           {selectedId != null && (
-            <button
-              type="button"
-              className="link"
+            <Button
+              variant="link"
               onClick={() => void navigator.clipboard?.writeText(window.location.href)}
               title="Copy a shareable link to this conversation"
             >
               Copy link
-            </button>
+            </Button>
           )}
-          <button type="button" onClick={newChat}>
-            New chat
-          </button>
+          <Button onClick={newChat}>New chat</Button>
         </div>
       </div>
-      <div className="files-layout">
-        <aside className="card">
-          <div className="tree-scroll">
+      <div className="grid min-h-[420px] gap-3.5 md:grid-cols-[minmax(220px,32%)_1fr]">
+        <Card>
+          <div className="max-h-[55vh] overflow-auto">
             {convs.length === 0 && (
-              <p className="muted small">No saved conversations yet.</p>
+              <p className="text-xs text-muted">No saved conversations yet.</p>
             )}
             {convs.map((cv) => (
               <div
                 key={cv.id}
-                className={`conv-row ${cv.id === selectedId ? 'active' : ''}`}
+                className={cx(
+                  'flex items-center justify-between gap-1.5 rounded-md px-1 py-0.5 hover:bg-accent/10',
+                  cv.id === selectedId && 'bg-accent/10',
+                )}
               >
                 <button
                   type="button"
-                  className="tree-file"
+                  className="min-w-0 flex-1 cursor-pointer overflow-hidden rounded border-0 bg-transparent px-1 py-0.5 text-left font-[inherit] text-sm text-ellipsis whitespace-nowrap text-fg"
                   onClick={() => void openConversation(cv.id)}
                   title={cv.title}
                 >
                   {cv.title}
                 </button>
-                <span className="conv-actions">
-                  <button
-                    type="button"
-                    className="link"
-                    onClick={() => void rename(cv.id)}
-                  >
+                <span className="inline-flex shrink-0 gap-1">
+                  <Button variant="link" size="sm" onClick={() => void rename(cv.id)}>
                     rename
-                  </button>
-                  <button
-                    type="button"
-                    className="link danger-text"
+                  </Button>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="text-danger"
                     onClick={() => void remove(cv.id)}
                   >
                     delete
-                  </button>
+                  </Button>
                 </span>
               </div>
             ))}
           </div>
-        </aside>
+        </Card>
         <ChatPanel
           project=""
           seedQuestion=""

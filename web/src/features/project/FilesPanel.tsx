@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError, type FileEntry } from '../../api'
+import { Alert } from '../../components/Alert'
+import { Button } from '../../components/Button'
+import { Card } from '../../components/Card'
+import { Input } from '../../components/Input'
+import { Snippet } from '../../components/Snippet'
+import { cx } from '../../lib/cx'
 import { buildFileTree } from './buildFileTree'
 import { TreeView } from './TreeView'
 
@@ -117,62 +123,65 @@ export function FilesPanel({
   }, [content, chunks, line])
 
   return (
-    <div className="files-layout">
-      <aside className="files-tree card">
-        <input
+    <div className="grid min-h-[420px] gap-3.5 md:grid-cols-[minmax(220px,32%)_1fr]">
+      <Card>
+        <Input
+          className="mb-2"
           placeholder="Filter paths…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
-        <p className="muted small">
+        <p className="text-xs text-muted">
           {loading ? 'Loading…' : `${total} files`}
         </p>
-        <div className="tree-scroll">
+        <div className="max-h-[55vh] overflow-auto">
           <TreeView
             nodes={tree}
             selected={selected}
             onSelect={setSelected}
           />
         </div>
-      </aside>
-      <section className="files-viewer card">
-        {err && <div className="alert error">{err}</div>}
+      </Card>
+      <Card>
+        {err && <Alert kind="error">{err}</Alert>}
         {!selected ? (
-          <p className="muted">Select a file from the tree (content from the index).</p>
+          <p className="text-muted">Select a file from the tree (content from the index).</p>
         ) : (
           <>
-            <div className="result-header">
-              <code className="result-path">{selected}</code>
-              <div className="row-actions">
-                <button
-                  type="button"
-                  className="link"
-                  onClick={() => onExplorePath(selected)}
-                >
-                  Find related
-                </button>
-              </div>
+            <div className="flex justify-between gap-3 max-sm:flex-wrap">
+              <code className="font-mono text-sm break-all">{selected}</code>
+              <Button
+                variant="link"
+                size="sm"
+                className="shrink-0"
+                onClick={() => onExplorePath(selected)}
+              >
+                Find related
+              </Button>
             </div>
             {truncated && (
-              <div className="alert error">Showing first chunks only (truncated).</div>
+              <Alert kind="error">Showing first chunks only (truncated).</Alert>
             )}
             {chunks.length > 0 && (
-              <details className="file-detail-chunks" open>
-                <summary>Chunks ({chunks.length})</summary>
-                <ul className="chunk-list">
+              <details className="my-2 text-sm" open>
+                <summary className="cursor-pointer font-semibold text-muted">
+                  Chunks ({chunks.length})
+                </summary>
+                <ul className="m-0 list-none p-0">
                   {chunks.map((c) => (
-                    <li key={`${c.start_line}-${c.end_line}`}>
-                      <button
-                        type="button"
-                        className="link"
+                    <li key={`${c.start_line}-${c.end_line}`} className="flex items-baseline gap-2">
+                      <Button
+                        variant="link"
+                        size="sm"
+                        className="shrink-0"
                         onClick={() => {
                           const el = document.getElementById(`L${c.start_line}`)
                           el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
                         }}
                       >
                         L{c.start_line}–{c.end_line}
-                      </button>
-                      <span className="muted small">
+                      </Button>
+                      <span className="truncate text-xs text-muted">
                         {c.content.slice(0, 80)}
                         {c.content.length > 80 ? '…' : ''}
                       </span>
@@ -182,17 +191,19 @@ export function FilesPanel({
               </details>
             )}
             {(callers.length > 0 || deps.length > 0 || graphErr) && (
-              <div className="file-graph-stats">
-                {graphErr && <p className="muted small">{graphErr}</p>}
+              <div className="my-2 text-sm">
+                {graphErr && <p className="text-xs text-muted">{graphErr}</p>}
                 {deps.length > 0 && (
                   <details open>
-                    <summary>Fan-out ({deps.length})</summary>
-                    <ul>
+                    <summary className="cursor-pointer font-semibold text-muted">
+                      Fan-out ({deps.length})
+                    </summary>
+                    <ul className="m-0 list-none p-0">
                       {deps.map((d) => (
                         <li key={d}>
-                          <button type="button" className="link" onClick={() => setSelected(d)}>
+                          <Button variant="link" size="sm" onClick={() => setSelected(d)}>
                             {d}
-                          </button>
+                          </Button>
                         </li>
                       ))}
                     </ul>
@@ -200,13 +211,15 @@ export function FilesPanel({
                 )}
                 {callers.length > 0 && (
                   <details open>
-                    <summary>Fan-in ({callers.length})</summary>
-                    <ul>
+                    <summary className="cursor-pointer font-semibold text-muted">
+                      Fan-in ({callers.length})
+                    </summary>
+                    <ul className="m-0 list-none p-0">
                       {callers.map((c) => (
                         <li key={c}>
-                          <button type="button" className="link" onClick={() => setSelected(c)}>
+                          <Button variant="link" size="sm" onClick={() => setSelected(c)}>
                             {c}
-                          </button>
+                          </Button>
                         </li>
                       ))}
                     </ul>
@@ -214,23 +227,25 @@ export function FilesPanel({
                 )}
               </div>
             )}
-            <pre className="snippet file-body">
+            <Snippet className="max-h-[60vh] overflow-y-auto text-[0.78rem]">
               {numbered.length === 0
                 ? '(empty or not in index)'
                 : numbered.map((row) => (
                     <div
                       key={row.n + row.text.slice(0, 8)}
                       id={`L${row.n}`}
-                      className={row.hi ? 'line-hi' : undefined}
+                      className={cx(row.hi && 'block bg-warning/25')}
                     >
-                      <span className="ln">{row.n}</span>
+                      <span className="mr-3 inline-block w-[3.2rem] text-right text-muted select-none">
+                        {row.n}
+                      </span>
                       {row.text}
                     </div>
                   ))}
-            </pre>
+            </Snippet>
           </>
         )}
-      </section>
+      </Card>
     </div>
   )
 }
