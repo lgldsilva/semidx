@@ -2,10 +2,12 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -151,5 +153,49 @@ func TestLocalBackendListToolsExposesAll(t *testing.T) {
 		if !got[want] {
 			t.Errorf("missing tool %q (have %v)", want, got)
 		}
+	}
+}
+
+// degradedEmbedder indexes normally (basis vectors) but fails query embedding
+// with an open circuit, so a search must degrade to keyword results.
+type degradedEmbedder struct{ basisEmbedder }
+
+func (degradedEmbedder) EmbedSingle(context.Context, string, string) ([]float32, error) {
+	return nil, &embed.RetryableError{Err: errors.New("circuit open"), After: 2 * time.Second}
+}
+
+// TestLocalBackendSearchDegradesWhenCircuitOpen: the local backend must copy
+// the search service's Degraded/RetryAfter flags into the MCP SearchOutput.
+func TestLocalBackendSearchDegradesWhenCircuitOpen(t *testing.T) {
+	ctx := context.Background()
+	st, err := localstore.New(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatalf("localstore.New: %v", err)
+	}
+	t.Cleanup(st.Close)
+
+	src := t.TempDir()
+	writeFile(t, src, "alpha.go", "package a\nfunc Alpha() {} // token alpha here\n")
+	pid, err := st.UpsertProject(ctx, "proj", src, "m", 0)
+	if err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+	if _, err := indexing.NewIndexer(st, basisEmbedder{}, 3, indexing.IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32}).IndexProject(ctx, pid, src, "m", 0); err != nil {
+		t.Fatalf("IndexProject: %v", err)
+	}
+
+	b := NewLocalBackend(search.NewService(st, degradedEmbedder{}), st, false, agent.Capabilities{})
+	out, err := b.Search(ctx, "proj", "where is the alpha token", "", 5, false, 0)
+	if err != nil {
+		t.Fatalf("degraded search must not error: %v", err)
+	}
+	if !out.Degraded || !out.Fallback {
+		t.Errorf("degraded=%v fallback=%v, want both true", out.Degraded, out.Fallback)
+	}
+	if out.RetryAfterMS != 2000 {
+		t.Errorf("RetryAfterMS = %d, want 2000", out.RetryAfterMS)
+	}
+	if len(out.Results) == 0 {
+		t.Error("degraded search should still return keyword results")
 	}
 }

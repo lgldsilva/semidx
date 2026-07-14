@@ -69,11 +69,16 @@ type SearchHit struct {
 }
 
 type SearchResponse struct {
-	Project  string      `json:"project"`
-	Model    string      `json:"model"`
-	Fallback bool        `json:"fallback"`
-	TookMS   int64       `json:"took_ms"`
-	Results  []SearchHit `json:"results"`
+	Project  string `json:"project"`
+	Model    string `json:"model"`
+	Fallback bool   `json:"fallback"`
+	// Degraded is true when the embedding circuit was open on the server and
+	// keyword results were served; RetryAfterMS hints when to retry semantic
+	// search. Absent (false/0) on older servers.
+	Degraded     bool        `json:"degraded"`
+	RetryAfterMS int64       `json:"retry_after_ms"`
+	TookMS       int64       `json:"took_ms"`
+	Results      []SearchHit `json:"results"`
 }
 
 type Project struct {

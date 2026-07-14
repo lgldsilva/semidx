@@ -67,6 +67,13 @@ type Response struct {
 	// constant placeholder, not a similarity, so formatters label such results
 	// "keyword match" instead of a misleading percentage.
 	Keyword bool
+	// Degraded is true when the embedding circuit breaker was open (provider
+	// temporarily unavailable) and the search served keyword results instead of
+	// failing. Degraded implies Fallback and Keyword.
+	Degraded bool
+	// RetryAfter hints when the embedding provider may recover (only set when
+	// Degraded is true).
+	RetryAfter time.Duration
 }
 
 // Search resolves the model, embeds the query and runs a vector search,
@@ -205,9 +212,13 @@ func (s *Service) searchRoutedKeyword(ctx context.Context, projectID int, req Re
 func (s *Service) searchSemantic(ctx context.Context, projectID int, req Request, model string, dims int, worktree string, resp *Response) (*Response, error) {
 	vec, err := s.emb.EmbedSingle(ctx, model, req.Query)
 	if err != nil {
+		// An open circuit (RetryableError) degrades to the same keyword fallback
+		// instead of failing the search — the caller gets results now plus a
+		// retry hint, rather than an error while the provider recovers.
 		var re interface{ RetryAfter() time.Duration }
 		if errors.As(err, &re) {
-			return nil, err
+			resp.Degraded = true
+			resp.RetryAfter = re.RetryAfter()
 		}
 		resp.Fallback = true
 		resp.Keyword = true

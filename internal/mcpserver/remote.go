@@ -21,7 +21,10 @@ func (b *clientBackend) Search(ctx context.Context, project, query, model string
 	if err != nil {
 		return nil, err
 	}
-	out := &SearchOutput{Project: resp.Project, Fallback: resp.Fallback}
+	out := &SearchOutput{
+		Project: resp.Project, Fallback: resp.Fallback,
+		Degraded: resp.Degraded, RetryAfterMS: resp.RetryAfterMS,
+	}
 	for _, r := range resp.Results {
 		out.Results = append(out.Results, Hit{Path: r.Path, StartLine: r.StartLine, EndLine: r.EndLine, Score: r.Score, Content: r.Content})
 	}

@@ -237,21 +237,51 @@ func TestSearchKeywordOnly(t *testing.T) {
 	}
 }
 
-func TestSearchPropagatesRetryableError(t *testing.T) {
-	st := &fakeStore{project: &store.Project{ID: 1, Name: "p", Model: "bge-m3"}}
+// TestSearchDegradesWhenCircuitOpen: an open embedding circuit (RetryableError)
+// must not fail the search — it degrades to keyword results, flagged Degraded
+// with the circuit's retry hint. Invariant: Degraded ⇒ Fallback ∧ Keyword.
+func TestSearchDegradesWhenCircuitOpen(t *testing.T) {
+	st := &fakeStore{
+		project:   &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		kwResults: []store.SearchResult{{FilePath: "b.go", Content: "y", Score: 0.5}},
+	}
+	emb := &fakeEmbedder{embedErr: &embed.RetryableError{Err: errors.New("circuit open"), After: 2 * time.Second}, dims: 3}
+	svc := NewService(st, emb)
+
+	resp, err := svc.Search(context.Background(), Request{Project: "p", Query: "handle request"})
+	if err != nil {
+		t.Fatalf("open circuit must degrade, not error: %v", err)
+	}
+	if !resp.Degraded {
+		t.Error("Degraded should be true when the embed circuit is open")
+	}
+	if resp.RetryAfter != 2*time.Second {
+		t.Errorf("RetryAfter = %v, want the circuit's 2s hint", resp.RetryAfter)
+	}
+	if !resp.Fallback || !resp.Keyword {
+		t.Errorf("Degraded must imply Fallback and Keyword, got fallback=%v keyword=%v", resp.Fallback, resp.Keyword)
+	}
+	if !st.usedKW {
+		t.Error("degraded search should serve keyword results")
+	}
+	if len(resp.Results) != 1 || resp.Results[0].FilePath != "b.go" {
+		t.Errorf("results = %+v", resp.Results)
+	}
+}
+
+// TestSearchDegradedKeywordFailure: when the circuit is open AND the keyword
+// fallback fails, the search errors — there is nothing left to serve.
+func TestSearchDegradedKeywordFailure(t *testing.T) {
+	st := &fakeStore{
+		project: &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		kwErr:   errors.New("kw down"),
+	}
 	emb := &fakeEmbedder{embedErr: &embed.RetryableError{Err: errors.New("circuit open"), After: time.Second}, dims: 3}
 	svc := NewService(st, emb)
 
 	_, err := svc.Search(context.Background(), Request{Project: "p", Query: "handle request"})
-	if err == nil {
-		t.Fatal("expected retryable error")
-	}
-	var re interface{ RetryAfter() time.Duration }
-	if !errors.As(err, &re) {
-		t.Fatalf("expected RetryAfter error, got %T: %v", err, err)
-	}
-	if st.usedKW {
-		t.Error("retryable embed errors must not fall back to keyword search")
+	if err == nil || err.Error() != "kw down" {
+		t.Fatalf("expected keyword error, got %v", err)
 	}
 }
 

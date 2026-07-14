@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -132,11 +133,17 @@ func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 		Content string  `json:"content"`
 	}
 	out := struct {
-		Project  string `json:"project"`
-		Model    string `json:"model"`
-		Fallback bool   `json:"fallback"`
-		Results  []row  `json:"results"`
-	}{Model: resp.Model, Fallback: resp.Fallback, Results: []row{}}
+		Project      string `json:"project"`
+		Model        string `json:"model"`
+		Fallback     bool   `json:"fallback"`
+		Degraded     bool   `json:"degraded"`
+		RetryAfterMS int64  `json:"retry_after_ms"`
+		Results      []row  `json:"results"`
+	}{
+		Model: resp.Model, Fallback: resp.Fallback,
+		Degraded: resp.Degraded, RetryAfterMS: resp.RetryAfter.Milliseconds(),
+		Results: []row{},
+	}
 	if resp.Project != nil {
 		out.Project = resp.Project.Name
 	}
@@ -146,6 +153,27 @@ func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+// DegradedNotice returns the one-line warning CLI commands print (on stderr)
+// when a response is degraded — the embedding circuit was open and keyword
+// results were served instead. Empty when the response is not degraded.
+func DegradedNotice(resp *Response) string {
+	if !resp.Degraded {
+		return ""
+	}
+	return fmt.Sprintf("[warn] embedding temporarily unavailable — keyword results; retry in ~%ds",
+		RetrySeconds(resp.RetryAfter.Milliseconds()))
+}
+
+// RetrySeconds converts a retry-after hint in milliseconds to whole seconds
+// for display, rounding up and flooring at 1 so the hint never reads "~0s".
+func RetrySeconds(ms int64) int64 {
+	secs := int64(math.Ceil(float64(ms) / 1000))
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
 }
 
 // matchLabel renders the per-result relevance label: cosine similarity as a
