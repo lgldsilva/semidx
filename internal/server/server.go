@@ -23,6 +23,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/search"
+	"github.com/lgldsilva/semidx/internal/secretbox"
 	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/internal/webadmin"
 	"github.com/lgldsilva/semidx/pkg/client"
@@ -62,6 +63,7 @@ type Server struct {
 	gitUser        string // basic-auth user for gitToken (SEMIDX_GIT_USER)
 	metricsToken   string // when set, /metrics requires Bearer match (SEMIDX_METRICS_TOKEN)
 	indexLimits    IndexLimits
+	secrets        *secretbox.Box // decrypts stored git credentials, nil-safe (SetSecretBox)
 }
 
 // EnableJWT turns on JWT control tokens using secret as the HS256 signing key.
