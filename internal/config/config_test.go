@@ -15,7 +15,7 @@ func clearEnv(t *testing.T) {
 	for _, key := range []string{
 		"SEMIDX_DB_DSN", "SEMIDX_OLLAMA_URL", "OLLAMA_URL",
 		"EMBED_PROVIDER", "EMBED_ENDPOINT", "EMBED_API_KEY",
-		"GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
+		"GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY",
 		"OLLAMA_CLOUD_API_KEY", "EMBED_PRIVACY", "SEMIDX_INDEX_WORKERS",
 		"SEMIDX_LOCAL_INDEX",
 	} {
@@ -246,6 +246,7 @@ func TestLoadWithLookupHermetic(t *testing.T) {
 		"SEMIDX_DB_DSN":                   "postgres://test:test@localhost:5432/test",
 		"SEMIDX_OLLAMA_URL":               "http://test-ollama:11434",
 		"GEMINI_API_KEY":                  "test-gemini-key",
+		"ANTHROPIC_API_KEY":               "test-anthropic-key",
 		"EMBED_PRIVACY":                   "true",
 		"SEMIDX_INDEX_WORKERS":            "8",
 		"SEMIDX_EMBED_BATCH_SIZE":         "16",
@@ -276,6 +277,7 @@ func TestLoadWithLookupHermetic(t *testing.T) {
 		{"DatabaseURL", cfg.DatabaseURL, "postgres://test:test@localhost:5432/test"},
 		{"OllamaURL", cfg.OllamaURL, "http://test-ollama:11434"},
 		{"GeminiAPIKey", cfg.GeminiAPIKey, "test-gemini-key"},
+		{"AnthropicAPIKey", cfg.AnthropicAPIKey, "test-anthropic-key"},
 		{"Privacy", cfg.Privacy, true},
 		{"IndexWorkers", cfg.IndexWorkers, 8},
 		{"EmbedBatchSize", cfg.EmbedBatchSize, 16},
