@@ -289,6 +289,44 @@ func TestSweepTempKeys(t *testing.T) {
 	}
 }
 
+func TestSweepTempKeys_PreservesPersistentState(t *testing.T) {
+	// Property-ish: regardless of leftover file names under ssh/tmp, sweep removes
+	// only that directory and never known_hosts.d entries.
+	rapid.Check(t, func(rt *rapid.T) {
+		data, err := os.MkdirTemp("", "sweep-*")
+		if err != nil {
+			rt.Fatalf("%v", err)
+		}
+		defer func() { _ = os.RemoveAll(data) }()
+		tmp := filepath.Join(data, "ssh", "tmp")
+		if err := os.MkdirAll(tmp, 0o700); err != nil {
+			rt.Fatalf("%v", err)
+		}
+		n := rapid.IntRange(0, 5).Draw(rt, "n")
+		for i := 0; i < n; i++ {
+			name := rapid.StringMatching(`[a-z0-9._-]{1,12}`).Draw(rt, "name")
+			_ = os.WriteFile(filepath.Join(tmp, name), []byte("x"), 0o600)
+		}
+		khd := filepath.Join(data, "ssh", "known_hosts.d")
+		if err := os.MkdirAll(khd, 0o700); err != nil {
+			rt.Fatalf("%v", err)
+		}
+		host := rapid.StringMatching(`[a-z][a-z0-9.-]{0,20}`).Draw(rt, "host")
+		if err := os.WriteFile(filepath.Join(khd, host), []byte("pin"), 0o600); err != nil {
+			rt.Fatalf("%v", err)
+		}
+		if err := SweepTempKeys(data); err != nil {
+			rt.Fatalf("%v", err)
+		}
+		if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+			rt.Fatalf("tmp still present: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(khd, host)); err != nil {
+			rt.Fatalf("known_hosts lost: %v", err)
+		}
+	})
+}
+
 // brokenSSHDir returns a dataDir where dataDir/ssh is a regular file, making
 // any ephemeral credential write under ssh/tmp fail.
 func brokenSSHDir(t *testing.T) string {
