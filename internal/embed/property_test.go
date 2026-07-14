@@ -88,6 +88,48 @@ func TestChainFallbackOrderProperty(t *testing.T) {
 	})
 }
 
+// TestEmbeddingDimsFromShowProperty: a model_info map with NO key suffixed
+// ".embedding_length" always yields 0 (no silent default), and adding one
+// suffixed key with a positive value always yields exactly that value. The
+// noise-key generator caps the dotted part at 12 chars, so it can never
+// produce the 17-char ".embedding_length" suffix by accident.
+func TestEmbeddingDimsFromShowProperty(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		mi := map[string]interface{}{}
+		n := rapid.IntRange(0, 8).Draw(rt, "n")
+		for i := 0; i < n; i++ {
+			key := rapid.StringMatching(`[a-z]{1,10}(\.[a-z_]{1,12})?`).Draw(rt, "key")
+			mi[key] = rapid.Float64().Draw(rt, "val")
+		}
+		if got := embeddingDimsFromShow(mi); got != 0 {
+			rt.Fatalf("map without *.embedding_length yielded %d, want 0 (map: %v)", got, mi)
+		}
+
+		dims := rapid.IntRange(1, 8192).Draw(rt, "dims")
+		arch := rapid.StringMatching(`[a-z]{1,10}`).Draw(rt, "arch")
+		mi[arch+".embedding_length"] = float64(dims)
+		if got := embeddingDimsFromShow(mi); got != dims {
+			rt.Fatalf("embeddingDimsFromShow = %d, want %d (map: %v)", got, dims, mi)
+		}
+	})
+}
+
+// Non-float64 and non-positive values under the suffix must not be used.
+func TestEmbeddingDimsFromShowRejectsBadValues(t *testing.T) {
+	cases := map[string]map[string]interface{}{
+		"nil map":                        nil,
+		"string value":                   {"bert.embedding_length": "768"},
+		"zero value":                     {"bert.embedding_length": float64(0)},
+		"negative":                       {"bert.embedding_length": float64(-1)},
+		"bare suffix name is not dotted": {"embedding_length": float64(768)},
+	}
+	for name, mi := range cases {
+		if got := embeddingDimsFromShow(mi); got != 0 {
+			t.Errorf("%s: embeddingDimsFromShow = %d, want 0", name, got)
+		}
+	}
+}
+
 // TestOpenAIRespectsContextCancellation proves an already-cancelled context is
 // honoured before any network round trip completes.
 func TestOpenAIRespectsContextCancellation(t *testing.T) {

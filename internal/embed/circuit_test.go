@@ -285,3 +285,31 @@ func TestCircuitEmbedderRecoversAfterCooldown(t *testing.T) {
 		t.Fatal("expected embedding vector")
 	}
 }
+
+// unknownModelEmbedder returns UnknownModelError from ModelInfo (a
+// deterministic catalog miss) while every other method succeeds.
+type unknownModelEmbedder struct{ okEmbedder }
+
+func (u *unknownModelEmbedder) ModelInfo(_ context.Context, model string) (*ModelInfo, error) {
+	return nil, &UnknownModelError{Provider: "test", Model: model, Reason: "not in catalog"}
+}
+
+func TestCircuitEmbedderModelInfoUnknownModelIsNeutral(t *testing.T) {
+	// Regression: repeated deterministic dims-catalog misses must NOT open the
+	// breaker — they say nothing about provider health, and opening it would
+	// degrade embedding for every other model/project on this provider.
+	ce := wrapWithCircuit("test", &unknownModelEmbedder{}, 2, time.Minute)
+
+	for i := 0; i < 10; i++ {
+		_, err := ce.ModelInfo(context.Background(), "mystery-model")
+		var ume *UnknownModelError
+		if !errors.As(err, &ume) {
+			t.Fatalf("call %d: err = %v, want UnknownModelError (breaker must stay closed)", i, err)
+		}
+	}
+
+	// The breaker stayed closed: embeds still reach the provider.
+	if _, err := ce.EmbedSingle(context.Background(), "m", "hello"); err != nil {
+		t.Fatalf("EmbedSingle after unknown-model lookups: %v (breaker opened?)", err)
+	}
+}
