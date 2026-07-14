@@ -48,7 +48,7 @@ type Server struct {
 	// implements it). Nil disables the /api/conversations endpoints (501) and
 	// the UI hides its sidebar.
 	//
-	// TODO(follow-up): in remote mode (CLI logged into a semidx server) these
+	// Follow-up: in remote mode (CLI logged into a semidx server) these
 	// endpoints should proxy the server's /admin/api/conversations API instead
 	// of a local store; nothing would consume that today, so remote backends
 	// simply leave convs nil.

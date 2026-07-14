@@ -203,35 +203,7 @@ func (a *Admin) handleChatStream(w http.ResponseWriter, r *http.Request, name st
 	flusher.Flush()
 
 	for chunk := range ch {
-		// Tool activity (agent streams): emit tool_call / tool_result events so
-		// the UI can show the loop working before tokens arrive.
-		if chunk.Tool != nil {
-			if evJSON := toolEventJSON(chunk.Tool); evJSON != nil {
-				_, _ = fmt.Fprintf(w, spaSSEDataFmt, evJSON)
-				flusher.Flush()
-			}
-		}
-		if chunk.Content != "" {
-			tokJSON, _ := json.Marshal(map[string]any{"type": "chunk", "content": chunk.Content})
-			_, _ = fmt.Fprintf(w, spaSSEDataFmt, tokJSON)
-			flusher.Flush()
-		}
-		// Agent answers learn their sources only after the tool calls, so they
-		// arrive on the terminal chunk — emit them as a (late) sources event.
-		if len(chunk.Sources) > 0 {
-			lateJSON, _ := json.Marshal(map[string]any{
-				"type": "sources", "sources": chatSourcesJSON(chunk.Sources), "fallback": chunk.Fallback,
-			})
-			_, _ = fmt.Fprintf(w, spaSSEDataFmt, lateJSON)
-			flusher.Flush()
-		}
-		// A failed stream surfaces a sanitized error event before done — the
-		// message is generic by contract (the real error is server-log only).
-		if chunk.Err != "" {
-			errJSON, _ := json.Marshal(map[string]any{"type": "error", "message": chunk.Err})
-			_, _ = fmt.Fprintf(w, spaSSEDataFmt, errJSON)
-			flusher.Flush()
-		}
+		writeChatStreamChunk(w, flusher, chunk)
 		if chunk.Done {
 			break
 		}
@@ -239,6 +211,38 @@ func (a *Admin) handleChatStream(w http.ResponseWriter, r *http.Request, name st
 	doneJSON, _ := json.Marshal(map[string]any{"type": "done"})
 	_, _ = fmt.Fprintf(w, spaSSEDataFmt, doneJSON)
 	flusher.Flush()
+}
+
+func writeChatStreamChunk(w http.ResponseWriter, flusher http.Flusher, chunk chat.StreamChunk) {
+	// Tool activity (agent streams): emit tool_call / tool_result events so
+	// the UI can show the loop working before tokens arrive.
+	if chunk.Tool != nil {
+		if evJSON := toolEventJSON(chunk.Tool); evJSON != nil {
+			_, _ = fmt.Fprintf(w, spaSSEDataFmt, evJSON)
+			flusher.Flush()
+		}
+	}
+	if chunk.Content != "" {
+		tokJSON, _ := json.Marshal(map[string]any{"type": "chunk", "content": chunk.Content})
+		_, _ = fmt.Fprintf(w, spaSSEDataFmt, tokJSON)
+		flusher.Flush()
+	}
+	// Agent answers learn their sources only after the tool calls, so they
+	// arrive on the terminal chunk — emit them as a (late) sources event.
+	if len(chunk.Sources) > 0 {
+		lateJSON, _ := json.Marshal(map[string]any{
+			"type": "sources", "sources": chatSourcesJSON(chunk.Sources), "fallback": chunk.Fallback,
+		})
+		_, _ = fmt.Fprintf(w, spaSSEDataFmt, lateJSON)
+		flusher.Flush()
+	}
+	// A failed stream surfaces a sanitized error event before done — the
+	// message is generic by contract (the real error is server-log only).
+	if chunk.Err != "" {
+		errJSON, _ := json.Marshal(map[string]any{"type": "error", "message": chunk.Err})
+		_, _ = fmt.Fprintf(w, spaSSEDataFmt, errJSON)
+		flusher.Flush()
+	}
 }
 
 // toolEventJSON renders one mid-stream tool event per the frozen SSE contract:

@@ -15,8 +15,12 @@ import (
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
-// Help text for commands that talk to the server vault — not a secret value.
-const gitCredPathDesc = "Requires semidx login with an admin-scoped API key" // #nosec G101 -- operator help text, not a credential
+const (
+	// Help text for commands that talk to the server vault — not a secret value.
+	gitCredPathDesc       = "Requires an admin-scoped remote session"               // #nosec G101 -- operator help, not a credential
+	errRepoCredNeedsLogin = "repo cred needs a remote session — authenticate first" // #nosec G101 -- error text, not a credential
+	errListGitCredsFmt    = "list stored git auth entries: %w"                      // #nosec G101 -- error format, not a credential
+)
 
 func newRepoCredCmd(d *deps) *cobra.Command {
 	c := &cobra.Command{
@@ -108,7 +112,7 @@ func (f repoCredFlags) hasSecret() bool {
 
 func runRepoCredSet(ctx context.Context, d *deps, f repoCredFlags) error {
 	if !d.remote() {
-		return fmt.Errorf("repo cred requires a server: run `semidx login` first")
+		return fmt.Errorf("%s", errRepoCredNeedsLogin)
 	}
 	cli := d.apiClient()
 	in, err := buildGitCredentialInput(f)
@@ -147,11 +151,11 @@ func runRepoCredSet(ctx context.Context, d *deps, f repoCredFlags) error {
 
 func runRepoCredList(ctx context.Context, d *deps) error {
 	if !d.remote() {
-		return fmt.Errorf("repo cred requires a server: run `semidx login` first")
+		return fmt.Errorf("%s", errRepoCredNeedsLogin)
 	}
 	creds, err := d.apiClient().ListGitCredentials(ctx)
 	if err != nil {
-		return fmt.Errorf("list git credentials: %w", err)
+		return fmt.Errorf(errListGitCredsFmt, err)
 	}
 	if len(creds) == 0 {
 		fmt.Println("No git credentials stored.")
@@ -175,7 +179,7 @@ func runRepoCredList(ctx context.Context, d *deps) error {
 
 func runRepoCredRm(ctx context.Context, d *deps, id int) error {
 	if !d.remote() {
-		return fmt.Errorf("repo cred requires a server: run `semidx login` first")
+		return fmt.Errorf("%s", errRepoCredNeedsLogin)
 	}
 	if err := d.apiClient().DeleteGitCredential(ctx, id); err != nil {
 		return fmt.Errorf("delete git credential: %w", err)
@@ -223,35 +227,54 @@ func parseGitCredMaterial(f repoCredFlags) (gitCredMaterial, error) {
 	if strings.TrimSpace(f.gitToken) != "" && strings.TrimSpace(f.sshKey) != "" {
 		return gitCredMaterial{}, fmt.Errorf("use either --git-token or --ssh-key, not both")
 	}
-
-	kind := strings.TrimSpace(f.kind)
-	var secret, knownHosts string
-	var err error
-	switch {
-	case strings.TrimSpace(f.gitToken) != "":
-		if kind == "" {
-			kind = "https"
-		}
-		if kind != "https" {
-			return gitCredMaterial{}, fmt.Errorf("kind must be https when using --git-token")
-		}
-		secret, err = readCredentialMaterial(f.gitToken)
-	case strings.TrimSpace(f.sshKey) != "":
-		if kind == "" {
-			kind = "ssh"
-		}
-		if kind != "ssh" {
-			return gitCredMaterial{}, fmt.Errorf("kind must be ssh when using --ssh-key")
-		}
-		secret, err = readCredentialMaterial(f.sshKey)
-		if err == nil && strings.TrimSpace(f.sshKnownHosts) != "" {
-			knownHosts, err = readCredentialMaterial(f.sshKnownHosts)
-		}
-	default:
-		return gitCredMaterial{}, fmt.Errorf("a secret is required: use --git-token or --ssh-key")
+	if strings.TrimSpace(f.gitToken) != "" {
+		return parseHTTPSGitCredMaterial(f)
 	}
+	if strings.TrimSpace(f.sshKey) != "" {
+		return parseSSHGitCredMaterial(f)
+	}
+	return gitCredMaterial{}, fmt.Errorf("a secret is required: use --git-token or --ssh-key")
+}
+
+func parseHTTPSGitCredMaterial(f repoCredFlags) (gitCredMaterial, error) {
+	kind := strings.TrimSpace(f.kind)
+	if kind == "" {
+		kind = "https"
+	}
+	if kind != "https" {
+		return gitCredMaterial{}, fmt.Errorf("kind must be https when using --git-token")
+	}
+	secret, err := readCredentialMaterial(f.gitToken)
 	if err != nil {
 		return gitCredMaterial{}, err
+	}
+	if strings.TrimSpace(secret) == "" {
+		return gitCredMaterial{}, fmt.Errorf("credential secret must not be empty")
+	}
+	return gitCredMaterial{
+		kind: kind, username: strings.TrimSpace(f.gitUser), secret: secret,
+		label: strings.TrimSpace(f.label),
+	}, nil
+}
+
+func parseSSHGitCredMaterial(f repoCredFlags) (gitCredMaterial, error) {
+	kind := strings.TrimSpace(f.kind)
+	if kind == "" {
+		kind = "ssh"
+	}
+	if kind != "ssh" {
+		return gitCredMaterial{}, fmt.Errorf("kind must be ssh when using --ssh-key")
+	}
+	secret, err := readCredentialMaterial(f.sshKey)
+	if err != nil {
+		return gitCredMaterial{}, err
+	}
+	var knownHosts string
+	if strings.TrimSpace(f.sshKnownHosts) != "" {
+		knownHosts, err = readCredentialMaterial(f.sshKnownHosts)
+		if err != nil {
+			return gitCredMaterial{}, err
+		}
 	}
 	if strings.TrimSpace(secret) == "" {
 		return gitCredMaterial{}, fmt.Errorf("credential secret must not be empty")
@@ -288,7 +311,7 @@ func resolveGitCredentialProjectID(ctx context.Context, cli *client.Client, ref 
 	}
 	creds, err := cli.ListGitCredentials(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("list git credentials: %w", err)
+		return 0, fmt.Errorf(errListGitCredsFmt, err)
 	}
 	for _, c := range creds {
 		if c.ProjectID != nil && c.ProjectName == ref {
@@ -304,7 +327,7 @@ func resolveGitCredentialProjectID(ctx context.Context, cli *client.Client, ref 
 func findGitCredentialForScope(ctx context.Context, cli *client.Client, projectID *int, host string) (*client.GitCredential, error) {
 	creds, err := cli.ListGitCredentials(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list git credentials: %w", err)
+		return nil, fmt.Errorf(errListGitCredsFmt, err)
 	}
 	for i := range creds {
 		c := &creds[i]

@@ -163,7 +163,7 @@ func gitConfigEnv(opts Options) []string {
 // dir and returns its path (empty when no CA is configured) plus a cleanup.
 func writeCACert(opts Options) (string, func(), error) {
 	if len(opts.CACert) == 0 {
-		return "", func() {}, nil
+		return "", func() { /* no ephemeral file to remove */ }, nil
 	}
 	path, err := writeEphemeral(opts.DataDir, "ca-*.pem", opts.CACert)
 	if err != nil {
