@@ -179,7 +179,10 @@ describe('ChatPanel mode/model selector', () => {
     vi.spyOn(api, 'chatConfig').mockResolvedValue({
       enabled: true,
       modes: ['rag', 'agent'],
-      models: ['model-a', 'model-b'],
+      models: [
+        { id: 'model-a', provider: 'ollama' },
+        { id: 'model-b', provider: 'openrouter' },
+      ],
     })
     mockNonStream()
     const stream = mockStream([{ type: 'chunk', content: 'ok' }, { type: 'done' }])

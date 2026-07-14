@@ -135,14 +135,22 @@ export type ChatStreamOptions = {
   mode?: string
 }
 
+/** One selectable chat model from GET /admin/api/chat/config. */
+export type ChatModelInfo = {
+  id: string
+  provider: string
+  default?: boolean
+}
+
 /** GET /admin/api/chat/config — selector options for the chat UI. A 404
  * (older server) or enabled:false hides the mode/model selector entirely. */
 export type ChatConfig = {
   enabled: boolean
   modes?: string[]
-  models?: string[]
+  models?: ChatModelInfo[]
   default_mode?: string
   default_model?: string
+  agent_actions?: string
 }
 
 export type Conversation = {

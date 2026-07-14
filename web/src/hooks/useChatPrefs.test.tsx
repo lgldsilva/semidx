@@ -23,7 +23,7 @@ describe('useChatPrefs', () => {
     vi.spyOn(api, 'chatConfig').mockResolvedValue({
       enabled: false,
       modes: ['rag'],
-      models: ['m'],
+      models: [{ id: 'm', provider: 'ollama' }],
     })
     const { result } = renderHook(() => useChatPrefs())
     await waitFor(() => expect(api.chatConfig).toHaveBeenCalled())
@@ -34,19 +34,24 @@ describe('useChatPrefs', () => {
     vi.spyOn(api, 'chatConfig').mockResolvedValue({
       enabled: true,
       modes: ['rag', 'agent'],
-      models: ['model-a'],
+      models: [{ id: 'model-a', provider: 'ollama' }],
     })
     const { result } = renderHook(() => useChatPrefs())
     await waitFor(() => expect(result.current.enabled).toBe(true))
     expect(result.current.config?.modes).toEqual(['rag', 'agent'])
-    expect(result.current.config?.models).toEqual(['model-a'])
+    expect(result.current.config?.models).toEqual([
+      { id: 'model-a', provider: 'ollama' },
+    ])
   })
 
   it('persists the choice in localStorage and restores it on remount', async () => {
     vi.spyOn(api, 'chatConfig').mockResolvedValue({
       enabled: true,
       modes: ['rag', 'agent'],
-      models: ['model-a', 'model-b'],
+      models: [
+        { id: 'model-a', provider: 'ollama' },
+        { id: 'model-b', provider: 'openrouter' },
+      ],
     })
     const first = renderHook(() => useChatPrefs())
     await waitFor(() => expect(first.result.current.enabled).toBe(true))
