@@ -759,7 +759,11 @@ Restrict the exposed tools with --tools (repeatable or comma-separated) or the
 SEMIDX_MCP_TOOLS env var (comma-separated; the flag wins). Valid tool names:
 ` + strings.Join(mcpserver.ToolNames(), ", ") + `.
 Capability-gated tools (repo_*, semantic_search_multi, semantic_ask) are only
-served when the backend supports them, allowlisted or not.`,
+served when the backend supports them, allowlisted or not.
+
+When a default project is configured (default_project in the client config, or
+SEMIDX_DEFAULT_PROJECT), tools may omit their "project" argument and the
+default is used.`,
 		Example: `  semidx mcp                                  # run the stdio server
   semidx mcp --tools semantic_search,semantic_status
   semidx mcp install --client claude-code --apply`,
@@ -788,6 +792,11 @@ func mcpToolAllowlist(flagSet bool, flagValues []string, cfg *config.Config) []s
 
 func runMCPServer(ctx context.Context, d *deps, allowedTools []string) error {
 	opts := mcpserver.Options{AllowedTools: allowedTools}
+	// Default project for tool calls that omit "project"
+	// (clientconfig.DefaultProject; SEMIDX_DEFAULT_PROJECT overrides the file).
+	if d.client != nil {
+		opts.DefaultProject = d.client.DefaultProject
+	}
 	if d.remote() {
 		return mcpserver.RunWithOptions(ctx, mcpserver.NewClientBackend(d.apiClient()), opts)
 	}
