@@ -186,6 +186,10 @@ type Config struct {
 	// MCPClientConfig points at a JSON file describing external MCP servers the
 	// agent may use as a client (SEMIDX_MCP_CLIENT_CONFIG). Empty = none.
 	MCPClientConfig string
+	// MCPTools restricts which tools `semidx mcp` exposes (SEMIDX_MCP_TOOLS,
+	// comma-separated tool names). Empty = all tools. The --tools flag
+	// overrides it.
+	MCPTools []string
 	// MetricsToken, when set, requires Bearer auth on GET /metrics (SEMIDX_METRICS_TOKEN).
 	MetricsToken string
 
@@ -448,6 +452,7 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 		GithubToken:     env.get("SEMIDX_GITHUB_TOKEN", ""),
 		CopilotToken:    env.first("SEMIDX_COPILOT_TOKEN", "SEMIDX_GITHUB_TOKEN", ""),
 		MCPClientConfig: env.get("SEMIDX_MCP_CLIENT_CONFIG", ""),
+		MCPTools:        parseCommaSep(env.get("SEMIDX_MCP_TOOLS", "")),
 		MetricsToken:    env.get("SEMIDX_METRICS_TOKEN", ""),
 
 		SecretScan:           env.get("SEMIDX_SECRET_SCAN", "") == "true",
@@ -494,6 +499,7 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_COPILOT_TOKEN", "GitHub token for the Copilot chat provider (falls back to SEMIDX_GITHUB_TOKEN)", true},
 	{"SEMIDX_AGENT_ACTIONS", "Action tools on MCP/admin: off (default), propose, or execute", false},
 	{"SEMIDX_MCP_CLIENT_CONFIG", "Path to a JSON file of external MCP servers the agent can use as a client", false},
+	{"SEMIDX_MCP_TOOLS", "Comma-separated MCP tool allowlist for semidx mcp", false},
 	{"EMBED_PROVIDER", "Custom provider prepended to the chain (openai|ollama)", false},
 	{"EMBED_ENDPOINT", "Custom provider endpoint URL", false},
 	{"EMBED_API_KEY", "Custom provider API key", true},
