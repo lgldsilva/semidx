@@ -2,7 +2,10 @@
 // the ChatRAG pipeline.
 package chat
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Client is a chat LLM provider.
 type Client interface {
@@ -21,6 +24,33 @@ type StreamChunk struct {
 	// up front instead.
 	Sources  []Source
 	Fallback bool
+	// Tool is a mid-stream tool activity event (agent streams only); nil on
+	// text/terminal chunks.
+	Tool *ToolEvent
+	// Err carries a sanitized, user-safe message on the terminal chunk when the
+	// stream failed. It must never echo the provider's raw error (which can
+	// contain URLs or keys) — that goes to the server log only.
+	Err string
+}
+
+// ToolEvent kinds carried by StreamChunk.Tool.
+const (
+	ToolEventCall   = "call"   // the model committed to a tool call
+	ToolEventResult = "result" // the tool finished
+)
+
+// ToolEvent reports one tool call or tool result inside a streamed answer.
+// Args carries the sanitized JSON arguments (calls only); Preview a bounded
+// excerpt of the output (results only).
+type ToolEvent struct {
+	Kind      string // ToolEventCall | ToolEventResult
+	ID        string // provider tool-call id (correlates call ↔ result)
+	Name      string
+	Args      json.RawMessage
+	Preview   string
+	IsError   bool
+	ElapsedMS int64
+	Truncated bool
 }
 
 // Source is one retrieved chunk cited by an answer. It mirrors rag.Source but
