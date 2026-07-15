@@ -1,0 +1,5 @@
+source=ai-standards
+path=scripts/sonar
+commit=8ed5927
+installed_at=2026-07-15T16:10:44Z
+# Re-sync: ~/.config/ai-standards/scripts/sonar/install-into-repo.sh /storage/Projetos/semidx-wt-sonar-ce
