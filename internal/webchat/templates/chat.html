@@ -23,7 +23,8 @@
             <div id="error"></div>
 
             <form id="chat-form">
-                <input type="text" id="question" placeholder="Ask about your codebase..." autofocus>
+                <label for="question" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0">Ask about your codebase</label>
+                <input type="text" id="question" name="question" placeholder="Ask about your codebase..." autofocus autocomplete="off" aria-label="Ask about your codebase">
                 <button type="submit" id="send-btn">Send</button>
                 <button type="button" id="clear-btn">Clear</button>
             </form>
