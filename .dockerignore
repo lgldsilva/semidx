@@ -12,7 +12,8 @@ deploy
 # This only widens the build context; the final server image copies just the binary.
 !deploy/agentics-test
 
-# Never let local secrets reach the build context (the build stage does COPY . .).
+# Never let local secrets reach the build context (web stage copies web/;
+# build stage copies cmd/internal/pkg only). Keep .env out of context either way.
 # Listed AFTER the deploy re-include so .env files are excluded even under it.
 .env
 .env.*
