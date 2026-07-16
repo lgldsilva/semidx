@@ -5,7 +5,7 @@ self-hosted `act_runner`s. The workflows, each with different jobs:
 
 | Workflow | File | Triggers | Purpose |
 |---|---|---|---|
-| **CI (gates)** | `.gitea/workflows/ci.yml` | every push to `main`, every pull request | **quality/security gates** — build, test, lint, gitleaks, govulncheck, gosec, Trivy image scan (all on PR + main); SonarQube **on main only** |
+| **CI (gates)** | `.gitea/workflows/ci.yml` | every push to `main`, every pull request | **quality/security gates** — local: build/test, mcp-harness, lint, Trivy image-scan; shared (`lgldsilva/gitea-workflows@v1.0.8`): secrets-scan, go-security (gosec+govulncheck), sonar-ce (PR ephemeral + main permanent) |
 | **Auto-tag (semver)** | `.gitea/workflows/autotag.yml` | every push to `main` | **cuts the version** — computes the next semver from Conventional Commits and pushes a `v*` tag, which triggers the release |
 | **Release (deploy)** | `.gitea/workflows/release.yml` | version tags (`v*`) and manual dispatch | **publishes + deploys** the release — pushes the image, uploads the SBOM to Dependency-Track, builds GoReleaser artifacts, and redeploys via Watchtower |
 
@@ -18,11 +18,11 @@ the PR it came from, so the gates are not re-run at release time.
 > auto-tags a new version and ships it end-to-end — no manual `git tag`. Merges
 > with only `docs`/`chore`/`ci`/`test` commits bump nothing and cut no release.
 
-> **SonarQube is main-only.** The homelab SonarQube is **Community edition**,
-> which analyses a single branch and has no PR/branch analysis. So the `sonar`
-> job runs only on push to `main` — a post-merge quality gate on main, not a PR
-> gate. PR-time prediction comes from the other gates (a red gate there blocks
-> the merge before it ever reaches main).
+> **SonarQube (Community edition) via shared reusable.** Homelab Sonar has no
+> built-in PR decoration, so `sonar-ce` from `lgldsilva/gitea-workflows@v1.0.8`
+> uses a **permanent** project key on `main` and an **ephemeral** project on each
+> PR (scan → export reports → attach artifacts → delete the temp project). Local
+> floors live in the library (`scripts/sonar`). Skips without `SONAR_TOKEN`.
 
 All workflows live in **`.gitea/workflows/`**. Gitea scans only that directory
 when it exists and ignores `.github/workflows/`, so keeping the gates under
@@ -39,23 +39,25 @@ The gate pipeline. Runs on every PR and every push to `main`.
 
 ```
 Gitea push / PR ──► Gitea Actions ──► self-hosted act_runner
-   test:        go vet · go build · go test -race -shuffle=on
-   lint:        golangci-lint (via `go run …@v2.12.2`)
-   gitleaks:    secret scan (via `go run …gitleaks@latest`)
-   govulncheck: CVE scan of reachable deps + stdlib (via `go run …`)
-   gosec:       SAST (via `go run …gosec@v2.27.1`)
-   sonar:       SonarQube quality gate — MAIN ONLY (Community edition has no PR
-                analysis). Runs only on push to main; sonar.qualitygate.wait=true
-                fails the job when main's gate fails. Skips without SONAR_TOKEN.
-   image-scan:  docker build + Trivy CRITICAL gate on the local image (no push).
-                Skips if the runner has no Docker.
+   test:         go vet · go build · go test -race -shuffle=on (+ SPA build)
+   mcp-harness:  MCP install + keyword stdio harness (needs test)
+   lint:         golangci-lint (via `go run …@v2.12.2`)
+   secrets-scan: gitleaks via gitea-workflows secrets-scan.yml@v1.0.8
+   security:     gosec + govulncheck via gitea-workflows go-security.yml@v1.0.8
+   sonar:        sonar-ce.yml@v1.0.8 — PR ephemeral + main permanent; uses
+                 sonar-project.properties; skips without SONAR_TOKEN
+   image-scan:   docker build + Trivy CRITICAL gate on the local image (no push).
+                 Skips if the runner has no Docker.
 ```
 
-The Go tool gates use only `actions/checkout` and `actions/setup-go` and run
-each tool as a plain `go run <tool>@<version>` step, so they stay portable to
-GitHub Actions. The `sonar` gate needs the homelab `SONAR_TOKEN` and pins the
-Sonar host IP into `/etc/hosts` (act_runner has no LAN DNS); it degrades to a
-skip when the secret is absent, so forked/secret-less runs stay green.
+Local Go gates use only `actions/checkout` and `actions/setup-go` (with
+`cache: false` — act_runner artifactcache is unreliable on this repo's ~3.5 GB
+Go cache) and run tools as plain `go run <tool>@<version>` where applicable.
+Shared jobs are pinned to `lgldsilva/gitea-workflows@v1.0.8`. The `sonar` gate
+needs homelab `SONAR_TOKEN` (+ `vars.SONAR_HOST_URL` / hosts as configured by
+the reusable); it degrades to a skip when the secret is absent, so
+forked/secret-less runs stay green. For a one-off local Sonar run outside CI,
+use `SONAR_TOKEN=… ./scripts/sonar-scan.sh` when that script is present.
 
 ## Auto-tag / versioning (`.gitea/workflows/autotag.yml`)
 
