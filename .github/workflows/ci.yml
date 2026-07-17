@@ -103,7 +103,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.28.0
+        # Pinned to commit SHA (same as tag v0.28.0) — tag-only refs like
+        # aquasecurity/trivy-action@0.28.0 fail with "unable to find version
+        # 0.28.0" because the repo uses action.yaml (not action.yml) and
+        # resolution needs the `v` prefix or a SHA. Pin to a SHA for
+        # immutability.
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           scan-type: fs
           scan-ref: .

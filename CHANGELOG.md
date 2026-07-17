@@ -17,6 +17,16 @@ each GitHub Release.
 - Add Windows installer (`install.ps1`) alongside `install.sh`.
 - Prepare GitHub Actions CI/CD for public release.
 
+### Fixed
+
+- Pin `aquasecurity/trivy-action` to a commit SHA (`915b19b`, same as tag
+  `v0.28.0`). The previous ref `aquasecurity/trivy-action@0.28.0` failed
+  with "unable to find version 0.28.0" because the upstream repo ships
+  `action.yaml` and the action only resolves with a `v`-prefixed tag or a
+  full commit SHA.
+- Remove the `dependency-review` workflow. It requires GitHub Advanced
+  Security, which is not available on a free public repo.
+
 ## [v0.43.1] - 2026-07-13
 
 See the [GitHub Releases](https://github.com/lgldsilva/semidx/releases) page
