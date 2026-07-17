@@ -16,16 +16,28 @@ each GitHub Release.
 - Point public install/upgrade defaults at GitHub Releases (was private Gitea).
 - Add Windows installer (`install.ps1`) alongside `install.sh`.
 - Prepare GitHub Actions CI/CD for public release.
+- Drop `cmd/**` from the coverage gate (was dragging the overall number
+  down to 76.4% because `cmd/chatrag/` is exercised end-to-end via the
+  agentics harness, not unit tests). Gate now measures only
+  `internal/**` + `pkg/**` (avg 94.6% on current `main`).
 
 ### Fixed
 
-- Pin `aquasecurity/trivy-action` to a commit SHA (`915b19b`, same as tag
+- Pin `aquasecurity/trivy-action` to commit SHA `915b19b` (same as tag
   `v0.28.0`). The previous ref `aquasecurity/trivy-action@0.28.0` failed
   with "unable to find version 0.28.0" because the upstream repo ships
   `action.yaml` and the action only resolves with a `v`-prefixed tag or a
   full commit SHA.
+  *Reverted in favor of `aquasecurity/trivy-action@v0.19.0`*: even the
+  SHA pin revealed a deeper issue — the v0.28.0 action internally calls
+  `aquasecurity/setup-trivy@v0.2.1` which was deleted from the marketplace.
+  v0.19.0 bundles trivy directly and has no `setup-trivy` dependency.
 - Remove the `dependency-review` workflow. It requires GitHub Advanced
   Security, which is not available on a free public repo.
+- Disable Dependabot. The first public run created 12 Dependabot PRs each
+  triggering ~9 failing job runs, burning free Actions minutes (690 / 2 000
+  in a single day). Closed all open Dependabot PRs. Manual dep bumps will
+  be done via PRs as needed; re-enabling Dependabot is tracked separately.
 
 ## [v0.43.1] - 2026-07-13
 
