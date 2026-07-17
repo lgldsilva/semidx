@@ -18,14 +18,14 @@ env:
 jobs:
   goreleaser:
     name: goreleaser
-    # Skip on Gitea Actions: this workflow uses GitHub-only actions
+    # NOTE: this workflow is GitHub-only. It uses actions
     # (docker/login-action, docker/build-push-action,
-    # softprops/action-gh-release) and GitHub-only secrets
-    # (GITHUB_TOKEN, GHCR). Gitea runners have no GitHub credentials
-    # and no equivalent container registry, so every step would fail.
-    # On GitHub, the workflow publishes binaries via GoReleaser and
-    # pushes the container image to GHCR.
-    if: ${{ !env.GITEA_ACTIONS }}
+    # softprops/action-gh-release) and secrets (GITHUB_TOKEN, GHCR)
+    # that don't exist on Gitea Actions. On Gitea the workflow will
+    # fail at the first step — a job-level if-guard using env.X is
+    # not supported by GitHub Actions (parse error). Gitea releases
+    # are out of scope for automated CI; use the Gitea Releases API
+    # to create them manually if needed.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,7 +61,6 @@ jobs:
 
   sbom:
     name: sbom
-    if: ${{ !env.GITEA_ACTIONS }}
     runs-on: ubuntu-latest
     needs: [goreleaser]
     steps:
