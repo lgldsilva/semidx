@@ -16,7 +16,9 @@ the latest release.
 Please report security issues privately — do **not** open a public issue for an
 unpatched vulnerability.
 
-- Email: `security@example.com` *(replace with the project's real contact)*.
+- Prefer [GitHub private vulnerability reporting](https://github.com/lgldsilva/semidx/security/advisories/new)
+  once the public repository is live.
+- Or email: `security@semidx.dev` (replace if you prefer a different contact).
 - Include: affected version/commit, a description, and reproduction steps or a
   proof of concept.
 
@@ -71,7 +73,7 @@ credentials stay within infrastructure you control.
 ### Supply-chain and code-quality gates
 
 CI enforces the following on every pull request and push to `main`
-(`.gitea/workflows/ci.yml`):
+(`.github/workflows/ci.yml`):
 
 - **`govulncheck`** — fails on known CVEs in dependencies or the Go stdlib that
   reach reachable code paths.

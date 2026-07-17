@@ -1,8 +1,8 @@
 #!/bin/sh
 # semidx installer — downloads the right release archive for your OS/arch from
-# the Gitea releases, verifies its SHA-256, and installs the binary.
+# GitHub releases, verifies its SHA-256, and installs the binary.
 #
-#   curl -fsSL <host>/lgldsilva/semidx/raw/branch/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/lgldsilva/semidx/main/install.sh | sh
 #   ./install.sh                              # install latest for this OS/arch
 #   ./install.sh --version v0.2.0             # a specific release
 #   ./install.sh --os windows --arch arm64 --dest ./dl   # just fetch one archive
@@ -11,8 +11,8 @@
 # Env overrides: SEMIDX_API, SEMIDX_DOWNLOAD_BASE, SEMIDX_BIN_DIR, SEMIDX_INSECURE=1
 set -eu
 
-API="${SEMIDX_API:-https://gitea.raspberrypi.lan/api/v1/repos/lgldsilva/semidx}"
-DL_BASE="${SEMIDX_DOWNLOAD_BASE:-https://gitea.raspberrypi.lan/lgldsilva/semidx/releases/download}"
+API="${SEMIDX_API:-https://api.github.com/repos/lgldsilva/semidx}"
+DL_BASE="${SEMIDX_DOWNLOAD_BASE:-https://github.com/lgldsilva/semidx/releases/download}"
 BIN_DIR="${SEMIDX_BIN_DIR:-$HOME/.local/bin}"
 VERSION="" OS="" ARCH="" DEST="" ALL=0 INSTALL=1
 
@@ -50,8 +50,9 @@ detect_arch() {
   esac
 }
 
-# Resolve the version from the latest release when not pinned. Gitea often
-# returns 404 on /releases/latest (unlike GitHub), so fall back to the list.
+# Resolve the version from the latest release when not pinned. GitHub serves
+# /releases/latest with JSON (or 302 to the tag URL); some hosts (e.g. Gitea)
+# return 404 there, so fall back to listing releases.
 if [ -z "$VERSION" ]; then
   VERSION="$($CURL "$API/releases/latest" 2>/dev/null | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
   if [ -z "$VERSION" ]; then
