@@ -32,6 +32,14 @@ each GitHub Release.
   SHA pin revealed a deeper issue — the v0.28.0 action internally calls
   `aquasecurity/setup-trivy@v0.2.1` which was deleted from the marketplace.
   v0.19.0 bundles trivy directly and has no `setup-trivy` dependency.
+  *Reverted again in favor of `aquasecurity/setup-trivy@v0.3.1`*: the
+  v0.19.0 Docker action nests a container inside the Gitea act_runner,
+  which rejects the combination of `--network host` + custom `--add-host`
+  entries ("conflicting options: custom host-to-IP mapping and the network
+  mode"). Installing the trivy binary via `setup-trivy@v0.3.1` and running
+  it directly avoids the nested container entirely. Bump `xuri/excelize`
+  `v2.10.1` → `v2.11.0` for CVE-2026-54063 (HIGH, DoS via unbounded row
+  index in worksheet parser).
 - Remove the `dependency-review` workflow. It requires GitHub Advanced
   Security, which is not available on a free public repo.
 - Disable Dependabot. The first public run created 12 Dependabot PRs each

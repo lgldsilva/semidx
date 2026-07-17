@@ -115,16 +115,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Trivy filesystem scan
-        # aquasecurity/trivy-action >= 0.20.0 internally calls
-        # aquasecurity/setup-trivy which has tags up to v0.3.1 but is
-        # pinned to v0.2.1 inside the action — v0.2.1 was deleted. Use
-        # the v0.19.0 tag which bundles trivy directly and has no
-        # setup-trivy dependency. Pinned by tag for readability; this
-        # is the most recent version without the broken internal ref.
-        uses: aquasecurity/trivy-action@v0.19.0
+        # Install trivy binary via setup-trivy@v0.3.1 (v0.2.1 was
+        # deleted from the marketplace) and run directly. The
+        # aquasecurity/trivy-action Docker image conflicts with the
+        # Gitea act_runner's --network host + ExtraHosts configuration:
+        # nested Docker containers cannot combine --network host with
+        # custom --add-host entries. Running the binary directly
+        # avoids the nested container entirely.
+      - uses: aquasecurity/setup-trivy@v0.3.1
         with:
-          scan-type: fs
-          scan-ref: .
-          severity: CRITICAL,HIGH
-          exit-code: "1"
-          ignore-unfixed: true
+          version: "0.50.0"
+      - run: |
+          trivy filesystem --exit-code 1 --severity CRITICAL,HIGH \
+            --ignore-unfixed --quiet .
