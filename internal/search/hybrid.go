@@ -15,6 +15,14 @@ const (
 	// rrfBonus is added to a result's score when it appears in both lists.
 	// Kept small (~1/k) so a rank-1 single-list hit beats a rank-60 overlap.
 	rrfBonus = 0.02
+	// MaxTopK is the hard upper bound on the number of results a single
+	// HybridSearch call will materialise. The value comes from the HTTP
+	// `top_k` field (or CLI `--top-k`) and is caller-controlled; capping
+	// it here prevents a malicious or buggy client from forcing a huge
+	// `make([]store.SearchResult, topK)` allocation in normaliseRRF.
+	// 1000 matches the practical limit any human would scroll through and
+	// keeps the slice size ~tens of KB per SearchResult.
+	MaxTopK = 1000
 )
 
 // HybridSearch runs vector search and keyword search concurrently,
@@ -23,6 +31,11 @@ func (s *Service) HybridSearch(ctx context.Context, projectID int, query string,
 	vec, err := s.emb.EmbedSingle(ctx, model, query)
 	if err != nil {
 		return nil, err
+	}
+	// Clamp topK to a hard ceiling. Without this, `normaliseRRF` would
+	// `make([]store.SearchResult, topK)` with whatever the caller passed.
+	if topK <= 0 || topK > MaxTopK {
+		topK = MaxTopK
 	}
 	return s.hybridFuse(ctx, projectID, query, vec, dims, topK, worktree)
 }

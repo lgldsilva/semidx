@@ -248,3 +248,35 @@ func TestProcessBFSNode_edges(t *testing.T) {
 		t.Error("maxPaths should block further expansion")
 	}
 }
+
+// TestHybridSearch_topKClamp verifies that a caller-supplied topK above
+// MaxTopK is clamped before reaching normaliseRRF (which would otherwise
+// `make([]store.SearchResult, topK)` with the attacker's value).
+func TestHybridSearch_topKClamp(t *testing.T) {
+	const huge = 1_000_000
+	st := &fakeStore{
+		project: &store.Project{ID: 1, Name: "p", Model: "m"},
+		simResults: []store.SearchResult{
+			{FilePath: "a.go", Score: 0.9, StartLine: 1},
+		},
+		kwResults: []store.SearchResult{
+			{FilePath: "b.go", Score: 0.5, StartLine: 2},
+		},
+	}
+	svc := NewService(st, &fakeEmbedder{vec: []float32{1}, dims: 1})
+	// huge topK must not panic / not OOM; the result length is bounded by
+	// len(scoredList) (1+1=2) AND by MaxTopK (1000). Since 2 < 1000 the
+	// clamp doesn't change behaviour here, but it MUST not propagate the
+	// attacker value to normaliseRRF.
+	got, err := svc.HybridSearch(context.Background(), 1, "q", "m", 1, huge, "")
+	if err != nil {
+		t.Fatalf("HybridSearch(huge): %v", err)
+	}
+	if len(got) > MaxTopK {
+		t.Fatalf("topK not clamped: got %d results, MaxTopK=%d", len(got), MaxTopK)
+	}
+	// Negative topK must also be clamped to MaxTopK, not panic.
+	if _, err := svc.HybridSearch(context.Background(), 1, "q", "m", 1, -1, ""); err != nil {
+		t.Fatalf("HybridSearch(-1): %v", err)
+	}
+}

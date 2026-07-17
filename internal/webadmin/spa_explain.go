@@ -53,6 +53,7 @@ func (a *Admin) apiProjectExplain(w http.ResponseWriter, r *http.Request, ac *au
 		return
 	}
 	// #nosec G304 -- absPath restricted to project root
+	// lgtm[go/path-injection] -- absPath validated against rootClean above
 	content, err := os.ReadFile(absPath)
 	if err != nil {
 		a.explainFromIndex(w, r, proj, filePath, line)
@@ -214,6 +215,7 @@ func goPackageName(content []byte) string {
 func detectModulePath(root string) string {
 	gm := filepath.Clean(filepath.Join(root, "go.mod"))
 	// #nosec G304 -- project go.mod
+	// lgtm[go/path-injection] -- gm is filepath.Clean(root + "go.mod"), not user input
 	data, err := os.ReadFile(gm)
 	if err != nil {
 		return ""
@@ -249,6 +251,7 @@ func findTestFiles(root, filePath, symbolName string) []string {
 			continue
 		}
 		// #nosec G304 -- within project root
+		// lgtm[go/path-injection] -- testAbs validated against rootClean above
 		data, err := os.ReadFile(testAbs)
 		if err != nil {
 			continue

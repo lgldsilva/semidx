@@ -560,6 +560,12 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 	if len(strings.TrimSpace(string(content))) == 0 {
 		return 0, 0, outcomeSkippedEmpty, "", nil
 	}
+	// lgtm[go/weak-sensitive-data-hashing]
+	// SHA-256 is a strong cryptographic hash. Used here for content
+	// addressing (deduplication of indexed chunks), not for password
+	// or security-sensitive hashing. CodeQL's rule fires because
+	// `content` originates from user-provided files; the hash itself
+	// is not a security boundary.
 	hash = fmt.Sprintf("%x", sha256.Sum256(content))
 
 	// Incremental: skip a unit already indexed with this exact content.

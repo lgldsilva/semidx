@@ -69,6 +69,26 @@ each GitHub Release.
   are skipped. Releases for the Gitea mirror are out of scope for
   automated CI — use the Gitea Releases API to create them manually if
   needed.
+- Address the 5 HIGH-severity CodeQL alerts from the first public
+  scan on commit `1a9e985`:
+  - **#2 (real)** `go/uncontrolled-allocation-size` in
+    `internal/search/hybrid.go`: cap `topK` at `MaxTopK = 1000`
+    inside `HybridSearch` so a caller-supplied `top_k` cannot force
+    an arbitrarily large `make([]store.SearchResult, topK)` slice
+    in `normaliseRRF`. Added `TestHybridSearch_topKClamp` covering
+    huge and negative inputs.
+  - **#1, #3-5 (false positives)** add `// lgtm[<query>]` suppressions
+    alongside the existing `// #nosec G304` comments:
+    - `internal/indexing/indexer.go:563` uses `sha256.Sum256` for
+      content addressing (deduplication), not for password/security
+      hashing. SHA-256 is a strong hash; the rule fires on
+      caller-controlled content reaching it.
+    - `internal/webadmin/spa_explain.go:56, 218, 254` all read files
+      after an explicit `filepath.Clean` + `strings.HasPrefix` check
+      against the project root, with `// #nosec G304` already in
+      place. CodeQL's data-flow analysis doesn't follow the
+      prefix-check pattern, so explicit `lgtm` suppressions with
+      justification are added.
 
 ## [v0.43.1] - 2026-07-13
 
