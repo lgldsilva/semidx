@@ -1,0 +1,44 @@
+# Semantic versioning from Conventional Commits (svu).
+# Pushes a new v* tag on main when commits warrant a bump.
+name: autotag
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GOTOOLCHAIN: go1.25.12
+
+jobs:
+  autotag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache: false
+      - name: Compute next tag with svu
+        id: svu
+        run: |
+          set -euo pipefail
+          current=$(go run github.com/caarlos0/svu/v3@v3.2.3 current 2>/dev/null || echo "v0.0.0")
+          next=$(go run github.com/caarlos0/svu/v3@v3.2.3 next)
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+          echo "current=$current next=$next"
+      - name: Push tag if new
+        if: steps.svu.outputs.current != steps.svu.outputs.next
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.svu.outputs.next }}"
+          git push origin "${{ steps.svu.outputs.next }}"
