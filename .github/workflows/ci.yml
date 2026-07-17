@@ -114,17 +114,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Install trivy binary via setup-trivy@v0.3.1 (v0.2.1 was
-      # deleted from the marketplace) and run directly. The
-      # aquasecurity/trivy-action Docker image conflicts with the
-      # Gitea act_runner's --network host + ExtraHosts configuration:
-      # nested Docker containers cannot combine --network host with
-      # custom --add-host entries. Running the binary directly
-      # avoids the nested container entirely.
+      # Download the trivy binary directly from the GitHub release
+      # tarball. This avoids three problems with the Docker action:
+      #   1. aquasecurity/trivy-action nests a container that the
+      #      Gitea act_runner rejects (--network host + ExtraHosts
+      #      is a conflicting Docker option pair).
+      #   2. aquasecurity/setup-trivy@v0.3.1 clones the GitHub repo
+      #      and the Gitea runner has no GitHub credentials.
+      #   3. Running the binary directly works identically on both
+      #      Gitea and GitHub Actions runners.
+      # Pinned to a release version + sha256 for reproducibility.
       - name: Install Trivy
-        uses: aquasecurity/setup-trivy@v0.3.1
-        with:
-          version: "0.50.0"
+        run: |
+          set -euo pipefail
+          TRIVY_VERSION="0.72.0"
+          curl -sSfL \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            -o /tmp/trivy.tar.gz
+          tar xzf /tmp/trivy.tar.gz -C /tmp trivy
+          mv /tmp/trivy /usr/local/bin/trivy
+          chmod +x /usr/local/bin/trivy
+          trivy --version
       - name: Trivy filesystem scan
         run: |
           trivy filesystem --exit-code 1 --severity CRITICAL,HIGH \

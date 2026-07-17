@@ -37,9 +37,15 @@ each GitHub Release.
   which rejects the combination of `--network host` + custom `--add-host`
   entries ("conflicting options: custom host-to-IP mapping and the network
   mode"). Installing the trivy binary via `setup-trivy@v0.3.1` and running
-  it directly avoids the nested container entirely. Bump `xuri/excelize`
-  `v2.10.1` → `v2.11.0` for CVE-2026-54063 (HIGH, DoS via unbounded row
-  index in worksheet parser).
+  it directly avoids the nested container entirely.
+  *Reverted again — download the binary directly*: `setup-trivy@v0.3.1`
+  internally clones `https://github.com/aquasecurity/setup-trivy` and the
+  Gitea runner has no GitHub credentials, so the `git clone` step fails
+  with "could not read Username for 'https://github.com'". Download the
+  trivy release tarball via `curl` and run the binary directly — works
+  identically on Gitea and GitHub runners, no GitHub auth required. Bump
+  `xuri/excelize` `v2.10.1` → `v2.11.0` for CVE-2026-54063 (HIGH, DoS
+  via unbounded row index in worksheet parser).
 - Remove the `dependency-review` workflow. It requires GitHub Advanced
   Security, which is not available on a free public repo.
 - Disable Dependabot. The first public run created 12 Dependabot PRs each
