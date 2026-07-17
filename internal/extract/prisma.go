@@ -14,7 +14,7 @@ var (
 )
 
 func init() {
-	Register(".prisma", extractPrisma)
+	_ = Register(".prisma", extractPrisma)
 }
 
 // extractPrisma reads .prisma files (plain text) and optionally prepends

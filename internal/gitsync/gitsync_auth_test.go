@@ -9,11 +9,11 @@ import (
 
 func TestNormalizeToHTTPS(t *testing.T) {
 	cases := map[string]string{
-		"git@github.com:acme/repo.git":                "https://github.com/acme/repo.git",
-		"git@gitea.raspberrypi.lan:lgldsilva/x.git":   "https://gitea.raspberrypi.lan/lgldsilva/x.git",
-		"ssh://git@192.168.0.100:222/lgldsilva/x.git": "https://192.168.0.100/lgldsilva/x.git",
-		"https://github.com/acme/repo.git":            "https://github.com/acme/repo.git", // already https
-		"file:///tmp/repo":                            "file:///tmp/repo",                 // untouched
+		"git@github.com:acme/repo.git":            "https://github.com/acme/repo.git",
+		"git@gitea.example.com:lgldsilva/x.git":   "https://gitea.example.com/lgldsilva/x.git",
+		"ssh://git@10.0.0.10:222/lgldsilva/x.git": "https://10.0.0.10/lgldsilva/x.git",
+		"https://github.com/acme/repo.git":        "https://github.com/acme/repo.git", // already https
+		"file:///tmp/repo":                        "file:///tmp/repo",                 // untouched
 	}
 	for in, want := range cases {
 		if got := normalizeToHTTPS(in); got != want {

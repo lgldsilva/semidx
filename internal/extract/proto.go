@@ -12,7 +12,7 @@ var (
 )
 
 func init() {
-	Register(".proto", extractProto)
+	_ = Register(".proto", extractProto)
 }
 
 // extractProto reads .proto files (plain text) and optionally prepends

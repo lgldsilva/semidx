@@ -555,3 +555,147 @@ func TestChatStreamUpstreamError(t *testing.T) {
 		t.Fatalf("stream upstream = %d", resp.StatusCode)
 	}
 }
+
+// coverage-patch: 2026-07-17
+func TestParseChatBody(t *testing.T) {
+	t.Run("valid json", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"question":"hello","history":[{"role":"user","content":"hi"}]}`))
+		body, err := parseChatBody(r)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if body.Question != "hello" {
+			t.Errorf("question = %q; want hello", body.Question)
+		}
+		if len(body.History) != 1 || body.History[0].Role != "user" {
+			t.Errorf("history = %+v", body.History)
+		}
+	})
+	t.Run("invalid json", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{not json}`))
+		_, err := parseChatBody(r)
+		if err == nil {
+			t.Fatal("expected error for invalid JSON")
+		}
+	})
+	t.Run("empty body", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+		body, err := parseChatBody(r)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if body.Question != "" {
+			t.Errorf("question = %q; want empty", body.Question)
+		}
+	})
+}
+
+// coverage-patch: 2026-07-17
+func TestToolEventJSON(t *testing.T) {
+	t.Run("call event", func(t *testing.T) {
+		ev := &chat.ToolEvent{Kind: chat.ToolEventCall, ID: "call_1", Name: "search", Args: json.RawMessage(`{"q":"test"}`)}
+		b := toolEventJSON(ev)
+		if b == nil {
+			t.Fatal("got nil")
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		if m["type"] != "tool_call" || m["id"] != "call_1" || m["name"] != "search" {
+			t.Errorf("unexpected call event: %+v", m)
+		}
+	})
+	t.Run("call event nil args", func(t *testing.T) {
+		ev := &chat.ToolEvent{Kind: chat.ToolEventCall, ID: "call_2", Name: "search"}
+		b := toolEventJSON(ev)
+		if b == nil {
+			t.Fatal("got nil")
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		args, ok := m["args"].(map[string]any)
+		if !ok || len(args) != 0 {
+			t.Errorf("expected empty args object, got %v", m["args"])
+		}
+	})
+	t.Run("result event", func(t *testing.T) {
+		ev := &chat.ToolEvent{Kind: chat.ToolEventResult, ID: "call_1", Name: "search", Preview: "found 3 results", IsError: false, ElapsedMS: 150, Truncated: false}
+		b := toolEventJSON(ev)
+		if b == nil {
+			t.Fatal("got nil")
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		if m["type"] != "tool_result" || m["id"] != "call_1" || m["preview"] != "found 3 results" {
+			t.Errorf("unexpected result event: %+v", m)
+		}
+		if m["is_error"] != false {
+			t.Errorf("is_error = %v; want false", m["is_error"])
+		}
+	})
+	t.Run("result event with error", func(t *testing.T) {
+		ev := &chat.ToolEvent{Kind: chat.ToolEventResult, ID: "call_3", Name: "search", Preview: "failed", IsError: true, ElapsedMS: 200, Truncated: true}
+		b := toolEventJSON(ev)
+		if b == nil {
+			t.Fatal("got nil")
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		if m["is_error"] != true || m["truncated"] != true || m["elapsed_ms"] != float64(200) {
+			t.Errorf("unexpected result with error: %+v", m)
+		}
+	})
+	t.Run("unknown kind", func(t *testing.T) {
+		ev := &chat.ToolEvent{Kind: "unknown"}
+		b := toolEventJSON(ev)
+		if b != nil {
+			t.Errorf("expected nil for unknown kind, got %s", string(b))
+		}
+	})
+}
+
+// coverage-patch: 2026-07-17
+func TestChatSourcesJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		src  []chat.Source
+		want int
+	}{
+		{"nil slice", nil, 0},
+		{"empty slice", []chat.Source{}, 0},
+		{"single source", []chat.Source{{File: "a.go", StartLine: 1, EndLine: 2, Content: "x", Score: 0.9, Keyword: false, Project: "proj"}}, 1},
+		{"multiple sources", []chat.Source{
+			{File: "a.go", StartLine: 1, EndLine: 2, Content: "x", Score: 0.9},
+			{File: "b.go", StartLine: 3, EndLine: 4, Content: "y", Score: 0.8, Keyword: true, Project: "proj2"},
+		}, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := chatSourcesJSON(tt.src)
+			if len(got) != tt.want {
+				t.Fatalf("len = %d; want %d", len(got), tt.want)
+			}
+			for i, m := range got {
+				if m["file"] != tt.src[i].File {
+					t.Errorf("[%d] file = %v; want %s", i, m["file"], tt.src[i].File)
+				}
+				if m["score"] != tt.src[i].Score {
+					t.Errorf("[%d] score = %v; want %f", i, m["score"], tt.src[i].Score)
+				}
+				if m["keyword"] != tt.src[i].Keyword {
+					t.Errorf("[%d] keyword = %v; want %v", i, m["keyword"], tt.src[i].Keyword)
+				}
+				if m["project"] != tt.src[i].Project {
+					t.Errorf("[%d] project = %v; want %s", i, m["project"], tt.src[i].Project)
+				}
+			}
+		})
+	}
+}

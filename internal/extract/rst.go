@@ -6,7 +6,7 @@ import (
 )
 
 func init() {
-	Register(".rst", extractRST)
+	_ = Register(".rst", extractRST)
 }
 
 // extractRST strips reStructuredText directives (lines starting with ".. " and

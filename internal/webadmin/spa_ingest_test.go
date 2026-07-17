@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/lgldsilva/semidx/internal/indexing"
+	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -130,6 +131,29 @@ func TestIngestNoEmbedder(t *testing.T) {
 	})
 	if code != http.StatusServiceUnavailable || !strings.Contains(body, "no embedder") {
 		t.Fatalf("no embedder = %d body=%s", code, body)
+	}
+}
+
+// coverage-patch: 2026-07-17
+func TestFinishIngest(t *testing.T) {
+	fs := newFakeStore()
+	iss, _ := jwtauth.New("test-secret")
+	a, err := New(fs, nil, nil, true, iss, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Create a project so it exists in the fake store.
+	pid, err := fs.EnsureProjectIdentity(context.Background(), "testproj", "", "", "", "", 768)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Project starts with empty status.
+	a.finishIngest(context.Background(), pid, "test ingest")
+	// Verify the project status was updated to "ready".
+	for _, p := range fs.projects {
+		if p.ID == pid && p.Status != "ready" {
+			t.Errorf("status = %q; want ready", p.Status)
+		}
 	}
 }
 

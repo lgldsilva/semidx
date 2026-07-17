@@ -39,6 +39,24 @@ func TestApplyActionPolicy_modes(t *testing.T) {
 	}
 }
 
+// coverage-patch: 2026-07-17 — covers the default/unknown policy branch (86.7% → 100%)
+func TestApplyActionPolicy_unknown(t *testing.T) {
+	ctx := context.Background()
+	base := func() map[string]any { return map[string]any{"action": "index"} }
+	req := permission.Request{Tool: "index_worktree"}
+
+	proceed, resp := applyActionPolicy(ctx, ActionPolicy(99), nil, req, base())
+	if proceed {
+		t.Error("unknown policy must not proceed")
+	}
+	if !resp.IsError {
+		t.Error("unknown policy should return a soft error")
+	}
+	if !strings.Contains(resp.Content, "unknown action policy") {
+		t.Errorf("error should mention unknown action policy, got: %s", resp.Content)
+	}
+}
+
 func TestActionTools_gatedByDeps(t *testing.T) {
 	// No indexer and no client → no action tools.
 	if got := ActionTools(newFakeSearchStore(), nil, nil, PolicyPropose, nil); len(got) != 0 {

@@ -55,6 +55,81 @@ func (f *fakeModel) StreamObject(context.Context, fantasy.ObjectCall) (fantasy.O
 func (f *fakeModel) Provider() string { return "fake" }
 func (f *fakeModel) Model() string    { return "fake-model" }
 
+// coverage-patch: 2026-07-17 — covers Model() trivial getter (0.0%)
+func TestRunner_Model(t *testing.T) {
+	fm := &fakeModel{}
+	r := NewRunner(fm, nil, RunnerConfig{})
+	if got := r.Model(); got != "fake-model" {
+		t.Errorf("Model() = %q, want fake-model", got)
+	}
+}
+
+// coverage-patch: 2026-07-17 — covers toolResultText media type (57.1%)
+func TestToolResultText_media(t *testing.T) {
+	tr := fantasy.ToolResultContent{
+		Result: fantasy.ToolResultOutputContentMedia{Text: "media-text", Data: "base64", MediaType: "image/png"},
+	}
+	result, errMsg := toolResultText(tr)
+	if result != "media-text" {
+		t.Errorf("result = %q, want media-text", result)
+	}
+	if errMsg != "" {
+		t.Errorf("errMsg = %q, want empty", errMsg)
+	}
+}
+
+// coverage-patch: 2026-07-17 — covers ToolResultOutputContentError with nil
+// error → "tool error" (57.1%)
+func TestToolResultText_errorNil(t *testing.T) {
+	tr := fantasy.ToolResultContent{
+		Result: fantasy.ToolResultOutputContentError{Error: nil},
+	}
+	result, errMsg := toolResultText(tr)
+	if result != "" {
+		t.Errorf("result = %q, want empty", result)
+	}
+	if errMsg != "tool error" {
+		t.Errorf("errMsg = %q, want tool error", errMsg)
+	}
+}
+
+// unknownOutputContent implements ToolResultOutputContent for the default
+// branch of toolResultText (unrecognised type → empty strings).
+type unknownOutputContent struct{}
+
+func (unknownOutputContent) GetType() fantasy.ToolResultContentType {
+	return "unknown"
+}
+
+// coverage-patch: 2026-07-17 — covers the default (unrecognised type) branch
+// of toolResultText (57.1%)
+func TestToolResultText_default(t *testing.T) {
+	tr := fantasy.ToolResultContent{
+		Result: unknownOutputContent{},
+	}
+	result, errMsg := toolResultText(tr)
+	if result != "" {
+		t.Errorf("result = %q, want empty", result)
+	}
+	if errMsg != "" {
+		t.Errorf("errMsg = %q, want empty", errMsg)
+	}
+}
+
+// coverage-patch: 2026-07-17 — covers agentOptions Temperature branch (87.5%)
+func TestAgentOptions_temperature(t *testing.T) {
+	temp := 0.7
+	r := NewRunner(&fakeModel{}, nil, RunnerConfig{Temperature: &temp})
+	opts := r.agentOptions()
+	// We can't easily inspect fantasy.AgentOption internals, but we ensure
+	// the function completes without panic and returns at least the stop
+	// condition (always present).
+	if len(opts) == 0 {
+		t.Error("agentOptions returned 0 options")
+	}
+}
+
+// coverage-patch: 2026-07-17 — end of patch block
 func TestRunner_plainText(t *testing.T) {
 	fm := &fakeModel{responses: []*fantasy.Response{
 		{

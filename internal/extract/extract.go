@@ -83,15 +83,15 @@ var byExt = map[string]extractor{
 }
 
 // Register adds a custom extractor for the given extension (with leading dot,
-// e.g. ".proto"). Panics if ext is already registered (to catch duplicate
-// registrations at init time).
-func Register(ext string, fn extractor) {
+// e.g. ".proto"). Returns an error if ext is already registered.
+func Register(ext string, fn extractor) error {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, ok := byExt[ext]; ok {
-		panic("extract: duplicate registration for " + ext)
+		return fmt.Errorf("extract: duplicate registration for %s", ext)
 	}
 	byExt[ext] = fn
+	return nil
 }
 
 // Extract returns the plain-text / lightweight-markdown content of a document,

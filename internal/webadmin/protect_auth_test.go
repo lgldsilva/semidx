@@ -2,6 +2,7 @@ package webadmin
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,6 +43,38 @@ func TestProtectAuthWriters(t *testing.T) {
 	if rec.Code != 403 {
 		t.Fatalf("role html = %d", rec.Code)
 	}
+}
+
+// coverage-patch: 2026-07-17
+func TestWriteUnauthorized(t *testing.T) {
+	t.Run("json API", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		a := &Admin{}
+		a.writeUnauthorized(w, nil, true)
+		resp := w.Result()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("status = %d; want 401", resp.StatusCode)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if !strings.Contains(string(body), "unauthorized") {
+			t.Errorf("body = %s; want 'unauthorized'", string(body))
+		}
+	})
+	t.Run("non-JSON (redirect)", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/admin", nil)
+		a := &Admin{}
+		a.writeUnauthorized(w, r, false)
+		resp := w.Result()
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Errorf("status = %d; want 303", resp.StatusCode)
+		}
+		loc := resp.Header.Get("Location")
+		if loc != "/admin/login" {
+			t.Errorf("Location = %q; want /admin/login", loc)
+		}
+	})
 }
 
 func TestResolveAuthCtxSessionError(t *testing.T) {

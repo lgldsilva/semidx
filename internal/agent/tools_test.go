@@ -444,6 +444,27 @@ func TestRepoTools_Run_missingProject(t *testing.T) {
 	}
 }
 
+func TestRepoTools_Run_resolveFailure(t *testing.T) {
+	resolver := errScopeResolver{}
+	tools := []Tool{
+		NewRepoWorktreesTool(&resolver),
+		NewRepoBranchesTool(&resolver),
+		NewRepoStatusTool(&resolver),
+	}
+
+	for _, tool := range tools {
+		t.Run(tool.Def().Name, func(t *testing.T) {
+			_, err := tool.Run(ctx, `{"project":"some-project"}`)
+			if err == nil {
+				t.Fatal("expected error for resolve failure, got nil")
+			}
+			if !strings.Contains(err.Error(), "resolve project") {
+				t.Errorf("error should mention 'resolve project', got: %v", err)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // truncate helper
 // ---------------------------------------------------------------------------

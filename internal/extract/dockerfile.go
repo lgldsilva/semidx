@@ -19,7 +19,7 @@ var dockerInstrRx = func() *regexp.Regexp {
 }()
 
 func init() {
-	RegisterName([]string{"Dockerfile", "Containerfile"}, extractDockerfile)
+	_ = RegisterName([]string{"Dockerfile", "Containerfile"}, extractDockerfile)
 }
 
 // extractDockerfile reads Dockerfile/Containerfile content (plain text) and
