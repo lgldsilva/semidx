@@ -1,7 +1,7 @@
 # Build a static semidx binary, then run it on a minimal image that still has
 # git + openssh-client (HTTPS/SSH tooling for server-side git-sync) and CA
 # certificates (for cloud embedders).
-FROM node:22-alpine AS web
+FROM node:26-alpine AS web
 WORKDIR /src
 COPY web/package.json web/package-lock.json ./web/
 RUN cd web && npm ci
