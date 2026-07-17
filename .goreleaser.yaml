@@ -2,8 +2,8 @@
 #
 # Builds the CLI for linux/macOS/Windows on amd64+arm64, packages each as
 # tar.gz (zip on Windows) with README + LICENSE, emits SHA-256 checksums and a
-# grouped changelog, and publishes a Gitea release. Run by the `release-artifacts`
-# job in .gitea/workflows/release.yml on a `v*` tag.
+# grouped changelog, and publishes a GitHub release. Run by the `goreleaser`
+# job in .github/workflows/release.yml on a `v*` tag.
 #
 # Validate locally without publishing:  goreleaser check  &&  goreleaser release --snapshot --clean
 version: 2

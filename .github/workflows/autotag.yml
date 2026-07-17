@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 env:
-  GOTOOLCHAIN: go1.25.12
+  GOTOOLCHAIN: go1.26.5
 
 jobs:
   autotag:
@@ -23,7 +23,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25.12"
+          go-version: "1.26.5"
           cache: false
       - name: Compute next tag with svu
         id: svu

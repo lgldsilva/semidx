@@ -553,8 +553,8 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_MAX_FILES_PER_PROJECT", "Maximum files per index run per project (0=unlimited)", false},
 	{"SEMIDX_JAVA_DECOMPILER", "External Java decompiler command for .class in JARs", false},
 	// Self-update (semidx upgrade) — override to point at a different release host.
-	{"SEMIDX_UPDATE_API", "Releases API base for `semidx upgrade` (default: homelab Gitea)", false},
-	{"SEMIDX_UPDATE_URL", "Release download base for `semidx upgrade` (default: homelab Gitea)", false},
+	{"SEMIDX_UPDATE_API", "Releases API base for `semidx upgrade` (default: public GitHub release)", false},
+	{"SEMIDX_UPDATE_URL", "Release download base for `semidx upgrade` (default: public GitHub release)", false},
 	{"SEMIDX_UPDATE_TOKEN", "Token for `semidx upgrade` against a private release host", true},
 	{"SEMIDX_INSECURE", "Skip TLS verification for update downloads (1 = self-signed CA)", false},
 	// Server-only (semidx serve).

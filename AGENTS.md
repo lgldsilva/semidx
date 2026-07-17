@@ -68,8 +68,7 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
   server-side git cloning.
 - **MCP `semantic_reindex` is server-only.** In standalone mode it returns an
   in-band message pointing at `semidx index`.
-- **No PR/branch SonarQube analysis** — the homelab Sonar is **Community
-  edition** (single branch). Sonar runs on **main only**.
+- **No PR/branch SonarQube analysis** — SonarQube runs on **`main` only**.
 - **Postgres is never exposed** — the only ingress is the authenticated HTTP API.
 - **Ollama is not bundled**; the host provides it (GPU box). Without any provider,
   use `--keyword`.
@@ -99,7 +98,7 @@ internal/
   mcpserver/       MCP tools over a Backend (remote client | local index)
   mcpinstall/      `mcp install` client registry (per-client config formats)
   skills/          embedded agent skills
-deploy/            docker-compose (self-host), homelab/ (Watchtower deploy),
+deploy/            docker-compose (self-host),
                    agentics-test/ (the MCP integration harness)
 docs/              architecture.md, api.md, self-hosting.md, CICD.md, ADRs
 ```
@@ -136,36 +135,31 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
   (server variation via its `docker-compose.yml`). See its `README.md`.
 - Local Sonar gate (needs a token): `SONAR_TOKEN=… ./scripts/sonar-scan.sh`.
 
-## CI/CD (Gitea Actions)
+## CI/CD (GitHub Actions)
 
-- **`ci.yml` = the gates**, on every PR and push to main: build, `go test -race`,
-  golangci-lint, gitleaks, govulncheck, gosec, Trivy image scan. **These predict
-  what may enter main.** SonarQube runs **on main only** (Community edition).
-- **`release.yml` = deploy + publish**, on `v*` tags / dispatch: build+push the
-  image, SBOM → Dependency-Track, **GoReleaser** artifacts
-  (linux/darwin/windows × amd64/arm64 tar.gz/zip + SHA-256 + changelog),
-  then **deploy** by triggering the host's **Watchtower** to pull `:latest`.
-- Every infra step is **gated on its secret** and skips cleanly when absent, so
-  secret-less runs stay green. Secrets/vars: `SONAR_TOKEN`, `REGISTRY_TOKEN`,
-  `GITEA_TOKEN`, `WATCHTOWER_URL`+`WATCHTOWER_TOKEN`, `SONAR_HOST_IP`, … (see
-  `docs/CICD.md`).
+- **`ci.yml` = the gates**, on every PR and push to `main`: build, `go test -race`,
+  golangci-lint, gitleaks, govulncheck, gosec, Trivy image scan, CodeQL, and
+  dependency review. **These predict what may enter `main`.**
+- **`release.yml` = publish**, on `v*` tags / dispatch: build + push the image
+  to **ghcr.io**, then **GoReleaser** artifacts (linux/darwin/windows ×
+  amd64/arm64 tar.gz/zip + SHA-256 + grouped changelog) to a **GitHub release**.
+- **`autotag.yml`** keeps version tags and GitHub releases in sync via
+  [`svu`](https://github.com/caarlos0/svu) (next semver from Conventional Commits).
+- **`codeql.yml`** and **`dependency-review.yml`** add static analysis and
+  dependency CVE review on every PR.
+- **Dependabot** (`dependabot.yml`) opens weekly PRs for Go modules and GitHub
+  Actions.
 - goreleaser is pinned to **v2.13.0** and gosec to **v2.27.1** because `@latest`
   needs Go ≥1.26 which `GOTOOLCHAIN=local` blocks.
-
-> **KNOWN ISSUE:** pushes to `main` currently do **not** trigger CI on this Gitea
-> instance (only PR/branch events do). So the main-only Sonar gate does not run
-> automatically on merge, and releases must be confirmed via the tag event. This
-> is a Gitea-side trigger/config problem, not a workflow bug.
 
 ## Conventions
 
 - **Conventional Commits.** The commit-msg hook **rejects a comma in the scope**
   (use one scope, e.g. `fix(mcp)` not `fix(mcp,skills)`) and warns on a subject
   over 72 chars. End commit messages with a `Claude-Session:` trailer.
-- **Never commit directly to `main` — always a PR.** Gitea has no `gh`; open/merge
-  PRs via the REST API (`gitea-pr` skill). Branch from an **updated** main.
-- After an API merge, the `refs/heads/main` transport ref lags a few seconds —
-  wait for it before relying on the remote head.
+- **Never commit directly to `main` — always a PR.** Branch from an **updated**
+  `main` and open a PR; CI gates (above) run on every PR and must be green
+  before merge.
 - **Secrets hygiene:** no keys/DSNs in code or committed files; providers/keys via
   `semidx config` or env. `.env` files and `deploy/**/.env` are gitignored.
 - Validate end-to-end before declaring done (build/tests/curl/logs), and test
@@ -188,16 +182,16 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 - MCP stdio: keep the server's stdout for the protocol (logs go to stderr).
 - CI: `setup-go` runs with `cache: false` on purpose. semidx's Go cache balloons
   to ~3.5 GB (many `go run …@version` tool builds + `-race` + testcontainers),
-  and the act_runner artifactcache times out / EOFs uploading it over the
-  WireGuard link — intermittently failing whichever job's cache-save loses the
-  race. Re-downloading modules each run is slower but reliable. Do **not**
-  re-enable the cache without first shrinking it or moving to a host-persistent
-  cache on the runners.
+  which exceeds the default GitHub Actions cache eviction pressure for this
+  repo and intermittently fails whichever job's cache-save loses the race.
+  Re-downloading modules each run is slower but reliable. If you re-enable
+  the cache, keep an eye on hit rate and quota.
 
 ## Docs
 
 `docs/architecture.md` · `docs/requirements.md` (product requirements) ·
-`docs/api.md` · `docs/self-hosting.md` · `docs/CICD.md` ·
+`docs/api.md` · `docs/self-hosting.md` ·
 `docs/design-decisions.md` (ADRs) ·
 `docs/research/large-scale-semantic-code-search.md` (scale research + roadmap) ·
+`docs/install.md` (install matrix and CI/private-host setup) ·
 `README.md` (quickstart) · `deploy/agentics-test/README.md` (MCP harness).
