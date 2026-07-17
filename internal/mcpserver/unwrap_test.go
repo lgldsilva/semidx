@@ -50,4 +50,12 @@ func TestAsGitBackend_seesThroughWrapper(t *testing.T) {
 	if _, ok := asGitBackend(wrapStub{Backend: plain}); ok {
 		t.Error("wrapping a plain backend must not fabricate git capability")
 	}
+
+	// Nil input: both must return false (hits the "b == nil" path out of the loop).
+	if _, ok := asGitBackend(nil); ok {
+		t.Error("asGitBackend(nil) must return false")
+	}
+	if _, ok := asMultiSearchBackend(nil); ok {
+		t.Error("asMultiSearchBackend(nil) must return false")
+	}
 }

@@ -251,7 +251,7 @@ func TestReplaceBinaryAt_UnwritableDir(t *testing.T) {
 }
 
 func TestUpdateHTTPClient_UsesSystemCAsByDefault(t *testing.T) {
-	c := updateHTTPClient("https://gitea.raspberrypi.lan/api/v1/repos/x/y")
+	c := updateHTTPClient("https://gitea.example.com/api/v1/repos/x/y")
 	tr, ok := c.Transport.(*http.Transport)
 	if !ok {
 		t.Fatal("expected *http.Transport")

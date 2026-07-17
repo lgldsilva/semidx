@@ -170,3 +170,79 @@ func TestSettingsPasswordValidation(t *testing.T) {
 		t.Fatalf("short password = %d body=%s", code, body)
 	}
 }
+
+// coverage-patch: 2026-07-17
+func TestAPIKeysCreateAndRevoke(t *testing.T) {
+	iss, _ := jwtauth.New("test-secret")
+	srv, fs := newAdminWith(t, fakeEmbedder{}, iss)
+	fs.addUser("admin", "supersecret", "admin")
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+
+	// apiCreateKey — bad JSON
+	code, body := postAdminJSON(t, c, srv.URL+"/admin/api/keys", csrf, "not-json")
+	if code != 400 || !strings.Contains(body, "invalid JSON") {
+		t.Fatalf("bad json = %d body=%s", code, body)
+	}
+
+	// apiCreateKey — empty name
+	code, body = postAdminJSON(t, c, srv.URL+"/admin/api/keys", csrf, map[string]any{
+		"name": "", "scopes": []string{"read"},
+	})
+	if code != 400 || !strings.Contains(body, "name is required") {
+		t.Fatalf("empty name = %d body=%s", code, body)
+	}
+
+	// apiCreateKey — invalid scope
+	code, body = postAdminJSON(t, c, srv.URL+"/admin/api/keys", csrf, map[string]any{
+		"name": "badscope", "scopes": []string{"bogus"},
+	})
+	if code != 400 || !strings.Contains(body, "invalid scope") {
+		t.Fatalf("bad scope = %d body=%s", code, body)
+	}
+
+	// apiCreateKey — happy path
+	code, body = postAdminJSON(t, c, srv.URL+"/admin/api/keys", csrf, map[string]any{
+		"name": "mykey", "scopes": []string{"read"},
+	})
+	if code != 201 || !strings.Contains(body, `"id":`) || !strings.Contains(body, "mykey") {
+		t.Fatalf("create key = %d body=%s", code, body)
+	}
+
+	// apiRevokeKey — invalid id (non-numeric)
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/admin/api/keys/abc", nil)
+	req.Header.Set("X-CSRF-Token", csrf)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("invalid key id = %d", resp.StatusCode)
+	}
+
+	// apiRevokeKey — not found
+	req, _ = http.NewRequest(http.MethodDelete, srv.URL+"/admin/api/keys/999", nil)
+	req.Header.Set("X-CSRF-Token", csrf)
+	resp, err = c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("key not found = %d", resp.StatusCode)
+	}
+
+	// apiRevokeKey — happy path (revoke key 1 created above)
+	req, _ = http.NewRequest(http.MethodDelete, srv.URL+"/admin/api/keys/1", nil)
+	req.Header.Set("X-CSRF-Token", csrf)
+	resp, err = c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("revoke key = %d", resp.StatusCode)
+	}
+}

@@ -4,7 +4,7 @@ name: semidx
 #
 # TWO MODES (pick one):
 #   Build from source:           docker compose up -d --build
-#   Pull pre-built image:        SEMIDX_IMAGE=gitea.raspberrypi.lan/lgldsilva/semidx:main SEMIDX_PULL_POLICY=always docker compose up -d
+#   Pull pre-built image:        SEMIDX_IMAGE=ghcr.io/lgldsilva/semidx:latest SEMIDX_PULL_POLICY=always docker compose up -d
 #
 # When SEMIDX_IMAGE is set to a registry image, set SEMIDX_PULL_POLICY=always
 # to pull instead of building. The :main tag is pushed automatically on every

@@ -18,7 +18,7 @@ func TestRegisterAndDuplicate(t *testing.T) {
 	// NOTE: not parallel because it mutates the global byExt map and the
 	// t.Cleanup delete would race with parallel readers in Extract/Supported.
 	called := false
-	Register(".unittest", func(data []byte) (string, error) {
+	_ = Register(".unittest", func(data []byte) (string, error) {
 		called = true
 		return "unit-test-result", nil
 	})
@@ -33,13 +33,10 @@ func TestRegisterAndDuplicate(t *testing.T) {
 		t.Errorf("Extract .unittest = %q called=%v, want unit-test-result true", got, called)
 	}
 
-	// Duplicate registration must panic.
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("duplicate Register should panic")
-		}
-	}()
-	Register(".unittest", nil)
+	// Duplicate registration must return an error.
+	if err := Register(".unittest", nil); err == nil {
+		t.Error("duplicate Register should return error")
+	}
 }
 
 // TestIsPDFEncrypted covers the two detection paths: the sentinel error and

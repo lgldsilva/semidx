@@ -5,6 +5,16 @@ Self-hosted semantic search for your code and documents.
 [![status](https://img.shields.io/badge/status-v0.x-orange.svg)](#)
 [![go](https://img.shields.io/badge/go-1.25%2B-blue.svg)](#)
 [![license](https://img.shields.io/badge/license-Apache--2.0-lightgrey.svg)](#)
+[![install.sh](https://img.shields.io/badge/install.sh-live-brightgreen.svg)](install.sh)
+[![install.ps1](https://img.shields.io/badge/install.ps1-live-brightgreen.svg)](install.ps1)
+[![GHCR](https://img.shields.io/badge/GHCR-pending-yellow.svg)](https://github.com/lgldsilva/semidx/pkgs/container/semidx)
+[![Homebrew](https://img.shields.io/badge/Homebrew-pending-yellow.svg)](#platform-package-managers)
+[![Scoop](https://img.shields.io/badge/Scoop-pending-yellow.svg)](#platform-package-managers)
+[![winget](https://img.shields.io/badge/winget-pending-yellow.svg)](#platform-package-managers)
+[![Chocolatey](https://img.shields.io/badge/Chocolatey-pending-yellow.svg)](#platform-package-managers)
+[![AUR](https://img.shields.io/badge/AUR-pending-yellow.svg)](#platform-package-managers)
+[![Snap](https://img.shields.io/badge/Snap-pending-yellow.svg)](#platform-package-managers)
+[![Flatpak](https://img.shields.io/badge/Flatpak-pending-yellow.svg)](#platform-package-managers)
 
 `semidx` indexes a codebase (and documents like PDF, DOCX, XLSX, HTML) into a
 vector store and searches it by *meaning*, not literal text. A query like
@@ -66,14 +76,32 @@ semidx separates *how it embeds* from *where it stores*.
 Prebuilt binaries for **linux / macOS / windows × amd64 / arm64** are attached to
 each release as `tar.gz` (`zip` on Windows) with SHA-256 `checksums.txt`.
 
-```sh
-# detect your OS/arch, download + verify the checksum, and install:
-curl -fsSL https://gitea.raspberrypi.lan/lgldsilva/semidx/raw/branch/main/install.sh | sh
+### Universal installers (recommended)
 
-# a specific version, or a specific platform without installing:
-./install.sh --version v0.2.0
-./install.sh --os windows --arch arm64 --dest ./dl   # just fetch that archive
-./install.sh --all --dest ./dist                     # download every artifact + checksums
+**Unix (Linux / macOS):**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lgldsilva/semidx/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/lgldsilva/semidx/main/install.ps1 | iex
+```
+
+Options (both installers):
+
+```sh
+./install.sh --version v0.43.1
+./install.sh --os windows --arch arm64 --dest ./dl
+./install.sh --all --dest ./dist
+```
+
+```powershell
+./install.ps1 -Version v0.43.1
+./install.ps1 -Destination .\dl -NoInstall
+./install.ps1 -All -Destination .\dist
 ```
 
 Or build from source with Go:
@@ -82,14 +110,49 @@ Or build from source with Go:
 go install github.com/lgldsilva/semidx/cmd/semidx@latest
 ```
 
-### Private Repositories / Gitea Auth
+### Platform package managers
 
-If your Gitea instance is private or requires authentication (where API requests return 404 without auth), you can pass credentials (using a Personal Access Token) to both the initial download and the installer script:
+| Platform | Install | Update |
+|---|---|---|
+| macOS (Homebrew) | `brew install lgldsilva/tap/semidx` | `brew upgrade semidx` |
+| Windows (Scoop) | `scoop bucket add lgldsilva https://github.com/lgldsilva/scoop-bucket && scoop install semidx` | `scoop update semidx` |
+| Windows (winget) | `winget install lgldsilva.semidx` | `winget upgrade lgldsilva.semidx` |
+| Windows (Chocolatey) | `choco install semidx` | `choco upgrade semidx` |
+| Arch (AUR) | `yay -S semidx` | `yay -Syu semidx` |
+| Linux (Snap) | `sudo snap install semidx` | `sudo snap refresh semidx` |
+| Linux (Flatpak) | `flatpak install flathub com.github.lgldsilva.semidx` | `flatpak update com.github.lgldsilva.semidx` |
+| Docker | `docker pull ghcr.io/lgldsilva/semidx:latest` | pull `:latest` / Watchtower |
+| Binary (any OS) | `install.sh` / `install.ps1` | `semidx upgrade` |
+| Go | `go install …@latest` | re-run with `@latest` |
+
+> **Roll-out status:** binary installers + GitHub Releases + GHCR ship first.
+> Homebrew / Scoop / winget / Chocolatey / AUR / Snap / Flatpak land as each
+> channel review completes. See [docs/install.md](docs/install.md) and the
+> pinned “Packaging status” issue for live badges.
+
+### Private / self-hosted release mirrors
+
+Point the installers and `semidx upgrade` at a private host with env overrides:
+
+```sh
+export SEMIDX_API=https://gitea.example.com/api/v1/repos/owner/semidx
+export SEMIDX_DOWNLOAD_BASE=https://gitea.example.com/owner/semidx/releases/download
+export SEMIDX_UPDATE_API=$SEMIDX_API
+export SEMIDX_UPDATE_URL=$SEMIDX_DOWNLOAD_BASE
+# optional token for private release hosts:
+export SEMIDX_UPDATE_TOKEN=…
+```
+
+If your private host needs basic auth for the raw installer script:
 
 ```sh
 curl -k -fsSL -u "username:token" https://gitea.example.com/owner/repo/raw/branch/main/install.sh | \
   CURL="curl -k -fsSL -u username:token" SEMIDX_INSECURE=1 sh
 ```
+
+If you installed via a package manager, `semidx upgrade` detects that and
+refuses to overwrite the managed binary — use the package manager’s upgrade
+command instead.
 
 ## Quickstart (server)
 
@@ -236,6 +299,7 @@ See [docs/self-hosting.md](docs/self-hosting.md) to run the server and
 
 ## Documentation
 
+- [docs/install.md](docs/install.md) — full install/update matrix and roll-out status.
 - [docs/architecture.md](docs/architecture.md) — how it is built.
 - [docs/requirements.md](docs/requirements.md) — product requirements and backlog status.
 - [docs/self-hosting.md](docs/self-hosting.md) — running the server.

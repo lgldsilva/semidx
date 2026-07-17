@@ -3,7 +3,7 @@ package extract
 import "unicode/utf8"
 
 func init() {
-	Register(".toml", extractTOML)
+	_ = Register(".toml", extractTOML)
 }
 
 // extractTOML passes through TOML text as-is after UTF-8 validation.

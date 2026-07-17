@@ -13,7 +13,7 @@ var (
 )
 
 func init() {
-	Register(".vue", extractVue)
+	_ = Register(".vue", extractVue)
 }
 
 // extractVue extracts text from .vue Single File Components. It pulls the text

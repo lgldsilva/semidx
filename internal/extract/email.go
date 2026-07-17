@@ -15,7 +15,7 @@ import (
 const maxEmailSize = 1 << 20 // 1 MiB
 
 func init() {
-	Register(".eml", extractEML)
+	_ = Register(".eml", extractEML)
 }
 
 // extractEML parses an .eml (RFC 5322) message and returns a plain-text

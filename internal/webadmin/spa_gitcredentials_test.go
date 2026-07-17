@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/lgldsilva/semidx/internal/gitcredmgr"
 	"github.com/lgldsilva/semidx/internal/secretbox"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -238,4 +241,35 @@ func putAdminJSON(t *testing.T, c *http.Client, url, csrf string, body any) (int
 	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b)
+}
+
+// coverage-patch: 2026-07-17
+func TestWriteGitCredErr(t *testing.T) {
+	log := slog.Default()
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"ErrUnsupported", gitcredmgr.ErrUnsupported, http.StatusNotImplemented},
+		{"ErrSecretboxDisabled", gitcredmgr.ErrSecretboxDisabled, http.StatusServiceUnavailable},
+		{"ErrNotFound", store.ErrNotFound, http.StatusNotFound},
+		{"already exists", errors.New("credential already exists"), http.StatusConflict},
+		{"passphrase-protected", errors.New("passphrase-protected key not supported"), http.StatusBadRequest},
+		{"invalid SSH", errors.New("invalid SSH key format"), http.StatusBadRequest},
+		{"kind must", errors.New("kind must be one of"), http.StatusBadRequest},
+		{"secret is required", errors.New("secret is required"), http.StatusBadRequest},
+		{"set exactly one", errors.New("set exactly one of username or secret"), http.StatusBadRequest},
+		{"generic error", errors.New("something unexpected"), http.StatusInternalServerError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			writeGitCredErr(w, log, "test", tt.err)
+			resp := w.Result()
+			if resp.StatusCode != tt.want {
+				t.Errorf("status = %d; want %d (err=%v)", resp.StatusCode, tt.want, tt.err)
+			}
+		})
+	}
 }

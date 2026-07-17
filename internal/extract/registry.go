@@ -24,16 +24,17 @@ var archiveExts = map[string]bool{".jar": true, ".war": true, ".aar": true}
 var byName = map[string]extractor{}
 
 // RegisterName adds a custom extractor for the given base filename (e.g.
-// "Makefile", "Dockerfile"). Panics if name is already registered.
-func RegisterName(names []string, fn extractor) {
+// "Makefile", "Dockerfile"). Returns an error if name is already registered.
+func RegisterName(names []string, fn extractor) error {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	for _, n := range names {
 		if _, ok := byName[n]; ok {
-			panic("extract: duplicate name registration for " + n)
+			return fmt.Errorf("extract: duplicate name registration for %s", n)
 		}
 		byName[n] = fn
 	}
+	return nil
 }
 
 // ExtractAll turns a file into one or more searchable Docs. Documents map to a

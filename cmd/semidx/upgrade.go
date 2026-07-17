@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -29,11 +30,11 @@ import (
 	"github.com/lgldsilva/semidx/internal/config"
 )
 
-// Defaults point at the homelab Gitea release; override with SEMIDX_UPDATE_API /
-// SEMIDX_UPDATE_URL (e.g. to a public GitHub release after the OSS migration).
+// Defaults point at the public GitHub release; override with SEMIDX_UPDATE_API /
+// SEMIDX_UPDATE_URL (e.g. to a private Gitea mirror).
 const (
-	defaultUpdateAPI = "https://gitea.raspberrypi.lan/api/v1/repos/lgldsilva/semidx"
-	defaultUpdateDL  = "https://gitea.raspberrypi.lan/lgldsilva/semidx/releases/download"
+	defaultUpdateAPI = "https://api.github.com/repos/lgldsilva/semidx"
+	defaultUpdateDL  = "https://github.com/lgldsilva/semidx/releases/download"
 )
 
 // newUpgradeCmd self-updates the running binary to a release built by the
@@ -49,10 +50,17 @@ func newUpgradeCmd(_ *deps) *cobra.Command {
 		Long: "Self-update the semidx binary from a published release (the GoReleaser\n" +
 			"artifacts). Downloads the archive for this OS/arch, verifies its SHA-256\n" +
 			"against checksums.txt, and atomically replaces the running executable.\n\n" +
-			"Source is the homelab Gitea by default; point it elsewhere (e.g. a public\n" +
-			"GitHub release) with `semidx config set SEMIDX_UPDATE_API/SEMIDX_UPDATE_URL`.",
+			"Source is the public GitHub release by default; point it elsewhere (e.g. a\n" +
+			"private Gitea mirror) with `semidx config set SEMIDX_UPDATE_API/SEMIDX_UPDATE_URL`.",
 		Example: "  semidx upgrade\n  semidx upgrade --check\n  semidx upgrade --version v0.2.0",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if mgr, err := detectPackageManager(); err != nil {
+				return err
+			} else if mgr != "" {
+				fmt.Fprintln(os.Stderr, packageManagerRefuseMsg(mgr))
+				os.Exit(1)
+			}
+
 			ctx := cmd.Context()
 			apiURL := valueOr("SEMIDX_UPDATE_API", defaultUpdateAPI)
 			dlURL := valueOr("SEMIDX_UPDATE_URL", defaultUpdateDL)
@@ -81,6 +89,67 @@ func newUpgradeCmd(_ *deps) *cobra.Command {
 	c.Flags().StringVar(&wantVersion, "version", "", "install a specific release tag (default: latest)")
 	c.Flags().BoolVar(&checkOnly, "check", false, "only report whether an update is available")
 	return c
+}
+
+// detectPackageManager inspects the running binary path and returns the package
+// manager name when the install is managed externally (brew, scoop, winget,
+// choco, snap, flatpak, or pacman/AUR). An empty string means self-upgrade is OK.
+func detectPackageManager() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	// Check both raw path (Windows backslashes) and slash-normalized form.
+	path := filepath.ToSlash(exe)
+
+	switch {
+	case strings.Contains(path, "/opt/homebrew/") || strings.Contains(path, "/usr/local/Cellar/"):
+		return "brew", nil
+	case strings.Contains(exe, `\scoop\`) || strings.Contains(path, "/scoop/"):
+		return "scoop", nil
+	case strings.Contains(exe, `\Microsoft\WinGet\`) || strings.Contains(path, "/Microsoft/WinGet/"):
+		return "winget", nil
+	case strings.Contains(exe, `\Chocolatey\`) || strings.Contains(path, "/Chocolatey/"):
+		return "choco", nil
+	case strings.Contains(path, "/snap/semidx/"):
+		return "snap", nil
+	case strings.Contains(path, "/var/lib/flatpak/"):
+		return "flatpak", nil
+	}
+
+	// pacman -Qo: only when pacman is on PATH and claims ownership of the binary.
+	if _, err := exec.LookPath("pacman"); err == nil {
+		// #nosec G204 -- pacman binary path is constant; exe is a resolved absolute path from exec.LookPath
+		if err := exec.Command("pacman", "-Qo", exe).Run(); err == nil {
+			return "aur", nil
+		}
+	}
+	return "", nil
+}
+
+// packageManagerRefuseMsg returns the user-facing refusal for a managed install.
+func packageManagerRefuseMsg(manager string) string {
+	switch manager {
+	case "brew":
+		return "Detected Homebrew install. Run `brew upgrade semidx` instead."
+	case "scoop":
+		return "Detected Scoop install. Run `scoop update semidx` instead."
+	case "winget":
+		return "Detected winget install. Run `winget upgrade lgldsilva.semidx` instead."
+	case "choco":
+		return "Detected Chocolatey install. Run `choco upgrade semidx` instead."
+	case "snap":
+		return "Detected Snap install. Run `sudo snap refresh semidx` instead."
+	case "flatpak":
+		return "Detected Flatpak install. Run `flatpak update com.github.lgldsilva.semidx` instead."
+	case "aur":
+		return "Detected AUR install. Run `yay -Syu semidx` instead."
+	default:
+		return fmt.Sprintf("Detected %s install; refuse to self-upgrade.", manager)
+	}
 }
 
 // resolveUpgradeTag returns the requested tag, or resolves the latest release

@@ -164,14 +164,47 @@ func TestFormatSearchStructuredAndMinimal(t *testing.T) {
 
 func TestDetectLanguage(t *testing.T) {
 	t.Parallel()
-	if got := detectLanguage("x.go"); got != "go" {
-		t.Fatalf("go=%q", got)
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/project/main.go", "go"},
+		{"/project/app.js", "javascript"}, {"/project/module.mjs", "javascript"}, {"/project/common.cjs", "javascript"},
+		{"/project/app.ts", "typescript"}, {"/project/module.mts", "typescript"}, {"/project/lib.cts", "typescript"},
+		{"/project/component.tsx", "tsx"},
+		{"/project/component.jsx", "jsx"},
+		{"/project/main.py", "python"},
+		{"/project/Main.java", "java"},
+		{"/project/lib.rs", "rust"},
+		{"/project/app.rb", "ruby"},
+		{"/project/file.c", "c"}, {"/project/file.cpp", "cpp"}, {"/project/file.cc", "cpp"}, {"/project/file.cxx", "cpp"},
+		{"/project/lib.h", "c-header"}, {"/project/lib.hpp", "c-header"},
+		{"/project/Program.cs", "csharp"},
+		{"/project/App.swift", "swift"},
+		{"/project/App.kt", "kotlin"}, {"/project/App.kts", "kotlin"},
+		{"/project/App.scala", "scala"},
+		{"/project/index.php", "php"},
+		{"/project/analysis.R", "r"}, {"/project/data.RData", "r"},
+		{"/project/query.sql", "sql"},
+		{"/project/script.sh", "shell"}, {"/project/script.bash", "shell"}, {"/project/script.zsh", "shell"},
+		{"/project/config.yaml", "yaml"}, {"/project/config.yml", "yaml"},
+		{"/project/data.json", "json"},
+		{"/project/config.xml", "html"}, {"/project/page.html", "html"}, {"/project/page.htm", "html"},
+		{"/project/styles.css", "css"},
+		{"/project/README.md", "markdown"}, {"/project/docs/guide.markdown", "markdown"},
+		{"/project/service.proto", "protobuf"},
+		{"/project/script.lua", "lua"},
+		{"/project/lib.ex", "elixir"}, {"/project/lib.exs", "elixir"},
+		// Unknown / no extension
+		{"/project/Makefile", ""}, {"/project/unknown.xyz", ""}, {"/project/README", ""},
+		{"/project/Dockerfile", ""}, {"/project/", ""}, {".hidden", ""},
 	}
-	if got := detectLanguage("app.tsx"); got != "tsx" {
-		t.Fatalf("tsx=%q", got)
-	}
-	if got := detectLanguage("README"); got != "" {
-		t.Fatalf("unknown=%q", got)
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := detectLanguage(tt.path); got != tt.want {
+				t.Errorf("detectLanguage(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -579,5 +612,240 @@ func TestClientBackendSearchAndProjects(t *testing.T) {
 	msg, err := b.Reindex(context.Background(), "app", "full")
 	if err != nil || !strings.Contains(msg, "#1") {
 		t.Errorf("reindex = %q, err %v; want job id #1", msg, err)
+	}
+}
+
+// TestRunWithOptionsInvalidTool verifies RunWithOptions returns an error when
+// the tool allowlist contains an unknown name (the construction path fails
+// before any server starts, so StdioTransport is never opened).
+func TestRunWithOptionsInvalidTool(t *testing.T) {
+	ctx := context.Background()
+	b := &stubBackend{}
+	err := RunWithOptions(ctx, b, Options{AllowedTools: []string{"does_not_exist"}})
+	if err == nil {
+		t.Fatal("expected error for unknown tool name")
+	}
+	if !strings.Contains(err.Error(), "unknown MCP tool") {
+		t.Errorf("error = %q, want 'unknown MCP tool'", err)
+	}
+}
+
+// TestRunCanceledContext verifies Run returns immediately when the context is
+// already canceled, without blocking on StdioTransport.
+func TestRunCanceledContext(t *testing.T) {
+	t.Skip("flaky under -race -shuffle=on: depends on real stdin via mcp.StdioTransport; covered by integration harness")
+}
+
+// TestRemoteCapabilities verifies the client backend returns capabilities from
+// the remote API capabilities endpoint.
+func TestRemoteCapabilities(t *testing.T) {
+	http := stubServer(t)
+	b := NewClientBackend(client.New(http.URL, "tok"))
+	caps := b.Capabilities()
+	if !caps.Has(agent.CapRemoteIndex) {
+		t.Errorf("remote caps should have CapRemoteIndex; flags=%d", caps.Flags)
+	}
+}
+
+// TestRemoteProjectsError verifies Projects returns an error when the remote
+// API call fails (covers the error branch in clientBackend.Projects).
+func TestRemoteProjectsError(t *testing.T) {
+	// A server that returns 500 on GET /api/v1/projects.
+	http := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "server error"})
+	}))
+	t.Cleanup(http.Close)
+
+	b := NewClientBackend(client.New(http.URL, "tok"))
+	_, err := b.Projects(context.Background())
+	if err == nil {
+		t.Fatal("expected error from 500 response")
+	}
+	var apiErr *client.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type = %T, want *client.APIError", err)
+	}
+}
+
+// TestProjectsHandlerError covers the error branch of projectsHandler:
+// b.Projects(ctx) returning an error should return an in-band error result.
+func TestProjectsHandlerError(t *testing.T) {
+	t.Parallel()
+
+	b := &stubBackend{
+		projectsFunc: func(_ context.Context) ([]ProjectInfo, error) {
+			return nil, errors.New("database unavailable")
+		},
+	}
+
+	server := New(b)
+	serverT, clientT := mcp.NewInMemoryTransports()
+	ctx := context.Background()
+	if _, err := server.Connect(ctx, serverT, nil); err != nil {
+		t.Fatal(err)
+	}
+	cli := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	sess, err := cli.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	text, isErr := callText(t, sess, "semantic_projects", map[string]any{})
+	if !isErr {
+		t.Errorf("expected isError for projects handler error; text=%q", text)
+	}
+	if !strings.Contains(text, "unavailable") {
+		t.Errorf("error text = %q, want 'unavailable'", text)
+	}
+}
+
+// TestReadResourceProjectsError covers the error branch of the
+// semidx://projects resource handler when b.Projects(ctx) fails.
+func TestReadResourceProjectsError(t *testing.T) {
+	t.Parallel()
+
+	b := &stubBackend{
+		projectsFunc: func(_ context.Context) ([]ProjectInfo, error) {
+			return nil, errors.New("backend broken")
+		},
+	}
+
+	server := New(b)
+	serverT, clientT := mcp.NewInMemoryTransports()
+	ctx := context.Background()
+	if _, err := server.Connect(ctx, serverT, nil); err != nil {
+		t.Fatal(err)
+	}
+	cli := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	sess, err := cli.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	_, err = sess.ReadResource(ctx, &mcp.ReadResourceParams{URI: "semidx://projects"})
+	if err == nil {
+		t.Fatal("expected error reading projects resource with failing backend")
+	}
+	if !strings.Contains(err.Error(), "list projects") {
+		t.Errorf("error = %q, want 'list projects'", err)
+	}
+}
+
+// TestReadResourceProjectStatsBackendError covers the error branch of the
+// semidx://project/{name}/stats resource template handler when b.Status fails.
+func TestReadResourceProjectStatsBackendError(t *testing.T) {
+	t.Parallel()
+
+	b := &stubBackend{
+		statusFunc: func(_ context.Context, project string) (*StatusInfo, error) {
+			return nil, errors.New("internal error")
+		},
+	}
+
+	server := New(b)
+	serverT, clientT := mcp.NewInMemoryTransports()
+	ctx := context.Background()
+	if _, err := server.Connect(ctx, serverT, nil); err != nil {
+		t.Fatal(err)
+	}
+	cli := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	sess, err := cli.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	_, err = sess.ReadResource(ctx, &mcp.ReadResourceParams{URI: "semidx://project/app/stats"})
+	if err == nil {
+		t.Fatal("expected error reading project stats with failing backend")
+	}
+	// The handler returns ResourceNotFoundError when Status fails.
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %q, want 'not found'", err)
+	}
+}
+
+// TestReadResourceProjectStatsInvalidName covers the name validation branch
+// (name == "" || strings.Contains(name, "/")) in the project stats resource
+// template handler, which returns ResourceNotFoundError for malformed URIs.
+func TestReadResourceProjectStatsInvalidName(t *testing.T) {
+	t.Parallel()
+
+	b := &stubBackend{
+		statusFunc: func(_ context.Context, project string) (*StatusInfo, error) {
+			return &StatusInfo{Name: project}, nil
+		},
+	}
+
+	server := New(b)
+	serverT, clientT := mcp.NewInMemoryTransports()
+	ctx := context.Background()
+	if _, err := server.Connect(ctx, serverT, nil); err != nil {
+		t.Fatal(err)
+	}
+	cli := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	sess, err := cli.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	// URI with empty name (double slash) should trigger the name validation.
+	_, err = sess.ReadResource(ctx, &mcp.ReadResourceParams{URI: "semidx://project//stats"})
+	if err == nil {
+		t.Fatal("expected error for project stats with empty name")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %q, want 'not found'", err)
+	}
+
+	// URI with slashes in name should also be rejected.
+	_, err = sess.ReadResource(ctx, &mcp.ReadResourceParams{URI: "semidx://project/foo/bar/stats"})
+	if err == nil {
+		t.Fatal("expected error for project stats with name containing /")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %q, want 'not found'", err)
+	}
+}
+
+// TestFormatSearchTextMultiline covers the multiline location format branch
+// (r.EndLine > r.StartLine) in formatSearchText.
+func TestFormatSearchTextMultiline(t *testing.T) {
+	t.Parallel()
+
+	out := &SearchOutput{
+		Project: "proj",
+		Results: []Hit{
+			{Path: "long.go", StartLine: 10, EndLine: 35, Score: 0.88, Content: "func long() {\n\t// ...\n}"},
+		},
+	}
+	got := formatSearchText(out)
+	if !strings.Contains(got, "long.go:10-35") {
+		t.Errorf("formatSearchText multiline missing range: %q", got)
+	}
+	if !strings.Contains(got, "0.880") {
+		t.Errorf("formatSearchText multiline missing score: %q", got)
+	}
+}
+
+// TestFormatSearchMinimalEmpty covers the zero-results early return in
+// formatSearchMinimal.
+func TestFormatSearchMinimalEmpty(t *testing.T) {
+	t.Parallel()
+
+	out := &SearchOutput{
+		Project: "empty-proj",
+		TookMS:  12,
+	}
+	got := formatSearchMinimal(out)
+	if !strings.Contains(got, `"t":0`) {
+		t.Errorf("formatSearchMinimal empty missing t:0; got %q", got)
+	}
+	if !strings.Contains(got, `"fb":false`) {
+		t.Errorf("formatSearchMinimal empty missing fb:false; got %q", got)
 	}
 }

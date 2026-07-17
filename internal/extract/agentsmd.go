@@ -13,7 +13,7 @@ var (
 )
 
 func init() {
-	RegisterName([]string{"AGENTS.md", "CLAUDE.md"}, extractAgentsMD)
+	_ = RegisterName([]string{"AGENTS.md", "CLAUDE.md"}, extractAgentsMD)
 }
 
 // extractAgentsMD reads AGENTS.md / CLAUDE.md files (plain text) and optionally
