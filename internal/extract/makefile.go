@@ -9,7 +9,7 @@ import (
 var targetRx = regexp.MustCompile(`(?m)^([a-zA-Z_][a-zA-Z0-9_./-]*)\s*:`)
 
 func init() {
-	RegisterName([]string{"Makefile", "makefile", "GNUmakefile"}, extractMakefile)
+	_ = RegisterName([]string{"Makefile", "makefile", "GNUmakefile"}, extractMakefile)
 }
 
 // extractMakefile reads Makefile content (plain text) and optionally prepends

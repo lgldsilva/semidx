@@ -51,18 +51,18 @@ func TestHostOf(t *testing.T) {
 		"https://github.com/acme/repo.git":         "github.com",
 		"https://gitea.lan:3000/o/r.git":           "gitea.lan",
 		"https://user:pass@gitea.lan:3000/o/r.git": "gitea.lan",
-		"https://host":          "host",
-		"ssh://git@host:2222/x": "host",
-		"ssh://host/x":          "host",
-		"git@host:o/r.git":      "host",
-		"git@gitea.raspberrypi.lan:lgldsilva/x.git": "gitea.raspberrypi.lan",
-		"git@:path":        "", // empty host
-		"git@ho/st:path":   "", // '/' before ':' → path, not scp
-		"ftp://x/y":        "",
-		"file:///srv/repo": "",
-		"/local/path":      "",
-		"lixo":             "",
-		"":                 "",
+		"https://host":                          "host",
+		"ssh://git@host:2222/x":                 "host",
+		"ssh://host/x":                          "host",
+		"git@host:o/r.git":                      "host",
+		"git@gitea.example.com:lgldsilva/x.git": "gitea.example.com",
+		"git@:path":                             "", // empty host
+		"git@ho/st:path":                        "", // '/' before ':' → path, not scp
+		"ftp://x/y":                             "",
+		"file:///srv/repo":                      "",
+		"/local/path":                           "",
+		"lixo":                                  "",
+		"":                                      "",
 	}
 	for in, want := range cases {
 		if got := HostOf(in); got != want {

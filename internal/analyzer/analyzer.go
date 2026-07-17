@@ -8,6 +8,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -101,26 +102,30 @@ type compiledExtractor struct {
 var (
 	compileOnce sync.Once
 	compiledMap map[string]*compiledExtractor
+	initErr     error
 )
 
-// initCompiled compiles all queries once. Panics on compile failure because
-// the query strings are static and must always be valid.
+// initCompiled compiles all queries once. Errors are returned via getCompiled.
 func initCompiled() {
 	compiledMap = make(map[string]*compiledExtractor, len(extractors))
 	for ext, e := range extractors {
 		lang := e.lang()
 		q, err := gotreesitter.NewQuery(e.queryStr, lang)
 		if err != nil {
-			panic("analyzer: compile query for " + ext + ": " + err.Error())
+			initErr = fmt.Errorf("analyzer: compile query for %s: %w", ext, err)
+			return
 		}
 		compiledMap[ext] = &compiledExtractor{query: q, lang: lang}
 	}
 }
 
 // getCompiled returns the compiled extractor for the given extension, or nil
-// if the extension is not supported.
+// if the extension is not supported or initialization failed.
 func getCompiled(ext string) *compiledExtractor {
 	compileOnce.Do(initCompiled)
+	if initErr != nil {
+		return nil
+	}
 	return compiledMap[ext]
 }
 

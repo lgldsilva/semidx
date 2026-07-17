@@ -68,8 +68,15 @@ func TestJobToJSONKeepsNonFailedErrorAsIs(t *testing.T) {
 }
 
 func TestSanitizeIngestIndexError(t *testing.T) {
-	got := sanitizeIngestIndexError(errors.New("dial tcp 10.0.0.5:5432: connect: refused"))
-	if got != "indexing failed for this file" {
-		t.Fatalf("sanitizeIngestIndexError returned %q", got)
-	}
+	t.Run("non-nil", func(t *testing.T) {
+		got := sanitizeIngestIndexError(errors.New("dial tcp 10.0.0.5:5432: connect: refused"))
+		if got != "indexing failed for this file" {
+			t.Fatalf("sanitizeIngestIndexError returned %q", got)
+		}
+	})
+	t.Run("nil", func(t *testing.T) {
+		if got := sanitizeIngestIndexError(nil); got != "" {
+			t.Errorf("got %q; want empty", got)
+		}
+	})
 }

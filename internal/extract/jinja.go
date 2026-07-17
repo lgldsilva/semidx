@@ -13,9 +13,9 @@ var (
 )
 
 func init() {
-	Register(".jinja", extractJinja)
-	Register(".jinja2", extractJinja)
-	Register(".j2", extractJinja)
+	_ = Register(".jinja", extractJinja)
+	_ = Register(".jinja2", extractJinja)
+	_ = Register(".j2", extractJinja)
 }
 
 // extractJinja strips Jinja template syntax ({{ }}, {% %}, {# #}) and returns
