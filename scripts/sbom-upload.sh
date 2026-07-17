@@ -1,7 +1,7 @@
 #!/bin/sh
 # Generate a CycloneDX SBOM for the Go module and upload it to Dependency-Track.
 #
-# Invoked by the `sbom` job in .gitea/workflows/release.yml, which is
+# Invoked by the `sbom` job in .github/workflows/release.yml, which is
 # continue-on-error, so any failure here is non-fatal to the release.
 #
 # Required env (all provided as Gitea secrets):

@@ -54,7 +54,7 @@ PDF_CMD="${PDF_CMD:-}"
 # When 1, only pass host/token/projectKey/name; rely on sonar-project.properties
 # for sources/tests/exclusions (CLI -D would override those keys).
 USE_PROJECT_PROPERTIES="${USE_PROJECT_PROPERTIES:-0}"
-NODE_EXTRA_CA_CERTS="${NODE_EXTRA_CA_CERTS:-/usr/local/share/ca-certificates/gitea-ca.crt}"
+NODE_EXTRA_CA_CERTS="${NODE_EXTRA_CA_CERTS:-}"
 if [ -z "$SONAR_TOKEN" ]; then
   echo "✘ SONAR_TOKEN not set"
   exit 1

@@ -83,12 +83,12 @@ CI enforces the following on every pull request and push to `main`
   `gitleaks protect --staged`).
 - **`golangci-lint`** plus `go vet` and the race-enabled test suite.
 
-The tagged release pipeline (`.gitea/workflows/release.yml`) additionally runs:
+The tagged release pipeline (`.github/workflows/release.yml`) additionally runs:
 
 - **SonarQube** quality gate.
 - **CycloneDX SBOM** generation, uploaded to **Dependency-Track**.
 - **Trivy** image scan that fails on a fixable `CRITICAL` vulnerability before
   the image is pushed.
 
-*(These homelab/CI integrations are gated on their secrets; they skip cleanly
+*(Optional CI integrations are gated on their secrets; they skip cleanly
 where those secrets are absent.)*

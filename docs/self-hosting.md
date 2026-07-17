@@ -83,7 +83,7 @@ directory is also honored; real environment variables win over it).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SEMIDX_GIT_SSL_NO_VERIFY` | `false` | When `true`, disables TLS verification for server-side `git clone`/`pull` (self-signed homelab Gitea). Prefer installing a real CA when possible. |
+| `SEMIDX_GIT_SSL_NO_VERIFY` | `false` | When `true`, disables TLS verification for server-side `git clone`/`pull` (self-signed CA on a private Gitea/GitLab/etc.). Prefer installing a real CA when possible. |
 | `SEMIDX_GIT_TOKEN` | *(unset)* | PAT for private HTTPS clones; injected as an Authorization header (not stored in the repo URL). Falls back to `SEMIDX_GITHUB_TOKEN`. |
 | `SEMIDX_GIT_USER` | `x-access-token` | Basic-auth username paired with `SEMIDX_GIT_TOKEN` (Gitea/GitHub default). |
 | `SEMIDX_GIT_ALLOW_FILE` | `false` | When `true`, permits `file://` git URLs for server-side sync. |
@@ -122,12 +122,13 @@ pins the host key (otherwise first-contact under
 
 ### Self-update (`semidx upgrade`)
 
-Override when using a private release host (the defaults point at the homelab Gitea).
+Override when using a private release host (the defaults point at the public
+GitHub release for `github.com/lgldsilva/semidx`).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SEMIDX_UPDATE_API` | *(homelab Gitea)* | Releases API base URL for `semidx upgrade`. |
-| `SEMIDX_UPDATE_URL` | *(homelab Gitea)* | Release download base URL for `semidx upgrade`. |
+| `SEMIDX_UPDATE_API` | `https://api.github.com/repos/lgldsilva/semidx` | Releases API base URL for `semidx upgrade`. |
+| `SEMIDX_UPDATE_URL` | `https://github.com/lgldsilva/semidx/releases/download` | Release download base URL for `semidx upgrade`. |
 | `SEMIDX_UPDATE_TOKEN` | *(unset)* | Token for `semidx upgrade` against a private release host. |
 | `SEMIDX_INSECURE` | *(unset)* | Skip TLS verification for update downloads (`1` for self-signed CA). |
 

@@ -27,8 +27,10 @@ go test -coverprofile=coverage.out ./... >/dev/null || {
 }
 
 echo "==> running SonarQube analysis (waits for the quality-gate verdict)"
-# The homelab server uses an internal CA; accept it for the Node-based scanner.
-NODE_TLS_REJECT_UNAUTHORIZED=0 sonar-scanner \
+# To scan a SonarQube server that uses a self-signed / private CA, set
+# NODE_EXTRA_CA_CERTS=/path/to/ca.crt in the environment before invoking this
+# script. The default is to trust the system CA pool.
+sonar-scanner \
   -Dsonar.host.url="$SONAR_HOST_URL" \
   -Dsonar.token="$SONAR_TOKEN"
 

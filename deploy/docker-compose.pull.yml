@@ -1,14 +1,15 @@
 name: semidx
 
-# semidx — pull-based deploy. Pulls the pre-built image from the Gitea container
-# registry instead of building locally. Use this when you don't want to compile
-# the Go binary yourself, or when deploying on a machine without the Go toolchain.
+# semidx — pull-based deploy. Pulls the pre-built image from the GitHub
+# Container Registry (ghcr.io) instead of building locally. Use this when you
+# don't want to compile the Go binary yourself, or when deploying on a machine
+# without the Go toolchain.
 #
 # The :main tag is pushed automatically on every merge to main (CI pipeline), so
 # you get the latest without waiting for a version tag. Set SEMIDX_IMAGE to pin a
 # specific version (e.g. ghcr.io/lgldsilva/semidx:v0.3.0).
 #
-# If you do NOT have access to the Gitea registry, use docker-compose.yml which
+# If you do NOT have access to the registry, use docker-compose.yml which
 # builds from source.
 #
 # Bring it up:
