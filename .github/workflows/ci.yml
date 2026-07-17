@@ -128,8 +128,18 @@ jobs:
         run: |
           set -euo pipefail
           TRIVY_VERSION="0.72.0"
+          # Detect architecture. Gitea act_runner uses ARM64 on the
+          # homelab (oracle-desktop); GitHub Actions uses x86_64.
+          # Trivy release tarballs are per-arch: Linux-64bit (x86_64),
+          # Linux-ARM64, Linux-ARM, etc. Download the matching one.
+          case "$(uname -m)" in
+            aarch64|arm64)  TRIVY_ARCH="Linux-ARM64" ;;
+            x86_64|amd64)   TRIVY_ARCH="Linux-64bit" ;;
+            armv7l|armv7)   TRIVY_ARCH="Linux-ARM"   ;;
+            *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
+          esac
           curl -sSfL \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_${TRIVY_ARCH}.tar.gz" \
             -o /tmp/trivy.tar.gz
           tar xzf /tmp/trivy.tar.gz -C /tmp trivy
           mv /tmp/trivy /usr/local/bin/trivy
