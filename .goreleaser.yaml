@@ -82,14 +82,38 @@ changelog:
       - '^chore:'
       - '^Merge '
 
-# Gitea release (self-hosted homelab). The download host is used by install.sh.
-gitea_urls:
-  api: https://gitea.raspberrypi.lan/api/v1
-  download: https://gitea.raspberrypi.lan
-
+# GitHub release (public). install.sh/ps1 fetch from here.
 release:
-  gitea:
+  github:
     owner: lgldsilva
     name: semidx
   draft: false
   prerelease: auto
+
+# Homebrew tap via https://github.com/lgldsilva/homebrew-tap
+brews:
+  - name: semidx
+    repository:
+      owner: lgldsilva
+      name: homebrew-tap
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/lgldsilva/semidx
+    description: Self-hosted semantic code search for your code and documents.
+    license: Apache-2.0
+    test: |
+      system "#{bin}/semidx version"
+    install: |
+      bin.install "semidx"
+      bin.install "chatrag"
+
+# Scoop bucket via https://github.com/lgldsilva/scoop-bucket
+scoops:
+  - name: semidx
+    repository:
+      owner: lgldsilva
+      name: scoop-bucket
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    homepage: https://github.com/lgldsilva/semidx
+    description: Self-hosted semantic code search for your code and documents.
+    license: Apache-2.0

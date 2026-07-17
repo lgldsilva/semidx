@@ -12,8 +12,8 @@ var (
 )
 
 func init() {
-	Register(".hbs", extractHandlebars)
-	Register(".handlebars", extractHandlebars)
+	_ = Register(".hbs", extractHandlebars)
+	_ = Register(".handlebars", extractHandlebars)
 }
 
 // extractHandlebars strips Handlebars/Mustache syntax ({{ }}, {{{ }}}, {{# }},

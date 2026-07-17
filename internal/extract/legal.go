@@ -3,7 +3,7 @@ package extract
 import "unicode/utf8"
 
 func init() {
-	RegisterName([]string{
+	_ = RegisterName([]string{
 		"LICENSE", "LICENSE.txt", "LICENSE.md",
 		"NOTICE",
 		"CHANGELOG", "CHANGELOG.md", "CHANGELOG.txt",

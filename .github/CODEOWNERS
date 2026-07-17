@@ -1,0 +1,15 @@
+# Default owner for the whole repository.
+*       @lgldsilva
+
+# CI / release surface
+.github/                @lgldsilva
+.goreleaser.yaml        @lgldsilva
+Dockerfile              @lgldsilva
+deploy/                 @lgldsilva
+
+# Auth and security-sensitive packages
+internal/jwtauth/       @lgldsilva
+internal/passwd/        @lgldsilva
+internal/privacy/       @lgldsilva
+internal/secrets/       @lgldsilva
+internal/secretbox/     @lgldsilva

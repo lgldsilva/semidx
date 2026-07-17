@@ -562,3 +562,22 @@ func TestCSRFRequiredForMutations(t *testing.T) {
 		t.Errorf("POST without CSRF = %d; want 403", code)
 	}
 }
+
+// coverage-patch: 2026-07-17
+func TestRedirectLogin(t *testing.T) {
+	iss, _ := jwtauth.New("test-secret")
+	a, err := New(newFakeStore(), nil, nil, true, iss, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/admin/whatever", nil)
+	a.redirectLogin(w, r)
+	resp := w.Result()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("status = %d; want 303", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "/admin/login" {
+		t.Errorf("Location = %q; want /admin/login", loc)
+	}
+}

@@ -18,7 +18,7 @@ var (
 )
 
 func init() {
-	RegisterName([]string{
+	_ = RegisterName([]string{
 		"package-lock.json",
 		"yarn.lock",
 		"poetry.lock",

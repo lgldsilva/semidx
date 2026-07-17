@@ -612,6 +612,156 @@ func TestFetchGraphPathsBFSPg(t *testing.T) {
 	}
 }
 
+// TestListenJobInsert verifies the LISTEN/NOTIFY channel receives notifications
+// sent via pg_notify.
+func TestListenJobInsert(t *testing.T) {
+	s := newTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ch, err := s.ListenJobInsert(ctx)
+	if err != nil {
+		t.Fatalf("ListenJobInsert: %v", err)
+	}
+
+	// Send a notification via pg_notify.
+	if _, err := s.pool.Exec(ctx, `SELECT pg_notify('job_inserted', '42')`); err != nil {
+		t.Fatalf("pg_notify: %v", err)
+	}
+
+	select {
+	case payload := <-ch:
+		if payload != "42" {
+			t.Fatalf("got payload %q, want %q", payload, "42")
+		}
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for notification")
+	}
+}
+
+// TestUpdateJobProgressAndComplete verifies UpdateJobProgress and the
+// progress_done/progress_total/error_count fields on a running job.
+func TestUpdateJobProgressAndComplete(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	p, _ := s.CreateProject(ctx, "progress-test", "bge-m3", "push", "", "", 0)
+
+	// Claim the auto-queued job (EnqueueJob enqueues with status=queued).
+	id, err := s.EnqueueJob(ctx, p.ID, "full")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	// Claim it so status becomes 'running'.
+	claimed, err := s.ClaimJob(ctx)
+	if err != nil || claimed == nil {
+		t.Fatalf("ClaimJob: %v / nil", err)
+	}
+
+	// Update progress.
+	if err := s.UpdateJobProgress(ctx, id, 5, 10, 3, 7, 1); err != nil {
+		t.Fatalf("UpdateJobProgress: %v", err)
+	}
+	job, _ := s.GetJob(ctx, id)
+	if job.ProgressDone != 5 || job.ProgressTotal != 10 || job.FilesIndexed != 3 || job.ChunksCreated != 7 || job.ErrorCount != 1 {
+		t.Errorf("after progress update: %+v", job)
+	}
+
+	// UpdateProgress on a non-running job (already claimed+updated) — still running.
+	if err := s.UpdateJobProgress(ctx, id, 8, 0, 4, 9, 0); err != nil {
+		t.Fatalf("UpdateJobProgress(2nd): %v", err)
+	}
+	job, _ = s.GetJob(ctx, id)
+	if job.ProgressDone != 8 || job.ProgressTotal != 10 {
+		// progress_total should remain 10 because $3=0 skips the update
+		t.Errorf("after 2nd update: progress_done=%d total=%d (want 8,10)", job.ProgressDone, job.ProgressTotal)
+	}
+
+	// Complete the job.
+	if err := s.CompleteJob(ctx, id, 4, 9, 0, 0); err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+	job, _ = s.GetJob(ctx, id)
+	if job.Status != "succeeded" || job.FilesIndexed != 4 || job.ChunksCreated != 9 {
+		t.Errorf("completed job = %+v", job)
+	}
+}
+
+// TestListRecentJobs covers pagination, multi-project listing, and limit
+// clamping in ListRecentJobs.
+func TestListRecentJobs(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	p, _ := s.CreateProject(ctx, "list-jobs", "bge-m3", "push", "", "", 0)
+
+	// Enqueue two jobs.
+	id1, _ := s.EnqueueJob(ctx, p.ID, "full")
+	id2, _ := s.EnqueueJob(ctx, p.ID, "git_history")
+
+	// List recent (project-scoped).
+	jobs, err := s.ListRecentJobs(ctx, p.ID, 10)
+	if err != nil {
+		t.Fatalf("ListRecentJobs: %v", err)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("ListRecentJobs returned %d, want 2", len(jobs))
+	}
+	// Newest first.
+	if jobs[0].ID != id2 || jobs[1].ID != id1 {
+		t.Errorf("order: got ids %d,%d; want %d,%d", jobs[0].ID, jobs[1].ID, id2, id1)
+	}
+
+	// Limit clamping (capped at 50).
+	jobs, err = s.ListRecentJobs(ctx, p.ID, 100)
+	if err != nil || len(jobs) != 2 {
+		t.Errorf("ListRecentJobs(limit=100) = %d err=%v; want 2", len(jobs), err)
+	}
+
+	// List across all projects (projectID=0).
+	all, err := s.ListRecentJobs(ctx, 0, 1)
+	if err != nil {
+		t.Fatalf("ListRecentJobs(all): %v", err)
+	}
+	if len(all) <= 0 {
+		t.Errorf("ListRecentJobs(all) returned 0 jobs")
+	}
+}
+
+// TestCountProjectChunks covers counting chunks per project, including the
+// resolveDims auto-detection path.
+func TestCountProjectChunks(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.EnsureChunksTable(ctx, 3); err != nil {
+		t.Fatalf("EnsureChunksTable: %v", err)
+	}
+	projectID, _ := s.UpsertProject(ctx, "count-chunks", "/tmp/c", "bge-m3", 0)
+
+	fid, _ := s.UpsertFile(ctx, projectID, "a.go", "h1", 10)
+	_ = s.InsertChunks(ctx, projectID, fid, []chunker.Chunk{{Content: "x"}}, [][]float32{{1, 0, 0}}, 3)
+
+	// Count with explicit dims.
+	n, err := s.CountProjectChunks(ctx, projectID, 3)
+	if err != nil || n != 1 {
+		t.Fatalf("CountProjectChunks(dims=3) = %d err=%v; want 1", n, err)
+	}
+
+	// Count with auto-resolve (dims <= 0).
+	n2, err := s.CountProjectChunks(ctx, projectID, -1)
+	if err != nil || n2 != 1 {
+		t.Fatalf("CountProjectChunks(auto) = %d err=%v; want 1", n2, err)
+	}
+
+	// Invalid dims produces an error.
+	_, err = s.CountProjectChunks(ctx, projectID, maxDims+1)
+	if err == nil {
+		t.Error("CountProjectChunks(invalid dims) should error")
+	}
+}
+
 func TestEmbeddingCacheRoundTripPg(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -635,5 +785,118 @@ func TestEmbeddingCacheRoundTripPg(t *testing.T) {
 	n, err := s.PruneEmbeddingCache(ctx, dims)
 	if err != nil || n != 2 {
 		t.Fatalf("PruneEmbeddingCache = %d err=%v", n, err)
+	}
+}
+
+// TestEmbeddingCacheTableValidation covers valid and invalid dimension ranges
+// for the embeddingCacheTable pure function.
+func TestEmbeddingCacheTableValidation(t *testing.T) {
+	t.Run("valid dims", func(t *testing.T) {
+		tbl, err := embeddingCacheTable(3)
+		if err != nil || tbl == "" {
+			t.Fatalf("embeddingCacheTable(3) = %q err=%v", tbl, err)
+		}
+	})
+	t.Run("zero dims", func(t *testing.T) {
+		_, err := embeddingCacheTable(0)
+		if err == nil {
+			t.Error("embeddingCacheTable(0) should error")
+		}
+	})
+	t.Run("too large", func(t *testing.T) {
+		_, err := embeddingCacheTable(maxDims + 1)
+		if err == nil {
+			t.Error("embeddingCacheTable(maxDims+1) should error")
+		}
+	})
+	t.Run("negative dims", func(t *testing.T) {
+		_, err := embeddingCacheTable(-1)
+		if err == nil {
+			t.Error("embeddingCacheTable(-1) should error")
+		}
+	})
+}
+
+// TestDeleteExpiredSessionsWithExpired covers the case where sessions exist
+// that have already expired, so RowsAffected > 0.
+func TestDeleteExpiredSessionsWithExpired(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	u, _ := s.CreateUser(ctx, "bob", "hash", "member")
+	_ = s.CreateSession(ctx, "valid-tok", u.ID, time.Now().UTC().Add(time.Hour))
+	_ = s.CreateSession(ctx, "expired-tok", u.ID, time.Now().UTC().Add(-time.Hour))
+
+	n, err := s.DeleteExpiredSessions(ctx)
+	if err != nil {
+		t.Fatalf("DeleteExpiredSessions: %v", err)
+	}
+	if n < 1 {
+		t.Errorf("DeleteExpiredSessions returned %d, want >=1 expired session removed", n)
+	}
+
+	// Run again — should return 0 since the expired session is already gone.
+	n2, err := s.DeleteExpiredSessions(ctx)
+	if err != nil || n2 != 0 {
+		t.Errorf("second DeleteExpiredSessions = %d err=%v; want 0", n2, err)
+	}
+}
+
+// TestListMessagesWithLimit verifies ListMessages with a limit and over-limit
+// clamping behaviour.
+func TestListMessagesWithLimit(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	u, err := s.CreateUser(ctx, "msg-limit-user", "hash", "member")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	conv, err := s.CreateConversation(ctx, u.ID, "acme", "")
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := s.AddMessage(ctx, conv.ID, "user", fmt.Sprintf("msg %d", i), ""); err != nil {
+			t.Fatalf("AddMessage(%d): %v", i, err)
+		}
+	}
+
+	// No limit returns all.
+	all, err := s.ListMessages(ctx, conv.ID, 0)
+	if err != nil || len(all) != 3 {
+		t.Fatalf("ListMessages(no limit) = %d err=%v; want 3", len(all), err)
+	}
+
+	// Limit returns fewer.
+	limited, err := s.ListMessages(ctx, conv.ID, 2)
+	if err != nil || len(limited) != 2 {
+		t.Fatalf("ListMessages(limit=2) = %d err=%v; want 2", len(limited), err)
+	}
+
+	// Unknown conversation returns empty.
+	empty, err := s.ListMessages(ctx, 99999, 0)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("ListMessages(unknown) = %d err=%v; want 0", len(empty), err)
+	}
+}
+
+// TestPruneUnreferencedFilesNoop verifies that PruneUnreferencedFiles returns 0
+// when every file has a matching worktree entry.
+func TestPruneUnreferencedFilesNoop(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	pid, _ := s.UpsertProject(ctx, "prune-noop", "/p", "bge-m3", 0)
+	fid, _ := s.UpsertFile(ctx, pid, "keep.go", "h", 10)
+	_ = s.InsertChunks(ctx, pid, fid, []chunker.Chunk{{Content: "x"}}, [][]float32{{1, 0, 0}}, 3)
+
+	// Reference the file in a worktree so prune finds nothing to remove.
+	if err := s.SetWorktreeFiles(ctx, pid, "main", map[string]string{"keep.go": "h"}); err != nil {
+		t.Fatalf("SetWorktreeFiles: %v", err)
+	}
+	n, err := s.PruneUnreferencedFiles(ctx, pid)
+	if err != nil || n != 0 {
+		t.Fatalf("PruneUnreferencedFiles = %d, err %v; want 0", n, err)
 	}
 }

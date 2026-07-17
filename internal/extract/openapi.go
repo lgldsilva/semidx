@@ -9,9 +9,9 @@ import (
 )
 
 func init() {
-	Register(".yaml", extractOpenAPI)
-	Register(".yml", extractOpenAPI)
-	Register(".json", extractOpenAPI)
+	_ = Register(".yaml", extractOpenAPI)
+	_ = Register(".yml", extractOpenAPI)
+	_ = Register(".json", extractOpenAPI)
 }
 
 // extractOpenAPI checks whether data is an OpenAPI/Swagger spec (by looking for

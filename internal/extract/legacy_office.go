@@ -19,7 +19,7 @@ func init() {
 	if _, err := exec.LookPath("libreoffice"); err == nil {
 		libreOfficeAvailable = true
 		for _, ext := range []string{".doc", ".xls", ".ppt"} {
-			Register(ext, extractLegacyOffice)
+			_ = Register(ext, extractLegacyOffice)
 		}
 	} else {
 		log.Printf("extract: libreoffice not found in $PATH — .doc/.xls/.ppt support disabled")

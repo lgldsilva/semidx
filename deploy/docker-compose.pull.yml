@@ -6,7 +6,7 @@ name: semidx
 #
 # The :main tag is pushed automatically on every merge to main (CI pipeline), so
 # you get the latest without waiting for a version tag. Set SEMIDX_IMAGE to pin a
-# specific version (e.g. gitea.raspberrypi.lan/lgldsilva/semidx:v0.3.0).
+# specific version (e.g. ghcr.io/lgldsilva/semidx:v0.3.0).
 #
 # If you do NOT have access to the Gitea registry, use docker-compose.yml which
 # builds from source.
@@ -33,7 +33,7 @@ services:
     restart: unless-stopped
 
   semidx:
-    image: ${SEMIDX_IMAGE:-gitea.raspberrypi.lan/lgldsilva/semidx:main}
+    image: ${SEMIDX_IMAGE:-ghcr.io/lgldsilva/semidx:latest}
     depends_on:
       db:
         condition: service_healthy

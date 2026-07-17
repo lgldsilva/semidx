@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -138,6 +139,40 @@ func TestConversationsAPI(t *testing.T) {
 	if code, _ := getBody(t, c, base); code != http.StatusNotFound {
 		t.Errorf("get after delete = %d, want 404", code)
 	}
+}
+
+// coverage-patch: 2026-07-17
+func TestConvStore(t *testing.T) {
+	t.Run("store implements ConversationStore", func(t *testing.T) {
+		fs := newFakeStore()
+		a := &Admin{store: fs}
+		w := httptest.NewRecorder()
+		cs, ok := a.convStore(w)
+		if !ok {
+			t.Fatal("want ok=true")
+		}
+		if cs == nil {
+			t.Fatal("want non-nil ConversationStore")
+		}
+		// convStore does not write on success; body stays empty.
+		if w.Body.Len() != 0 {
+			t.Errorf("unexpected write: code=%d body=%s", w.Code, w.Body.String())
+		}
+	})
+	t.Run("store does not implement ConversationStore", func(t *testing.T) {
+		a := &Admin{} // nil store
+		w := httptest.NewRecorder()
+		cs, ok := a.convStore(w)
+		if ok {
+			t.Fatal("want ok=false")
+		}
+		if cs != nil {
+			t.Error("want nil ConversationStore")
+		}
+		if w.Code != http.StatusNotImplemented {
+			t.Errorf("status = %d; want 501", w.Code)
+		}
+	})
 }
 
 // doJSON issues a request with a CSRF token and returns the status code.

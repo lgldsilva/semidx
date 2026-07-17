@@ -9,8 +9,8 @@ import (
 var graphqlDefRx = regexp.MustCompile(`(?:type|input|enum|query|mutation)\s+(\w+)`)
 
 func init() {
-	Register(".graphql", extractGraphQL)
-	Register(".gql", extractGraphQL)
+	_ = Register(".graphql", extractGraphQL)
+	_ = Register(".gql", extractGraphQL)
 }
 
 // extractGraphQL reads .graphql/.gql files (plain text) and optionally prepends

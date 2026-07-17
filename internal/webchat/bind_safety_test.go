@@ -7,12 +7,12 @@ import (
 
 func TestIsLoopbackListen(t *testing.T) {
 	cases := map[string]bool{
-		"127.0.0.1:8976":    true,
-		"localhost:8976":    true,
-		"[::1]:8976":        true,
-		":8976":             false, // all interfaces
-		"0.0.0.0:8976":      false,
-		"192.168.1.10:8976": false,
+		"127.0.0.1:8976": true,
+		"localhost:8976": true,
+		"[::1]:8976":     true,
+		":8976":          false, // all interfaces
+		"0.0.0.0:8976":   false,
+		"10.0.1.10:8976": false,
 	}
 	for addr, want := range cases {
 		if got := isLoopbackListen(addr); got != want {

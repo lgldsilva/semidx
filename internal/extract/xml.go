@@ -13,7 +13,7 @@ import (
 var xmlTagRx = regexp.MustCompile(`<[^>]*>`)
 
 func init() {
-	Register(".xml", extractXML)
+	_ = Register(".xml", extractXML)
 }
 
 // extractXML strips XML tags and returns the text content between them. It first
