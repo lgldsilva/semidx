@@ -16,7 +16,7 @@
 #   PROJECT_KEY
 #
 # Common env (defaults in brackets):
-#   SONAR_HOST_URL   [https://sonar.raspberrypi.lan]
+#   SONAR_HOST_URL   [https://sonar.example.com]
 #   PROJECT_NAME     [$PROJECT_KEY]
 #   EPHEMERAL        [1]
 #   REPORT_DIR       [$PWD/sonar-out]
@@ -33,7 +33,7 @@
 #   NODE_EXTRA_CA_CERTS
 set -euo pipefail
 
-SONAR_HOST_URL="${SONAR_HOST_URL:-${SONAR_URL:-https://sonar.raspberrypi.lan}}"
+SONAR_HOST_URL="${SONAR_HOST_URL:-${SONAR_URL:-https://sonar.example.com}}"
 SONAR_TOKEN="${SONAR_TOKEN:-}"
 PROJECT_KEY="${PROJECT_KEY:-}"
 PROJECT_NAME="${PROJECT_NAME:-${PROJECT_KEY}}"

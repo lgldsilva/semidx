@@ -5,7 +5,7 @@
 # continue-on-error, so any failure here is non-fatal to the release.
 #
 # Required env (all provided as Gitea secrets):
-#   DT_API   Dependency-Track base URL, e.g. https://dtrack.raspberrypi.lan
+#   DT_API   Dependency-Track base URL, e.g. https://dtrack.example.com
 #   DT_USER  Dependency-Track username with BOM_UPLOAD permission
 #   DT_PASS  password for DT_USER
 # Optional env:

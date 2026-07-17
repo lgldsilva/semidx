@@ -13,7 +13,7 @@
 set -eu
 
 : "${SONAR_TOKEN:?set SONAR_TOKEN (a SonarQube user/analysis token)}"
-SONAR_HOST_URL="${SONAR_HOST_URL:-https://sonar.raspberrypi.lan}"
+SONAR_HOST_URL="${SONAR_HOST_URL:-https://sonar.example.com}"
 
 command -v sonar-scanner >/dev/null 2>&1 || {
   echo "sonar-scanner not found — install it (brew install sonar-scanner) or use the CI job" >&2
