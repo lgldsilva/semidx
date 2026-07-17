@@ -114,17 +114,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Trivy filesystem scan
-        # Install trivy binary via setup-trivy@v0.3.1 (v0.2.1 was
-        # deleted from the marketplace) and run directly. The
-        # aquasecurity/trivy-action Docker image conflicts with the
-        # Gitea act_runner's --network host + ExtraHosts configuration:
-        # nested Docker containers cannot combine --network host with
-        # custom --add-host entries. Running the binary directly
-        # avoids the nested container entirely.
-      - uses: aquasecurity/setup-trivy@v0.3.1
+      # Install trivy binary via setup-trivy@v0.3.1 (v0.2.1 was
+      # deleted from the marketplace) and run directly. The
+      # aquasecurity/trivy-action Docker image conflicts with the
+      # Gitea act_runner's --network host + ExtraHosts configuration:
+      # nested Docker containers cannot combine --network host with
+      # custom --add-host entries. Running the binary directly
+      # avoids the nested container entirely.
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.3.1
         with:
           version: "0.50.0"
-      - run: |
+      - name: Trivy filesystem scan
+        run: |
           trivy filesystem --exit-code 1 --severity CRITICAL,HIGH \
             --ignore-unfixed --quiet .
