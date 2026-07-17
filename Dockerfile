@@ -20,7 +20,7 @@ COPY pkg/ ./pkg/
 COPY --from=web /src/internal/webui/dist ./internal/webui/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/semidx ./cmd/semidx
 
-FROM alpine:3.20
+FROM alpine:3.24
 # openssh-client provides the `ssh` binary for SSH clone/pull
 # (GIT_SSH_COMMAND); git covers HTTPS. Vaulted per-project/host SSH creds
 # use this once the job-runner resolution lands.
