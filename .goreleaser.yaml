@@ -90,30 +90,9 @@ release:
   draft: false
   prerelease: auto
 
-# Homebrew tap via https://github.com/lgldsilva/homebrew-tap
-brews:
-  - name: semidx
-    repository:
-      owner: lgldsilva
-      name: homebrew-tap
-      token: "{{ .Env.GITHUB_TOKEN }}"
-    directory: Formula
-    homepage: https://github.com/lgldsilva/semidx
-    description: Self-hosted semantic code search for your code and documents.
-    license: Apache-2.0
-    test: |
-      system "#{bin}/semidx version"
-    install: |
-      bin.install "semidx"
-      bin.install "chatrag"
-
-# Scoop bucket via https://github.com/lgldsilva/scoop-bucket
-scoops:
-  - name: semidx
-    repository:
-      owner: lgldsilva
-      name: scoop-bucket
-      token: "{{ .Env.GITHUB_TOKEN }}"
-    homepage: https://github.com/lgldsilva/semidx
-    description: Self-hosted semantic code search for your code and documents.
-    license: Apache-2.0
+# Package manager taps (Homebrew, Scoop) are intentionally NOT configured
+# here — the target repos (lgldsilva/homebrew-tap, lgldsilva/scoop-bucket)
+# do not exist yet. GoReleaser aborts the entire release if a tap is
+# configured but the repo is missing, which would skip the Docker image
+# push. Add the `brews:` and `scoops:` blocks back when the tap repos
+# are created (see AGENTS.md → "Package managers").
