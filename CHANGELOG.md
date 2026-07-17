@@ -61,6 +61,14 @@ each GitHub Release.
   On Gitea Actions the job is skipped via `if: ${{ !env.GITEA_ACTIONS }}`
   because `github/codeql-action` requires GitHub credentials and Gitea
   has no equivalent Code Scanning backend.
+- Add the same Gitea-skip guard to the `release` workflow. It uses
+  GitHub-only actions (`docker/login-action`, `docker/build-push-action`,
+  `softprops/action-gh-release`) and the `GITHUB_TOKEN` secret, so it
+  cannot run on Gitea Actions. On GitHub it publishes GoReleaser
+  binaries and pushes the container image to GHCR; on Gitea both jobs
+  are skipped. Releases for the Gitea mirror are out of scope for
+  automated CI — use the Gitea Releases API to create them manually if
+  needed.
 
 ## [v0.43.1] - 2026-07-13
 
