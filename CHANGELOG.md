@@ -52,6 +52,14 @@ each GitHub Release.
   triggering ~9 failing job runs, burning free Actions minutes (690 / 2 000
   in a single day). Closed all open Dependabot PRs. Manual dep bumps will
   be done via PRs as needed; re-enabling Dependabot is tracked separately.
+- Remove the `codeql` workflow. It uses `github/codeql-action` which
+  is GitHub-specific: on Gitea Actions the runner cannot clone the
+  action (no GitHub credentials), and on GitHub the analysis succeeds
+  but the upload fails with "Code scanning is not enabled" until the
+  repo Settings → Security → Code scanning toggle is turned on (free
+  for public repos). Rather than keep a workflow that always fails on
+  at least one platform, delete it and re-add it after enabling Code
+  scanning on the public mirror.
 
 ## [v0.43.1] - 2026-07-13
 
