@@ -26,7 +26,15 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (go)
-    if: ${{ !env.GITEA_ACTIONS }}
+    # NOTE: this workflow is GitHub-only (uses github/codeql-action which
+    # requires GitHub credentials + the Code Scanning API). A job-level
+    # if-guard using env.X is NOT supported by GitHub Actions (parse
+    # error: 'Unrecognized named-value: env'). Removing the guard means
+    # the workflow will run on Gitea and fail at the first step — Gitea
+    # releases are out of scope for CodeQL; the Gitea mirror only needs
+    # the ci.yml gates to be green. Re-introduce the guard via a
+    # Gitea-specific workflow file in .gitea/workflows/ if Gitea code
+    # scanning is ever needed.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
