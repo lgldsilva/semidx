@@ -1,0 +1,39 @@
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+# Skip on Gitea Actions: github/codeql-action is a GitHub-specific action
+# that clones github.com/codeql-action and uploads results to GitHub's
+# Code Scanning API. Gitea runners have no GitHub credentials and Gitea
+# has no equivalent Code Scanning backend, so the job would always fail.
+# On GitHub, this workflow works once "Code scanning" is enabled in
+# repo Settings (free for public repos).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (go)
+    if: ${{ !env.GITEA_ACTIONS }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: go
+      - uses: github/codeql-action/autobuild@v3
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:go"
