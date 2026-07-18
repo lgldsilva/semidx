@@ -19,9 +19,9 @@ universal installers or `go install`.
 | Scoop | seeded | bucket [`lgldsilva/scoop-bucket`](https://github.com/lgldsilva/scoop-bucket) has `semidx` 0.44.9; needs clean Windows smoke before **live** |
 | winget | pending | PR to `microsoft/winget-pkgs` |
 | Chocolatey | pending | package review |
-| AUR | pending | PKGBUILD |
-| Snap | pending | Snap Store review |
-| Flatpak | pending | Flathub review |
+| AUR (`yay` / `paru`) | prepared | verified PKGBUILD template; requires AUR maintainer publication |
+| Snap | prepared | verified classic-confinement manifest; requires Snap Store registration/review |
+| Flatpak | not supported | CLI/server needs arbitrary host repositories; a broad sandbox exception is not an acceptable Flathub package |
 
 "Seeded" means the tap/bucket repository exists with a package for the current
 release, but the channel is **not** advertised as installable until a
@@ -69,8 +69,17 @@ Env overrides: `$env:SEMIDX_API`, `$env:SEMIDX_DOWNLOAD_BASE`, `$env:SEMIDX_BIN_
 
 Homebrew and Scoop taps are **seeded** (repos + package for v0.44.9) but not
 marked live yet — no clean-machine smoke test has passed, and GoReleaser does
-not auto-publish to them until `TAP_GITHUB_TOKEN` is configured. winget,
-Chocolatey, AUR, Snap and Flatpak are still unpublished.
+not auto-publish to them until `TAP_GITHUB_TOKEN` is configured. AUR and Snap
+have checksum-verified source templates under `packaging/`, but are not yet
+published: their stores require a maintainer account and review. `yay` is an
+AUR client, so it becomes available when the AUR package is published. Flatpak
+is intentionally unsupported for the headless CLI/server; details and the
+security rationale are in [`packaging/README.md`](../packaging/README.md).
+
+When a release is created from a `v*` tag, GitHub Releases also receives an
+`semidx-vX.Y.Z-package-manifests.tar.gz` bundle plus its SHA-256 file. It
+contains the rendered AUR and Snap inputs for that exact release; maintainers
+must still publish them through the respective account and review flow.
 
 Until a channel is **live**, use the universal installers, GitHub Releases,
 GHCR or `go install`.
