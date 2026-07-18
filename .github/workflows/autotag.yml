@@ -2,9 +2,11 @@
 # Pushes a new v* tag on main when commits warrant a bump.
 name: autotag
 
+# Autotag on every main push flooded tags/releases during the GitHub
+# migration (v0.41–v0.44 spam + failed goreleaser runs). Keep the workflow
+# for intentional bumps via Actions → Run workflow; cut release tags by hand
+# (or re-enable push after the cutover settles).
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

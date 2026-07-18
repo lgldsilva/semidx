@@ -15,16 +15,17 @@ universal installers or `go install`.
 | `install.sh` (Unix) | live | SHA-256 verified |
 | `install.ps1` (Windows) | live | SHA-256 verified |
 | `go install` | live | needs Go 1.26.5+ |
-| Homebrew | pending | tap `lgldsilva/homebrew-tap` |
-| Scoop | pending | bucket `lgldsilva/scoop-bucket` |
+| Homebrew | seeded | tap [`lgldsilva/homebrew-tap`](https://github.com/lgldsilva/homebrew-tap) has `semidx` 0.44.9; needs clean macOS/Linux smoke before **live** |
+| Scoop | seeded | bucket [`lgldsilva/scoop-bucket`](https://github.com/lgldsilva/scoop-bucket) has `semidx` 0.44.9; needs clean Windows smoke before **live** |
 | winget | pending | PR to `microsoft/winget-pkgs` |
 | Chocolatey | pending | package review |
 | AUR | pending | PKGBUILD |
 | Snap | pending | Snap Store review |
 | Flatpak | pending | Flathub review |
 
-The pending channels below are roadmap entries, not working install methods.
-Track progress in
+"Seeded" means the tap/bucket repository exists with a package for the current
+release, but the channel is **not** advertised as installable until a
+clean-machine install + update smoke test passes. Track progress in
 [Packaging status #16](https://github.com/lgldsilva/semidx/issues/16).
 
 ## Universal installers
@@ -66,11 +67,13 @@ Env overrides: `$env:SEMIDX_API`, `$env:SEMIDX_DOWNLOAD_BASE`, `$env:SEMIDX_BIN_
 
 ## Package managers
 
-Homebrew, Scoop, winget, Chocolatey, AUR, Snap and Flatpak are **not published
-yet**. Commands for those channels will be documented only after a package has
-passed its registry review and a clean-machine install/update smoke test.
+Homebrew and Scoop taps are **seeded** (repos + package for v0.44.9) but not
+marked live yet — no clean-machine smoke test has passed, and GoReleaser does
+not auto-publish to them until `TAP_GITHUB_TOKEN` is configured. winget,
+Chocolatey, AUR, Snap and Flatpak are still unpublished.
 
-Until then, use the universal installers, GitHub Releases, GHCR or `go install`.
+Until a channel is **live**, use the universal installers, GitHub Releases,
+GHCR or `go install`.
 
 ### Docker / GHCR
 
