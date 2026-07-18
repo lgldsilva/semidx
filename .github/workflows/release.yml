@@ -35,6 +35,30 @@ jobs:
         with:
           go-version: "1.26.5"
           cache: false
+      # GitHub Actions runners have ~14 GB of ephemeral disk. Cross-compiling
+      # 12 binaries (semidx + chatrag × 6 platform combos) fills the disk
+      # and the Go linker aborts with "no space left on device". Free up
+      # space before the heavy goreleaser build.
+      - name: Free disk space before build
+        run: |
+          echo "=== disk before ==="
+          df -h /tmp /github/workspace
+          # Remove pre-installed language toolchains we don't need (Node,
+          # Python, Ruby, Haskell, .NET, PHP, Go pre-installed alternatives).
+          sudo rm -rf /opt/hostedtoolcache/Node* \
+                       /opt/hostedtoolcache/Python* \
+                       /opt/hostedtoolcache/Ruby* \
+                       /opt/hostedtoolcache/Haskell* \
+                       /opt/hostedtoolcache/PyPy* \
+                       /opt/hostedtoolcache/dotnet \
+                       /opt/hostedtoolcache/php \
+                       /opt/hostedtoolcache/go/1.* 2>/dev/null || true
+          # Clear any pre-existing Go build cache.
+          go clean -cache -modcache 2>/dev/null || true
+          # Clear /tmp.
+          sudo rm -rf /tmp/* 2>/dev/null || true
+          echo "=== disk after ==="
+          df -h /tmp /github/workspace
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
