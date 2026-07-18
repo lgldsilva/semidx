@@ -112,7 +112,10 @@ go install github.com/lgldsilva/semidx/cmd/semidx@latest
 | Docker / GHCR | Live | `docker pull ghcr.io/lgldsilva/semidx:latest` |
 | Go | Live | `go install github.com/lgldsilva/semidx/cmd/semidx@latest` |
 | Homebrew / Scoop | Seeded | Tap/bucket repos exist for v0.44.9; smoke tests pending before live |
-| winget, Chocolatey, AUR, Snap, Flatpak | Planned | Not published yet |
+| AUR (`yay` / `paru`) | Prepared | Verified PKGBUILD template; publication requires the AUR maintainer account |
+| Snap | Prepared | Verified manifest; publication requires Snap Store registration and classic-confinement review |
+| winget / Chocolatey | Planned | Upstream repository/review still required |
+| Flatpak | Not supported | A sandboxed desktop format is not appropriate for the CLI/server; see `packaging/README.md` |
 
 > Package-manager channels stay off the quickstart until a clean-machine
 > install/update smoke test passes. Track rollout in
@@ -299,4 +302,3 @@ See [docs/self-hosting.md](docs/self-hosting.md) to run the server and
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
-

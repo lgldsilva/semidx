@@ -121,3 +121,36 @@ jobs:
           files: bom.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  package-manifests:
+    name: package manifests
+    runs-on: ubuntu-latest
+    needs: [goreleaser]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download release checksums
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          curl --fail --location --retry 3 --silent --show-error \
+            --output checksums.txt \
+            "https://github.com/${{ github.repository }}/releases/download/${TAG}/checksums.txt"
+      - name: Render AUR and Snap manifests
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          scripts/render-package-manifests.sh "$TAG" checksums.txt package-manifests
+          tar -C package-manifests -czf "semidx-${TAG}-package-manifests.tar.gz" aur snap
+          sha256sum "semidx-${TAG}-package-manifests.tar.gz" \
+            >"semidx-${TAG}-package-manifests.tar.gz.sha256"
+      - name: Upload package manifests to release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          files: |
+            semidx-*-package-manifests.tar.gz
+            semidx-*-package-manifests.tar.gz.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
