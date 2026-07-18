@@ -152,9 +152,12 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
   (the two conflict and the advanced workflow fails every run).
 - **`dependency-review.yml`** blocks PRs that introduce high/critical vulnerable
   dependencies (free for public repos).
-- **`sonar.yml`** runs the SonarCloud quality gate when `SONAR_TOKEN` is set
-  (skipped cleanly otherwise). Local equivalent:
-  `SONAR_TOKEN=… ./scripts/sonar-scan.sh`.
+- **SonarCloud** runs via the SonarCloud **GitHub App (Automatic Analysis)** —
+  no workflow file and no `SONAR_TOKEN` needed. Do NOT add a CI-based
+  `sonarcloud-github-action` workflow: it conflicts with Automatic Analysis
+  (SonarCloud refuses to run both). Config lives in `sonar-project.properties`.
+  Note: Automatic Analysis does not run tests, so Go coverage is not uploaded;
+  run `scripts/sonar-scan.sh` locally for a coverage-aware gate if needed.
 - **Dependabot** (`dependabot.yml`) opens weekly grouped PRs for Go modules and
   GitHub Actions.
 - goreleaser is pinned to **v2.13.0** and gosec to **v2.27.1**.
