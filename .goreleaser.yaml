@@ -90,9 +90,10 @@ release:
   draft: false
   prerelease: auto
 
-# Package manager taps (Homebrew, Scoop) are intentionally NOT configured
-# here — the target repos (lgldsilva/homebrew-tap, lgldsilva/scoop-bucket)
-# do not exist yet. GoReleaser aborts the entire release if a tap is
-# configured but the repo is missing, which would skip the Docker image
-# push. Add the `brews:` and `scoops:` blocks back when the tap repos
-# are created (see AGENTS.md → "Package managers").
+# Package manager taps exist (lgldsilva/homebrew-tap, lgldsilva/scoop-bucket)
+# and are seeded manually for now. Do NOT enable `brews:` / `scoops:` here
+# until a repository secret `TAP_GITHUB_TOKEN` (classic PAT with `repo` on
+# those taps) is configured in this repo — GoReleaser's default
+# GITHUB_TOKEN cannot push to sibling repositories, and a missing token
+# aborts the entire release (including the GHCR image push).
+# Track: https://github.com/lgldsilva/semidx/issues/16
