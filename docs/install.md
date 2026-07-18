@@ -10,11 +10,11 @@ universal installers or `go install`.
 
 | Channel | Status | Notes |
 |---|---|---|
-| GitHub Releases (binaries) | live (on first public release) | `semidx` + `chatrag` × 6 platforms |
-| GHCR (`ghcr.io/lgldsilva/semidx`) | live (on first public release) | Docker image |
+| GitHub Releases (binaries) | **live** | `semidx` × 6 platforms + checksums |
+| GHCR (`ghcr.io/lgldsilva/semidx`) | **live** | Public Docker image (`latest` + version tags) |
 | `install.sh` (Unix) | live | SHA-256 verified |
 | `install.ps1` (Windows) | live | SHA-256 verified |
-| `go install` | live | needs Go 1.25+ |
+| `go install` | live | needs Go 1.26.5+ |
 | Homebrew | pending | tap `lgldsilva/homebrew-tap` |
 | Scoop | pending | bucket `lgldsilva/scoop-bucket` |
 | winget | pending | PR to `microsoft/winget-pkgs` |
@@ -23,8 +23,9 @@ universal installers or `go install`.
 | Snap | pending | Snap Store review |
 | Flatpak | pending | Flathub review |
 
-Track progress on the pinned **Packaging status** GitHub issue and the
-Packaging project board.
+The pending channels below are roadmap entries, not working install methods.
+Track progress in
+[Packaging status #16](https://github.com/lgldsilva/semidx/issues/16).
 
 ## Universal installers
 
@@ -65,61 +66,17 @@ Env overrides: `$env:SEMIDX_API`, `$env:SEMIDX_DOWNLOAD_BASE`, `$env:SEMIDX_BIN_
 
 ## Package managers
 
-### Homebrew (macOS)
+Homebrew, Scoop, winget, Chocolatey, AUR, Snap and Flatpak are **not published
+yet**. Commands for those channels will be documented only after a package has
+passed its registry review and a clean-machine install/update smoke test.
 
-```sh
-brew install lgldsilva/tap/semidx
-brew upgrade semidx
-```
-
-### Scoop (Windows)
-
-```powershell
-scoop bucket add lgldsilva https://github.com/lgldsilva/scoop-bucket
-scoop install semidx
-scoop update semidx
-```
-
-### winget (Windows 10/11)
-
-```powershell
-winget install lgldsilva.semidx
-winget upgrade lgldsilva.semidx
-```
-
-### Chocolatey (Windows enterprise)
-
-```powershell
-choco install semidx
-choco upgrade semidx
-```
-
-### AUR (Arch)
-
-```sh
-yay -S semidx
-yay -Syu semidx
-```
-
-### Snap
-
-```sh
-sudo snap install semidx
-sudo snap refresh semidx
-```
-
-### Flatpak
-
-```sh
-flatpak install flathub com.github.lgldsilva.semidx
-flatpak update com.github.lgldsilva.semidx
-```
+Until then, use the universal installers, GitHub Releases, GHCR or `go install`.
 
 ### Docker / GHCR
 
 ```sh
 docker pull ghcr.io/lgldsilva/semidx:latest
-docker pull ghcr.io/lgldsilva/semidx:v0.43.1
+docker pull ghcr.io/lgldsilva/semidx:v0.44.9
 ```
 
 Reference compose files live under `deploy/`.
@@ -136,13 +93,6 @@ go install github.com/lgldsilva/semidx/cmd/chatrag@latest
 | How you installed | How to update |
 |---|---|
 | `install.sh` / `install.ps1` | `semidx upgrade` (or re-run the installer) |
-| Homebrew | `brew upgrade semidx` |
-| Scoop | `scoop update semidx` |
-| winget | `winget upgrade lgldsilva.semidx` |
-| Chocolatey | `choco upgrade semidx` |
-| AUR | `yay -Syu semidx` |
-| Snap | `sudo snap refresh semidx` |
-| Flatpak | `flatpak update com.github.lgldsilva.semidx` |
 | Docker | pull a newer tag |
 | `go install` | re-run with `@latest` |
 

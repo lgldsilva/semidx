@@ -2,19 +2,13 @@
 
 Self-hosted semantic search for your code and documents.
 
-[![status](https://img.shields.io/badge/status-v0.x-orange.svg)](#)
-[![go](https://img.shields.io/badge/go-1.25%2B-blue.svg)](#)
-[![license](https://img.shields.io/badge/license-Apache--2.0-lightgrey.svg)](#)
+[![CI](https://github.com/lgldsilva/semidx/actions/workflows/ci.yml/badge.svg)](https://github.com/lgldsilva/semidx/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/lgldsilva/semidx)](https://github.com/lgldsilva/semidx/releases/latest)
+[![go](https://img.shields.io/badge/go-1.26.5%2B-blue.svg)](go.mod)
+[![license](https://img.shields.io/badge/license-Apache--2.0-lightgrey.svg)](LICENSE)
 [![install.sh](https://img.shields.io/badge/install.sh-live-brightgreen.svg)](install.sh)
 [![install.ps1](https://img.shields.io/badge/install.ps1-live-brightgreen.svg)](install.ps1)
-[![GHCR](https://img.shields.io/badge/GHCR-pending-yellow.svg)](https://github.com/lgldsilva/semidx/pkgs/container/semidx)
-[![Homebrew](https://img.shields.io/badge/Homebrew-pending-yellow.svg)](#platform-package-managers)
-[![Scoop](https://img.shields.io/badge/Scoop-pending-yellow.svg)](#platform-package-managers)
-[![winget](https://img.shields.io/badge/winget-pending-yellow.svg)](#platform-package-managers)
-[![Chocolatey](https://img.shields.io/badge/Chocolatey-pending-yellow.svg)](#platform-package-managers)
-[![AUR](https://img.shields.io/badge/AUR-pending-yellow.svg)](#platform-package-managers)
-[![Snap](https://img.shields.io/badge/Snap-pending-yellow.svg)](#platform-package-managers)
-[![Flatpak](https://img.shields.io/badge/Flatpak-pending-yellow.svg)](#platform-package-managers)
+[![GHCR](https://img.shields.io/badge/GHCR-live-brightgreen.svg)](https://github.com/lgldsilva/semidx/pkgs/container/semidx)
 
 `semidx` indexes a codebase (and documents like PDF, DOCX, XLSX, HTML) into a
 vector store and searches it by *meaning*, not literal text. A query like
@@ -112,23 +106,17 @@ go install github.com/lgldsilva/semidx/cmd/semidx@latest
 
 ### Platform package managers
 
-| Platform | Install | Update |
+| Channel | Status | Install / update |
 |---|---|---|
-| macOS (Homebrew) | `brew install lgldsilva/tap/semidx` | `brew upgrade semidx` |
-| Windows (Scoop) | `scoop bucket add lgldsilva https://github.com/lgldsilva/scoop-bucket && scoop install semidx` | `scoop update semidx` |
-| Windows (winget) | `winget install lgldsilva.semidx` | `winget upgrade lgldsilva.semidx` |
-| Windows (Chocolatey) | `choco install semidx` | `choco upgrade semidx` |
-| Arch (AUR) | `yay -S semidx` | `yay -Syu semidx` |
-| Linux (Snap) | `sudo snap install semidx` | `sudo snap refresh semidx` |
-| Linux (Flatpak) | `flatpak install flathub com.github.lgldsilva.semidx` | `flatpak update com.github.lgldsilva.semidx` |
-| Docker | `docker pull ghcr.io/lgldsilva/semidx:latest` | pull `:latest` / Watchtower |
-| Binary (any OS) | `install.sh` / `install.ps1` | `semidx upgrade` |
-| Go | `go install …@latest` | re-run with `@latest` |
+| GitHub Releases | Live | `install.sh` / `install.ps1`; update with `semidx upgrade` |
+| Docker / GHCR | Live | `docker pull ghcr.io/lgldsilva/semidx:latest` |
+| Go | Live | `go install github.com/lgldsilva/semidx/cmd/semidx@latest` |
+| Homebrew, Scoop, winget, Chocolatey, AUR, Snap, Flatpak | Planned | Not published yet — do not use package-manager commands until marked live |
 
-> **Roll-out status:** binary installers + GitHub Releases + GHCR ship first.
-> Homebrew / Scoop / winget / Chocolatey / AUR / Snap / Flatpak land as each
-> channel review completes. See [docs/install.md](docs/install.md) and the
-> pinned “Packaging status” issue for live badges.
+> Package-manager channels are intentionally not advertised as installable
+> until their registries contain a verified package. Track rollout in
+> [docs/install.md](docs/install.md) and
+> [Packaging status #16](https://github.com/lgldsilva/semidx/issues/16).
 
 ### Private / self-hosted release mirrors
 
