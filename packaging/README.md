@@ -34,9 +34,13 @@ from the Snap Store publisher account after the `semidx` name has been
 registered and classic confinement approved:
 
 ```sh
+cd /tmp/semidx-packages/snap/amd64  # or arm64, on a matching build host
 snapcraft pack
 snapcraft upload --release=stable semidx_*.snap
 ```
+
+The renderer produces separate amd64 and arm64 manifests, each restricted to
+its matching build/run platform and release-asset checksum.
 
 ## Flatpak
 

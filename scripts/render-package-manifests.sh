@@ -50,7 +50,7 @@ checksum_for() {
 linux_amd64="$(checksum_for "semidx_${version}_linux_amd64.tar.gz")"
 linux_arm64="$(checksum_for "semidx_${version}_linux_arm64.tar.gz")"
 
-mkdir -p "$output_dir/aur" "$output_dir/snap"
+mkdir -p "$output_dir/aur"
 
 sed \
   -e "s|@VERSION@|$version|g" \
@@ -58,11 +58,19 @@ sed \
   -e "s|@LINUX_ARM64_SHA256@|$linux_arm64|g" \
   packaging/aur/PKGBUILD.in >"$output_dir/aur/PKGBUILD"
 
-sed \
-  -e "s|@VERSION@|$version|g" \
-  -e "s|@LINUX_AMD64_SHA256@|$linux_amd64|g" \
-  packaging/snap/snapcraft.yaml.in >"$output_dir/snap/snapcraft.yaml"
+for snap_arch in amd64 arm64; do
+  case "$snap_arch" in
+    amd64) snap_checksum="$linux_amd64" ;;
+    arm64) snap_checksum="$linux_arm64" ;;
+  esac
+  mkdir -p "$output_dir/snap/$snap_arch"
+  sed \
+    -e "s|@VERSION@|$version|g" \
+    -e "s|@SNAP_ARCH@|$snap_arch|g" \
+    -e "s|@SNAP_SHA256@|$snap_checksum|g" \
+    packaging/snap/snapcraft.yaml.in >"$output_dir/snap/$snap_arch/snapcraft.yaml"
+done
 
 echo "Rendered AUR and Snap manifests for $tag in $output_dir."
 echo "AUR: review, generate .SRCINFO with makepkg --printsrcinfo, then push to aur.archlinux.org."
-echo "Snap: run snapcraft pack and publish only with the Snap Store publisher account."
+echo "Snap: build each architecture from snap/{amd64,arm64} with the publisher account."

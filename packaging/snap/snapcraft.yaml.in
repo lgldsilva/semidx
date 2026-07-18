@@ -12,11 +12,16 @@ description: |
 grade: stable
 confinement: classic
 
+platforms:
+  @SNAP_ARCH@:
+    build-on: [@SNAP_ARCH@]
+    build-for: [@SNAP_ARCH@]
+
 parts:
   semidx:
     plugin: dump
-    source: https://github.com/lgldsilva/semidx/releases/download/v@VERSION@/semidx_@VERSION@_linux_amd64.tar.gz
-    source-checksum: sha256/@LINUX_AMD64_SHA256@
+    source: https://github.com/lgldsilva/semidx/releases/download/v@VERSION@/semidx_@VERSION@_linux_@SNAP_ARCH@.tar.gz
+    source-checksum: sha256/@SNAP_SHA256@
     organize:
       semidx: bin/semidx
 
