@@ -111,10 +111,11 @@ go install github.com/lgldsilva/semidx/cmd/semidx@latest
 | GitHub Releases | Live | `install.sh` / `install.ps1`; update with `semidx upgrade` |
 | Docker / GHCR | Live | `docker pull ghcr.io/lgldsilva/semidx:latest` |
 | Go | Live | `go install github.com/lgldsilva/semidx/cmd/semidx@latest` |
-| Homebrew, Scoop, winget, Chocolatey, AUR, Snap, Flatpak | Planned | Not published yet — do not use package-manager commands until marked live |
+| Homebrew / Scoop | Seeded | Tap/bucket repos exist for v0.44.9; smoke tests pending before live |
+| winget, Chocolatey, AUR, Snap, Flatpak | Planned | Not published yet |
 
-> Package-manager channels are intentionally not advertised as installable
-> until their registries contain a verified package. Track rollout in
+> Package-manager channels stay off the quickstart until a clean-machine
+> install/update smoke test passes. Track rollout in
 > [docs/install.md](docs/install.md) and
 > [Packaging status #16](https://github.com/lgldsilva/semidx/issues/16).
 

@@ -145,8 +145,9 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 - **`release.yml` = publish**, on `v*` tags / dispatch: **GoReleaser** artifacts
   (linux/darwin/windows × amd64/arm64 tar.gz/zip + SHA-256) to a **GitHub
   Release**, plus Docker image to **ghcr.io/lgldsilva/semidx**.
-- **`autotag.yml`** keeps version tags in sync via
-  [`svu`](https://github.com/caarlos0/svu) (next semver from Conventional Commits).
+- **`autotag.yml`** is **manual-only** (`workflow_dispatch`) via
+  [`svu`](https://github.com/caarlos0/svu). Do not re-enable push-to-main
+  tagging until release publishing is stable — it flooded tags during cutover.
 - **Code scanning** uses GitHub's default CodeQL setup (not a workflow file) —
   do not re-add `.github/workflows/codeql.yml` while default setup is enabled
   (the two conflict and the advanced workflow fails every run).
