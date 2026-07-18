@@ -246,3 +246,23 @@ func TestAPIKeysCreateAndRevoke(t *testing.T) {
 		t.Fatalf("revoke key = %d", resp.StatusCode)
 	}
 }
+
+func TestConfinedPath(t *testing.T) {
+	root := t.TempDir()
+	inside, ok := confinedPath(root, "pkg/foo.go")
+	if !ok {
+		t.Fatal("expected ok for in-root path")
+	}
+	if !strings.HasPrefix(inside, filepath.Clean(root)) {
+		t.Fatalf("inside=%q root=%q", inside, root)
+	}
+	if _, ok := confinedPath(root, "../etc/passwd"); ok {
+		t.Fatal("escape via .. must be rejected")
+	}
+	if _, ok := confinedPath(root, "/etc/passwd"); ok {
+		t.Fatal("absolute escape must be rejected")
+	}
+	if abs, ok := confinedPath(root, "go.mod"); !ok || filepath.Base(abs) != "go.mod" {
+		t.Fatalf("go.mod: abs=%q ok=%v", abs, ok)
+	}
+}

@@ -46,14 +46,12 @@ func (a *Admin) apiProjectExplain(w http.ResponseWriter, r *http.Request, ac *au
 		return
 	}
 
-	absPath := filepath.Clean(filepath.Join(root, filePath))
-	rootClean := filepath.Clean(root)
-	if !strings.HasPrefix(absPath, rootClean+string(filepath.Separator)) && absPath != rootClean {
+	absPath, ok := confinedPath(root, filePath)
+	if !ok {
 		writeJSONErr(w, http.StatusBadRequest, "path escapes project root")
 		return
 	}
-	// #nosec G304 -- absPath restricted to project root
-	// lgtm[go/path-injection] -- absPath validated against rootClean above
+	// #nosec G304 -- absPath from confinedPath (Rel + IsLocal)
 	content, err := os.ReadFile(absPath)
 	if err != nil {
 		a.explainFromIndex(w, r, proj, filePath, line)
@@ -213,9 +211,11 @@ func goPackageName(content []byte) string {
 }
 
 func detectModulePath(root string) string {
-	gm := filepath.Clean(filepath.Join(root, "go.mod"))
-	// #nosec G304 -- project go.mod
-	// lgtm[go/path-injection] -- gm is filepath.Clean(root + "go.mod"), not user input
+	gm, ok := confinedPath(root, "go.mod")
+	if !ok {
+		return ""
+	}
+	// #nosec G304 -- gm from confinedPath (fixed "go.mod" under root)
 	data, err := os.ReadFile(gm)
 	if err != nil {
 		return ""
@@ -229,8 +229,29 @@ func detectModulePath(root string) string {
 	return ""
 }
 
+// confinedPath joins root and rel and returns the absolute path only when the
+// result stays inside root. filepath.IsAbs rejects absolute user input;
+// filepath.Rel + filepath.IsLocal are the sanitizers CodeQL recognizes for
+// go/path-injection (HasPrefix alone is not enough).
+func confinedPath(root, rel string) (string, bool) {
+	if rel == "" || filepath.IsAbs(rel) {
+		return "", false
+	}
+	rootClean := filepath.Clean(root)
+	abs := filepath.Clean(filepath.Join(rootClean, rel))
+	relOut, err := filepath.Rel(rootClean, abs)
+	if err != nil || !filepath.IsLocal(relOut) {
+		return "", false
+	}
+	return abs, true
+}
+
 func findTestFiles(root, filePath, symbolName string) []string {
-	dir := filepath.Dir(filepath.Join(root, filePath))
+	absFile, ok := confinedPath(root, filePath)
+	if !ok {
+		return nil
+	}
+	dir := filepath.Dir(absFile)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -245,13 +266,11 @@ func findTestFiles(root, filePath, symbolName string) []string {
 			continue
 		}
 		relPath := filepath.ToSlash(filepath.Join(filepath.Dir(filePath), name))
-		testAbs := filepath.Clean(filepath.Join(root, relPath))
-		rootClean := filepath.Clean(root)
-		if !strings.HasPrefix(testAbs, rootClean+string(filepath.Separator)) && testAbs != rootClean {
+		testAbs, ok := confinedPath(root, relPath)
+		if !ok {
 			continue
 		}
-		// #nosec G304 -- within project root
-		// lgtm[go/path-injection] -- testAbs validated against rootClean above
+		// #nosec G304 -- testAbs from confinedPath
 		data, err := os.ReadFile(testAbs)
 		if err != nil {
 			continue

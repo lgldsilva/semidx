@@ -158,9 +158,22 @@ func compareScoredDesc(a, b rrfScored) int {
 // normaliseRRF takes the top-K scored results and scales scores to [0,1] so UX
 // labels ("92%") are meaningful. The list must be sorted descending and non-empty.
 func normaliseRRF(scoredList []rrfScored, topK int) []store.SearchResult {
+	n := topK
+	if n > len(scoredList) {
+		n = len(scoredList)
+	}
+	// Clamp again here so CodeQL sees the bound at the allocation site.
+	// HybridSearch already clamps, but topK is still a tainted parameter
+	// flowing into this make — a local ceiling breaks that taint.
+	if n > MaxTopK {
+		n = MaxTopK
+	}
+	if n < 0 {
+		n = 0
+	}
 	maxScore := scoredList[0].score
-	out := make([]store.SearchResult, topK)
-	for i := 0; i < topK; i++ {
+	out := make([]store.SearchResult, n)
+	for i := 0; i < n; i++ {
 		out[i] = scoredList[i].result
 		if maxScore > 0 {
 			out[i].Score = scoredList[i].score / maxScore

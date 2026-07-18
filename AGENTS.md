@@ -68,7 +68,9 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
   server-side git cloning.
 - **MCP `semantic_reindex` is server-only.** In standalone mode it returns an
   in-band message pointing at `semidx index`.
-- **No PR/branch SonarQube analysis** — SonarQube runs on **`main` only**.
+- **No PR/branch SonarCloud analysis by default** — SonarCloud runs on `main`
+  (and PRs when `SONAR_TOKEN` is configured). Homelab SonarQube is retired for
+  this repo.
 - **Postgres is never exposed** — the only ingress is the authenticated HTTP API.
 - **Ollama is not bundled**; the host provides it (GPU box). Without any provider,
   use `--keyword`.
@@ -138,19 +140,28 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ## CI/CD (GitHub Actions)
 
 - **`ci.yml` = the gates**, on every PR and push to `main`: build, `go test -race`,
-  golangci-lint, gitleaks, govulncheck, gosec, Trivy image scan, CodeQL, and
-  dependency review. **These predict what may enter `main`.**
-- **`release.yml` = publish**, on `v*` tags / dispatch: build + push the image
-  to **ghcr.io**, then **GoReleaser** artifacts (linux/darwin/windows ×
-  amd64/arm64 tar.gz/zip + SHA-256 + grouped changelog) to a **GitHub release**.
-- **`autotag.yml`** keeps version tags and GitHub releases in sync via
+  golangci-lint, gitleaks, govulncheck, gosec, Trivy fs scan. **These predict
+  what may enter `main`.**
+- **`release.yml` = publish**, on `v*` tags / dispatch: **GoReleaser** artifacts
+  (linux/darwin/windows × amd64/arm64 tar.gz/zip + SHA-256) to a **GitHub
+  Release**, plus Docker image to **ghcr.io/lgldsilva/semidx**.
+- **`autotag.yml`** keeps version tags in sync via
   [`svu`](https://github.com/caarlos0/svu) (next semver from Conventional Commits).
-- **`codeql.yml`** and **`dependency-review.yml`** add static analysis and
-  dependency CVE review on every PR.
-- **Dependabot** (`dependabot.yml`) opens weekly PRs for Go modules and GitHub
-  Actions.
-- goreleaser is pinned to **v2.13.0** and gosec to **v2.27.1** because `@latest`
-  needs Go ≥1.26 which `GOTOOLCHAIN=local` blocks.
+- **Code scanning** uses GitHub's default CodeQL setup (not a workflow file) —
+  do not re-add `.github/workflows/codeql.yml` while default setup is enabled
+  (the two conflict and the advanced workflow fails every run).
+- **`dependency-review.yml`** blocks PRs that introduce high/critical vulnerable
+  dependencies (free for public repos).
+- **`sonar.yml`** runs the SonarCloud quality gate when `SONAR_TOKEN` is set
+  (skipped cleanly otherwise). Local equivalent:
+  `SONAR_TOKEN=… ./scripts/sonar-scan.sh`.
+- **Dependabot** (`dependabot.yml`) opens weekly grouped PRs for Go modules and
+  GitHub Actions.
+- goreleaser is pinned to **v2.13.0** and gosec to **v2.27.1**.
+
+> **Migration note:** a Gitea mirror may still be alive during cutover. Prefer
+> GitHub as the source of truth for PRs/releases. Homelab deploy pulls from
+> **ghcr.io** via Watchtower (`deploy/docker-compose.pull.yml`).
 
 ## Conventions
 
