@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/lgldsilva/semidx/internal/webui"
@@ -45,7 +46,16 @@ func spaFileServer() http.Handler {
 }
 
 func tryServeSPAAsset(w http.ResponseWriter, r *http.Request, sub fs.FS, rel string) bool {
-	f, err := sub.Open(rel)
+	// Confine to the embedded FS root. path.Clean collapses ".." and
+	// filepath.IsLocal rejects absolute / ".." / empty escapes — the
+	// sanitizer SonarCloud (gosecurity:S2083) and CodeQL recognize.
+	clean := path.Clean("/" + rel)
+	clean = strings.TrimPrefix(clean, "/")
+	if clean == "" || clean == "." || !filepath.IsLocal(clean) {
+		return false
+	}
+	// #nosec G304 -- clean is IsLocal-validated against the embedded FS root
+	f, err := sub.Open(clean)
 	if err != nil {
 		return false
 	}
@@ -58,7 +68,7 @@ func tryServeSPAAsset(w http.ResponseWriter, r *http.Request, sub fs.FS, rel str
 	if !ok {
 		return false
 	}
-	http.ServeContent(w, r, path.Base(rel), st.ModTime(), rs)
+	http.ServeContent(w, r, path.Base(clean), st.ModTime(), rs)
 	return true
 }
 
