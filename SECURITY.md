@@ -82,13 +82,23 @@ CI enforces the following on every pull request and push to `main`
 - **`gitleaks`** — secret scanning (also run pre-commit via lefthook,
   `gitleaks protect --staged`).
 - **`golangci-lint`** plus `go vet` and the race-enabled test suite.
+- **Trivy filesystem scan** — fails on fixable `HIGH` and `CRITICAL`
+  findings. The downloaded Trivy archive is checked against the official
+  release SHA-256 before it is executed.
+- **CodeQL** — code scanning on pull requests, pushes to `main`, and weekly.
+- **Dependency review** — blocks pull requests that introduce `HIGH` or
+  `CRITICAL` GitHub Advisory Database findings; Dependabot proposes weekly Go
+  module and GitHub Actions updates.
+
+All GitHub Actions are pinned to immutable commit SHAs. Repository rules require
+pull requests and passing security checks before updates to `main`; release tag
+updates and deletion are blocked.
 
 The tagged release pipeline (`.github/workflows/release.yml`) additionally runs:
 
-- **SonarQube** quality gate.
-- **CycloneDX SBOM** generation, uploaded to **Dependency-Track**.
-- **Trivy** image scan that fails on a fixable `CRITICAL` vulnerability before
-  the image is pushed.
+- **CycloneDX SBOM** generation, attached to the GitHub Release.
+- SHA-256 checksums for each release archive.
+- Publication to GitHub Releases and GHCR only after GoReleaser succeeds.
 
 *(Optional CI integrations are gated on their secrets; they skip cleanly
 where those secrets are absent.)*

@@ -19,8 +19,8 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.5"
           cache: false
@@ -53,8 +53,8 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.5"
           cache: false
@@ -75,10 +75,10 @@ jobs:
     name: gitleaks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.5"
           cache: false
@@ -89,8 +89,8 @@ jobs:
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.5"
           cache: false
@@ -101,8 +101,8 @@ jobs:
     name: gosec
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.5"
           cache: false
@@ -113,7 +113,7 @@ jobs:
     name: trivy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       # Download the trivy binary directly from the GitHub release
       # tarball. This avoids three problems with the Docker action:
       #   1. aquasecurity/trivy-action nests a container that the
@@ -123,7 +123,7 @@ jobs:
       #      and the Gitea runner has no GitHub credentials.
       #   3. Running the binary directly works identically on both
       #      Gitea and GitHub Actions runners.
-      # Pinned to a release version + sha256 for reproducibility.
+      # Pinned to a release version and the official per-architecture SHA-256.
       - name: Install Trivy
         run: |
           set -euo pipefail
@@ -133,14 +133,15 @@ jobs:
           # Trivy release tarballs are per-arch: Linux-64bit (x86_64),
           # Linux-ARM64, Linux-ARM, etc. Download the matching one.
           case "$(uname -m)" in
-            aarch64|arm64)  TRIVY_ARCH="Linux-ARM64" ;;
-            x86_64|amd64)   TRIVY_ARCH="Linux-64bit" ;;
-            armv7l|armv7)   TRIVY_ARCH="Linux-ARM"   ;;
+            aarch64|arm64)  TRIVY_ARCH="Linux-ARM64"; TRIVY_SHA256="2ca2c023109c2db6b2b77366b6717291452d4531167377d95c79547f0c8e3467" ;;
+            x86_64|amd64)   TRIVY_ARCH="Linux-64bit"; TRIVY_SHA256="bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea" ;;
+            armv7l|armv7)   TRIVY_ARCH="Linux-ARM"; TRIVY_SHA256="b54b629ee03e6e894a0f652c8e07718a86610ca291f75453701d81a4cc277a8b" ;;
             *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
           esac
           curl -sSfL \
             "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_${TRIVY_ARCH}.tar.gz" \
             -o /tmp/trivy.tar.gz
+          echo "${TRIVY_SHA256}  /tmp/trivy.tar.gz" | sha256sum --check --status
           tar xzf /tmp/trivy.tar.gz -C /tmp trivy
           mv /tmp/trivy /usr/local/bin/trivy
           chmod +x /usr/local/bin/trivy
