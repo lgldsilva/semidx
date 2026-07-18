@@ -40,11 +40,18 @@ jobs:
       # and the Go linker aborts with "no space left on device". Free up
       # space before the heavy goreleaser build.
       - name: Free disk space before build
+        # set -euo pipefail is the default in GHA shell steps. df
+        # returns exit 1 if any path argument doesn't exist; on
+        # Ubuntu 24.04 runners /github/workspace is not a valid path
+        # (the workspace is mounted under /home/runner/work/...).
+        # Use `|| true` on every command so a missing path doesn't
+        # abort the entire cleanup before the actual rm -rf runs.
         run: |
+          set -uo pipefail
           echo "=== disk before ==="
-          df -h /tmp /github/workspace
-          # Remove pre-installed language toolchains we don't need (Node,
-          # Python, Ruby, Haskell, .NET, PHP, Go pre-installed alternatives).
+          df -h /tmp /github/workspace 2>/dev/null || true
+          # Remove pre-installed language toolchains we don't need
+          # (Node, Python, Ruby, Haskell, .NET, PHP, pre-installed Go).
           sudo rm -rf /opt/hostedtoolcache/Node* \
                        /opt/hostedtoolcache/Python* \
                        /opt/hostedtoolcache/Ruby* \
@@ -58,7 +65,7 @@ jobs:
           # Clear /tmp.
           sudo rm -rf /tmp/* 2>/dev/null || true
           echo "=== disk after ==="
-          df -h /tmp /github/workspace
+          df -h /tmp /github/workspace 2>/dev/null || true
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
