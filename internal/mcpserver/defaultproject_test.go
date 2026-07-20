@@ -2,9 +2,13 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/lgldsilva/semidx/internal/repotools"
 )
@@ -106,22 +110,105 @@ func TestSearchUsesDefaultProjectWhenOmitted(t *testing.T) {
 	}
 }
 
-func TestSearchWithoutProjectAndNoDefaultKeepsBehavior(t *testing.T) {
+func TestSearchWithoutProjectAndNoDefaultErrors(t *testing.T) {
 	t.Parallel()
-	var got string
+	called := false
 	b := &stubBackend{
 		searchFunc: func(_ context.Context, project, _, _ string, _ int, _ bool, _ int) (*SearchOutput, error) {
-			got = project
+			called = true
 			return &SearchOutput{Project: project}, nil
 		},
 	}
 	sess := connectWithOptions(t, b, Options{})
-	if _, isErr := callText(t, sess, "semantic_search", map[string]any{"query": "q"}); isErr {
-		t.Fatal("unexpected tool error")
+	// Empty string still reaches the handler (schema only requires the key);
+	// requireResolvedProject must reject before the backend is called.
+	text, isErr := callText(t, sess, "semantic_search", map[string]any{"project": "", "query": "q"})
+	if !isErr {
+		t.Fatalf("expected in-band error for empty project, got %q", text)
 	}
-	if got != "" {
-		t.Errorf("with no default the backend must see the empty project; saw %q", got)
+	if !strings.Contains(text, errProjectRequired) {
+		t.Errorf("error = %q, want it to contain %q", text, errProjectRequired)
 	}
+	if called {
+		t.Error("backend must not be called when project resolves empty")
+	}
+}
+
+func TestSearchOmittingProjectWithoutDefaultFailsSchema(t *testing.T) {
+	t.Parallel()
+	called := false
+	b := &stubBackend{
+		searchFunc: func(_ context.Context, _, _, _ string, _ int, _ bool, _ int) (*SearchOutput, error) {
+			called = true
+			return &SearchOutput{}, nil
+		},
+	}
+	sess := connectWithOptions(t, b, Options{})
+	text, isErr := callText(t, sess, "semantic_search", map[string]any{"query": "q"})
+	if !isErr {
+		t.Fatalf("omitting project without a default must error; got %q", text)
+	}
+	// SDK schema validation or our requireResolvedProject — either is fine as
+	// long as the backend is never hit and the agent sees an error.
+	if called {
+		t.Error("backend must not be called when project is omitted without a default")
+	}
+	if !strings.Contains(text, "project") {
+		t.Errorf("error should mention project; got %q", text)
+	}
+}
+
+func TestSearchSchemaRequiresProjectWithoutDefault(t *testing.T) {
+	t.Parallel()
+	sess := connectWithOptions(t, &stubBackend{}, Options{})
+	res, err := sess.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var searchTool *mcp.Tool
+	for _, tool := range res.Tools {
+		if tool.Name == toolSemanticSearch {
+			searchTool = tool
+			break
+		}
+	}
+	if searchTool == nil {
+		t.Fatal("semantic_search not listed")
+	}
+	required := schemaRequired(t, searchTool.InputSchema)
+	if !slices.Contains(required, "project") {
+		t.Errorf("without default, semantic_search schema.required = %v, want project", required)
+	}
+
+	sessDef := connectWithOptions(t, &stubBackend{}, Options{DefaultProject: "myproj"})
+	resDef, err := sessDef.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range resDef.Tools {
+		if tool.Name != toolSemanticSearch {
+			continue
+		}
+		required = schemaRequired(t, tool.InputSchema)
+		if slices.Contains(required, "project") {
+			t.Errorf("with default, project must stay optional; required = %v", required)
+		}
+	}
+}
+
+func schemaRequired(t *testing.T, schema any) []string {
+	t.Helper()
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	var m struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+	return m.Required
 }
 
 // recordingGitStub records the project each git tool received, and fails for

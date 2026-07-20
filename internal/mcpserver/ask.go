@@ -39,11 +39,15 @@ type askInput struct {
 
 func askHandler(b AskBackend, defaultProject string) mcp.ToolHandlerFor[askInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in askInput) (*mcp.CallToolResult, any, error) {
+		project, err := requireResolvedProject(in.Project, defaultProject)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
 		topK := in.TopK
 		if topK == 0 {
 			topK = 5
 		}
-		out, err := b.Ask(ctx, resolveProject(in.Project, defaultProject), in.Question, topK)
+		out, err := b.Ask(ctx, project, in.Question, topK)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}

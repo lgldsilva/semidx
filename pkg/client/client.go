@@ -176,11 +176,24 @@ type SearchParams struct {
 	GraphDepth int    // max BFS depth for graph expansion
 }
 
+// requireProject rejects empty project path segments before they become
+// /api/v1/projects//… which reverse proxies often rewrite into a different
+// route (HTTP 405).
+func requireProject(project string) error {
+	if strings.TrimSpace(project) == "" {
+		return fmt.Errorf("semidx: project name is required")
+	}
+	return nil
+}
+
 // Search runs a search over a project. With Params.Keyword the server searches
 // by keyword only and never contacts the embedding provider (the remote-mode
 // equivalent of the CLI's --keyword); otherwise it runs a semantic search that
 // transparently falls back to keyword when embeddings are unavailable.
 func (c *Client) Search(ctx context.Context, project, query string, p SearchParams) (*SearchResponse, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
 	body := map[string]any{"query": query, "top_k": p.TopK, "model": p.Model, "keyword": p.Keyword, "graph": p.Graph, "graph_depth": p.GraphDepth}
 	var out SearchResponse
 	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/search", body, &out); err != nil {
@@ -202,6 +215,9 @@ func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 
 // GetProject fetches one project.
 func (c *Client) GetProject(ctx context.Context, name string) (*Project, error) {
+	if err := requireProject(name); err != nil {
+		return nil, err
+	}
 	var out Project
 	if err := c.do(ctx, http.MethodGet, projectsPath+esc(name), nil, &out); err != nil {
 		return nil, err
@@ -227,6 +243,9 @@ func (c *Client) CreateProject(ctx context.Context, name, model, sourceType, git
 
 // Status returns the indexing status and file count for a project.
 func (c *Client) Status(ctx context.Context, project string) (*StatusResponse, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
 	var out StatusResponse
 	if err := c.do(ctx, http.MethodGet, projectsPath+esc(project)+"/status", nil, &out); err != nil {
 		return nil, err
@@ -236,11 +255,17 @@ func (c *Client) Status(ctx context.Context, project string) (*StatusResponse, e
 
 // DeleteProject removes a project.
 func (c *Client) DeleteProject(ctx context.Context, name string) error {
+	if err := requireProject(name); err != nil {
+		return err
+	}
 	return c.do(ctx, http.MethodDelete, projectsPath+esc(name), nil, nil)
 }
 
 // EnqueueJob queues an index job and returns its id.
 func (c *Client) EnqueueJob(ctx context.Context, project, jobType string) (int, error) {
+	if err := requireProject(project); err != nil {
+		return 0, err
+	}
 	var out struct {
 		JobID int `json:"job_id"`
 	}
@@ -253,6 +278,9 @@ func (c *Client) EnqueueJob(ctx context.Context, project, jobType string) (int, 
 
 // GetJob fetches a job's status scoped to a project (prevents cross-project IDOR).
 func (c *Client) GetJob(ctx context.Context, project string, id int) (*Job, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
 	var out Job
 	path := projectsPath + esc(project) + "/jobs/" + strconv.Itoa(id)
 	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
@@ -263,6 +291,9 @@ func (c *Client) GetJob(ctx context.Context, project string, id int) (*Job, erro
 
 // FilesDiff reports which of the given path→hash files are stale or deleted.
 func (c *Client) FilesDiff(ctx context.Context, project string, hashes map[string]string) (*DiffResponse, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
 	var out DiffResponse
 	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/files/diff",
 		map[string]any{"files": hashes}, &out); err != nil {
@@ -275,6 +306,9 @@ func (c *Client) FilesDiff(ctx context.Context, project string, hashes map[strin
 // using the synchronous mode (?sync=true) so the response includes the
 // indexing counts directly.
 func (c *Client) FilesBatch(ctx context.Context, project string, files []BatchFile, del []string) (*BatchResponse, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
 	var out BatchResponse
 	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/files/batch?sync=true",
 		map[string]any{"files": files, "delete": del}, &out); err != nil {
@@ -287,6 +321,9 @@ func (c *Client) FilesBatch(ctx context.Context, project string, files []BatchFi
 // job is processed by a background worker; call WaitForJob to poll for completion.
 // Requires server support for async batches (status 202 Accepted).
 func (c *Client) FilesBatchAsync(ctx context.Context, project string, files []BatchFile, del []string) (int, error) {
+	if err := requireProject(project); err != nil {
+		return 0, err
+	}
 	body := map[string]any{"files": files, "delete": del}
 	resp, err := c.doResponse(ctx, http.MethodPost, projectsPath+esc(project)+"/files/batch", body)
 	if err != nil {
