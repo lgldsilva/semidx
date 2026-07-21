@@ -5,7 +5,7 @@
 > **Verificações feitas no código** antes de codar — algumas afirmações "óbvias"
 > foram checadas e uma foi corrigida.
 
-- **Status:** planejado, nada implementado ainda
+- **Status:** v1 (graph primitives MCP + --ast-only) implementado e verificado
 - **Data:** 2026-07-21
 - **Origem:** avaliação do repo [Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify)
   como fonte de ideias para o semidx.
