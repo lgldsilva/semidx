@@ -20,6 +20,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/analyzer"
 	"github.com/lgldsilva/semidx/internal/repotools"
 	"github.com/lgldsilva/semidx/internal/search"
 )
@@ -100,6 +101,15 @@ type MultiSearchBackend interface {
 	SearchMulti(ctx context.Context, req search.MultiScopeRequest) (*search.MultiResponse, error)
 }
 
+// GraphBackend extends Backend with graph-based queries and symbol extraction.
+// Only implemented by the local backend.
+type GraphBackend interface {
+	Backend
+	Neighbors(ctx context.Context, project, file string) (map[string][]string, error)
+	Trace(ctx context.Context, project string, files []string, maxDepth int) (map[string]int, error)
+	Symbols(ctx context.Context, project, file string) ([]analyzer.Symbol, error)
+}
+
 // unwrapper is implemented by backend wrappers (e.g. the agentic/RAG ask
 // backends) that embed another Backend. It lets tool gating see the wrapped
 // backend's extra capabilities (GitBackend, MultiSearchBackend) which interface
@@ -136,6 +146,21 @@ func asMultiSearchBackend(b Backend) (MultiSearchBackend, bool) {
 	return nil, false
 }
 
+// asGraphBackend finds a GraphBackend in b or its wrapped chain.
+func asGraphBackend(b Backend) (GraphBackend, bool) {
+	for b != nil {
+		if gb, ok := b.(GraphBackend); ok {
+			return gb, true
+		}
+		u, ok := b.(unwrapper)
+		if !ok {
+			return nil, false
+		}
+		b = u.Unwrap()
+	}
+	return nil, false
+}
+
 // Canonical tool names. toolNames below is the single source the allowlist
 // validation checks against: when you register a new tool in NewWithOptions,
 // add its name here too, and the validation error message (and the CLI help
@@ -150,6 +175,9 @@ const (
 	toolRepoStatus          = "repo_status"
 	toolSemanticSearchMulti = "semantic_search_multi"
 	toolSemanticAsk         = "semantic_ask"
+	toolSemanticNeighbors   = "semantic_neighbors"
+	toolSemanticTrace       = "semantic_trace"
+	toolSemanticSymbols     = "semantic_symbols"
 )
 
 // toolNames is the canonical list of every tool this server can register,
@@ -158,6 +186,7 @@ var toolNames = []string{
 	toolSemanticSearch, toolSemanticProjects, toolSemanticReindex, toolSemanticStatus,
 	toolRepoWorktrees, toolRepoBranches, toolRepoStatus,
 	toolSemanticSearchMulti, toolSemanticAsk,
+	toolSemanticNeighbors, toolSemanticTrace, toolSemanticSymbols,
 }
 
 // ToolNames returns the canonical list of registrable tool names. Used by the
@@ -281,6 +310,7 @@ func build(b Backend, allowed map[string]bool, explicit bool, defaultProject str
 	registerGitTools(s, b, allowed, explicit, defaultProject)
 	registerMultiSearchTool(s, b, allowed, explicit)
 	registerAskTool(s, b, allowed, explicit, defaultProject)
+	registerGraphTools(s, b, allowed, explicit, defaultProject)
 	registerResources(s, b)
 	return s
 }

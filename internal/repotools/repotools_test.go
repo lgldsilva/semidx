@@ -30,6 +30,7 @@ func setupTestRepo(t *testing.T) string {
 	for _, cfg := range []struct{ k, v string }{
 		{"user.name", "test"},
 		{"user.email", "test@test"},
+		{"core.hooksPath", ""},
 	} {
 		run("config", cfg.k, cfg.v)
 	}

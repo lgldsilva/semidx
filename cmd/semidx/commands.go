@@ -106,7 +106,11 @@ func docsFlagHint(docs bool) string {
 
 // printIndexHeader prints the pre-index banner: the model and its dims, or the
 // keyword-only notice when no embeddings are used.
-func printIndexHeader(tgt indexTarget, model string, dims int, keywordOnly bool) {
+func printIndexHeader(tgt indexTarget, model string, dims int, keywordOnly, astOnly bool) {
+	if astOnly {
+		fmt.Printf("Indexing project: %s\nPath: %s (%s)\nMode: AST-only (keyword-only with symbol enrichment)\n", tgt.name, tgt.indexPath, tgt.sourceType)
+		return
+	}
 	if keywordOnly {
 		fmt.Printf("Indexing project: %s\nPath: %s (%s)\nMode: keyword-only (no embeddings)\n", tgt.name, tgt.indexPath, tgt.sourceType)
 		return
@@ -147,6 +151,7 @@ type indexCmdOpts struct {
 	docs         bool
 	toServer     bool
 	embedLocally bool
+	astOnly      bool
 }
 
 func newIndexCmd(d *deps) *cobra.Command {
@@ -197,6 +202,7 @@ With no embedding provider configured, add --keyword to index text-only.`,
 	c.Flags().BoolVar(&opts.watch, "watch", false, "Watch for file changes and re-index automatically")
 	c.Flags().BoolVar(&opts.toServer, "to-server", false, "Push files to the logged-in server instead of writing a local index (alias of push)")
 	c.Flags().BoolVar(&opts.embedLocally, "embed-locally", false, "With --to-server: chunk and embed on this machine before upload")
+	c.Flags().BoolVar(&opts.astOnly, "ast-only", false, "AST-only indexing (zero-cost, keyword-only but with symbol enrichment)")
 	return c
 }
 
@@ -250,11 +256,16 @@ func runIndexLocal(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 	tgt = applyBranchSuffix(tgt, opts.branch)
 
 	// Keyword-only mode needs no model: dims come from the fixed text bucket.
-	dims, err := d.modelDims(ctx, opts.model)
-	if err != nil {
-		return fmt.Errorf("model info for %s: %w (no embedding provider reachable? re-run with --keyword to index text-only)", opts.model, err)
+	var dims int
+	if d.keywordOnly || opts.astOnly {
+		dims = store.KeywordDims
+	} else {
+		dims, err = d.modelDims(ctx, opts.model)
+		if err != nil {
+			return fmt.Errorf("model info for %s: %w (no embedding provider reachable? re-run with --keyword to index text-only)", opts.model, err)
+		}
 	}
-	printIndexHeader(tgt, opts.model, dims, d.keywordOnly)
+	printIndexHeader(tgt, opts.model, dims, d.keywordOnly, opts.astOnly)
 
 	if err := db.EnsureChunksTable(ctx, dims); err != nil {
 		return fmt.Errorf("ensure chunks table: %w", err)
@@ -276,7 +287,8 @@ func runIndexLocal(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 		GitSince:            opts.gitSince,
 		OnProgress:          cliProgressHook(opts.verbose),
 	}).
-		SetKeywordOnly(d.keywordOnly).
+		SetKeywordOnly(d.keywordOnly || opts.astOnly).
+		SetASTOnly(opts.astOnly).
 		SetWorktree(tgt.worktree).
 		SetSecretScan(tgt.indexPath, d.cfg.SecretScan || d.cfg.SecretBlockEmbedding, d.cfg.SecretBlockEmbedding)
 	start := time.Now()

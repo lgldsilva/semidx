@@ -24,6 +24,7 @@ func TestRun(t *testing.T) {
 	for _, cfg := range []struct{ k, v string }{
 		{"user.name", "test"},
 		{"user.email", "test@test"},
+		{"core.hooksPath", ""},
 	} {
 		c := exec.Command("git", "config", cfg.k, cfg.v)
 		c.Dir = dir

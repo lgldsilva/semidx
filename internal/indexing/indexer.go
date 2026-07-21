@@ -60,6 +60,7 @@ type Indexer struct {
 	gitMode             bool
 	gitSince            string
 	keywordOnly         bool   // when true, store text-only (no embeddings) for keyword search
+	astOnly             bool   // when true, keywordOnly is also true, but symbols are extracted and prepended to chunks
 	noSymbols           bool   // when true, skip symbol enrichment (even when embedding)
 	modulePath          string // Go module path from go.mod (for import-dependency extraction)
 	worktree            string // when set, record this worktree's manifest + prune after indexing
@@ -167,6 +168,17 @@ func NewIndexer(db store.IndexStore, emb embed.Embedder, dims int, opts IndexerO
 // for chaining.
 func (idx *Indexer) SetKeywordOnly(v bool) *Indexer {
 	idx.keywordOnly = v
+	return idx
+}
+
+// SetASTOnly switches the indexer to AST-only mode: chunks are stored as text
+// (embedding NULL) enriched with AST symbols, and no embedding provider is called.
+// Sets keyword-only mode to true. Returns the indexer for chaining.
+func (idx *Indexer) SetASTOnly(v bool) *Indexer {
+	idx.astOnly = v
+	if v {
+		idx.keywordOnly = true
+	}
 	return idx
 }
 
@@ -598,7 +610,7 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 	}
 
 	var syms []sym.Symbol
-	if !idx.keywordOnly && !idx.noSymbols {
+	if !idx.noSymbols && (!idx.keywordOnly || idx.astOnly) {
 		syms = sym.Symbols(rel, content)
 	}
 
@@ -659,7 +671,16 @@ func (idx *Indexer) storeChunks(ctx context.Context, p chunkStoreParams) (create
 	// Keyword-only mode: no embedding provider at all — store the chunks as text
 	// so they stay searchable by keyword (FTS/ILIKE) without any model.
 	if idx.keywordOnly {
-		if err := idx.db.InsertChunksTextOnly(ctx, p.projectID, p.fileID, p.chunks, idx.dims); err != nil {
+		chunksToStore := p.chunks
+		if idx.astOnly && len(p.syms) > 0 {
+			inputs := buildChunkInputs(p.chunks, p.syms)
+			chunksToStore = make([]chunker.Chunk, len(p.chunks))
+			for i, c := range p.chunks {
+				chunksToStore[i] = c
+				chunksToStore[i].Content = inputs[i]
+			}
+		}
+		if err := idx.db.InsertChunksTextOnly(ctx, p.projectID, p.fileID, chunksToStore, idx.dims); err != nil {
 			return 0, 0, err
 		}
 		return len(p.chunks), 0, nil

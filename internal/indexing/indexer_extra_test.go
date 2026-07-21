@@ -924,3 +924,64 @@ func TestEmbedAndInsertCacheLookupError(t *testing.T) {
 		t.Errorf("embedder called %d times, want 1 (full fallback)", count)
 	}
 }
+
+// TestIndexerASTOnly verifies that AST-only mode runs in keyword-only mode
+// but enriches the chunk content with symbol names.
+func TestIndexerASTOnly(t *testing.T) {
+	ctx := context.Background()
+	fs := &fakeStore{}
+	emb := &fakeEmbedder{}
+
+	idx := NewIndexer(fs, emb, 3, IndexerOpts{
+		Workers:          1,
+		EmbedBatchSize:   8,
+		MaxFileSize:      1024 * 1024,
+		MaxChunksPerFile: 32,
+	}).
+		SetKeywordOnly(true).
+		SetASTOnly(true)
+
+	dir := t.TempDir()
+	// Create a Go file with functions/structs to extract symbols
+	goContent := `package main
+type User struct {
+	Name string
+}
+func (u *User) GetName() string {
+	return u.Name
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(goContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := idx.IndexProject(ctx, 1, dir, "m", 0)
+	if err != nil {
+		t.Fatalf("IndexProject: %v", err)
+	}
+
+	if stats.FilesIndexed != 1 {
+		t.Errorf("FilesIndexed = %d, want 1", stats.FilesIndexed)
+	}
+
+	// In AST-only mode, we set keyword-only to true, so chunks should be inserted
+	// text-only (using InsertChunksTextOnly).
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	if len(fs.embedded) > 0 {
+		t.Errorf("expected 0 embedded chunks, got %d", len(fs.embedded))
+	}
+
+	if len(fs.textOnly) < 3 {
+		t.Fatalf("expected at least 3 chunks, got %d", len(fs.textOnly))
+	}
+
+	// Verify that the symbols are prepended to the chunk content where they overlap.
+	if !strings.Contains(fs.textOnly[1], "Symbols: type User") {
+		t.Errorf("expected chunk 1 to contain 'Symbols: type User', got:\n%s", fs.textOnly[1])
+	}
+	if !strings.Contains(fs.textOnly[2], "Symbols: method GetName") {
+		t.Errorf("expected chunk 2 to contain 'Symbols: method GetName', got:\n%s", fs.textOnly[2])
+	}
+}
