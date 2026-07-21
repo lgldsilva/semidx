@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/lgldsilva/semidx/internal/gitenv"
 )
 
 // setupTestRepo creates a real git repository in a temp directory with two
@@ -19,6 +21,7 @@ func setupTestRepo(t *testing.T) string {
 		t.Helper()
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
+		cmd.Env = append(gitenv.Clean(os.Environ()), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -62,6 +65,7 @@ func setupTestRepo(t *testing.T) string {
 		// repo — this is how the test previously corrupted the real worktree.
 		cmd := exec.Command("git", "worktree", "remove", "--force", wtDir)
 		cmd.Dir = dir
+		cmd.Env = append(gitenv.Clean(os.Environ()), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		_ = cmd.Run()
 	})
 
@@ -233,6 +237,7 @@ func TestStatus_detached(t *testing.T) {
 	// Detach HEAD at a specific commit.
 	cmd := exec.Command("git", "checkout", "--detach", "HEAD")
 	cmd.Dir = dir
+	cmd.Env = append(gitenv.Clean(os.Environ()), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git checkout --detach: %v\n%s", err, out)
 	}

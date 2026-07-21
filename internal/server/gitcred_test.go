@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lgldsilva/semidx/internal/gitenv"
 	"github.com/lgldsilva/semidx/internal/secretbox"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -313,7 +314,7 @@ func runGitCmd(t *testing.T, dir string, args ...string) {
 	cmd.Dir = dir
 	// Isolate from any global/system git config (e.g. a core.hooksPath that
 	// would run unrelated commit hooks on the developer's machine).
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(gitenv.Clean(os.Environ()),
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
