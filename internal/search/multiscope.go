@@ -94,9 +94,7 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 	if len(req.Identities) == 0 && len(req.Projects) == 0 {
 		return nil, fmt.Errorf("no project identities specified")
 	}
-	if req.TopK <= 0 {
-		req.TopK = 5
-	}
+	req.TopK = clampMultiTopK(req.TopK)
 
 	scopes := make([]multiProjectScope, 0, len(req.Identities)+len(req.Projects))
 	for _, ident := range req.Identities {
@@ -119,7 +117,7 @@ func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*Mult
 		// Search one project at a time.
 		one := scope.request
 		one.Query = req.Query
-		one.TopK = req.TopK * 2 // over-fetch per project for fusion quality
+		one.TopK = min(req.TopK*2, MaxTopK) // bounded over-fetch for fusion quality
 		one.Graph = req.Graph
 		one.GraphMaxDepth = req.GraphMaxDepth
 		one.KeywordOnly = req.KeywordOnly
@@ -167,9 +165,7 @@ func (s *Service) SearchAllProjects(ctx context.Context, req MultiScopeRequest) 
 	if len(projects) == 0 {
 		return &MultiResponse{}, nil
 	}
-	if req.TopK <= 0 {
-		req.TopK = 5
-	}
+	req.TopK = clampMultiTopK(req.TopK)
 
 	var allResults []rankedResult
 	var flags aggFlags
@@ -177,7 +173,7 @@ func (s *Service) SearchAllProjects(ctx context.Context, req MultiScopeRequest) 
 	for _, p := range projects {
 		one := Request{
 			Query:         req.Query,
-			TopK:          req.TopK * 2, // over-fetch per project for fusion quality
+			TopK:          min(req.TopK*2, MaxTopK), // bounded over-fetch for fusion quality
 			Graph:         req.Graph,
 			GraphMaxDepth: req.GraphMaxDepth,
 			KeywordOnly:   req.KeywordOnly,
@@ -328,6 +324,7 @@ func compareCandidates(a, b rankedResult) int {
 }
 
 func applyRankedDiversity(results []rankedResult, maxPerFile, maxPerProject, topK int) []rankedResult {
+	topK = clampMultiTopK(topK)
 	if maxPerFile <= 0 {
 		maxPerFile = topK + 1
 	}
@@ -336,7 +333,9 @@ func applyRankedDiversity(results []rankedResult, maxPerFile, maxPerProject, top
 	}
 	fileCount := make(map[string]int)
 	projectCount := make(map[string]int)
-	out := make([]rankedResult, 0, min(topK, len(results)))
+	// Do not pre-allocate from topK: this function is also reachable from
+	// direct CLI/MCP callers, so topK is not necessarily HTTP-validated.
+	out := make([]rankedResult, 0)
 	for _, result := range results {
 		project, file := splitProvenance(result.result.FilePath)
 		if projectCount[project] >= maxPerProject || fileCount[project+"\x00"+file] >= maxPerFile {
@@ -350,6 +349,16 @@ func applyRankedDiversity(results []rankedResult, maxPerFile, maxPerProject, top
 		}
 	}
 	return out
+}
+
+func clampMultiTopK(topK int) int {
+	if topK <= 0 {
+		return 5
+	}
+	if topK > MaxTopK {
+		return MaxTopK
+	}
+	return topK
 }
 
 // applyDiversity caps results per file and per project (identified by prefix
