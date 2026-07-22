@@ -65,7 +65,11 @@ func (b *localBackend) Search(ctx context.Context, project, query, model string,
 		Degraded: resp.Degraded, RetryAfterMS: resp.RetryAfter.Milliseconds(),
 	}
 	for _, r := range resp.Results {
-		out.Results = append(out.Results, Hit{Path: r.FilePath, StartLine: r.StartLine, EndLine: r.EndLine, Score: r.Score, Content: r.Content})
+		out.Results = append(out.Results, Hit{
+			Path: r.FilePath, StartLine: r.StartLine, EndLine: r.EndLine,
+			Score: r.Score, Content: r.Content,
+			Confidence: r.Confidence, Symbol: r.Symbol,
+		})
 	}
 	return out, nil
 }
@@ -142,6 +146,22 @@ func (b *localBackend) resolveProject(ctx context.Context, project string) (*sto
 	return p, nil
 }
 
+// graphProject resolves a project and asserts the backing store implements
+// graphLister. It is the shared preamble of Neighbors and Trace: both need the
+// project's row ID and a graph-capable handle on the store, and both report
+// the same "graph not supported" error when the store lacks the methods.
+func (b *localBackend) graphProject(ctx context.Context, project string) (*store.Project, graphLister, error) {
+	p, err := b.resolveProject(ctx, project)
+	if err != nil {
+		return nil, nil, err
+	}
+	gl, ok := b.projects.(graphLister)
+	if !ok {
+		return nil, nil, fmt.Errorf("graph operations are not supported by the current store")
+	}
+	return p, gl, nil
+}
+
 // resolveProjectPath resolves a project name or identity to a local filesystem
 // path. Returns the path and an error if the project is not a local checkout.
 func (b *localBackend) resolveProjectPath(ctx context.Context, project string) (string, error) {
@@ -195,14 +215,9 @@ func (b *localBackend) Neighbors(ctx context.Context, project, file string) (map
 		return nil, fmt.Errorf("invalid file path: %w", err)
 	}
 
-	p, err := b.resolveProject(ctx, project)
+	p, gl, err := b.graphProject(ctx, project)
 	if err != nil {
 		return nil, err
-	}
-
-	gl, ok := b.projects.(graphLister)
-	if !ok {
-		return nil, fmt.Errorf("graph operations are not supported by the current store")
 	}
 
 	graph, err := gl.FetchGraphNeighbors(ctx, p.ID)
@@ -237,14 +252,9 @@ func (b *localBackend) Trace(ctx context.Context, project string, files []string
 		}
 	}
 
-	p, err := b.resolveProject(ctx, project)
+	p, gl, err := b.graphProject(ctx, project)
 	if err != nil {
 		return nil, err
-	}
-
-	gl, ok := b.projects.(graphLister)
-	if !ok {
-		return nil, fmt.Errorf("graph operations are not supported by the current store")
 	}
 
 	return gl.FetchGraphPathsBFS(ctx, p.ID, files, maxDepth)

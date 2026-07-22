@@ -61,11 +61,13 @@ func (e *APIError) Error() string {
 // ---- DTOs (mirror the server's JSON) ------------------------------------------
 
 type SearchHit struct {
-	Path      string  `json:"path"`
-	StartLine int     `json:"start_line"`
-	EndLine   int     `json:"end_line"`
-	Score     float64 `json:"score"`
-	Content   string  `json:"content"`
+	Path       string  `json:"path"`
+	StartLine  int     `json:"start_line"`
+	EndLine    int     `json:"end_line"`
+	Score      float64 `json:"score"`
+	Content    string  `json:"content"`
+	Confidence string  `json:"confidence,omitempty"`
+	Symbol     string  `json:"symbol,omitempty"`
 }
 
 type SearchResponse struct {

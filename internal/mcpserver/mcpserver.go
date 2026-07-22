@@ -34,12 +34,14 @@ const mimeApplicationJSON = "application/json"
 
 // Hit is one ranked search result, independent of the backend that produced it.
 type Hit struct {
-	Path      string
-	StartLine int
-	EndLine   int
-	Score     float64
-	Content   string
-	Language  string
+	Path       string
+	StartLine  int
+	EndLine    int
+	Score      float64
+	Content    string
+	Language   string
+	Confidence string
+	Symbol     string
 }
 
 // SearchOutput is a backend-neutral search result set.
@@ -637,11 +639,7 @@ func gitWorktreesHandler(b GitBackend, defaultProject string) mcp.ToolHandlerFor
 			return errorResult(err), nil, nil
 		}
 		wts, err := b.Worktrees(ctx, project)
-		if err != nil {
-			return errorResult(err), nil, nil
-		}
-		data, _ := json.Marshal(wts)
-		return textResult(string(data)), nil, nil
+		return jsonToolResult(wts, err)
 	}
 }
 
@@ -657,11 +655,7 @@ func gitBranchesHandler(b GitBackend, defaultProject string) mcp.ToolHandlerFor[
 			return errorResult(err), nil, nil
 		}
 		branches, err := b.Branches(ctx, project, in.Remote)
-		if err != nil {
-			return errorResult(err), nil, nil
-		}
-		data, _ := json.Marshal(branches)
-		return textResult(string(data)), nil, nil
+		return jsonToolResult(branches, err)
 	}
 }
 
@@ -676,11 +670,7 @@ func gitStatusHandler(b GitBackend, defaultProject string) mcp.ToolHandlerFor[gi
 			return errorResult(err), nil, nil
 		}
 		status, err := b.GitStatus(ctx, project)
-		if err != nil {
-			return errorResult(err), nil, nil
-		}
-		data, _ := json.Marshal(status)
-		return textResult(string(data)), nil, nil
+		return jsonToolResult(status, err)
 	}
 }
 
@@ -796,6 +786,21 @@ func textResult(text string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}
 }
 
+// jsonToolResult marshals v as JSON text on success, or surfaces err as an
+// in-band tool error. The middle return is always nil (kept for the
+// ToolHandlerFor signature) and the error return is always nil because the
+// handler either succeeds or reports a business error through CallToolResult.
+// Marshalling never fails for the value types we pass (slices/structs of
+// primitives), so the discarded error is intentional — surfacing it would leak
+// encoding internals to the agent for no actionable benefit.
+func jsonToolResult(v any, err error) (*mcp.CallToolResult, any, error) {
+	if err != nil {
+		return errorResult(err), nil, nil
+	}
+	data, _ := json.Marshal(v)
+	return textResult(string(data)), nil, nil
+}
+
 // errorResult surfaces a business error to the agent as tool content with
 // IsError set — an in-band error the model can read and react to, not a
 // protocol-level failure.
@@ -810,13 +815,15 @@ func errorResult(err error) *mcp.CallToolResult {
 
 // structuredHit is the JSON shape for one search result in structured mode.
 type structuredHit struct {
-	File      string  `json:"file"`
-	StartLine int     `json:"start_line"`
-	EndLine   int     `json:"end_line"`
-	Score     float64 `json:"score"`
-	Language  string  `json:"language,omitempty"`
-	Content   string  `json:"content"`
-	Project   string  `json:"project"`
+	File       string  `json:"file"`
+	StartLine  int     `json:"start_line"`
+	EndLine    int     `json:"end_line"`
+	Score      float64 `json:"score"`
+	Language   string  `json:"language,omitempty"`
+	Content    string  `json:"content"`
+	Project    string  `json:"project"`
+	Confidence string  `json:"confidence,omitempty"`
+	Symbol     string  `json:"symbol,omitempty"`
 }
 
 // structuredOutput is the JSON envelope for structured search results.
@@ -845,13 +852,15 @@ func formatSearchStructured(out *SearchOutput) string {
 			lang = detectLanguage(r.Path)
 		}
 		hits[i] = structuredHit{
-			File:      r.Path,
-			StartLine: r.StartLine,
-			EndLine:   r.EndLine,
-			Score:     r.Score,
-			Language:  lang,
-			Content:   r.Content,
-			Project:   out.Project,
+			File:       r.Path,
+			StartLine:  r.StartLine,
+			EndLine:    r.EndLine,
+			Score:      r.Score,
+			Language:   lang,
+			Content:    r.Content,
+			Project:    out.Project,
+			Confidence: r.Confidence,
+			Symbol:     r.Symbol,
 		}
 	}
 	envelope.Results = hits
@@ -864,10 +873,12 @@ func formatSearchStructured(out *SearchOutput) string {
 
 // minimalHit is the compact JSON shape for one search result.
 type minimalHit struct {
-	F string  `json:"f"` // file path
-	L string  `json:"l"` // line range ("start-end" or "start")
-	S float64 `json:"s"` // score
-	C string  `json:"c"` // content preview
+	F  string  `json:"f"`            // file path
+	L  string  `json:"l"`            // line range ("start-end" or "start")
+	S  float64 `json:"s"`            // score
+	C  string  `json:"c"`            // content preview
+	Cf string  `json:"cf,omitempty"` // confidence tag
+	Sy string  `json:"sy,omitempty"` // symbol name (when classified)
 }
 
 // minimalOutput is the compact JSON envelope.
@@ -892,10 +903,12 @@ func formatSearchMinimal(out *SearchOutput) string {
 			lineRange = fmt.Sprintf("%d-%d", r.StartLine, r.EndLine)
 		}
 		hits[i] = minimalHit{
-			F: r.Path,
-			L: lineRange,
-			S: r.Score,
-			C: preview(r.Content, 120),
+			F:  r.Path,
+			L:  lineRange,
+			S:  r.Score,
+			C:  preview(r.Content, 120),
+			Cf: r.Confidence,
+			Sy: r.Symbol,
 		}
 	}
 	outJSON := minimalOutput{R: hits, Fb: out.Fallback, Dg: out.Degraded, Ra: out.RetryAfterMS, T: len(hits), Ms: out.TookMS}

@@ -101,6 +101,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     model       TEXT NOT NULL DEFAULT '',
     start_line  INTEGER,
     end_line    INTEGER,
+    confidence  TEXT NOT NULL DEFAULT 'AMBIGUOUS',
+    symbol      TEXT,
     UNIQUE(project_id, file_id, chunk_index)
 );
 -- unique_embeddings de-duplicates identical vectors (same content across
@@ -258,6 +260,20 @@ func ensureSchema(db *sql.DB) error {
 	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('chunks') WHERE name='emb_hash'`).Scan(&hasEmbHash)
 	if hasEmbHash == 0 {
 		if _, err := db.Exec(`ALTER TABLE chunks ADD COLUMN emb_hash TEXT`); err != nil {
+			return err
+		}
+	}
+	var hasConfidence int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('chunks') WHERE name='confidence'`).Scan(&hasConfidence)
+	if hasConfidence == 0 {
+		if _, err := db.Exec(`ALTER TABLE chunks ADD COLUMN confidence TEXT NOT NULL DEFAULT 'AMBIGUOUS'`); err != nil {
+			return err
+		}
+	}
+	var hasSymbol int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('chunks') WHERE name='symbol'`).Scan(&hasSymbol)
+	if hasSymbol == 0 {
+		if _, err := db.Exec(`ALTER TABLE chunks ADD COLUMN symbol TEXT`); err != nil {
 			return err
 		}
 	}
@@ -670,11 +686,12 @@ func (s *SQLiteStore) insertChunks(ctx context.Context, projectID, fileID int, c
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO chunks (project_id, file_id, chunk_index, content, emb_hash, dims, model, start_line, end_line)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO chunks (project_id, file_id, chunk_index, content, emb_hash, dims, model, start_line, end_line, confidence, symbol)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project_id, file_id, chunk_index) DO UPDATE
 		SET content = excluded.content, embedding = NULL, emb_hash = excluded.emb_hash, dims = excluded.dims,
-		    model = excluded.model, start_line = excluded.start_line, end_line = excluded.end_line
+		    model = excluded.model, start_line = excluded.start_line, end_line = excluded.end_line,
+		    confidence = excluded.confidence, symbol = excluded.symbol
 	`)
 	if err != nil {
 		return err
@@ -699,7 +716,15 @@ func (s *SQLiteStore) insertChunks(ctx context.Context, projectID, fileID int, c
 			}
 			embHash = h
 		}
-		if _, err := stmt.ExecContext(ctx, projectID, fileID, i, chunk.Content, embHash, dims, model, chunk.StartLine, chunk.EndLine); err != nil {
+		conf := chunk.Confidence
+		if conf == "" {
+			conf = "AMBIGUOUS"
+		}
+		var symVal *string
+		if chunk.Symbol != "" {
+			symVal = &chunk.Symbol
+		}
+		if _, err := stmt.ExecContext(ctx, projectID, fileID, i, chunk.Content, embHash, dims, model, chunk.StartLine, chunk.EndLine, conf, symVal); err != nil {
 			return err
 		}
 	}
@@ -738,7 +763,7 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 	// legacy inline column (pre-ADR-7 rows); rows with neither are text-only and
 	// excluded so they surface via keyword search instead.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT f.path, c.content, c.start_line, c.end_line, COALESCE(ue.embedding, c.embedding)
+		SELECT f.path, c.content, c.start_line, c.end_line, COALESCE(ue.embedding, c.embedding), c.confidence, c.symbol
 		FROM chunks c `+join+`
 		LEFT JOIN unique_embeddings ue ON ue.emb_hash = c.emb_hash
 		WHERE c.project_id = ? AND COALESCE(ue.embedding, c.embedding) IS NOT NULL
@@ -757,17 +782,24 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 	)
 	for rows.Next() {
 		var (
-			r         store.SearchResult
-			startLine sql.NullInt64
-			endLine   sql.NullInt64
-			blob      []byte
+			r          store.SearchResult
+			startLine  sql.NullInt64
+			endLine    sql.NullInt64
+			blob       []byte
+			confidence sql.NullString
+			symbol     sql.NullString
 		)
-		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &blob); err != nil {
+		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &blob, &confidence, &symbol); err != nil {
 			return nil, err
 		}
 		r.StartLine = int(startLine.Int64)
 		r.EndLine = int(endLine.Int64)
 		r.Score = cosineSimilarity(embedding, decodeEmbedding(blob))
+		r.Confidence = confidence.String
+		if r.Confidence == "" {
+			r.Confidence = "AMBIGUOUS"
+		}
+		r.Symbol = symbol.String
 		if !useHeap {
 			all = append(all, r)
 			continue
@@ -845,7 +877,7 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 
 	// Note: FTS5 MATCH requires the table name, not an alias.
 	query := fmt.Sprintf(`
-		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score
+		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol
 		FROM chunks c
 		JOIN chunks_fts ft ON ft.rowid = c.id
 		%s
@@ -861,18 +893,34 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 	}
 	defer func() { _ = rows.Close() }()
 
+	return scanChunkResultRows(rows)
+}
+
+// scanChunkResultRows reads the canonical "path, content, start_line, end_line,
+// score, confidence, symbol" row shape shared by keyword search and the
+// FetchChunksBy{Path,DirPrefix} helpers. Empty confidence is normalized to
+// AMBIGUOUS (the column default) so callers see a stable tag for pre-v2 rows.
+// The caller owns closing the rows.
+func scanChunkResultRows(rows *sql.Rows) ([]store.SearchResult, error) {
 	var results []store.SearchResult
 	for rows.Next() {
 		var (
-			r         store.SearchResult
-			startLine sql.NullInt64
-			endLine   sql.NullInt64
+			r          store.SearchResult
+			startLine  sql.NullInt64
+			endLine    sql.NullInt64
+			confidence sql.NullString
+			symbol     sql.NullString
 		)
-		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score); err != nil {
+		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score, &confidence, &symbol); err != nil {
 			return nil, err
 		}
 		r.StartLine = int(startLine.Int64)
 		r.EndLine = int(endLine.Int64)
+		r.Confidence = confidence.String
+		if r.Confidence == "" {
+			r.Confidence = "AMBIGUOUS"
+		}
+		r.Symbol = symbol.String
 		results = append(results, r)
 	}
 	return results, rows.Err()
@@ -939,53 +987,23 @@ func (s *SQLiteStore) FetchGraphNeighbors(ctx context.Context, projectID int) (m
 // FetchChunksByPath returns chunks for a specific file path, ordered by
 // chunk_index. Returns an empty slice if the file has no chunks.
 func (s *SQLiteStore) FetchChunksByPath(ctx context.Context, projectID int, filePath string, dims, limit int) ([]store.SearchResult, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path = ? ORDER BY c.chunk_index LIMIT ?`, projectID, filePath, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path = ? ORDER BY c.chunk_index LIMIT ?`, projectID, filePath, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-
-	var results []store.SearchResult
-	for rows.Next() {
-		var (
-			r         store.SearchResult
-			startLine sql.NullInt64
-			endLine   sql.NullInt64
-		)
-		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score); err != nil {
-			return nil, err
-		}
-		r.StartLine = int(startLine.Int64)
-		r.EndLine = int(endLine.Int64)
-		results = append(results, r)
-	}
-	return results, rows.Err()
+	return scanChunkResultRows(rows)
 }
 
 // FetchChunksByDirPrefix returns chunks for files whose path starts with the
 // given directory prefix. Returns empty slice if no files match.
 func (s *SQLiteStore) FetchChunksByDirPrefix(ctx context.Context, projectID int, dirPrefix string, dims, limit int) ([]store.SearchResult, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path LIKE (? || '%') ORDER BY c.chunk_index LIMIT ?`, projectID, dirPrefix, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path LIKE (? || '%') ORDER BY c.chunk_index LIMIT ?`, projectID, dirPrefix, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-
-	var results []store.SearchResult
-	for rows.Next() {
-		var (
-			r         store.SearchResult
-			startLine sql.NullInt64
-			endLine   sql.NullInt64
-		)
-		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score); err != nil {
-			return nil, err
-		}
-		r.StartLine = int(startLine.Int64)
-		r.EndLine = int(endLine.Int64)
-		results = append(results, r)
-	}
-	return results, rows.Err()
+	return scanChunkResultRows(rows)
 }
 
 // DropAll clears all indexed data and resets the auto-increment counters

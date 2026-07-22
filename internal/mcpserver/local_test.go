@@ -47,9 +47,23 @@ func (e basisEmbedder) EmbedSingle(_ context.Context, _, text string) ([]float32
 }
 func (basisEmbedder) ListModels(_ context.Context) ([]string, error) { return []string{"m"}, nil }
 
-// connectLocal indexes a fixture into a real SQLite store and wires an in-memory
-// MCP client to a server backed by the standalone local backend.
-func connectLocal(t *testing.T) *mcp.ClientSession {
+// localFixture is the shared setup result for tests that need a real SQLite
+// store wired to an in-memory MCP session through the standalone local backend.
+// pid and st let callers add fixtures (e.g. graph edges) after indexing; src is
+// the temp source root in case a test needs to write more files.
+type localFixture struct {
+	ctx  context.Context
+	st   *localstore.SQLiteStore
+	pid  int
+	sess *mcp.ClientSession
+	src  string
+}
+
+// setupLocalMCP indexes a fixture into a real SQLite store and wires an
+// in-memory MCP client to a server backed by the standalone local backend.
+// The returned fixture owns the store, session and temp source root; cleanups
+// are registered with t so callers can return early on failure.
+func setupLocalMCP(t *testing.T, files map[string]string) localFixture {
 	t.Helper()
 	ctx := context.Background()
 	st, err := localstore.New(filepath.Join(t.TempDir(), "index.db"))
@@ -59,8 +73,9 @@ func connectLocal(t *testing.T) *mcp.ClientSession {
 	t.Cleanup(st.Close)
 
 	src := t.TempDir()
-	writeFile(t, src, "alpha.go", "package a\nfunc Alpha() {} // token alpha here\n")
-	writeFile(t, src, "beta.go", "package b\nfunc Beta() {} // token beta here\n")
+	for name, content := range files {
+		writeFile(t, src, name, content)
+	}
 
 	pid, err := st.UpsertProject(ctx, "proj", src, "m", 0)
 	if err != nil {
@@ -82,7 +97,18 @@ func connectLocal(t *testing.T) *mcp.ClientSession {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sess.Close() })
-	return sess
+	return localFixture{ctx: ctx, st: st, pid: pid, sess: sess, src: src}
+}
+
+// connectLocal is a thin wrapper over setupLocalMCP for the common two-file
+// alpha/beta fixture used by the local-backend search tests. It keeps the
+// pre-existing *mcp.ClientSession return type so existing callers compile.
+func connectLocal(t *testing.T) *mcp.ClientSession {
+	t.Helper()
+	return setupLocalMCP(t, map[string]string{
+		"alpha.go": "package a\nfunc Alpha() {} // token alpha here\n",
+		"beta.go":  "package b\nfunc Beta() {} // token beta here\n",
+	}).sess
 }
 
 func writeFile(t *testing.T, dir, name, content string) {

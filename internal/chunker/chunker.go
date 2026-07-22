@@ -15,9 +15,11 @@ import (
 // it spans in the source file (so search results can point at a line without
 // re-reading the file).
 type Chunk struct {
-	Content   string
-	StartLine int
-	EndLine   int
+	Content    string
+	StartLine  int
+	EndLine    int
+	Confidence string
+	Symbol     string
 }
 
 var (

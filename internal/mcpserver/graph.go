@@ -2,7 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -58,11 +57,7 @@ func registerGraphTools(s *mcp.Server, b Backend, allowed map[string]bool, expli
 func neighborsHandler(b GraphBackend, defaultProject string) mcp.ToolHandlerFor[neighborsInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in neighborsInput) (*mcp.CallToolResult, any, error) {
 		res, err := b.Neighbors(ctx, resolveProject(in.Project, defaultProject), in.File)
-		if err != nil {
-			return errorResult(err), nil, nil
-		}
-		data, _ := json.Marshal(res)
-		return textResult(string(data)), nil, nil
+		return jsonToolResult(res, err)
 	}
 }
 
@@ -70,21 +65,13 @@ func traceHandler(b GraphBackend, defaultProject string) mcp.ToolHandlerFor[trac
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in traceInput) (*mcp.CallToolResult, any, error) {
 		depth := search.ClampGraphDepth(in.MaxDepth)
 		res, err := b.Trace(ctx, resolveProject(in.Project, defaultProject), in.Files, depth)
-		if err != nil {
-			return errorResult(err), nil, nil
-		}
-		data, _ := json.Marshal(res)
-		return textResult(string(data)), nil, nil
+		return jsonToolResult(res, err)
 	}
 }
 
 func symbolsHandler(b GraphBackend, defaultProject string) mcp.ToolHandlerFor[symbolsInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in symbolsInput) (*mcp.CallToolResult, any, error) {
 		res, err := b.Symbols(ctx, resolveProject(in.Project, defaultProject), in.File)
-		if err != nil {
-			return errorResult(err), nil, nil
-		}
-		data, _ := json.Marshal(res)
-		return textResult(string(data)), nil, nil
+		return jsonToolResult(res, err)
 	}
 }

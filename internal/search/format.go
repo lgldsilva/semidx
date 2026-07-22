@@ -60,6 +60,11 @@ func (f HumanFormatter) formatResult(w io.Writer, i int, r store.SearchResult, k
 	if _, err := fmt.Fprintf(w, "Score: %s\n", humanScore(keyword, r.Score)); err != nil {
 		return err
 	}
+	if conf := formatConfidence(r.Confidence, r.Symbol); conf != "" {
+		if _, err := fmt.Fprintf(w, "Confidence: %s\n", conf); err != nil {
+			return err
+		}
+	}
 	content := truncatePreview(r.Content, preview)
 	if f.NoLineNums || r.StartLine < 1 || r.EndLine < r.StartLine {
 		if _, err := fmt.Fprintf(w, "%s\n\n", content); err != nil {
@@ -71,6 +76,20 @@ func (f HumanFormatter) formatResult(w io.Writer, i int, r store.SearchResult, k
 		}
 	}
 	return nil
+}
+
+// formatConfidence renders the v2 confidence tag for human output: empty when
+// absent or AMBIGUOUS (the default), "EXTRACTED (SymbolName)" when a symbol is
+// attached, or just the tag otherwise. Keeps the existing output stable when no
+// classification is present.
+func formatConfidence(confidence, symbol string) string {
+	if confidence == "" || confidence == "AMBIGUOUS" {
+		return ""
+	}
+	if symbol != "" {
+		return confidence + " (" + symbol + ")"
+	}
+	return confidence
 }
 
 func humanScore(keyword bool, score float64) string {
@@ -128,9 +147,11 @@ type JSONFormatter struct{}
 
 func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 	type row struct {
-		File    string  `json:"file"`
-		Score   float64 `json:"score"`
-		Content string  `json:"content"`
+		File       string  `json:"file"`
+		Score      float64 `json:"score"`
+		Content    string  `json:"content"`
+		Confidence string  `json:"confidence,omitempty"`
+		Symbol     string  `json:"symbol,omitempty"`
 	}
 	out := struct {
 		Project      string `json:"project"`
@@ -148,7 +169,10 @@ func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 		out.Project = resp.Project.Name
 	}
 	for _, r := range resp.Results {
-		out.Results = append(out.Results, row{File: r.FilePath, Score: r.Score, Content: r.Content})
+		out.Results = append(out.Results, row{
+			File: r.FilePath, Score: r.Score, Content: r.Content,
+			Confidence: r.Confidence, Symbol: r.Symbol,
+		})
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")

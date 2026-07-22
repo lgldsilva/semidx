@@ -56,6 +56,7 @@ func (b *serverBackend) Search(ctx context.Context, project, query, model string
 		out.Results = append(out.Results, mcpserver.Hit{
 			Path: r.FilePath, StartLine: r.StartLine, EndLine: r.EndLine,
 			Score: r.Score, Content: r.Content,
+			Confidence: r.Confidence, Symbol: r.Symbol,
 		})
 	}
 	return out, nil

@@ -616,14 +616,7 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 
 	// Secret scan: run before embedding. When secrets are detected and
 	// blockEmbedding is on, the file is stored text-only (no embedding).
-	hasSecrets := false
-	if idx.secretScanEnabled && idx.secretDetector != nil {
-		findings := idx.secretDetector.Scan(rel, content)
-		if len(findings) > 0 {
-			hasSecrets = true
-			idx.logf("[secrets] %s: %d finding(s) — stored text-only", rel, len(findings))
-		}
-	}
+	hasSecrets := idx.detectSecrets(rel, content)
 
 	created, softErrs, err = idx.storeChunks(ctx, chunkStoreParams{
 		projectID:  projectID,
@@ -652,6 +645,22 @@ type chunkStoreParams struct {
 	hasSecrets bool
 }
 
+// detectSecrets runs the gitleaks detector on a unit's content when configured.
+// Returns true when at least one finding is reported (the caller stores such
+// files text-only when SECRET_BLOCK_EMBEDDING is on). The check is a no-op when
+// the detector is disabled, so callers do not need to gate on the config flag.
+func (idx *Indexer) detectSecrets(rel string, content []byte) bool {
+	if !idx.secretScanEnabled || idx.secretDetector == nil {
+		return false
+	}
+	findings := idx.secretDetector.Scan(rel, content)
+	if len(findings) == 0 {
+		return false
+	}
+	idx.logf("[secrets] %s: %d finding(s) — stored text-only", rel, len(findings))
+	return true
+}
+
 // storeChunks turns a unit's chunks into stored rows, honoring keyword-only mode,
 // privacy routing and secret-scan tagging. It stores the chunks text-only in
 // keyword-only mode, when a sensitive file cannot be embedded by a local provider,
@@ -668,22 +677,14 @@ func (idx *Indexer) storeChunks(ctx context.Context, p chunkStoreParams) (create
 		p.chunks = p.chunks[:budget]
 	}
 
+	// v2 confidence tags: classify after the budget trim so only stored chunks
+	// are annotated (and the work is bounded to what will actually be written).
+	classifyChunks(p.chunks, p.syms)
+
 	// Keyword-only mode: no embedding provider at all — store the chunks as text
 	// so they stay searchable by keyword (FTS/ILIKE) without any model.
 	if idx.keywordOnly {
-		chunksToStore := p.chunks
-		if idx.astOnly && len(p.syms) > 0 {
-			inputs := buildChunkInputs(p.chunks, p.syms)
-			chunksToStore = make([]chunker.Chunk, len(p.chunks))
-			for i, c := range p.chunks {
-				chunksToStore[i] = c
-				chunksToStore[i].Content = inputs[i]
-			}
-		}
-		if err := idx.db.InsertChunksTextOnly(ctx, p.projectID, p.fileID, chunksToStore, idx.dims); err != nil {
-			return 0, 0, err
-		}
-		return len(p.chunks), 0, nil
+		return idx.storeChunksKeywordOnly(ctx, p)
 	}
 
 	// Privacy routing + secret scan: a sensitive file or one with detected
@@ -692,21 +693,58 @@ func (idx *Indexer) storeChunks(ctx context.Context, p chunkStoreParams) (create
 	// (embedding NULL) so it stays findable via keyword search without ever
 	// leaving the machine.
 	embedCtx := ctx
-	isSensitive := privacy.IsSensitive(p.rel) || (p.hasSecrets && idx.secretBlockEmbedding)
-	if isSensitive {
-		localCtx := embed.WithForceLocal(ctx, true)
-		if _, err := idx.embedder.ModelInfo(localCtx, p.model); err != nil {
-			if err := idx.db.InsertChunksTextOnly(ctx, p.projectID, p.fileID, p.chunks, idx.dims); err != nil {
-				return 0, 0, err
-			}
-			idx.logf("  [local-text] %s (sensitive; stored text-only, no cloud embedding)", p.rel)
-			return len(p.chunks), 0, nil
+	if privacy.IsSensitive(p.rel) || (p.hasSecrets && idx.secretBlockEmbedding) {
+		localCtx, doEmbed, sCreated, sSoft, sErr := idx.storeSensitiveChunks(ctx, p)
+		if sErr != nil {
+			return 0, 0, sErr
+		}
+		if !doEmbed {
+			return sCreated, sSoft, nil
 		}
 		embedCtx = localCtx
 	}
 
 	created, softErrs = idx.embedAndInsert(embedCtx, p.projectID, p.fileID, p.chunks, p.model, p.rel, p.syms)
 	return created, softErrs, nil
+}
+
+// storeChunksKeywordOnly writes chunks as text-only (no embedding) in keyword
+// mode. When AST mode is on and the file produced symbols, the symbol-enriched
+// input strings are stored instead of the raw chunk text so symbol names are
+// searchable too.
+func (idx *Indexer) storeChunksKeywordOnly(ctx context.Context, p chunkStoreParams) (int, int, error) {
+	chunksToStore := p.chunks
+	if idx.astOnly && len(p.syms) > 0 {
+		inputs := buildChunkInputs(p.chunks, p.syms)
+		chunksToStore = make([]chunker.Chunk, len(p.chunks))
+		for i, c := range p.chunks {
+			chunksToStore[i] = c
+			chunksToStore[i].Content = inputs[i]
+		}
+	}
+	if err := idx.db.InsertChunksTextOnly(ctx, p.projectID, p.fileID, chunksToStore, idx.dims); err != nil {
+		return 0, 0, err
+	}
+	return len(p.chunks), 0, nil
+}
+
+// storeSensitiveChunks handles a sensitive file (or one with detected secrets).
+// When a local embedding provider can serve the model, it returns the force-
+// local context and doEmbed=true so storeChunks proceeds with embedding. When
+// no local provider is available, it stores the chunks text-only and returns
+// doEmbed=false so storeChunks returns the text-only result; the text-only
+// insert error is propagated as hardErr. The created/softErrs values are valid
+// only when doEmbed=false.
+func (idx *Indexer) storeSensitiveChunks(ctx context.Context, p chunkStoreParams) (localCtx context.Context, doEmbed bool, created, softErrs int, hardErr error) {
+	localCtx = embed.WithForceLocal(ctx, true)
+	if _, err := idx.embedder.ModelInfo(localCtx, p.model); err != nil {
+		if err := idx.db.InsertChunksTextOnly(ctx, p.projectID, p.fileID, p.chunks, idx.dims); err != nil {
+			return nil, false, 0, 0, err
+		}
+		idx.logf("  [local-text] %s (sensitive; stored text-only, no cloud embedding)", p.rel)
+		return nil, false, len(p.chunks), 0, nil
+	}
+	return localCtx, true, 0, 0, nil
 }
 
 // buildChunkInputs builds input text strings for each chunk, prefixing symbols
@@ -730,6 +768,56 @@ func buildChunkInputs(chunks []chunker.Chunk, syms []sym.Symbol) []string {
 		}
 	}
 	return inputs
+}
+
+// classifyChunks annotates each chunk in place with a confidence tag (EXTRACTED,
+// INFERRED, AMBIGUOUS) and the matching symbol name (when any). It mutates the
+// slice directly; callers should pass the final, budget-trimmed chunk list.
+func classifyChunks(chunks []chunker.Chunk, syms []sym.Symbol) {
+	for i := range chunks {
+		conf, name := classifyChunk(chunks[i], syms)
+		chunks[i].Confidence = conf
+		chunks[i].Symbol = name
+	}
+}
+
+// classifyChunk applies the v2 confidence rules to one chunk:
+//  1. EXTRACTED when a symbol declaration starts inside the chunk
+//     (s.StartLine in [c.StartLine, c.EndLine]) — the chunk literally opens the
+//     declaration; the first such symbol wins.
+//  2. INFERRED when the chunk overlaps any symbol range but is not its start.
+//  3. INFERRED when the chunk content mentions any symbol name as a substring.
+//  4. AMBIGUOUS otherwise (no symbol match).
+func classifyChunk(c chunker.Chunk, syms []sym.Symbol) (confidence, symbol string) {
+	var overlapping []sym.Symbol
+	for _, s := range syms {
+		// Overlap: [s.StartLine, s.EndLine] ∩ [c.StartLine, c.EndLine] != ∅.
+		if s.StartLine <= c.EndLine && s.EndLine >= c.StartLine {
+			overlapping = append(overlapping, s)
+		}
+	}
+	// Rule 1: declaration start inside the chunk.
+	for _, s := range overlapping {
+		if s.StartLine >= c.StartLine && s.StartLine <= c.EndLine && s.Name != "" {
+			return "EXTRACTED", s.Name
+		}
+	}
+	// Rule 2: chunk overlaps a symbol range without containing its start.
+	if len(overlapping) > 0 {
+		for _, s := range overlapping {
+			if s.Name != "" {
+				return "INFERRED", s.Name
+			}
+		}
+	}
+	// Rule 3: chunk content mentions a symbol name.
+	for _, s := range syms {
+		if s.Name != "" && strings.Contains(c.Content, s.Name) {
+			return "INFERRED", s.Name
+		}
+	}
+	// Rule 4: no symbol match.
+	return "AMBIGUOUS", ""
 }
 
 // embedAndInsert embeds chunks in sub-batches and inserts each successful batch.
