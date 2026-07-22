@@ -377,3 +377,40 @@ func TestDeleteProjectNoContent(t *testing.T) {
 		t.Errorf("delete err = %v", err)
 	}
 }
+
+func TestRequireProjectRejectsEmpty(t *testing.T) {
+	t.Parallel()
+	c := New("http://example.invalid", "tok")
+	ctx := context.Background()
+
+	if _, err := c.Search(ctx, "", "q", SearchParams{}); err == nil || !strings.Contains(err.Error(), "project name is required") {
+		t.Errorf("Search empty project: %v", err)
+	}
+	if _, err := c.Search(ctx, "  ", "q", SearchParams{}); err == nil {
+		t.Error("Search blank project: want error")
+	}
+	if _, err := c.Status(ctx, ""); err == nil {
+		t.Error("Status empty project: want error")
+	}
+	if _, err := c.GetProject(ctx, ""); err == nil {
+		t.Error("GetProject empty: want error")
+	}
+	if err := c.DeleteProject(ctx, ""); err == nil {
+		t.Error("DeleteProject empty: want error")
+	}
+	if _, err := c.EnqueueJob(ctx, "", "full"); err == nil {
+		t.Error("EnqueueJob empty: want error")
+	}
+	if _, err := c.GetJob(ctx, "", 1); err == nil {
+		t.Error("GetJob empty: want error")
+	}
+	if _, err := c.FilesDiff(ctx, "", nil); err == nil {
+		t.Error("FilesDiff empty: want error")
+	}
+	if _, err := c.FilesBatch(ctx, "", nil, nil); err == nil {
+		t.Error("FilesBatch empty: want error")
+	}
+	if _, err := c.FilesBatchAsync(ctx, "", nil, nil); err == nil {
+		t.Error("FilesBatchAsync empty: want error")
+	}
+}

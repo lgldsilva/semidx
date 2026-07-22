@@ -25,7 +25,8 @@ func TestProjectNameIsPathEscaped(t *testing.T) {
 	c := New(srv.URL, "tok")
 
 	// A rune set of names that survive as a single path segment (no '/').
-	runes := []rune("abcXYZ012 ._-%&=+,éçü#")
+	// Space omitted: whitespace-only names are rejected client-side (requireProject).
+	runes := []rune("abcXYZ012._-%&=+,éçü#")
 	rapid.Check(t, func(rt *rapid.T) {
 		name := string(rapid.SliceOfN(rapid.SampledFrom(runes), 1, 24).Draw(rt, "name"))
 		// "." and ".." are collapsed by HTTP path normalization on both ends, so
