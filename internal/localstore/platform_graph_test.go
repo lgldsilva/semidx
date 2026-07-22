@@ -55,6 +55,10 @@ func TestRuntimeGraphAndQuota(t *testing.T) {
 	if err != nil || len(all) != 1 {
 		t.Fatalf("ListWorkspaceRuntimeEdges = %+v, err %v", all, err)
 	}
+	all, err = s.ListWorkspaceRuntimeEdges(ctx, 0)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("ListWorkspaceRuntimeEdges without limit = %+v, err %v", all, err)
+	}
 	if err := s.SetTenantQuota(ctx, store.TenantQuota{Plan: "pro", MaxProjects: 5, MaxRuntimeEdges: 20}); err != nil {
 		t.Fatal(err)
 	}

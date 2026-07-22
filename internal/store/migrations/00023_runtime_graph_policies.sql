@@ -3,7 +3,7 @@
 -- context; target_project_id is nullable for external services.
 -- +goose Up
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS privacy_mode TEXT NOT NULL DEFAULT 'hybrid';
-UPDATE projects SET privacy_mode = 'hybrid' WHERE privacy_mode IS NULL OR privacy_mode = '';
+UPDATE projects SET privacy_mode = 'hybrid' WHERE NULLIF(privacy_mode, '') IS NULL;
 ALTER TABLE projects ADD CONSTRAINT projects_privacy_mode_check
     CHECK (privacy_mode IN ('cloud', 'hybrid', 'edge'));
 

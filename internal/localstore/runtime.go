@@ -76,12 +76,24 @@ func (s *SQLiteStore) UpsertRuntimeEdges(ctx context.Context, sourceProjectID in
 	return tx.Commit()
 }
 
-const runtimeSelect = `SELECT e.tenant_id, e.workspace_id, e.source_project_id,
+const runtimeProjectQuery = `SELECT e.tenant_id, e.workspace_id, e.source_project_id,
 	sp.name, e.target_project_id, COALESCE(tp.name, e.target_name),
 	e.source_component, e.target_component, e.protocol, e.environment,
 	e.request_count, e.error_count, e.p95_latency_ms, e.first_seen, e.last_seen
 	FROM runtime_edges e JOIN projects sp ON sp.id = e.source_project_id
-	LEFT JOIN projects tp ON tp.id = e.target_project_id`
+	LEFT JOIN projects tp ON tp.id = e.target_project_id
+	WHERE e.tenant_id = ? AND e.source_project_id = ?
+	ORDER BY e.last_seen DESC, e.target_name`
+
+const runtimeWorkspaceQuery = `SELECT e.tenant_id, e.workspace_id, e.source_project_id,
+	sp.name, e.target_project_id, COALESCE(tp.name, e.target_name),
+	e.source_component, e.target_component, e.protocol, e.environment,
+	e.request_count, e.error_count, e.p95_latency_ms, e.first_seen, e.last_seen
+	FROM runtime_edges e JOIN projects sp ON sp.id = e.source_project_id
+	LEFT JOIN projects tp ON tp.id = e.target_project_id
+	WHERE e.tenant_id = ?
+	ORDER BY e.last_seen DESC, sp.name, e.target_name
+	LIMIT CASE WHEN ? > 0 THEN ? ELSE -1 END`
 
 func scanRuntimeRows(rows interface {
 	Next() bool
@@ -106,7 +118,7 @@ func scanRuntimeRows(rows interface {
 }
 
 func (s *SQLiteStore) ListRuntimeEdges(ctx context.Context, projectID int) ([]store.RuntimeEdge, error) {
-	rows, err := s.db.QueryContext(ctx, runtimeSelect+` WHERE e.tenant_id = ? AND e.source_project_id = ? ORDER BY e.last_seen DESC, e.target_name`, tenant.ID(ctx), projectID)
+	rows, err := s.db.QueryContext(ctx, runtimeProjectQuery, tenant.ID(ctx), projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -115,13 +127,7 @@ func (s *SQLiteStore) ListRuntimeEdges(ctx context.Context, projectID int) ([]st
 }
 
 func (s *SQLiteStore) ListWorkspaceRuntimeEdges(ctx context.Context, limit int) ([]store.RuntimeEdge, error) {
-	query := runtimeSelect + ` WHERE e.tenant_id = ? ORDER BY e.last_seen DESC, sp.name, e.target_name`
-	args := []any{tenant.ID(ctx)}
-	if limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, limit)
-	}
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, runtimeWorkspaceQuery, tenant.ID(ctx), limit, limit)
 	if err != nil {
 		return nil, err
 	}
