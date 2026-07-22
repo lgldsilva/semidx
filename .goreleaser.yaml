@@ -90,10 +90,33 @@ release:
   draft: false
   prerelease: auto
 
-# Package manager taps exist (lgldsilva/homebrew-tap, lgldsilva/scoop-bucket)
-# and are seeded manually for now. Do NOT enable `brews:` / `scoops:` here
-# until a repository secret `TAP_GITHUB_TOKEN` (classic PAT with `repo` on
-# those taps) is configured in this repo — GoReleaser's default
-# GITHUB_TOKEN cannot push to sibling repositories, and a missing token
-# aborts the entire release (including the GHCR image push).
+# Package manager taps (lgldsilva/homebrew-tap, lgldsilva/scoop-bucket)
+# enabled using the TAP_GITHUB_TOKEN repository secret.
 # Track: https://github.com/lgldsilva/semidx/issues/16
+brews:
+  - name: semidx
+    repository:
+      owner: lgldsilva
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/lgldsilva/semidx
+    description: "Self-hosted semantic code search."
+    license: Apache-2.0
+    install: |
+      bin.install "semidx"
+      bin.install "chatrag"
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} {{ .Tag }}"
+
+scoops:
+  - name: semidx
+    repository:
+      owner: lgldsilva
+      name: scoop-bucket
+      branch: main
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/lgldsilva/semidx
+    description: "Self-hosted semantic code search."
+    license: Apache-2.0
+    commit_msg_template: "Scoop update for {{ .ProjectName }} {{ .Tag }}"
