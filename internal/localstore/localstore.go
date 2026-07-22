@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS file_dependencies (
     target_file TEXT    NOT NULL,
     PRIMARY KEY (project_id, source_file, target_file)
 );
+CREATE INDEX IF NOT EXISTS idx_file_deps_target ON file_dependencies(project_id, target_file);
 CREATE TABLE IF NOT EXISTS chunks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

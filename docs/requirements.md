@@ -212,18 +212,18 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 
 | ID | Requirement | Status | Notes |
 |----|-------------|--------|-------|
-| REQ-AGENT-01 | Conversational agent with tool-calling loop (chat/MCP). LLM decides whether to call git tools, search, or index tools; supports multi-round tool invocation with max-rounds guard | **todo** | `internal/agent` loop; activates only when LLM with tool calling is configured |
-| REQ-AGENT-02 | Tool calling in `internal/chat` (Gemini + OpenAI-compatible function definitions). `Request.Tools`, `Response.ToolCalls`, `StreamChunk.ToolCalls` | **todo** | Schema translation per provider; aggregation across streaming chunks |
-| REQ-AGENT-03 | Scope resolver: project ref → (path, identity, source). Injected once into agent, tools call it — no per-tool `projectref` duplication | **todo** | `agent.ScopeResolver` interface |
-| REQ-AGENT-04 | Query routing (`ClassifyQuery`) wired into `search.Service.Search`. Heuristic identifier/path/exact/NL → adjust recall weights | **todo** | Already implemented (`routing.go`) but dead code |
-| REQ-AGENT-05 | Graph expansion in the agent/chat retrieval path (not only `--graph` flag). Expand search results via dependency import BFS when query suggests code intent | **todo** | `rag.Pipeline` passes `Graph:true`; admin/chat adapters propagate it |
-| REQ-AGENT-06 | Multi-scope fused search (`SearchMulti`): across projects + optional path prefix. Cross-project RRF ranking with provenance labels + per-source diversification | **todo** | `*search.Service.SearchMulti`; provenance in `MultiResponse` envelope, not in `store.SearchResult` |
-| REQ-GIT-01 | Tools `repo_worktrees`, `repo_branches`, `repo_status` (git read-only). Hermetic, secured, locale-stable (`git for-each-ref`, `git worktree list --porcelain`) | **todo** | `internal/repotools` package; `internal/gitexec` shared git runner |
-| REQ-GIT-02 | Capability gating: local CLI exposes git tools + local index tools; remote/server exposes index/reindex tools only (no client worktrees) | **todo** | `agent.Capabilities` bitmask + capability-based MCP tool registration |
-| REQ-MCP-06 | MCP tools repotools (local) + semantic_search multi-scope + semantic_ask agentic (gated on CapToolCalling). Remote MCP omits git tools, returns "unsupported on server" | **todo** | Sub-interface pattern (`GitBackend`, `MultiSearchBackend`) |
-| REQ-MCP-07 | MCP action tools (`index_project`, `reindex`) with default policy: **propose** on MCP, **confirm** on CLI REPL. Never ARBITRARY path index on remote | **partial** | `action_policy` enum + propose/confirm/execute; propose implemented, confirm/execute deferred |
-| REQ-ACT-01 | Action tools: `index_worktree` (local), `reindex_project`, `server_repo_sync` (if logged in). Policy propose/confirm/execute | **partial** | Tools implemented in `internal/agent/actions.go`; propose-only in Phase 5, confirm/execute deferred |
-| REQ-ACT-02 | `semidx repo sync` — trigger pull + reindex on server via jobs API | **partial** | `server_repo_sync` action tool in propose mode; enqueues server job on execute |
+| REQ-AGENT-01 | Conversational agent with tool-calling loop (chat/MCP). LLM decides whether to call git tools, search, or index tools; supports multi-round tool invocation with max-rounds guard | **done** | `internal/agent` loop; activates only when LLM with tool calling is configured |
+| REQ-AGENT-02 | Tool calling in `internal/chat` (Gemini + OpenAI-compatible function definitions). `Request.Tools`, `Response.ToolCalls`, `StreamChunk.ToolCalls` | **done** | Schema translation per provider; aggregation across streaming chunks |
+| REQ-AGENT-03 | Scope resolver: project ref → (path, identity, source). Injected once into agent, tools call it — no per-tool `projectref` duplication | **done** | `agent.ScopeResolver` interface |
+| REQ-AGENT-04 | Query routing (`ClassifyQuery`) wired into `search.Service.Search`. Heuristic identifier/path/exact/NL → adjust recall weights | **done** | Already implemented (`routing.go`) but dead code |
+| REQ-AGENT-05 | Graph expansion in the agent/chat retrieval path (not only `--graph` flag). Expand search results via dependency import BFS when query suggests code intent | **done** | `rag.Pipeline` passes `Graph:true`; admin/chat adapters propagate it |
+| REQ-AGENT-06 | Multi-scope fused search (`SearchMulti`): across projects + optional path prefix. Cross-project RRF ranking with provenance labels + per-source diversification | **done** | `*search.Service.SearchMulti`; provenance in `MultiResponse` envelope, not in `store.SearchResult` |
+| REQ-GIT-01 | Tools `repo_worktrees`, `repo_branches`, `repo_status` (git read-only). Hermetic, secured, locale-stable (`git for-each-ref`, `git worktree list --porcelain`) | **done** | `internal/repotools` package; `internal/gitexec` shared git runner |
+| REQ-GIT-02 | Capability gating: local CLI exposes git tools + local index tools; remote/server exposes index/reindex tools only (no client worktrees) | **done** | `agent.Capabilities` bitmask + capability-based MCP tool registration |
+| REQ-MCP-06 | MCP tools repotools (local) + semantic_search multi-scope + semantic_ask agentic (gated on CapToolCalling). Remote MCP omits git tools, returns "unsupported on server" | **done** | Sub-interface pattern (`GitBackend`, `MultiSearchBackend`) |
+| REQ-MCP-07 | MCP action tools (`index_project`, `reindex`) with default policy: **propose** on MCP, **confirm** on CLI REPL. Never ARBITRARY path index on remote | **done** | `action_policy` enum + propose/confirm/execute; propose implemented, confirm/execute deferred |
+| REQ-ACT-01 | Action tools: `index_worktree` (local), `reindex_project`, `server_repo_sync` (if logged in). Policy propose/confirm/execute | **done** | Tools implemented in `internal/agent/actions.go`; propose-only in Phase 5, confirm/execute deferred |
+| REQ-ACT-02 | `semidx repo sync` — trigger pull + reindex on server via jobs API | **done** | `server_repo_sync` action tool in propose mode; enqueues server job on execute |
 
 ---
 

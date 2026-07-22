@@ -225,7 +225,7 @@ func runIndexWhenRemote(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 	if !opts.toServer {
 		return errIndexInRemoteMode(d.client.ServerURL, opts.projectPath)
 	}
-	if err := validateIndexToServer(opts.watch, opts.gitMode, opts.branch, d.keywordOnly); err != nil {
+	if err := validateIndexToServer(opts.watch, opts.gitMode, opts.branch, d.keywordOnly || opts.astOnly); err != nil {
 		return err
 	}
 	return runPush(cmd, d, &pushOptions{
