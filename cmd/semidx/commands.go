@@ -106,7 +106,11 @@ func docsFlagHint(docs bool) string {
 
 // printIndexHeader prints the pre-index banner: the model and its dims, or the
 // keyword-only notice when no embeddings are used.
-func printIndexHeader(tgt indexTarget, model string, dims int, keywordOnly bool) {
+func printIndexHeader(tgt indexTarget, model string, dims int, keywordOnly, astOnly bool) {
+	if astOnly {
+		fmt.Printf("Indexing project: %s\nPath: %s (%s)\nMode: AST-only (keyword-only with symbol enrichment)\n", tgt.name, tgt.indexPath, tgt.sourceType)
+		return
+	}
 	if keywordOnly {
 		fmt.Printf("Indexing project: %s\nPath: %s (%s)\nMode: keyword-only (no embeddings)\n", tgt.name, tgt.indexPath, tgt.sourceType)
 		return
@@ -147,6 +151,7 @@ type indexCmdOpts struct {
 	docs         bool
 	toServer     bool
 	embedLocally bool
+	astOnly      bool
 }
 
 func newIndexCmd(d *deps) *cobra.Command {
@@ -197,6 +202,7 @@ With no embedding provider configured, add --keyword to index text-only.`,
 	c.Flags().BoolVar(&opts.watch, "watch", false, "Watch for file changes and re-index automatically")
 	c.Flags().BoolVar(&opts.toServer, "to-server", false, "Push files to the logged-in server instead of writing a local index (alias of push)")
 	c.Flags().BoolVar(&opts.embedLocally, "embed-locally", false, "With --to-server: chunk and embed on this machine before upload")
+	c.Flags().BoolVar(&opts.astOnly, "ast-only", false, "AST-only indexing (zero-cost, keyword-only but with symbol enrichment)")
 	return c
 }
 
@@ -219,7 +225,7 @@ func runIndexWhenRemote(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 	if !opts.toServer {
 		return errIndexInRemoteMode(d.client.ServerURL, opts.projectPath)
 	}
-	if err := validateIndexToServer(opts.watch, opts.gitMode, opts.branch, d.keywordOnly); err != nil {
+	if err := validateIndexToServer(opts.watch, opts.gitMode, opts.branch, d.keywordOnly || opts.astOnly); err != nil {
 		return err
 	}
 	return runPush(cmd, d, &pushOptions{
@@ -250,11 +256,11 @@ func runIndexLocal(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 	tgt = applyBranchSuffix(tgt, opts.branch)
 
 	// Keyword-only mode needs no model: dims come from the fixed text bucket.
-	dims, err := d.modelDims(ctx, opts.model)
+	dims, err := resolveIndexDims(ctx, d, opts.model, opts.astOnly)
 	if err != nil {
-		return fmt.Errorf("model info for %s: %w (no embedding provider reachable? re-run with --keyword to index text-only)", opts.model, err)
+		return err
 	}
-	printIndexHeader(tgt, opts.model, dims, d.keywordOnly)
+	printIndexHeader(tgt, opts.model, dims, d.keywordOnly, opts.astOnly)
 
 	if err := db.EnsureChunksTable(ctx, dims); err != nil {
 		return fmt.Errorf("ensure chunks table: %w", err)
@@ -264,32 +270,13 @@ func runIndexLocal(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 		return fmt.Errorf("register project: %w", err)
 	}
 
-	indexer := indexing.NewIndexer(db, d.emb, dims, indexing.IndexerOpts{
-		Workers:             d.cfg.IndexWorkers,
-		EmbedBatchSize:      d.cfg.EmbedBatchSize,
-		MaxFileSize:         d.cfg.MaxFileSize,
-		MaxChunksPerFile:    d.cfg.MaxChunksPerFile,
-		MaxChunksPerProject: d.cfg.MaxChunksPerProject,
-		MaxFilesPerProject:  d.cfg.MaxFilesPerProject,
-		Verbose:             opts.verbose,
-		GitMode:             opts.gitMode,
-		GitSince:            opts.gitSince,
-		OnProgress:          cliProgressHook(opts.verbose),
-	}).
-		SetKeywordOnly(d.keywordOnly).
-		SetWorktree(tgt.worktree).
-		SetSecretScan(tgt.indexPath, d.cfg.SecretScan || d.cfg.SecretBlockEmbedding, d.cfg.SecretBlockEmbedding)
+	indexer := newCLIIndexer(db, d, tgt, opts, dims)
 	start := time.Now()
 	stats, err := indexer.IndexProject(ctx, projectID, tgt.indexPath, opts.model, opts.maxFiles)
 	if err != nil {
 		return fmt.Errorf("index project: %w", err)
 	}
-	fmt.Printf("\nDone in %v\nFiles scanned: %d\nFiles indexed: %d\nFiles skipped (unchanged): %d\nChunks created: %d\nErrors: %d\n",
-		time.Since(start), stats.FilesScanned, stats.FilesIndexed, stats.FilesSkipped, stats.ChunksCreated, stats.Errors)
-
-	if d.cfg.LocalIndexPath != "" {
-		indexing.MaybeWarnSQLiteScale(os.Stderr, stats.FilesIndexed, stats.ChunksCreated)
-	}
+	printIndexDone(d.cfg.LocalIndexPath, stats, start)
 
 	// Record password-protected files so `semidx unlock` can find them, and
 	// point the user at it.
@@ -303,6 +290,55 @@ func runIndexLocal(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 		}
 	}
 	return nil
+}
+
+// resolveIndexDims returns the embedding dimensions to use for an indexing run.
+// Keyword-only and AST-only modes share the fixed text bucket; otherwise the
+// configured embedding provider reports the model's dims.
+func resolveIndexDims(ctx context.Context, d *deps, model string, astOnly bool) (int, error) {
+	if d.keywordOnly || astOnly {
+		return store.KeywordDims, nil
+	}
+	dims, err := d.modelDims(ctx, model)
+	if err != nil {
+		return 0, fmt.Errorf("model info for %s: %w (no embedding provider reachable? re-run with --keyword to index text-only)", model, err)
+	}
+	return dims, nil
+}
+
+// newCLIIndexer wires the indexer used by the `semidx index` command from the
+// shared deps, the resolved target and the parsed CLI options. Centralizing the
+// builder keeps runIndexLocal readable and gives --watch a single indexer to
+// attach its watcher to.
+func newCLIIndexer(db store.IndexStore, d *deps, tgt indexTarget, opts indexCmdOpts, dims int) *indexing.Indexer {
+	return indexing.NewIndexer(db, d.emb, dims, indexing.IndexerOpts{
+		Workers:             d.cfg.IndexWorkers,
+		EmbedBatchSize:      d.cfg.EmbedBatchSize,
+		MaxFileSize:         d.cfg.MaxFileSize,
+		MaxChunksPerFile:    d.cfg.MaxChunksPerFile,
+		MaxChunksPerProject: d.cfg.MaxChunksPerProject,
+		MaxFilesPerProject:  d.cfg.MaxFilesPerProject,
+		Verbose:             opts.verbose,
+		GitMode:             opts.gitMode,
+		GitSince:            opts.gitSince,
+		OnProgress:          cliProgressHook(opts.verbose),
+	}).
+		SetKeywordOnly(d.keywordOnly || opts.astOnly).
+		SetASTOnly(opts.astOnly).
+		SetWorktree(tgt.worktree).
+		SetSecretScan(tgt.indexPath, d.cfg.SecretScan || d.cfg.SecretBlockEmbedding, d.cfg.SecretBlockEmbedding)
+}
+
+// printIndexDone prints the post-index summary and any backend-specific scale
+// warning. Extracted from runIndexLocal so its complexity stays under the gate.
+// localIndexPath is non-empty when the active backend is the standalone SQLite
+// store (the only backend that triggers the SQLite scale hint).
+func printIndexDone(localIndexPath string, stats *indexing.IndexStats, start time.Time) {
+	fmt.Printf("\nDone in %v\nFiles scanned: %d\nFiles indexed: %d\nFiles skipped (unchanged): %d\nChunks created: %d\nErrors: %d\n",
+		time.Since(start), stats.FilesScanned, stats.FilesIndexed, stats.FilesSkipped, stats.ChunksCreated, stats.Errors)
+	if localIndexPath != "" {
+		indexing.MaybeWarnSQLiteScale(os.Stderr, stats.FilesIndexed, stats.ChunksCreated)
+	}
 }
 
 // cliProgressHook returns an indexer progress callback that prints throttled

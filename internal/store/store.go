@@ -84,11 +84,13 @@ type User struct {
 
 // SearchResult is one hit from a similarity or keyword search.
 type SearchResult struct {
-	FilePath  string
-	Content   string
-	Score     float64
-	StartLine int
-	EndLine   int
+	FilePath   string
+	Content    string
+	Score      float64
+	StartLine  int
+	EndLine    int
+	Confidence string
+	Symbol     string
 }
 
 // IndexStore is the persistence subset needed to drive indexing and search:
@@ -401,6 +403,8 @@ func (s *PgStore) EnsureChunksTable(ctx context.Context, dims int) error {
 			embedding vector(%d),
 			start_line INTEGER,
 			end_line INTEGER,
+			confidence TEXT NOT NULL DEFAULT 'AMBIGUOUS',
+			symbol TEXT,
 			created_at TIMESTAMP DEFAULT NOW(),
 			UNIQUE(project_id, file_id, chunk_index),
 			FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
@@ -410,11 +414,18 @@ func (s *PgStore) EnsureChunksTable(ctx context.Context, dims int) error {
 		return err
 	}
 
-	// Upgrade tables created before line tracking existed.
+	// Upgrade tables created before a column existed.
 	for _, col := range []string{"start_line", "end_line"} {
 		if _, err := s.pool.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s INTEGER", table, col)); err != nil {
 			return err
 		}
+	}
+	// v2 confidence tags: confidence defaults to AMBIGUOUS when absent.
+	if _, err := s.pool.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS confidence TEXT NOT NULL DEFAULT 'AMBIGUOUS'", table)); err != nil {
+		return err
+	}
+	if _, err := s.pool.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS symbol TEXT", table)); err != nil {
+		return err
 	}
 
 	idxFile := pgx.Identifier{fmt.Sprintf("idx_chunks_%d_file", dims)}.Sanitize()
@@ -900,13 +911,15 @@ func (s *PgStore) InsertChunks(ctx context.Context, projectID, fileID int, chunk
 	batch := &pgx.Batch{}
 	for i, chunk := range chunks {
 		vec := pgvector.NewVector(embeddings[i])
+		conf, sym := chunkConfidenceSymbol(chunk)
 		batch.Queue(fmt.Sprintf(`
-			INSERT INTO %s (project_id, file_id, chunk_index, content, embedding, start_line, end_line)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			INSERT INTO %s (project_id, file_id, chunk_index, content, embedding, start_line, end_line, confidence, symbol)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT (project_id, file_id, chunk_index) DO UPDATE
 			SET content = EXCLUDED.content, embedding = EXCLUDED.embedding,
-			    start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line
-		`, table), projectID, fileID, i, chunk.Content, vec, chunk.StartLine, chunk.EndLine)
+			    start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line,
+			    confidence = EXCLUDED.confidence, symbol = EXCLUDED.symbol
+		`, table), projectID, fileID, i, chunk.Content, vec, chunk.StartLine, chunk.EndLine, conf, sym)
 	}
 
 	br := s.pool.SendBatch(ctx, batch)
@@ -931,13 +944,15 @@ func (s *PgStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID in
 
 	batch := &pgx.Batch{}
 	for i, chunk := range chunks {
+		conf, sym := chunkConfidenceSymbol(chunk)
 		batch.Queue(fmt.Sprintf(`
-			INSERT INTO %s (project_id, file_id, chunk_index, content, embedding, start_line, end_line)
-			VALUES ($1, $2, $3, $4, NULL, $5, $6)
+			INSERT INTO %s (project_id, file_id, chunk_index, content, embedding, start_line, end_line, confidence, symbol)
+			VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8)
 			ON CONFLICT (project_id, file_id, chunk_index) DO UPDATE
 			SET content = EXCLUDED.content, embedding = NULL,
-			    start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line
-		`, table), projectID, fileID, i, chunk.Content, chunk.StartLine, chunk.EndLine)
+			    start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line,
+			    confidence = EXCLUDED.confidence, symbol = EXCLUDED.symbol
+		`, table), projectID, fileID, i, chunk.Content, chunk.StartLine, chunk.EndLine, conf, sym)
 	}
 
 	br := s.pool.SendBatch(ctx, batch)
@@ -949,6 +964,20 @@ func (s *PgStore) InsertChunksTextOnly(ctx context.Context, projectID, fileID in
 		}
 	}
 	return br.Close()
+}
+
+// chunkConfidenceSymbol normalizes a chunk's confidence/symbol for storage:
+// empty confidence becomes "AMBIGUOUS" (the default), empty symbol becomes NULL.
+func chunkConfidenceSymbol(chunk chunker.Chunk) (string, any) {
+	conf := chunk.Confidence
+	if conf == "" {
+		conf = "AMBIGUOUS"
+	}
+	var sym any
+	if chunk.Symbol != "" {
+		sym = chunk.Symbol
+	}
+	return conf, sym
 }
 
 func (s *PgStore) SearchSimilar(ctx context.Context, projectID int, embedding []float32, dims, topK int) ([]SearchResult, error) {
@@ -977,7 +1006,7 @@ func (s *PgStore) searchSimilar(ctx context.Context, projectID int, embedding []
 		args = append(args, worktree)
 	}
 	query := fmt.Sprintf(`
-		SELECT f.path, c.content, c.start_line, c.end_line, 1 - (%s) AS score
+		SELECT f.path, c.content, c.start_line, c.end_line, 1 - (%s) AS score, c.confidence, c.symbol
 		FROM %s c
 		%s
 		WHERE c.project_id = $2 AND c.embedding IS NOT NULL
@@ -994,14 +1023,20 @@ func (s *PgStore) searchSimilar(ctx context.Context, projectID int, embedding []
 	return scanSearchRows(rows)
 }
 
-// scanSearchRows reads (path, content, start_line, end_line, score) rows,
-// tolerating NULL line columns (rows indexed before line tracking).
+// scanSearchRows reads (path, content, start_line, end_line, score, confidence,
+// symbol) rows, tolerating NULL line/confidence/symbol columns (rows indexed
+// before the columns existed).
 func scanSearchRows(rows pgx.Rows) ([]SearchResult, error) {
 	var results []SearchResult
 	for rows.Next() {
-		var r SearchResult
-		var startLine, endLine *int
-		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score); err != nil {
+		var (
+			r          SearchResult
+			startLine  *int
+			endLine    *int
+			confidence *string
+			symbol     *string
+		)
+		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score, &confidence, &symbol); err != nil {
 			return nil, err
 		}
 		if startLine != nil {
@@ -1009,6 +1044,15 @@ func scanSearchRows(rows pgx.Rows) ([]SearchResult, error) {
 		}
 		if endLine != nil {
 			r.EndLine = *endLine
+		}
+		if confidence != nil {
+			r.Confidence = *confidence
+		}
+		if r.Confidence == "" {
+			r.Confidence = "AMBIGUOUS"
+		}
+		if symbol != nil {
+			r.Symbol = *symbol
 		}
 		results = append(results, r)
 	}
@@ -1386,7 +1430,7 @@ func (s *PgStore) FetchChunksByPath(ctx context.Context, projectID int, filePath
 	if err != nil {
 		return nil, err
 	}
-	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path = $2 ORDER BY c.chunk_index LIMIT $3`, table)
+	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path = $2 ORDER BY c.chunk_index LIMIT $3`, table)
 	rows, err := s.pool.Query(ctx, query, projectID, filePath, limit)
 	if err != nil {
 		return nil, err
@@ -1402,7 +1446,7 @@ func (s *PgStore) FetchChunksByDirPrefix(ctx context.Context, projectID int, dir
 	if err != nil {
 		return nil, err
 	}
-	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path LIKE $2 || '%%' ORDER BY c.chunk_index LIMIT $3`, table)
+	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path LIKE $2 || '%%' ORDER BY c.chunk_index LIMIT $3`, table)
 	rows, err := s.pool.Query(ctx, query, projectID, dirPrefix, limit)
 	if err != nil {
 		return nil, err
@@ -1485,7 +1529,7 @@ func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText s
 	}
 
 	sql := fmt.Sprintf(`
-		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score
+		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol
 		FROM %s c
 		%s
 		WHERE c.project_id = $1 AND (%s)

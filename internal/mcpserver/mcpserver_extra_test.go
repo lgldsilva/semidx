@@ -139,6 +139,10 @@ func TestFormatSearchStructuredAndMinimal(t *testing.T) {
 	if !strings.Contains(structured, `"language":"go"`) || !strings.Contains(structured, `"file":"main.go"`) {
 		t.Fatalf("structured=%s", structured)
 	}
+	// No-confidence hits omit the fields (omitempty), keeping output stable.
+	if strings.Contains(structured, `"confidence"`) || strings.Contains(structured, `"symbol"`) {
+		t.Fatalf("structured should omit empty confidence/symbol: %s", structured)
+	}
 	minimal := formatSearchMinimal(out)
 	if !strings.Contains(minimal, `"f":"main.go"`) || !strings.Contains(minimal, `"l":"3-5"`) {
 		t.Fatalf("minimal=%s", minimal)
@@ -847,5 +851,34 @@ func TestFormatSearchMinimalEmpty(t *testing.T) {
 	}
 	if !strings.Contains(got, `"fb":false`) {
 		t.Errorf("formatSearchMinimal empty missing fb:false; got %q", got)
+	}
+}
+
+// TestFormatSearchConfidenceTags verifies v2 confidence/symbol fields are
+// emitted in both structured and minimal formats when a Hit carries them.
+func TestFormatSearchConfidenceTags(t *testing.T) {
+	t.Parallel()
+	out := &SearchOutput{
+		Project: "demo",
+		Results: []Hit{{
+			Path: "main.go", StartLine: 3, EndLine: 5, Score: 0.8,
+			Content: "func main() {}", Confidence: "EXTRACTED", Symbol: "main",
+		}},
+	}
+
+	structured := formatSearchStructured(out)
+	if !strings.Contains(structured, `"confidence":"EXTRACTED"`) {
+		t.Errorf("structured missing confidence: %s", structured)
+	}
+	if !strings.Contains(structured, `"symbol":"main"`) {
+		t.Errorf("structured missing symbol: %s", structured)
+	}
+
+	minimal := formatSearchMinimal(out)
+	if !strings.Contains(minimal, `"cf":"EXTRACTED"`) {
+		t.Errorf("minimal missing cf: %s", minimal)
+	}
+	if !strings.Contains(minimal, `"sy":"main"`) {
+		t.Errorf("minimal missing sy: %s", minimal)
 	}
 }

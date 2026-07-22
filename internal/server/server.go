@@ -387,6 +387,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		out.Results = append(out.Results, client.SearchHit{
 			Path: hit.FilePath, StartLine: hit.StartLine, EndLine: hit.EndLine,
 			Score: hit.Score, Content: hit.Content,
+			Confidence: hit.Confidence, Symbol: hit.Symbol,
 		})
 	}
 	s.searchDuration.WithLabelValues(project).Observe(time.Since(start).Seconds())

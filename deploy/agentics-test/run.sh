@@ -54,7 +54,7 @@ variation_standalone() {
   # gracefully returns "no local path" which proves the tool is wired).
   log "verify new workspace-agent tools"
   if node "$HERE/tool-test.mjs" \
-    --mcp-cmd "semidx" "--local" "mcp" \
+    --mcp-cmd="semidx" --mcp-cmd="--local" --mcp-cmd="mcp" \
     --project "$PROJECT" \
     --skip-git \
     2>&1 | sed 's/^/     /'; then

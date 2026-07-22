@@ -6,41 +6,35 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/lgldsilva/semidx/internal/gitenv"
 )
 
 func TestRun(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	// Init a real git repo.
-	init := exec.Command("git", "init", "--initial-branch=main")
-	init.Dir = dir
-	if out, err := init.CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v\n%s", err, out)
+	runCmd := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(gitenv.Clean(os.Environ()), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
 	}
+
+	// Init a real git repo.
+	runCmd("init", "--initial-branch=main")
 	_ = os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test"), 0o644)
 
 	// Configure user (needed for commit).
-	for _, cfg := range []struct{ k, v string }{
-		{"user.name", "test"},
-		{"user.email", "test@test"},
-	} {
-		c := exec.Command("git", "config", cfg.k, cfg.v)
-		c.Dir = dir
-		if out, err := c.CombinedOutput(); err != nil {
-			t.Fatalf("git config %s: %v\n%s", cfg.k, err, out)
-		}
-	}
-	add := exec.Command("git", "add", ".")
-	add.Dir = dir
-	if out, err := add.CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v\n%s", err, out)
-	}
-	commit := exec.Command("git", "commit", "-m", "chore: initial")
-	commit.Dir = dir
-	if out, err := commit.CombinedOutput(); err != nil {
-		t.Fatalf("git commit: %v\n%s", err, out)
-	}
+	runCmd("config", "user.name", "test")
+	runCmd("config", "user.email", "test@test")
+	runCmd("config", "core.hooksPath", "")
+
+	runCmd("add", ".")
+	runCmd("commit", "-m", "chore: initial")
 
 	t.Run("rev-parse", func(t *testing.T) {
 		out, err := Run(context.Background(), dir, "rev-parse", "--short", "HEAD")

@@ -5,8 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/analyzer"
 	"github.com/lgldsilva/semidx/internal/repotools"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -20,6 +24,11 @@ type projectLister interface {
 	GetProjectByIdentity(ctx context.Context, identity string) (*store.Project, error)
 	CountProjectFiles(ctx context.Context, projectID int) (int, error)
 	ListFileHashes(ctx context.Context, projectID int) (map[string]string, error)
+}
+
+type graphLister interface {
+	FetchGraphNeighbors(ctx context.Context, projectID int) (map[string][]string, error)
+	FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error)
 }
 
 // localBackend adapts the standalone index (search service + local store) to the
@@ -56,7 +65,11 @@ func (b *localBackend) Search(ctx context.Context, project, query, model string,
 		Degraded: resp.Degraded, RetryAfterMS: resp.RetryAfter.Milliseconds(),
 	}
 	for _, r := range resp.Results {
-		out.Results = append(out.Results, Hit{Path: r.FilePath, StartLine: r.StartLine, EndLine: r.EndLine, Score: r.Score, Content: r.Content})
+		out.Results = append(out.Results, Hit{
+			Path: r.FilePath, StartLine: r.StartLine, EndLine: r.EndLine,
+			Score: r.Score, Content: r.Content,
+			Confidence: r.Confidence, Symbol: r.Symbol,
+		})
 	}
 	return out, nil
 }
@@ -121,15 +134,40 @@ func (b *localBackend) Reindex(_ context.Context, project, _ string) (string, er
 // Capabilities reports what the local backend offers.
 func (b *localBackend) Capabilities() agent.Capabilities { return b.caps }
 
-// resolveProjectPath resolves a project name or identity to a local filesystem
-// path. Returns the path and an error if the project is not a local checkout.
-func (b *localBackend) resolveProjectPath(ctx context.Context, project string) (string, error) {
+// resolveProject resolves a project name or identity to a store.Project.
+func (b *localBackend) resolveProject(ctx context.Context, project string) (*store.Project, error) {
 	p, err := b.projects.GetProject(ctx, project)
 	if err != nil {
 		p, err = b.projects.GetProjectByIdentity(ctx, project)
 		if err != nil {
-			return "", fmt.Errorf("project %q not found locally", project)
+			return nil, fmt.Errorf("project %q not found locally", project)
 		}
+	}
+	return p, nil
+}
+
+// graphProject resolves a project and asserts the backing store implements
+// graphLister. It is the shared preamble of Neighbors and Trace: both need the
+// project's row ID and a graph-capable handle on the store, and both report
+// the same "graph not supported" error when the store lacks the methods.
+func (b *localBackend) graphProject(ctx context.Context, project string) (*store.Project, graphLister, error) {
+	p, err := b.resolveProject(ctx, project)
+	if err != nil {
+		return nil, nil, err
+	}
+	gl, ok := b.projects.(graphLister)
+	if !ok {
+		return nil, nil, fmt.Errorf("graph operations are not supported by the current store")
+	}
+	return p, gl, nil
+}
+
+// resolveProjectPath resolves a project name or identity to a local filesystem
+// path. Returns the path and an error if the project is not a local checkout.
+func (b *localBackend) resolveProjectPath(ctx context.Context, project string) (string, error) {
+	p, err := b.resolveProject(ctx, project)
+	if err != nil {
+		return "", err
 	}
 	if p.Path == "" {
 		return "", fmt.Errorf("project %q has no local path (remote/server clone)", project)
@@ -172,6 +210,105 @@ func (b *localBackend) SearchMulti(ctx context.Context, req search.MultiScopeReq
 	return b.svc.SearchMulti(ctx, req)
 }
 
-// Compile-time check: *localBackend satisfies GitBackend and MultiSearchBackend.
+func (b *localBackend) Neighbors(ctx context.Context, project, file string) (map[string][]string, error) {
+	if err := validateRelativePath(file); err != nil {
+		return nil, fmt.Errorf("invalid file path: %w", err)
+	}
+
+	p, gl, err := b.graphProject(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	graph, err := gl.FetchGraphNeighbors(ctx, p.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	imports := graph[file]
+	var exports []string
+	for k, v := range graph {
+		if k == file {
+			continue
+		}
+		for _, dep := range v {
+			if dep == file {
+				exports = append(exports, k)
+				break
+			}
+		}
+	}
+
+	return map[string][]string{
+		"imports": imports,
+		"exports": exports,
+	}, nil
+}
+
+func (b *localBackend) Trace(ctx context.Context, project string, files []string, maxDepth int) (map[string]int, error) {
+	for _, file := range files {
+		if err := validateRelativePath(file); err != nil {
+			return nil, fmt.Errorf("invalid file path %q: %w", file, err)
+		}
+	}
+
+	p, gl, err := b.graphProject(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	return gl.FetchGraphPathsBFS(ctx, p.ID, files, maxDepth)
+}
+
+func (b *localBackend) Symbols(ctx context.Context, project, file string) ([]analyzer.Symbol, error) {
+	if err := validateRelativePath(file); err != nil {
+		return nil, fmt.Errorf("invalid file path: %w", err)
+	}
+
+	p, err := b.resolveProject(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	cleanProjPath := filepath.Clean(p.Path)
+	cleanFullPath := filepath.Clean(filepath.Join(p.Path, file))
+	if !strings.HasPrefix(cleanFullPath, cleanProjPath) {
+		return nil, fmt.Errorf("path traversal detected: file %q is outside project root %q", file, p.Path)
+	}
+
+	content, err := os.ReadFile(cleanFullPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file %q: %w", file, err)
+	}
+
+	syms := analyzer.Symbols(file, content)
+	if syms == nil {
+		return []analyzer.Symbol{}, nil
+	}
+	return syms, nil
+}
+
+func validateRelativePath(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("path is required")
+	}
+	if filepath.IsAbs(path) {
+		return errors.New("path must be relative")
+	}
+	clean := filepath.ToSlash(filepath.Clean(path))
+	if clean == "." || clean == ".." {
+		return errors.New("path is required")
+	}
+	for _, seg := range strings.Split(clean, "/") {
+		if seg == ".." {
+			return errors.New("path must not contain parent directory segments")
+		}
+	}
+	return nil
+}
+
+// Compile-time check: *localBackend satisfies GitBackend, MultiSearchBackend and GraphBackend.
 var _ GitBackend = (*localBackend)(nil)
 var _ MultiSearchBackend = (*localBackend)(nil)
+var _ GraphBackend = (*localBackend)(nil)
