@@ -1,16 +1,12 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
+	"github.com/lgldsilva/semidx/internal/codeintel"
 	"github.com/lgldsilva/semidx/internal/deadcode"
-	"github.com/lgldsilva/semidx/internal/gitmeta"
-	"github.com/lgldsilva/semidx/internal/projectref"
-	"github.com/lgldsilva/semidx/internal/store"
 )
 
 // newDeadCodeCmd returns the `semidx dead-code` command, which analyses an
@@ -40,54 +36,22 @@ Examples:
 				return err
 			}
 
-			resolved, err := resolveDeadCodeTarget(ctx, db, projectArg)
+			resolved, err := codeintel.ResolveProject(ctx, db, projectArg)
 			if err != nil {
 				return err
 			}
 
-			root := resolved.Path
-			if root == "" {
-				root = "."
-			}
-
-			findings, err := deadcode.Analyze(ctx, resolved.ID, db, root)
+			result, err := codeintel.DeadCode(ctx, db, resolved)
 			if err != nil {
 				return fmt.Errorf("dead code analysis: %w", err)
 			}
 
-			stats := deadcode.AggregateStats(findings)
-			printDeadCodeResults(findings, stats)
+			printDeadCodeResults(result.Findings, result.Stats)
 			return nil
 		},
 	}
 	c.Flags().StringVar(&projectArg, "project", "", "Project path or name (default: the project enclosing the current directory)")
 	return c
-}
-
-// resolveDeadCodeTarget resolves the project for dead-code analysis.
-func resolveDeadCodeTarget(ctx context.Context, db store.IndexStore, projectArg string) (*store.Project, error) {
-	if projectArg != "" {
-		return projectref.Resolve(ctx, db, projectArg)
-	}
-	// No argument: try the enclosing git repo.
-	if gi := gitmeta.Resolve(ctx, "."); gi.IsGit {
-		if p, err := db.GetProjectByIdentity(ctx, gi.Identity); err == nil {
-			return p, nil
-		}
-	}
-	// Fall back to listing and picking an enclosing project.
-	projects, err := db.ListProjects(ctx, 0, 0)
-	if err != nil {
-		return nil, err
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	if p := projectref.Enclosing(cwd, projects); p != nil {
-		return p, nil
-	}
-	return nil, fmt.Errorf("no indexed project found — run 'semidx index --project .' first")
 }
 
 // printDeadCodeResults formats dead-code findings grouped by confidence.
