@@ -19,29 +19,38 @@ type CallersResult struct {
 	Transitive []string
 }
 
-// Callers finds all files that import the file containing the symbol at the
-// given file:line reference.
-func Callers(ctx context.Context, db store.IndexStore, proj *store.Project, fl FileLine) (*CallersResult, error) {
+// loadSymbol reads the file at fl within proj, parses its symbols, and returns
+// the file content plus the symbol at fl.Line. Shared by Callers, Explain and
+// Impact so the path-guard/read/parse sequence is defined once.
+func loadSymbol(proj *store.Project, fl FileLine) ([]byte, *analyzer.Symbol, error) {
 	root := proj.Path
 	if root == "" {
 		root = "."
 	}
 	absPath := filepath.Clean(filepath.Join(root, fl.File))
 	if !strings.HasPrefix(absPath, filepath.Clean(root)+string(filepath.Separator)) && absPath != filepath.Clean(root) && root != "." {
-		return nil, fmt.Errorf("path %q escapes project root", fl.File)
+		return nil, nil, fmt.Errorf("path %q escapes project root", fl.File)
 	}
 	// #nosec G304 -- absPath is safely restricted within the project root
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", fl.File, err)
+		return nil, nil, fmt.Errorf("read %s: %w", fl.File, err)
 	}
 
 	syms := analyzer.Symbols(fl.File, content)
 	if len(syms) == 0 {
-		return nil, fmt.Errorf("no symbols found in %s", fl.File)
+		return nil, nil, fmt.Errorf("no symbols found in %s", fl.File)
 	}
+	return content, lookupSymbolAtLine(syms, fl.Line), nil
+}
 
-	targetSym := lookupSymbolAtLine(syms, fl.Line)
+// Callers finds all files that import the file containing the symbol at the
+// given file:line reference.
+func Callers(ctx context.Context, db store.IndexStore, proj *store.Project, fl FileLine) (*CallersResult, error) {
+	_, targetSym, err := loadSymbol(proj, fl)
+	if err != nil {
+		return nil, err
+	}
 
 	graph, err := db.FetchGraphNeighbors(ctx, proj.ID)
 	if err != nil {

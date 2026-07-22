@@ -208,9 +208,8 @@ func getChangedFiles(dir, ref1, ref2 string, threeDot bool) ([]string, error) {
 	if threeDot {
 		sep = "..."
 	}
-	// #nosec G204 -- refs validated via safeGitRef; binary resolved via LookPath; '--' ends options
 	gitBin := gitExecutable()
-	cmd := exec.Command(gitBin)
+	cmd := exec.Command(gitBin) // #nosec G204 -- refs validated via safeGitRef; binary resolved via LookPath; '--' ends options
 	cmd.Args = []string{gitBin, "diff", "--name-only", "--diff-filter=ACMR", ref1 + sep + ref2, "--"}
 	cmd.Dir = dir
 	cmd.Stderr = os.Stderr
@@ -234,9 +233,8 @@ func getFileAtRef(dir, filePath, ref string) (string, error) {
 	if !safeGitRef(ref) || !safeGitFilepath(filePath) {
 		return "", fmt.Errorf("invalid git ref or file path: %q:%q", ref, filePath)
 	}
-	// #nosec G204 -- ref/path validated via safeGitRef and safeGitFilepath; binary from LookPath
 	gitBin := gitExecutable()
-	cmd := exec.Command(gitBin)
+	cmd := exec.Command(gitBin) // #nosec G204 -- ref/path validated via safeGitRef and safeGitFilepath; binary from LookPath
 	cmd.Args = []string{gitBin, "show", ref + ":" + filePath}
 	cmd.Dir = dir
 	cmd.Stderr = os.Stderr

@@ -3,10 +3,8 @@ package codeintel
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/lgldsilva/semidx/internal/analyzer"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -35,25 +33,10 @@ type ImpactResult struct {
 // symbol's directory; each subsequent level walks importers of the previous
 // level's directories, up to maxDepth (default 5, hard cap 10).
 func Impact(ctx context.Context, db store.IndexStore, proj *store.Project, fl FileLine, maxDepth int) (*ImpactResult, error) {
-	root := proj.Path
-	if root == "" {
-		root = "."
-	}
-	absPath := filepath.Clean(filepath.Join(root, fl.File))
-	if !strings.HasPrefix(absPath, filepath.Clean(root)+string(filepath.Separator)) && absPath != filepath.Clean(root) && root != "." {
-		return nil, fmt.Errorf("path %q escapes project root", fl.File)
-	}
-	// #nosec G304 -- absPath is safely restricted within the project root
-	content, err := os.ReadFile(absPath)
+	_, targetSym, err := loadSymbol(proj, fl)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", fl.File, err)
+		return nil, err
 	}
-
-	syms := analyzer.Symbols(fl.File, content)
-	if len(syms) == 0 {
-		return nil, fmt.Errorf("no symbols found in %s", fl.File)
-	}
-	targetSym := lookupSymbolAtLine(syms, fl.Line)
 
 	graph, err := db.FetchGraphNeighbors(ctx, proj.ID)
 	if err != nil {

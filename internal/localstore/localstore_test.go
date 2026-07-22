@@ -2,6 +2,7 @@ package localstore
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -165,10 +166,10 @@ func TestIncrementalFileUpToDate(t *testing.T) {
 	s := newTestStore(t)
 	projectID, _ := s.UpsertProject(ctx, "inc", "/tmp/inc", "bge-m3", 0)
 
-	assertFileNotUpToDate(t, s, ctx, projectID, "a.go", "h1", 2, "unknown")
+	assertFileNotUpToDate(t, s, ctx, projectID, "a.go", "h1", 2)
 
 	fileID, _ := s.UpsertFile(ctx, projectID, "a.go", "h1", 10)
-	assertFileNotUpToDate(t, s, ctx, projectID, "a.go", "h1", 2, "no chunks")
+	assertFileNotUpToDate(t, s, ctx, projectID, "a.go", "h1", 2)
 
 	if err := s.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, [][]float32{{1, 0}}, 2); err != nil {
 		t.Fatalf("InsertChunks: %v", err)
@@ -176,13 +177,14 @@ func TestIncrementalFileUpToDate(t *testing.T) {
 
 	assertFileUpToDate(t, s, ctx, projectID, "a.go", "h1", 2)
 	// Dims-aware: chunks at dims=2 must not skip a dims=3 re-index.
-	assertFileNotUpToDate(t, s, ctx, projectID, "a.go", "h1", 3, "other dims")
-	assertFileNotUpToDate(t, s, ctx, projectID, "a.go", "h2", 2, "changed")
+	assertFileNotUpToDate(t, s, ctx, projectID, "a.go", "h1", 3)
+	assertFileNotUpToDate(t, s, ctx, projectID, "a.go", "h2", 2)
 	assertListFileHashes(t, s, ctx, projectID)
 }
 
-func assertFileNotUpToDate(t *testing.T, s *SQLiteStore, ctx context.Context, projectID int, path, hash string, dims int, label string) {
+func assertFileNotUpToDate(t *testing.T, s *SQLiteStore, ctx context.Context, projectID int, path, hash string, dims int) {
 	t.Helper()
+	label := fmt.Sprintf("%s dims=%d", path, dims)
 	up, err := s.FileUpToDate(ctx, projectID, path, hash, dims)
 	if err != nil || up {
 		t.Fatalf("FileUpToDate(%s) = %v err=%v, want false", label, up, err)

@@ -25,29 +25,11 @@ type ExplainResult struct {
 
 // Explain gathers detailed information about a symbol at the given file:line.
 func Explain(ctx context.Context, db store.IndexStore, proj *store.Project, fl FileLine) (*ExplainResult, error) {
-	root := proj.Path
-	if root == "" {
-		root = "."
-	}
-	absPath := filepath.Clean(filepath.Join(root, fl.File))
-	if !strings.HasPrefix(absPath, filepath.Clean(root)+string(filepath.Separator)) && absPath != filepath.Clean(root) && root != "." {
-		return nil, fmt.Errorf("path %q escapes project root", fl.File)
-	}
-	// #nosec G304 -- absPath is safely restricted within the project root
-	content, err := os.ReadFile(absPath)
+	content, targetSym, err := loadSymbol(proj, fl)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", fl.File, err)
+		return nil, err
 	}
-
-	syms := analyzer.Symbols(fl.File, content)
-	if len(syms) == 0 {
-		return nil, fmt.Errorf("no symbols found in %s", fl.File)
-	}
-
-	targetSym := lookupSymbolAtLine(syms, fl.Line)
-	if targetSym == nil {
-		return nil, fmt.Errorf("no symbol found at %s:%d", fl.File, fl.Line)
-	}
+	root := proj.Path
 
 	modulePath := detectModulePath(root)
 	fileImports := imports.Analyze(fl.File, content, modulePath)
