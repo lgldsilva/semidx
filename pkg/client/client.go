@@ -83,6 +83,10 @@ type SearchHit struct {
 	Content     string  `json:"content"`
 	Confidence  string  `json:"confidence,omitempty"`
 	Symbol      string  `json:"symbol,omitempty"`
+	// Stale is true when the file changed since indexing (server-side check).
+	Stale bool `json:"stale,omitempty"`
+	// IndexedAt is when the file version was last indexed (RFC3339; empty if unknown).
+	IndexedAt time.Time `json:"indexed_at,omitempty"`
 }
 
 type SearchResponse struct {

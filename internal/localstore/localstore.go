@@ -700,19 +700,33 @@ func (s *SQLiteStore) CountProjectFiles(ctx context.Context, projectID int) (int
 
 // ListFileHashes returns path→hash for every indexed file of a project.
 func (s *SQLiteStore) ListFileHashes(ctx context.Context, projectID int) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT path, hash FROM files WHERE project_id = ?`, projectID)
+	infos, err := s.ListFileHashesWithTime(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(infos))
+	for path, info := range infos {
+		out[path] = info.Hash
+	}
+	return out, nil
+}
+
+// ListFileHashesWithTime returns path→(hash, indexed_at) for every indexed file
+// of a project (used by search to flag stale previews).
+func (s *SQLiteStore) ListFileHashesWithTime(ctx context.Context, projectID int) (map[string]store.FileHashInfo, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT path, hash, indexed_at FROM files WHERE project_id = ?`, projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := make(map[string]string)
+	out := make(map[string]store.FileHashInfo)
 	for rows.Next() {
-		var path, hash string
-		if err := rows.Scan(&path, &hash); err != nil {
+		var path, hash, indexedAt string
+		if err := rows.Scan(&path, &hash, &indexedAt); err != nil {
 			return nil, err
 		}
-		out[path] = hash
+		out[path] = store.FileHashInfo{Hash: hash, IndexedAt: parseSQLiteTime(indexedAt)}
 	}
 	return out, rows.Err()
 }

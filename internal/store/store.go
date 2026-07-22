@@ -106,6 +106,18 @@ type SearchResult struct {
 	EndLine    int
 	Confidence string
 	Symbol     string
+	// Stale is true when the on-disk file content no longer matches the hash
+	// captured at index time. Best-effort: false when the path is not local,
+	// unreadable, or staleness could not be computed.
+	Stale bool
+	// IndexedAt is when the file version was last indexed (zero when unknown).
+	IndexedAt time.Time
+}
+
+// FileHashInfo is one row from the files table used for freshness checks.
+type FileHashInfo struct {
+	Hash      string
+	IndexedAt time.Time
 }
 
 // IndexStore is the persistence subset needed to drive indexing and search:
@@ -132,6 +144,9 @@ type IndexStore interface {
 	FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error)
 	CountProjectFiles(ctx context.Context, projectID int) (int, error)
 	ListFileHashes(ctx context.Context, projectID int) (map[string]string, error)
+	// ListFileHashesWithTime returns path→(hash, indexed_at) for every indexed
+	// file of a project. Used by search to mark stale result previews.
+	ListFileHashesWithTime(ctx context.Context, projectID int) (map[string]FileHashInfo, error)
 	DeleteFileByPath(ctx context.Context, projectID int, path string) error
 	DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error
 	InsertChunks(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, embeddings [][]float32, dims int) error
@@ -954,19 +969,34 @@ func (s *PgStore) GetProjectCommit(ctx context.Context, projectID int) (string, 
 // ListFileHashes returns path→hash for every indexed file of a project (used by
 // the push files/diff endpoint to decide what changed).
 func (s *PgStore) ListFileHashes(ctx context.Context, projectID int) (map[string]string, error) {
-	rows, err := s.pool.Query(ctx, `SELECT path, hash FROM files WHERE project_id = $1`, projectID)
+	infos, err := s.ListFileHashesWithTime(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(infos))
+	for path, info := range infos {
+		out[path] = info.Hash
+	}
+	return out, nil
+}
+
+// ListFileHashesWithTime returns path→(hash, indexed_at) for every indexed file
+// of a project (used by search to flag stale previews).
+func (s *PgStore) ListFileHashesWithTime(ctx context.Context, projectID int) (map[string]FileHashInfo, error) {
+	rows, err := s.pool.Query(ctx, `SELECT path, hash, indexed_at FROM files WHERE project_id = $1`, projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	out := make(map[string]string)
+	out := make(map[string]FileHashInfo)
 	for rows.Next() {
 		var path, hash string
-		if err := rows.Scan(&path, &hash); err != nil {
+		var indexedAt time.Time
+		if err := rows.Scan(&path, &hash, &indexedAt); err != nil {
 			return nil, err
 		}
-		out[path] = hash
+		out[path] = FileHashInfo{Hash: hash, IndexedAt: indexedAt}
 	}
 	return out, rows.Err()
 }

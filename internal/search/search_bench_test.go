@@ -68,6 +68,10 @@ func (f *benchFakeStore) InsertFileDependencies(_ context.Context, _ int, _ stri
 	return nil
 }
 
+func (f *benchFakeStore) ListFileHashesWithTime(context.Context, int) (map[string]store.FileHashInfo, error) {
+	return map[string]store.FileHashInfo{}, nil
+}
+
 // benchFakeEmbedder implements embed.Embedder with fast no-op returns.
 type benchFakeEmbedder struct {
 	embed.Embedder

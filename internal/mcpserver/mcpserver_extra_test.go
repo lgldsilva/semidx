@@ -167,6 +167,44 @@ func TestFormatSearchStructuredAndMinimal(t *testing.T) {
 	}
 }
 
+func TestFormatSearchStale(t *testing.T) {
+	t.Parallel()
+	out := &SearchOutput{
+		Project: "proj",
+		Results: []Hit{
+			{Path: "fresh.go", StartLine: 1, Score: 0.9, Content: "package fresh"},
+			{Path: "stale.go", StartLine: 2, Score: 0.8, Content: "package stale", Stale: true},
+		},
+	}
+	text := formatSearchText(out)
+	if strings.Contains(text, "[stale] fresh.go") {
+		t.Fatalf("fresh hit should not be marked stale: %q", text)
+	}
+	if !strings.Contains(text, "1. fresh.go:1") {
+		t.Fatalf("fresh hit line missing: %q", text)
+	}
+	if !strings.Contains(text, "2. [stale] stale.go:2") {
+		t.Fatalf("stale marker missing: %q", text)
+	}
+	if !strings.Contains(text, "file changed since indexing — re-read before editing") {
+		t.Fatalf("stale note missing: %q", text)
+	}
+
+	structured := formatSearchStructured(out)
+	if !strings.Contains(structured, `"stale":true`) {
+		t.Fatalf("structured missing stale: %s", structured)
+	}
+	// Fresh hit omits stale via omitempty — ensure the fresh file object lacks it.
+	if strings.Count(structured, `"stale"`) != 1 {
+		t.Fatalf("structured should emit stale once: %s", structured)
+	}
+
+	minimal := formatSearchMinimal(out)
+	if !strings.Contains(minimal, `"st":true`) {
+		t.Fatalf("minimal missing st: %s", minimal)
+	}
+}
+
 func TestDetectLanguage(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

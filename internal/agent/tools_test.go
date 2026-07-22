@@ -104,6 +104,18 @@ func (f *fakeSearchStore) ListFileHashes(_ context.Context, projectID int) (map[
 	return map[string]string{}, nil
 }
 
+func (f *fakeSearchStore) ListFileHashesWithTime(ctx context.Context, projectID int) (map[string]store.FileHashInfo, error) {
+	hashes, err := f.ListFileHashes(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]store.FileHashInfo, len(hashes))
+	for path, hash := range hashes {
+		out[path] = store.FileHashInfo{Hash: hash}
+	}
+	return out, nil
+}
+
 // fakeNilStore returns store.ErrNotFound for every project lookup.
 // Methods are used via store.IndexStore interface dispatch by tool.Run calls.
 type fakeNilStore struct {

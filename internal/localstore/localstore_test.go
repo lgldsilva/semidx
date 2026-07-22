@@ -201,6 +201,17 @@ func TestIncrementalFileUpToDate(t *testing.T) {
 	if err != nil || hashes["a.go"] != "h1" {
 		t.Fatalf("ListFileHashes = %v err=%v", hashes, err)
 	}
+	// ListFileHashesWithTime includes indexed_at.
+	infos, err := s.ListFileHashesWithTime(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListFileHashesWithTime: %v", err)
+	}
+	if infos["a.go"].Hash != "h1" {
+		t.Fatalf("ListFileHashesWithTime hash = %q", infos["a.go"].Hash)
+	}
+	if infos["a.go"].IndexedAt.IsZero() {
+		t.Fatal("ListFileHashesWithTime IndexedAt should be set")
+	}
 }
 
 func TestCreateProjectAndDuplicate(t *testing.T) {

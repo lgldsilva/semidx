@@ -57,6 +57,11 @@ func (f HumanFormatter) formatResult(w io.Writer, i int, r store.SearchResult, k
 	if _, err := fmt.Fprintf(w, "File: %s\n", loc); err != nil {
 		return err
 	}
+	if r.Stale {
+		if _, err := fmt.Fprintf(w, "Stale: yes — file changed since indexing; re-read before editing\n"); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(w, "Score: %s\n", humanScore(keyword, r.Score)); err != nil {
 		return err
 	}
