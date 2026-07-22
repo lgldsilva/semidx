@@ -8,7 +8,27 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 )
+
+// gitExecutable resolves the absolute path of the user's git once. Semantic
+// diff intentionally runs the host git against the caller's repo (same pattern
+// as gitsync/CLI); LookPath makes the binary fixed for Sonar PATH hotspots.
+var (
+	gitPathOnce sync.Once
+	gitPath     string
+)
+
+func gitExecutable() string {
+	gitPathOnce.Do(func() {
+		if p, err := exec.LookPath("git"); err == nil {
+			gitPath = p
+			return
+		}
+		gitPath = "git" // fall back; exec will search PATH at run time
+	})
+	return gitPath
+}
 
 // SymbolDiff represents a single symbol-level difference.
 type SymbolDiff struct {
@@ -188,9 +208,10 @@ func getChangedFiles(dir, ref1, ref2 string, threeDot bool) ([]string, error) {
 	if threeDot {
 		sep = "..."
 	}
-	// #nosec G204 -- refs validated via safeGitRef; '--' ends options so no pathspec is injected
-	cmd := exec.Command("git")
-	cmd.Args = []string{"git", "diff", "--name-only", "--diff-filter=ACMR", ref1 + sep + ref2, "--"}
+	// #nosec G204 -- refs validated via safeGitRef; binary resolved via LookPath; '--' ends options
+	gitBin := gitExecutable()
+	cmd := exec.Command(gitBin)
+	cmd.Args = []string{gitBin, "diff", "--name-only", "--diff-filter=ACMR", ref1 + sep + ref2, "--"}
 	cmd.Dir = dir
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
@@ -213,9 +234,10 @@ func getFileAtRef(dir, filePath, ref string) (string, error) {
 	if !safeGitRef(ref) || !safeGitFilepath(filePath) {
 		return "", fmt.Errorf("invalid git ref or file path: %q:%q", ref, filePath)
 	}
-	// #nosec G204 -- ref/path validated via safeGitRef and safeGitFilepath
-	cmd := exec.Command("git")
-	cmd.Args = []string{"git", "show", ref + ":" + filePath}
+	// #nosec G204 -- ref/path validated via safeGitRef and safeGitFilepath; binary from LookPath
+	gitBin := gitExecutable()
+	cmd := exec.Command(gitBin)
+	cmd.Args = []string{gitBin, "show", ref + ":" + filePath}
 	cmd.Dir = dir
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()

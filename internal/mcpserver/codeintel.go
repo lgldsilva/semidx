@@ -7,7 +7,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/lgldsilva/semidx/internal/analyzer"
 	"github.com/lgldsilva/semidx/internal/codeintel"
+	"github.com/lgldsilva/semidx/internal/deadcode"
 )
 
 type callersInput struct {
@@ -159,24 +161,10 @@ func requireFileLine(file string, line int) error {
 
 func formatCallers(r *codeintel.CallersResult) string {
 	var b strings.Builder
-	name := "(unknown)"
-	if r.Symbol != nil {
-		name = r.Symbol.Name
-	}
-	fmt.Fprintf(&b, "Callers of: %s\n", name)
-	fmt.Fprintf(&b, "Direct (%d):\n", len(r.Direct))
-	if len(r.Direct) == 0 {
-		b.WriteString("  (none — no indexed file imports this package)\n")
-	} else {
-		for _, c := range r.Direct {
-			fmt.Fprintf(&b, "  %s\n", c)
-		}
-	}
+	fmt.Fprintf(&b, "Callers of: %s\n", symbolDisplayName(r.Symbol))
+	writeNamedList(&b, "Direct", r.Direct, "  (none — no indexed file imports this package)\n")
 	if len(r.Transitive) > 0 {
-		fmt.Fprintf(&b, "Transitive (%d):\n", len(r.Transitive))
-		for _, t := range r.Transitive {
-			fmt.Fprintf(&b, "  %s\n", t)
-		}
+		writeNamedList(&b, "Transitive", r.Transitive, "")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -188,40 +176,15 @@ func formatExplain(r *codeintel.ExplainResult) string {
 	} else {
 		fmt.Fprintf(&b, "%s (%s)\n", r.Display, r.File)
 	}
-	fmt.Fprintf(&b, "Dependencies (%d):\n", len(r.Imports))
-	if len(r.Imports) == 0 {
-		b.WriteString("  (none detected)\n")
-	} else {
-		for _, dep := range r.Imports {
-			fmt.Fprintf(&b, "  %s\n", dep)
-		}
-	}
-	fmt.Fprintf(&b, "Imported by (%d):\n", len(r.Importers))
-	if len(r.Importers) == 0 {
-		b.WriteString("  (none)\n")
-	} else {
-		for _, imp := range r.Importers {
-			fmt.Fprintf(&b, "  %s\n", imp)
-		}
-	}
-	fmt.Fprintf(&b, "Tests (%d):\n", len(r.Tests))
-	if len(r.Tests) == 0 {
-		b.WriteString("  (none found)\n")
-	} else {
-		for _, tf := range r.Tests {
-			fmt.Fprintf(&b, "  %s\n", tf)
-		}
-	}
+	writeNamedList(&b, "Dependencies", r.Imports, "  (none detected)\n")
+	writeNamedList(&b, "Imported by", r.Importers, "  (none)\n")
+	writeNamedList(&b, "Tests", r.Tests, "  (none found)\n")
 	return strings.TrimRight(b.String(), "\n")
 }
 
 func formatImpact(r *codeintel.ImpactResult) string {
 	var b strings.Builder
-	name := "(unknown)"
-	if r.Symbol != nil {
-		name = r.Symbol.Name
-	}
-	fmt.Fprintf(&b, "Impact of changing: %s\n", name)
+	fmt.Fprintf(&b, "Impact of changing: %s\n", symbolDisplayName(r.Symbol))
 	fmt.Fprintf(&b, "Affected files: %d\n", r.TotalCount)
 	if r.TotalCount == 0 {
 		b.WriteString("  (none — no reverse dependencies in the index)\n")
@@ -237,32 +200,10 @@ func formatDeadCode(r *codeintel.DeadCodeResult) string {
 	if r == nil || len(r.Findings) == 0 {
 		return "No dead code found."
 	}
+	confirmed, publicAPI := partitionDeadCodeFindings(r.Findings)
 	var b strings.Builder
-	var confirmed, publicAPI []string
-	for _, f := range r.Findings {
-		line := fmt.Sprintf("%s:%d  %s (%s)", f.File, f.StartLine, f.Symbol, f.Kind)
-		switch f.Confidence {
-		case "confirmed":
-			confirmed = append(confirmed, line)
-		default:
-			publicAPI = append(publicAPI, line)
-		}
-	}
-	if len(confirmed) > 0 {
-		b.WriteString("Confirmed dead (safe to delete):\n")
-		for _, line := range confirmed {
-			fmt.Fprintf(&b, "  %s\n", line)
-		}
-	}
-	if len(publicAPI) > 0 {
-		if b.Len() > 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString("Likely dead (review needed):\n")
-		for _, line := range publicAPI {
-			fmt.Fprintf(&b, "  %s\n", line)
-		}
-	}
+	writeDeadCodeSection(&b, "Confirmed dead (safe to delete):", confirmed, false)
+	writeDeadCodeSection(&b, "Likely dead (review needed):", publicAPI, b.Len() > 0)
 	fmt.Fprintf(&b, "\nTotal dead: %d symbols (confirmed=%d, public-api=%d)",
 		r.Stats.TotalFindings, r.Stats.Confirmed, r.Stats.PublicAPI)
 	return strings.TrimRight(b.String(), "\n")
@@ -271,39 +212,94 @@ func formatDeadCode(r *codeintel.DeadCodeResult) string {
 func formatDiff(r *codeintel.DiffResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Semantic Diff: %s → %s\n", r.Ref1, r.Ref2)
-	total := len(r.New) + len(r.Removed) + len(r.Changed)
-	if total == 0 {
+	if len(r.New)+len(r.Removed)+len(r.Changed) == 0 {
 		b.WriteString("No semantic differences found.")
 		return b.String()
 	}
-	if len(r.New) > 0 {
-		fmt.Fprintf(&b, "New symbols (%d):\n", len(r.New))
-		for _, d := range r.New {
-			fmt.Fprintf(&b, "  + %s (%s:%d) [%s]\n", d.Name, d.FilePath, d.Line, d.Kind)
-		}
-	}
-	if len(r.Removed) > 0 {
-		fmt.Fprintf(&b, "Removed symbols (%d):\n", len(r.Removed))
-		for _, d := range r.Removed {
-			fmt.Fprintf(&b, "  - %s (%s:%d) [%s]\n", d.Name, d.FilePath, d.Line, d.Kind)
-		}
-	}
-	if len(r.Changed) > 0 {
-		fmt.Fprintf(&b, "Changed signatures (%d):\n", len(r.Changed))
-		for _, d := range r.Changed {
-			fmt.Fprintf(&b, "  ~ %s (%s:%d) [%s]\n", d.Name, d.FilePath, d.Line, d.Kind)
-			if d.OldSignature != "" {
-				fmt.Fprintf(&b, "      old: %s\n", d.OldSignature)
-			}
-			if d.Signature != "" {
-				fmt.Fprintf(&b, "      new: %s\n", d.Signature)
-			}
-		}
-	}
+	writeDiffSection(&b, "New symbols", "+", r.New)
+	writeDiffSection(&b, "Removed symbols", "-", r.Removed)
+	writeChangedDiffSection(&b, r.Changed)
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// errCodeIntelRemote is the shared remote/server stub message.
-func errCodeIntelRemote(toolName string) error {
-	return fmt.Errorf("code-intelligence tool %q is available in standalone/local mode only; remote server support is not yet implemented", toolName)
+// symbolDisplayName returns s.Name, or "(unknown)" when s is nil.
+func symbolDisplayName(s *analyzer.Symbol) string {
+	if s == nil {
+		return "(unknown)"
+	}
+	return s.Name
+}
+
+// writeNamedList writes "Title (N):" plus indented items, or emptyMsg when N=0.
+// emptyMsg must include its own trailing newline when non-empty; when items is
+// non-empty emptyMsg is ignored.
+func writeNamedList(b *strings.Builder, title string, items []string, emptyMsg string) {
+	fmt.Fprintf(b, "%s (%d):\n", title, len(items))
+	if len(items) == 0 {
+		b.WriteString(emptyMsg)
+		return
+	}
+	for _, item := range items {
+		fmt.Fprintf(b, "  %s\n", item)
+	}
+}
+
+func partitionDeadCodeFindings(findings []deadcode.Finding) (confirmed, publicAPI []string) {
+	for _, f := range findings {
+		line := fmt.Sprintf("%s:%d  %s (%s)", f.File, f.StartLine, f.Symbol, f.Kind)
+		if f.Confidence == "confirmed" {
+			confirmed = append(confirmed, line)
+			continue
+		}
+		publicAPI = append(publicAPI, line)
+	}
+	return confirmed, publicAPI
+}
+
+func writeDeadCodeSection(b *strings.Builder, title string, lines []string, leadingBlank bool) {
+	if len(lines) == 0 {
+		return
+	}
+	if leadingBlank {
+		b.WriteString("\n")
+	}
+	b.WriteString(title)
+	b.WriteString("\n")
+	for _, line := range lines {
+		fmt.Fprintf(b, "  %s\n", line)
+	}
+}
+
+func writeDiffSection(b *strings.Builder, title, mark string, diffs []codeintel.SymbolDiff) {
+	if len(diffs) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "%s (%d):\n", title, len(diffs))
+	for _, d := range diffs {
+		fmt.Fprintf(b, "  %s %s (%s:%d) [%s]\n", mark, d.Name, d.FilePath, d.Line, d.Kind)
+	}
+}
+
+// writeChangedDiffSection is extracted from formatDiff to keep its cognitive
+// complexity under the SonarQube gate.
+func writeChangedDiffSection(b *strings.Builder, diffs []codeintel.SymbolDiff) {
+	if len(diffs) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "Changed signatures (%d):\n", len(diffs))
+	for _, d := range diffs {
+		fmt.Fprintf(b, "  ~ %s (%s:%d) [%s]\n", d.Name, d.FilePath, d.Line, d.Kind)
+		if d.OldSignature != "" {
+			fmt.Fprintf(b, "      old: %s\n", d.OldSignature)
+		}
+		if d.Signature != "" {
+			fmt.Fprintf(b, "      new: %s\n", d.Signature)
+		}
+	}
+}
+
+// ErrCodeIntelStandaloneOnly is returned by remote/server backends for the
+// code-intelligence tools, which currently run only against the local index.
+func ErrCodeIntelStandaloneOnly(tool string) error {
+	return fmt.Errorf("code-intelligence tool %q is available in standalone/local mode only; remote server support is not yet implemented", tool)
 }

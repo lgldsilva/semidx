@@ -12,11 +12,6 @@ import (
 // The hash is for content-addressed dedup of indexed units, not for
 // password/security-sensitive material.
 func ContentHash(content []byte) string {
-	// lgtm[go/weak-sensitive-data-hashing]
-	// SHA-256 is a strong cryptographic hash. Used here for content
-	// addressing (deduplication of indexed chunks), not for password
-	// or security-sensitive hashing. CodeQL's rule fires because
-	// `content` originates from user-provided files; the hash itself
-	// is not a security boundary.
-	return fmt.Sprintf("%x", sha256.Sum256(content))
+	sum := sha256.Sum256(content) // codeql[go/weak-sensitive-data-hashing] : content-addressed dedup, not password hashing
+	return fmt.Sprintf("%x", sum)
 }

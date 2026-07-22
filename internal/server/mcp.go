@@ -137,21 +137,21 @@ func (b *serverBackend) safeErr(op, project string, err error) error {
 // Code-intelligence tools are standalone/local-only for now (no server HTTP
 // endpoints yet). Return a structured error the MCP handler surfaces in-band.
 func (b *serverBackend) Callers(_ context.Context, _, _ string, _ int) (*codeintel.CallersResult, error) {
-	return nil, fmt.Errorf("code-intelligence tool %q is available in standalone/local mode only; remote server support is not yet implemented", "semantic_callers")
+	return nil, mcpserver.ErrCodeIntelStandaloneOnly("semantic_callers")
 }
 
 func (b *serverBackend) Explain(_ context.Context, _, _ string, _ int) (*codeintel.ExplainResult, error) {
-	return nil, fmt.Errorf("code-intelligence tool %q is available in standalone/local mode only; remote server support is not yet implemented", "semantic_explain")
+	return nil, mcpserver.ErrCodeIntelStandaloneOnly("semantic_explain")
 }
 
 func (b *serverBackend) Impact(_ context.Context, _, _ string, _ int, _ int) (*codeintel.ImpactResult, error) {
-	return nil, fmt.Errorf("code-intelligence tool %q is available in standalone/local mode only; remote server support is not yet implemented", "semantic_impact")
+	return nil, mcpserver.ErrCodeIntelStandaloneOnly("semantic_impact")
 }
 
 func (b *serverBackend) DeadCode(_ context.Context, _ string) (*codeintel.DeadCodeResult, error) {
-	return nil, fmt.Errorf("code-intelligence tool %q is available in standalone/local mode only; remote server support is not yet implemented", "semantic_deadcode")
+	return nil, mcpserver.ErrCodeIntelStandaloneOnly("semantic_deadcode")
 }
 
 func (b *serverBackend) Diff(_ context.Context, _ string) (*codeintel.DiffResult, error) {
-	return nil, fmt.Errorf("code-intelligence tool %q is available in standalone/local mode only; remote server support is not yet implemented", "semantic_diff")
+	return nil, mcpserver.ErrCodeIntelStandaloneOnly("semantic_diff")
 }

@@ -46,6 +46,14 @@ func (f HumanFormatter) Format(w io.Writer, resp *Response) error {
 // formatResult renders a single result block (header + file:line + content).
 // Extracted from Format to keep cognitive complexity below the SonarQube gate.
 func (f HumanFormatter) formatResult(w io.Writer, i int, r store.SearchResult, keyword bool, preview, pad int) error {
+	if err := writeResultHeader(w, i, r, keyword); err != nil {
+		return err
+	}
+	return f.writeResultBody(w, r, preview, pad)
+}
+
+// writeResultHeader prints the --- Result N --- block plus File/Stale/Score/Confidence lines.
+func writeResultHeader(w io.Writer, i int, r store.SearchResult, keyword bool) error {
 	label := matchLabel(keyword, r.Score)
 	if r.Content == "" && r.FilePath != "" {
 		label = "(graph match)"
@@ -53,8 +61,7 @@ func (f HumanFormatter) formatResult(w io.Writer, i int, r store.SearchResult, k
 	if _, err := fmt.Fprintf(w, "--- Result %d (%s) ---\n", i+1, label); err != nil {
 		return err
 	}
-	loc := formatLoc(r.FilePath, r.StartLine, r.EndLine)
-	if _, err := fmt.Fprintf(w, "File: %s\n", loc); err != nil {
+	if _, err := fmt.Fprintf(w, "File: %s\n", formatLoc(r.FilePath, r.StartLine, r.EndLine)); err != nil {
 		return err
 	}
 	if r.Stale {
@@ -70,17 +77,18 @@ func (f HumanFormatter) formatResult(w io.Writer, i int, r store.SearchResult, k
 			return err
 		}
 	}
+	return nil
+}
+
+// writeResultBody prints the (optionally line-numbered) content preview.
+func (f HumanFormatter) writeResultBody(w io.Writer, r store.SearchResult, preview, pad int) error {
 	content := truncatePreview(r.Content, preview)
 	if f.NoLineNums || r.StartLine < 1 || r.EndLine < r.StartLine {
-		if _, err := fmt.Fprintf(w, "%s\n\n", content); err != nil {
-			return err
-		}
-	} else {
-		if _, err := fmt.Fprintf(w, "%s\n\n", prefixLineNumbers(content, r.StartLine, pad)); err != nil {
-			return err
-		}
+		_, err := fmt.Fprintf(w, "%s\n\n", content)
+		return err
 	}
-	return nil
+	_, err := fmt.Fprintf(w, "%s\n\n", prefixLineNumbers(content, r.StartLine, pad))
+	return err
 }
 
 // formatConfidence renders the v2 confidence tag for human output: empty when

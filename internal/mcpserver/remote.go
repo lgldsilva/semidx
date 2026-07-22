@@ -106,23 +106,23 @@ func (b *clientBackend) Capabilities() agent.Capabilities {
 }
 
 func (b *clientBackend) Callers(_ context.Context, _, _ string, _ int) (*codeintel.CallersResult, error) {
-	return nil, errCodeIntelRemote(toolSemanticCallers)
+	return nil, ErrCodeIntelStandaloneOnly(toolSemanticCallers)
 }
 
 func (b *clientBackend) Explain(_ context.Context, _, _ string, _ int) (*codeintel.ExplainResult, error) {
-	return nil, errCodeIntelRemote(toolSemanticExplain)
+	return nil, ErrCodeIntelStandaloneOnly(toolSemanticExplain)
 }
 
 func (b *clientBackend) Impact(_ context.Context, _, _ string, _ int, _ int) (*codeintel.ImpactResult, error) {
-	return nil, errCodeIntelRemote(toolSemanticImpact)
+	return nil, ErrCodeIntelStandaloneOnly(toolSemanticImpact)
 }
 
 func (b *clientBackend) DeadCode(_ context.Context, _ string) (*codeintel.DeadCodeResult, error) {
-	return nil, errCodeIntelRemote(toolSemanticDeadCode)
+	return nil, ErrCodeIntelStandaloneOnly(toolSemanticDeadCode)
 }
 
 func (b *clientBackend) Diff(_ context.Context, _ string) (*codeintel.DiffResult, error) {
-	return nil, errCodeIntelRemote(toolSemanticDiff)
+	return nil, ErrCodeIntelStandaloneOnly(toolSemanticDiff)
 }
 
 var _ MultiSearchBackend = (*clientBackend)(nil)
