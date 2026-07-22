@@ -346,7 +346,7 @@ func TestFindTestFiles_ReadError(t *testing.T) {
 	if err := os.Chmod(testFile, 0o000); err != nil {
 		t.Skip("Cannot change file permissions")
 	}
-	defer os.Chmod(testFile, 0o600)
+	defer func() { _ = os.Chmod(testFile, 0o600) }()
 
 	// Should handle read error gracefully
 	result := findTestFiles(tmpDir, "pkg/main.go", "Symbol")

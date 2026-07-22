@@ -17,16 +17,6 @@ import (
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
-// projectLister is the subset of the local store the MCP backend needs to list
-// projects and query their file status (satisfied by store.IndexStore).
-type projectLister interface {
-	ListProjects(ctx context.Context, limit, offset int) ([]store.Project, error)
-	GetProject(ctx context.Context, name string) (*store.Project, error)
-	GetProjectByIdentity(ctx context.Context, identity string) (*store.Project, error)
-	CountProjectFiles(ctx context.Context, projectID int) (int, error)
-	ListFileHashes(ctx context.Context, projectID int) (map[string]string, error)
-}
-
 type graphLister interface {
 	FetchGraphNeighbors(ctx context.Context, projectID int) (map[string][]string, error)
 	FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error)

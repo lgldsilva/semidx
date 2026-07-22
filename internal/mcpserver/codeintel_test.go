@@ -676,9 +676,6 @@ func TestMultiSearchHandlerViaMCP(t *testing.T) {
 	if isErr {
 		t.Fatalf("unexpected error: %q", text)
 	}
-	if !strings.Contains(text, "Results") && !strings.Contains(text, "results") && text == "" {
-		// JSON marshal of empty MultiResponse is fine; just ensure no error.
-	}
 	// error path
 	b.err = errors.New("multi fail")
 	text, isErr = callText(t, sess, toolSemanticSearchMulti, map[string]any{
