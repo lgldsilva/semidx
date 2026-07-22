@@ -13,6 +13,8 @@ import (
 
 // projectItem is the JSON shape for project list/detail (enriched).
 type projectItem struct {
+	TenantID     int            `json:"tenant_id,omitempty"`
+	WorkspaceID  int            `json:"workspace_id,omitempty"`
 	Name         string         `json:"name"`
 	Identity     string         `json:"identity,omitempty"`
 	Path         string         `json:"path,omitempty"`
@@ -23,6 +25,7 @@ type projectItem struct {
 	Branch       string         `json:"branch,omitempty"`
 	Dims         int            `json:"dims,omitempty"`
 	License      string         `json:"license,omitempty"`
+	PrivacyMode  string         `json:"privacy_mode"`
 	TotalFiles   int            `json:"total_files"`
 	TotalChunks  *int           `json:"total_chunks,omitempty"`
 	LastCommit   string         `json:"last_commit,omitempty"`
@@ -62,9 +65,10 @@ func jobToItem(j store.Job) jobItem {
 
 func projectToItem(p store.Project) projectItem {
 	return projectItem{
+		TenantID: p.TenantID, WorkspaceID: p.WorkspaceID,
 		Name: p.Name, Identity: p.Identity, Path: p.Path, Model: p.Model,
 		Status: p.Status, SourceType: p.SourceType, GitURL: p.GitURL,
-		Branch: p.Branch, Dims: p.Dims, License: p.LicenseSPDXID,
+		Branch: p.Branch, Dims: p.Dims, License: p.LicenseSPDXID, PrivacyMode: p.PrivacyMode,
 	}
 }
 

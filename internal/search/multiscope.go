@@ -15,6 +15,8 @@ import (
 // path filtering.
 type MultiScopeRequest struct {
 	Identities    []string // project identities (git or path:identity); empty = all
+	Projects      []string // project names for document/push projects or friendly API callers
+	All           bool     // search every project in the active workspace
 	Query         string
 	TopK          int
 	Graph         bool
@@ -29,14 +31,32 @@ type MultiScopeRequest struct {
 // which stays clean and free of the internal scope-label prefix.
 type MultiResult struct {
 	store.SearchResult
-	Project string `json:"project"` // project identity the hit came from
+	Project     string  `json:"project"`      // project identity the hit came from
+	SourceRank  int     `json:"source_rank"`  // rank inside that project's result list
+	FusionScore float64 `json:"fusion_score"` // reciprocal-rank fusion score
+}
+
+const reciprocalRankConstant = 60
+
+type rankedResult struct {
+	result     store.SearchResult
+	project    string
+	sourceRank int
+	fusion     float64
+}
+
+type multiProjectScope struct {
+	request Request
+	label   string
 }
 
 // MultiResponse is a fused result from multi-scope search, with provenance.
 type MultiResponse struct {
-	Results  []MultiResult
-	Fallback bool
-	Keyword  bool
+	Results      []MultiResult
+	ProjectCount int
+	SkippedCount int // projects that could not be searched; results remain best-effort
+	Fallback     bool
+	Keyword      bool
 	// Degraded is true when at least one sub-search degraded to keyword results
 	// because the embedding circuit was open. RetryAfter is the largest recovery
 	// hint across degraded sub-searches.
@@ -68,50 +88,70 @@ func (f *aggFlags) absorb(resp *Response) {
 // the FilePath scope label — provenance is in the envelope, NOT in
 // store.SearchResult (which stays clean).
 func (s *Service) SearchMulti(ctx context.Context, req MultiScopeRequest) (*MultiResponse, error) {
-	if len(req.Identities) == 0 {
+	if req.All {
+		return s.SearchAllProjects(ctx, req)
+	}
+	if len(req.Identities) == 0 && len(req.Projects) == 0 {
 		return nil, fmt.Errorf("no project identities specified")
 	}
-	if req.TopK <= 0 {
-		req.TopK = 5
-	}
+	req.TopK = clampMultiTopK(req.TopK)
 
-	var allResults []store.SearchResult
-	var flags aggFlags
-
+	scopes := make([]multiProjectScope, 0, len(req.Identities)+len(req.Projects))
 	for _, ident := range req.Identities {
+		scopes = append(scopes, multiProjectScope{
+			request: Request{Identity: ident}, label: ident,
+		})
+	}
+	for _, project := range req.Projects {
+		scopes = append(scopes, multiProjectScope{
+			request: Request{Project: project}, label: project,
+		})
+	}
+	projectCount := len(scopes)
+
+	var allResults []rankedResult
+	var flags aggFlags
+	skipped := 0
+
+	for _, scope := range scopes {
 		// Search one project at a time.
-		one := Request{
-			Identity:      ident,
-			Query:         req.Query,
-			TopK:          req.TopK * 2, // over-fetch per project for fusion quality
-			Graph:         req.Graph,
-			GraphMaxDepth: req.GraphMaxDepth,
-			KeywordOnly:   req.KeywordOnly,
-		}
+		one := scope.request
+		one.Query = req.Query
+		one.TopK = min(req.TopK*2, MaxTopK) // bounded over-fetch for fusion quality
+		one.Graph = req.Graph
+		one.GraphMaxDepth = req.GraphMaxDepth
+		one.KeywordOnly = req.KeywordOnly
 		resp, err := s.Search(ctx, one)
 		if err != nil {
 			// Best-effort: skip projects that error; log for observability.
-			slog.Warn("search failed for project", "identity", ident, "error", err)
+			slog.Warn("search failed for project", "project", scope.label, "error", err)
+			skipped++
 			continue
 		}
 		flags.absorb(resp)
 
 		// Tag results with project label using null-byte separator so
 		// identities containing ':' (e.g. "path:/abs/path") or '/' are safe.
-		for i := range resp.Results {
-			resp.Results[i].FilePath = fmt.Sprintf("%s\x00%s", ident, resp.Results[i].FilePath)
+		for i, result := range resp.Results {
+			result.FilePath = fmt.Sprintf("%s\x00%s", scope.label, result.FilePath)
+			allResults = append(allResults, rankedResult{
+				result: result, project: scope.label, sourceRank: i + 1,
+				fusion: 1 / float64(reciprocalRankConstant+i+1),
+			})
 		}
-		allResults = append(allResults, resp.Results...)
 	}
 
-	// Fuse by score descending with diversity caps. True cross-project RRF
-	// requires rank maps per identity and is deferred to a follow-up.
 	// Note: each sub-search does NOT call applyQueryRouting — if routing
 	// gains real weight, SearchMulti must route per sub-search too.
-	return fuseResults(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK, flags), nil
+	resp := fuseRankedResults(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK, flags)
+	resp.ProjectCount = projectCount
+	resp.SkippedCount = skipped
+	return resp, nil
+
 }
 
-// SearchAllProjects searches every indexed project (deduped by identity) and
+// SearchAllProjects searches every indexed project in the active workspace
+// (deduped by identity) and
 // fuses the results the same way SearchMulti does, tagging each hit with its
 // project. It powers the global (cross-project) chat, where the agent is not
 // bound to a single project. Git projects search by identity; document/push
@@ -125,16 +165,15 @@ func (s *Service) SearchAllProjects(ctx context.Context, req MultiScopeRequest) 
 	if len(projects) == 0 {
 		return &MultiResponse{}, nil
 	}
-	if req.TopK <= 0 {
-		req.TopK = 5
-	}
+	req.TopK = clampMultiTopK(req.TopK)
 
-	var allResults []store.SearchResult
+	var allResults []rankedResult
 	var flags aggFlags
+	skipped := 0
 	for _, p := range projects {
 		one := Request{
 			Query:         req.Query,
-			TopK:          req.TopK * 2, // over-fetch per project for fusion quality
+			TopK:          min(req.TopK*2, MaxTopK), // bounded over-fetch for fusion quality
 			Graph:         req.Graph,
 			GraphMaxDepth: req.GraphMaxDepth,
 			KeywordOnly:   req.KeywordOnly,
@@ -149,55 +188,177 @@ func (s *Service) SearchAllProjects(ctx context.Context, req MultiScopeRequest) 
 		resp, err := s.Search(ctx, one)
 		if err != nil {
 			slog.Warn("search failed for project", "project", p.Name, "error", err)
+			skipped++
 			continue
 		}
 		flags.absorb(resp)
-		for i := range resp.Results {
-			resp.Results[i].FilePath = fmt.Sprintf("%s\x00%s", label, resp.Results[i].FilePath)
+		for i, result := range resp.Results {
+			result.FilePath = fmt.Sprintf("%s\x00%s", label, result.FilePath)
+			allResults = append(allResults, rankedResult{
+				result: result, project: label, sourceRank: i + 1,
+				fusion: 1 / float64(reciprocalRankConstant+i+1),
+			})
 		}
-		allResults = append(allResults, resp.Results...)
 	}
-	return fuseResults(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK, flags), nil
+	resp := fuseRankedResults(allResults, req.MaxPerFile, req.MaxPerProject, req.TopK, flags)
+	resp.ProjectCount = len(projects)
+	resp.SkippedCount = skipped
+	return resp, nil
 }
 
-// fuseResults sorts the tagged results by score, applies diversity caps, and
-// splits the internal "identity\x00path" provenance prefix back into an explicit
-// Project field and a clean FilePath (the \x00 label must never leak). Shared by
-// SearchMulti and SearchAllProjects.
+// fuseResults keeps the old internal helper useful to callers/tests that pass
+// tagged results directly. Production multi-project searches use rankedResult
+// so each project's rank contributes independently through RRF.
 func fuseResults(allResults []store.SearchResult, maxPerFile, maxPerProject, topK int, flags aggFlags) *MultiResponse {
+	byProjectRank := make(map[string]int)
+	ranked := make([]rankedResult, 0, len(allResults))
+	for _, result := range allResults {
+		project, _ := splitProvenance(result.FilePath)
+		byProjectRank[project]++
+		ranked = append(ranked, rankedResult{
+			result: result, project: project,
+			sourceRank: byProjectRank[project],
+			fusion:     1 / float64(reciprocalRankConstant+byProjectRank[project]),
+		})
+	}
+	return fuseRankedResults(ranked, maxPerFile, maxPerProject, topK, flags)
+}
+
+// fuseRankedResults applies reciprocal-rank fusion across project result lists.
+// Similarity scores are deliberately retained in SearchResult.Score for
+// explainability; FusionScore is the cross-project ordering score.
+func fuseRankedResults(allResults []rankedResult, maxPerFile, maxPerProject, topK int, flags aggFlags) *MultiResponse {
 	out := &MultiResponse{
-		Fallback:   flags.fallback,
-		Keyword:    flags.keyword,
-		Degraded:   flags.degraded,
-		RetryAfter: flags.retryAfter,
+		Fallback: flags.fallback, Keyword: flags.keyword,
+		Degraded: flags.degraded, RetryAfter: flags.retryAfter,
 	}
 	if len(allResults) == 0 {
 		return out
 	}
-	slices.SortFunc(allResults, func(a, b store.SearchResult) int {
-		if a.Score > b.Score {
+	if topK <= 0 {
+		topK = 5
+	}
+
+	// A caller may request the same identity more than once. Treat the same
+	// chunk in that project as one candidate while adding its independent rank
+	// contributions, just as RRF does for multiple retrievers.
+	byCandidate := make(map[string]rankedResult, len(allResults))
+	for _, candidate := range allResults {
+		candidate.fusion = 1 / float64(reciprocalRankConstant+candidate.sourceRank)
+		key := candidateKey(candidate)
+		if previous, ok := byCandidate[key]; ok {
+			previous.fusion += candidate.fusion
+			if candidate.result.Score > previous.result.Score {
+				previous.result = candidate.result
+			}
+			byCandidate[key] = previous
+			continue
+		}
+		byCandidate[key] = candidate
+	}
+
+	ranked := make([]rankedResult, 0, len(byCandidate))
+	for _, candidate := range byCandidate {
+		ranked = append(ranked, candidate)
+	}
+	slices.SortFunc(ranked, func(a, b rankedResult) int {
+		if a.fusion > b.fusion {
 			return -1
 		}
-		if a.Score < b.Score {
+		if a.fusion < b.fusion {
 			return 1
 		}
-		return 0
+		if a.result.Score > b.result.Score {
+			return -1
+		}
+		if a.result.Score < b.result.Score {
+			return 1
+		}
+		return compareCandidates(a, b)
 	})
-	fused := applyDiversity(allResults, maxPerFile, maxPerProject, topK)
-	if fused == nil {
-		fused = allResults
-		if len(fused) > topK {
-			fused = fused[:topK]
+
+	selected := ranked
+	if maxPerFile > 0 || maxPerProject > 0 {
+		selected = applyRankedDiversity(ranked, maxPerFile, maxPerProject, topK)
+	} else if len(selected) > topK {
+		selected = selected[:topK]
+	}
+
+	out.Results = make([]MultiResult, 0, len(selected))
+	for _, candidate := range selected {
+		project, file := splitProvenance(candidate.result.FilePath)
+		candidate.result.FilePath = file
+		out.Results = append(out.Results, MultiResult{
+			SearchResult: candidate.result,
+			Project:      project, SourceRank: candidate.sourceRank, FusionScore: candidate.fusion,
+		})
+	}
+	return out
+}
+
+func candidateKey(candidate rankedResult) string {
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%d", candidate.project,
+		candidate.result.FilePath, candidate.result.StartLine, candidate.result.EndLine)
+}
+
+func compareCandidates(a, b rankedResult) int {
+	if a.project < b.project {
+		return -1
+	}
+	if a.project > b.project {
+		return 1
+	}
+	if a.result.FilePath < b.result.FilePath {
+		return -1
+	}
+	if a.result.FilePath > b.result.FilePath {
+		return 1
+	}
+	if a.result.StartLine < b.result.StartLine {
+		return -1
+	}
+	if a.result.StartLine > b.result.StartLine {
+		return 1
+	}
+	return 0
+}
+
+func applyRankedDiversity(results []rankedResult, maxPerFile, maxPerProject, topK int) []rankedResult {
+	topK = clampMultiTopK(topK)
+	if maxPerFile <= 0 {
+		maxPerFile = topK + 1
+	}
+	if maxPerProject <= 0 {
+		maxPerProject = topK + 1
+	}
+	fileCount := make(map[string]int)
+	projectCount := make(map[string]int)
+	// Do not pre-allocate from topK: this function is also reachable from
+	// direct CLI/MCP callers, so topK is not necessarily HTTP-validated.
+	out := make([]rankedResult, 0)
+	for _, result := range results {
+		project, file := splitProvenance(result.result.FilePath)
+		if projectCount[project] >= maxPerProject || fileCount[project+"\x00"+file] >= maxPerFile {
+			continue
+		}
+		projectCount[project]++
+		fileCount[project+"\x00"+file]++
+		out = append(out, result)
+		if len(out) >= topK {
+			break
 		}
 	}
-	results := make([]MultiResult, len(fused))
-	for i, r := range fused {
-		proj, file := splitProvenance(r.FilePath)
-		r.FilePath = file
-		results[i] = MultiResult{SearchResult: r, Project: proj}
-	}
-	out.Results = results
 	return out
+}
+
+func clampMultiTopK(topK int) int {
+	if topK <= 0 {
+		return 5
+	}
+	if topK > MaxTopK {
+		return MaxTopK
+	}
+	return topK
 }
 
 // applyDiversity caps results per file and per project (identified by prefix

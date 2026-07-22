@@ -77,6 +77,36 @@ func TestSearchKeywordForwarded(t *testing.T) {
 	}
 }
 
+func TestSearchMultiForwardsProjectsAndRRFFields(t *testing.T) {
+	c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requireAuth(t, r)
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/search" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		projects, ok := body["projects"].([]any)
+		if !ok || len(projects) != 2 || projects[0] != "api" || projects[1] != "worker" {
+			t.Errorf("projects = %#v", body["projects"])
+		}
+		_ = json.NewEncoder(w).Encode(MultiSearchResponse{
+			ProjectCount: 2,
+			Results:      []SearchHit{{Project: "api", Path: "auth.go", FusionScore: 1.0 / 61}},
+		})
+	})
+	defer done()
+
+	resp, err := c.SearchMulti(context.Background(), "where is auth", MultiSearchParams{
+		Projects: []string{"api", "worker"}, TopK: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ProjectCount != 2 || len(resp.Results) != 1 || resp.Results[0].Project != "api" {
+		t.Fatalf("response = %+v", resp)
+	}
+}
+
 func TestCreateAndListProjects(t *testing.T) {
 	c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		requireAuth(t, r)

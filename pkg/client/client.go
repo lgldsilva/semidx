@@ -21,9 +21,11 @@ const projectsPath = "/api/v1/projects/"
 
 // Client talks to a semidx server with a Bearer token.
 type Client struct {
-	baseURL string
-	token   string
-	http    *http.Client
+	baseURL   string
+	token     string
+	tenant    string
+	workspace string
+	http      *http.Client
 }
 
 // Option customizes a Client.
@@ -31,6 +33,16 @@ type Option func(*Client)
 
 // WithHTTPClient overrides the default *http.Client.
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
+
+// WithTenant selects the tenant slug sent with each request. The server still
+// verifies membership; this header is a selector, never an authority.
+func WithTenant(slug string) Option { return func(c *Client) { c.tenant = strings.TrimSpace(slug) } }
+
+// WithWorkspace selects the workspace slug sent with each request. The server
+// verifies that it belongs to the selected tenant before applying the scope.
+func WithWorkspace(slug string) Option {
+	return func(c *Client) { c.workspace = strings.TrimSpace(slug) }
+}
 
 // New returns a client for baseURL authenticating with token.
 func New(baseURL, token string, opts ...Option) *Client {
@@ -61,19 +73,23 @@ func (e *APIError) Error() string {
 // ---- DTOs (mirror the server's JSON) ------------------------------------------
 
 type SearchHit struct {
-	Path       string  `json:"path"`
-	StartLine  int     `json:"start_line"`
-	EndLine    int     `json:"end_line"`
-	Score      float64 `json:"score"`
-	Content    string  `json:"content"`
-	Confidence string  `json:"confidence,omitempty"`
-	Symbol     string  `json:"symbol,omitempty"`
+	Project     string  `json:"project,omitempty"`
+	Path        string  `json:"path"`
+	StartLine   int     `json:"start_line"`
+	EndLine     int     `json:"end_line"`
+	Score       float64 `json:"score"`
+	FusionScore float64 `json:"fusion_score,omitempty"`
+	SourceRank  int     `json:"source_rank,omitempty"`
+	Content     string  `json:"content"`
+	Confidence  string  `json:"confidence,omitempty"`
+	Symbol      string  `json:"symbol,omitempty"`
 }
 
 type SearchResponse struct {
 	Project  string `json:"project"`
 	Model    string `json:"model"`
 	Fallback bool   `json:"fallback"`
+	Keyword  bool   `json:"keyword"`
 	// Degraded is true when the embedding circuit was open on the server and
 	// keyword results were served; RetryAfterMS hints when to retry semantic
 	// search. Absent (false/0) on older servers.
@@ -83,15 +99,105 @@ type SearchResponse struct {
 	Results      []SearchHit `json:"results"`
 }
 
+// MultiSearchResponse is the tenant-scoped result envelope for a search over
+// several projects. Each hit includes project provenance and the RRF score
+// used for cross-project ordering.
+type MultiSearchResponse struct {
+	Fallback     bool        `json:"fallback"`
+	Keyword      bool        `json:"keyword"`
+	Degraded     bool        `json:"degraded"`
+	RetryAfterMS int64       `json:"retry_after_ms"`
+	TookMS       int64       `json:"took_ms"`
+	ProjectCount int         `json:"project_count"`
+	SkippedCount int         `json:"skipped_count"`
+	Results      []SearchHit `json:"results"`
+}
+
 type Project struct {
-	Name       string `json:"name"`
-	Model      string `json:"model"`
-	Status     string `json:"status"`
-	SourceType string `json:"source_type"`
-	GitURL     string `json:"git_url,omitempty"`
-	Branch     string `json:"branch,omitempty"`
-	Identity   string `json:"identity,omitempty"`
-	Path       string `json:"path,omitempty"`
+	TenantID    int    `json:"tenant_id,omitempty"`
+	WorkspaceID int    `json:"workspace_id,omitempty"`
+	Name        string `json:"name"`
+	Model       string `json:"model"`
+	Status      string `json:"status"`
+	SourceType  string `json:"source_type"`
+	GitURL      string `json:"git_url,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	Identity    string `json:"identity,omitempty"`
+	Path        string `json:"path,omitempty"`
+	PrivacyMode string `json:"privacy_mode,omitempty"`
+}
+
+type RuntimeEdge struct {
+	TenantID          int       `json:"tenant_id,omitempty"`
+	WorkspaceID       int       `json:"workspace_id,omitempty"`
+	SourceProjectID   int       `json:"source_project_id,omitempty"`
+	SourceProjectName string    `json:"source_project,omitempty"`
+	TargetProjectID   int       `json:"target_project_id,omitempty"`
+	TargetProjectName string    `json:"target_project"`
+	SourceComponent   string    `json:"source_component,omitempty"`
+	TargetComponent   string    `json:"target_component,omitempty"`
+	Protocol          string    `json:"protocol,omitempty"`
+	Environment       string    `json:"environment,omitempty"`
+	RequestCount      int64     `json:"request_count"`
+	ErrorCount        int64     `json:"error_count"`
+	P95LatencyMS      float64   `json:"p95_latency_ms"`
+	FirstSeen         time.Time `json:"first_seen,omitempty"`
+	LastSeen          time.Time `json:"last_seen,omitempty"`
+}
+
+type TenantQuota struct {
+	TenantID        int    `json:"tenant_id"`
+	Plan            string `json:"plan"`
+	MaxProjects     int64  `json:"max_projects"`
+	MaxRuntimeEdges int64  `json:"max_runtime_edges"`
+}
+
+type TenantUsage struct {
+	TenantID     int   `json:"tenant_id"`
+	Projects     int64 `json:"projects"`
+	RuntimeEdges int64 `json:"runtime_edges"`
+}
+
+type UsageResponse struct {
+	Quota TenantQuota `json:"quota"`
+	Usage TenantUsage `json:"usage"`
+}
+
+type Tenant struct {
+	ID   int    `json:"id"`
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+}
+
+type Workspace struct {
+	ID       int    `json:"id"`
+	TenantID int    `json:"tenant_id"`
+	Slug     string `json:"slug"`
+	Name     string `json:"name"`
+}
+
+type Dependency struct {
+	Ecosystem       string `json:"ecosystem"`
+	Name            string `json:"name"`
+	NormalizedName  string `json:"normalized_name"`
+	Constraint      string `json:"constraint,omitempty"`
+	ResolvedVersion string `json:"resolved_version,omitempty"`
+	Scope           string `json:"scope,omitempty"`
+	Source          string `json:"source,omitempty"`
+	Manifest        string `json:"manifest"`
+	Direct          bool   `json:"direct"`
+}
+
+type DependencyUsage struct {
+	ProjectID       int    `json:"project_id"`
+	ProjectName     string `json:"project_name"`
+	Ecosystem       string `json:"ecosystem"`
+	Name            string `json:"name"`
+	NormalizedName  string `json:"normalized_name"`
+	Constraint      string `json:"constraint,omitempty"`
+	ResolvedVersion string `json:"resolved_version,omitempty"`
+	Scope           string `json:"scope,omitempty"`
+	Direct          bool   `json:"direct"`
 }
 
 type Job struct {
@@ -150,6 +256,20 @@ type EnqueueResponse struct {
 	Status string `json:"status"`
 }
 
+type DependencyResolveResponse struct {
+	Project string `json:"project"`
+	Mode    string `json:"mode"`
+	Status  string `json:"status"`
+	JobID   int    `json:"job_id,omitempty"`
+	Submit  string `json:"submit,omitempty"`
+}
+
+type DependencySubmitResponse struct {
+	Project string `json:"project"`
+	Status  string `json:"status"`
+	Count   int    `json:"count"`
+}
+
 type StatusResponse struct {
 	Name       string `json:"name"`
 	Identity   string `json:"identity,omitempty"`
@@ -160,6 +280,58 @@ type StatusResponse struct {
 }
 
 // ---- Methods ------------------------------------------------------------------
+
+// ListTenants returns tenants visible to the authenticated principal.
+func (c *Client) ListTenants(ctx context.Context) ([]Tenant, error) {
+	var out struct {
+		Tenants []Tenant `json:"tenants"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v1/tenants", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Tenants, nil
+}
+
+// CreateTenant creates an organization. The authenticated user is added as its
+// owner when the server has a user-bound token.
+func (c *Client) CreateTenant(ctx context.Context, slug, name string) (*Tenant, error) {
+	var out Tenant
+	if err := c.do(ctx, http.MethodPost, "/api/v1/tenants", map[string]string{
+		"slug": slug, "name": name,
+	}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListWorkspaces returns workspaces visible in the active tenant.
+func (c *Client) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
+	var out struct {
+		Workspaces []Workspace `json:"workspaces"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v1/workspaces", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Workspaces, nil
+}
+
+// Usage returns the active tenant's quota and current counters.
+func (c *Client) Usage(ctx context.Context) (*UsageResponse, error) {
+	var out UsageResponse
+	if err := c.do(ctx, http.MethodGet, "/api/v1/usage", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CreateWorkspace creates a project portfolio inside the active tenant.
+func (c *Client) CreateWorkspace(ctx context.Context, slug, name string) (*Workspace, error) {
+	var out Workspace
+	if err := c.do(ctx, http.MethodPost, "/api/v1/workspaces", map[string]string{"slug": slug, "name": name}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
 
 // Healthz reports whether the server is reachable.
 func (c *Client) Healthz(ctx context.Context) error {
@@ -176,6 +348,19 @@ type SearchParams struct {
 	Keyword    bool   // keyword-only search; never contacts the embedding provider
 	Graph      bool   // expand results via the dependency graph (Graph-RAG)
 	GraphDepth int    // max BFS depth for graph expansion
+}
+
+// MultiSearchParams carries the optional knobs for Client.SearchMulti.
+type MultiSearchParams struct {
+	Projects      []string // project names; empty is valid only when All is true
+	Identities    []string // stable Git/path identities for agent integrations
+	All           bool
+	TopK          int
+	Keyword       bool
+	Graph         bool
+	GraphDepth    int
+	MaxPerFile    int
+	MaxPerProject int
 }
 
 // requireProject rejects empty project path segments before they become
@@ -199,6 +384,127 @@ func (c *Client) Search(ctx context.Context, project, query string, p SearchPara
 	body := map[string]any{"query": query, "top_k": p.TopK, "model": p.Model, "keyword": p.Keyword, "graph": p.Graph, "graph_depth": p.GraphDepth}
 	var out SearchResponse
 	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/search", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SearchMulti searches across selected projects or all projects in the active
+// workspace. Project names are resolved server-side, so callers do not need to
+// know Git/path identities.
+func (c *Client) SearchMulti(ctx context.Context, query string, p MultiSearchParams) (*MultiSearchResponse, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("semidx: query is required")
+	}
+	if !p.All && len(p.Projects) == 0 && len(p.Identities) == 0 {
+		return nil, fmt.Errorf("semidx: projects are required unless all is true")
+	}
+	body := map[string]any{
+		"query": query, "projects": p.Projects, "identities": p.Identities, "all": p.All,
+		"top_k": p.TopK, "keyword": p.Keyword, "graph": p.Graph,
+		"graph_depth": p.GraphDepth, "max_per_file": p.MaxPerFile,
+		"max_per_project": p.MaxPerProject,
+	}
+	var out MultiSearchResponse
+	if err := c.do(ctx, http.MethodPost, "/api/v1/search", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListDependencies returns the normalized manifest catalog for a project.
+func (c *Client) ListDependencies(ctx context.Context, project string) ([]Dependency, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
+	var out struct {
+		Dependencies []Dependency `json:"dependencies"`
+	}
+	if err := c.do(ctx, http.MethodGet, projectsPath+esc(project)+"/dependencies", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Dependencies, nil
+}
+
+// SharedDependencies returns dependency occurrences in other projects of the
+// active workspace that share an ecosystem and normalized package name.
+func (c *Client) SharedDependencies(ctx context.Context, project string) ([]DependencyUsage, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
+	var out struct {
+		Dependencies []DependencyUsage `json:"dependencies"`
+	}
+	if err := c.do(ctx, http.MethodGet, projectsPath+esc(project)+"/dependencies/shared", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Dependencies, nil
+}
+
+// ListRuntimeEdges returns observed outbound communication for a project.
+func (c *Client) ListRuntimeEdges(ctx context.Context, project string) ([]RuntimeEdge, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
+	var out struct {
+		Edges []RuntimeEdge `json:"edges"`
+	}
+	if err := c.do(ctx, http.MethodGet, projectsPath+esc(project)+"/runtime-edges", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Edges, nil
+}
+
+// SubmitRuntimeEdges adds customer-agent or OpenTelemetry-derived observations
+// without uploading source files.
+func (c *Client) SubmitRuntimeEdges(ctx context.Context, project string, edges []RuntimeEdge) (int, error) {
+	if err := requireProject(project); err != nil {
+		return 0, err
+	}
+	var out struct {
+		Accepted int `json:"accepted"`
+	}
+	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/runtime-edges", map[string]any{"edges": edges}, &out); err != nil {
+		return 0, err
+	}
+	return out.Accepted, nil
+}
+
+// ListRuntimeGraph returns the tenant/workspace portfolio communication graph.
+func (c *Client) ListRuntimeGraph(ctx context.Context, limit int) ([]RuntimeEdge, error) {
+	path := "/api/v1/runtime-graph"
+	if limit > 0 {
+		path += "?limit=" + strconv.Itoa(limit)
+	}
+	var out struct {
+		Edges []RuntimeEdge `json:"edges"`
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Edges, nil
+}
+
+// ResolveDependencies asks a managed worker to run native package tooling, or
+// returns the submit contract for a customer agent when mode is "agent".
+func (c *Client) ResolveDependencies(ctx context.Context, project, mode string) (*DependencyResolveResponse, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
+	var out DependencyResolveResponse
+	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/dependencies/resolve", map[string]string{"mode": mode}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SubmitDependencies stores a resolution result produced by a customer agent.
+func (c *Client) SubmitDependencies(ctx context.Context, project string, deps []Dependency, source string) (*DependencySubmitResponse, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
+	var out DependencySubmitResponse
+	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/dependencies/submit", map[string]any{"dependencies": deps, "source": source}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -229,6 +535,12 @@ func (c *Client) GetProject(ctx context.Context, name string) (*Project, error) 
 
 // CreateProject registers a project. sourceType is "push" or "git".
 func (c *Client) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string) (*Project, error) {
+	return c.CreateProjectWithPrivacy(ctx, name, model, sourceType, gitURL, branch, "")
+}
+
+// CreateProjectWithPrivacy registers a project and optionally selects its
+// cloud/hybrid/edge data-routing policy in the same request.
+func (c *Client) CreateProjectWithPrivacy(ctx context.Context, name, model, sourceType, gitURL, branch, privacyMode string) (*Project, error) {
 	body := map[string]any{
 		"name":  name,
 		"model": model,
@@ -236,8 +548,23 @@ func (c *Client) CreateProject(ctx context.Context, name, model, sourceType, git
 			"type": sourceType, "url": gitURL, "branch": branch,
 		},
 	}
+	if privacyMode != "" {
+		body["privacy_mode"] = privacyMode
+	}
 	var out Project
 	if err := c.do(ctx, http.MethodPost, "/api/v1/projects", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetProjectPrivacy changes the persisted project embedding policy.
+func (c *Client) SetProjectPrivacy(ctx context.Context, project, mode string) (*Project, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
+	var out Project
+	if err := c.do(ctx, http.MethodPut, projectsPath+esc(project)+"/privacy", map[string]string{"mode": mode}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -399,6 +726,12 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
+	if c.tenant != "" {
+		req.Header.Set("X-Semidx-Tenant", c.tenant)
+	}
+	if c.workspace != "" {
+		req.Header.Set("X-Semidx-Workspace", c.workspace)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -440,6 +773,12 @@ func (c *Client) doResponse(ctx context.Context, method, path string, body any) 
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if c.tenant != "" {
+		req.Header.Set("X-Semidx-Tenant", c.tenant)
+	}
+	if c.workspace != "" {
+		req.Header.Set("X-Semidx-Workspace", c.workspace)
 	}
 	return c.http.Do(req)
 }

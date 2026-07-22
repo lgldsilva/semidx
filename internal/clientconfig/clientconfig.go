@@ -18,6 +18,8 @@ import (
 type Config struct {
 	ServerURL      string `yaml:"server_url"`
 	Token          string `yaml:"token"`
+	Tenant         string `yaml:"tenant,omitempty"`
+	Workspace      string `yaml:"workspace,omitempty"`
 	DefaultProject string `yaml:"default_project,omitempty"`
 }
 
@@ -28,7 +30,8 @@ func Path() (string, error) {
 
 // Load reads the config file (a missing file is not an error — an empty Config is
 // returned) and then applies environment overrides. SEMIDX_SERVER_URL,
-// SEMIDX_TOKEN and SEMIDX_DEFAULT_PROJECT win over the file when set.
+// SEMIDX_TOKEN, SEMIDX_TENANT, SEMIDX_WORKSPACE and SEMIDX_DEFAULT_PROJECT win
+// over the file when set.
 func Load() (*Config, error) {
 	c := &Config{}
 	p, err := Path()
@@ -47,6 +50,12 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("SEMIDX_TOKEN"); v != "" {
 		c.Token = v
+	}
+	if v := os.Getenv("SEMIDX_TENANT"); v != "" {
+		c.Tenant = v
+	}
+	if v := os.Getenv("SEMIDX_WORKSPACE"); v != "" {
+		c.Workspace = v
 	}
 	if v := os.Getenv("SEMIDX_DEFAULT_PROJECT"); v != "" {
 		c.DefaultProject = v

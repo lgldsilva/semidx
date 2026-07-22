@@ -41,11 +41,19 @@ export type Project = {
   branch?: string
   dims?: number
   license?: string
+  privacy_mode?: 'cloud' | 'hybrid' | 'edge'
   total_files?: number
   total_chunks?: number
   last_commit?: string
   last_job?: Job
   ext_breakdown?: Record<string, number>
+}
+
+export type Workspace = {
+  id: number
+  tenant_id: number
+  slug: string
+  name: string
 }
 
 export type ProjectDetail = {
@@ -81,6 +89,49 @@ export type SearchResponse = {
   retry_after_ms?: number
   project_count?: number
   resolved_project?: string
+}
+
+export type Dependency = {
+  ecosystem: string
+  name: string
+  normalized_name: string
+  constraint?: string
+  resolved_version?: string
+  scope?: string
+  source?: string
+  manifest: string
+  direct: boolean
+}
+
+export type DependencyUsage = Dependency & {
+  project_id: number
+  project_name: string
+}
+
+export type RuntimeEdge = {
+  source_project?: string
+  target_project: string
+  source_component?: string
+  target_component?: string
+  protocol?: string
+  environment?: string
+  request_count: number
+  error_count: number
+  p95_latency_ms: number
+  first_seen?: string
+  last_seen?: string
+}
+
+export type UsageResponse = {
+  quota: {
+    plan: string
+    max_projects: number
+    max_runtime_edges: number
+  }
+  usage: {
+    projects: number
+    runtime_edges: number
+  }
 }
 
 export type ChatSource = {
@@ -215,6 +266,17 @@ class ApiError extends Error {
 }
 
 let csrfToken = ''
+const WORKSPACE_KEY = 'semidx.workspace'
+
+export function getWorkspaceSelection() {
+  return typeof window === 'undefined' ? '' : window.localStorage.getItem(WORKSPACE_KEY) || ''
+}
+
+export function setWorkspaceSelection(slug: string) {
+  if (typeof window === 'undefined') return
+  if (slug) window.localStorage.setItem(WORKSPACE_KEY, slug)
+  else window.localStorage.removeItem(WORKSPACE_KEY)
+}
 
 export function setCsrf(token: string) {
   csrfToken = token
@@ -252,6 +314,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (method !== 'GET' && method !== 'HEAD' && csrfToken) {
     headers.set('X-CSRF-Token', csrfToken)
   }
+  const workspace = getWorkspaceSelection()
+  if (workspace) headers.set('X-Semidx-Workspace', workspace)
   const res = await fetch(path, {
     ...init,
     headers,
@@ -279,6 +343,7 @@ function chatBase(name: string): string {
 export const api = {
   me: () => request<MeResponse>('/admin/api/me'),
   system: () => request<SystemInfo>('/admin/api/system'),
+  usage: () => request<UsageResponse>('/admin/api/usage'),
   login: (username: string, password: string, remember: boolean) =>
     request<MeResponse>('/admin/api/login', {
       method: 'POST',
@@ -294,6 +359,10 @@ export const api = {
     request<{ projects: Project[] }>('/admin/api/projects').then(
       (r) => r.projects ?? [],
     ),
+  workspaces: () =>
+    request<{ workspaces: Workspace[] }>('/admin/api/workspaces').then(
+      (r) => r.workspaces ?? [],
+    ),
   projectDetail: (name: string) =>
     request<ProjectDetail>(
       `/admin/api/projects/${encodeURIComponent(name)}`,
@@ -305,6 +374,7 @@ export const api = {
     git_url?: string
     branch?: string
     index?: boolean
+    privacy_mode?: 'cloud' | 'hybrid' | 'edge'
   }) =>
     request<{ project: Project; job_id?: number; push_hint?: string }>(
       '/admin/api/projects',
@@ -400,6 +470,14 @@ export const api = {
       top_depends: { node: string; degree: number }[]
       top_depended: { node: string; degree: number }[]
     }>(`/admin/api/projects/${encodeURIComponent(name)}/graph-stats`),
+  projectDependencies: (name: string) =>
+    request<{ project: string; dependencies: Dependency[] }>(
+      `/admin/api/projects/${encodeURIComponent(name)}/dependencies`,
+    ),
+  projectSharedDependencies: (name: string) =>
+    request<{ project: string; dependencies: DependencyUsage[] }>(
+      `/admin/api/projects/${encodeURIComponent(name)}/dependencies/shared`,
+    ),
   projectDeadCode: (name: string, limit = 100) =>
     request<{
       findings: {
@@ -432,6 +510,16 @@ export const api = {
     request<Project & { total_files: number }>(
       `/admin/api/projects/${encodeURIComponent(name)}/status`,
     ),
+  projectRuntimeEdges: (name: string) =>
+    request<{ project: string; edges: RuntimeEdge[] }>(
+      `/admin/api/projects/${encodeURIComponent(name)}/runtime-edges`,
+    ),
+  runtimeGraph: () => request<{ edges: RuntimeEdge[] }>('/admin/api/runtime-graph'),
+  setProjectPrivacy: (name: string, mode: 'cloud' | 'hybrid' | 'edge') =>
+    request<Project>(`/admin/api/projects/${encodeURIComponent(name)}/privacy`, {
+      method: 'PUT',
+      body: JSON.stringify({ mode }),
+    }),
   projectFiles: (
     name: string,
     opts?: { prefix?: string; q?: string; limit?: number; offset?: number },

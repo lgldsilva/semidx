@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -28,29 +29,42 @@ func validateProjectName(name string) error {
 }
 
 type projectView struct {
-	Name       string `json:"name"`
-	Model      string `json:"model"`
-	Status     string `json:"status"`
-	SourceType string `json:"source_type"`
-	GitURL     string `json:"git_url,omitempty"`
-	Branch     string `json:"branch,omitempty"`
-	Identity   string `json:"identity,omitempty"`
-	Path       string `json:"path,omitempty"`
+	TenantID    int    `json:"tenant_id"`
+	WorkspaceID int    `json:"workspace_id"`
+	Name        string `json:"name"`
+	Model       string `json:"model"`
+	Status      string `json:"status"`
+	SourceType  string `json:"source_type"`
+	GitURL      string `json:"git_url,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	Identity    string `json:"identity,omitempty"`
+	Path        string `json:"path,omitempty"`
+	PrivacyMode string `json:"privacy_mode"`
 }
 
 func toProjectView(p *store.Project) projectView {
 	return projectView{
-		Name: p.Name, Model: p.Model, Status: p.Status,
+		TenantID:    p.TenantID,
+		WorkspaceID: p.WorkspaceID,
+		Name:        p.Name, Model: p.Model, Status: p.Status,
 		SourceType: p.SourceType, GitURL: p.GitURL, Branch: p.Branch,
-		Identity: p.Identity, Path: p.Path,
+		Identity: p.Identity, Path: p.Path, PrivacyMode: projectPrivacyMode(p.PrivacyMode),
 	}
+}
+
+func projectPrivacyMode(mode string) string {
+	if strings.TrimSpace(mode) == "" {
+		return string(privacy.Hybrid)
+	}
+	return mode
 }
 
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name   string `json:"name"`
-		Model  string `json:"model"`
-		Source struct {
+		Name        string `json:"name"`
+		Model       string `json:"model"`
+		PrivacyMode string `json:"privacy_mode"`
+		Source      struct {
 			Type   string `json:"type"`
 			URL    string `json:"url"`
 			Branch string `json:"branch"`
@@ -70,6 +84,20 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Source.Type == "" {
 		body.Source.Type = "push"
+	}
+	privacyMode, err := privacy.NormalizeMode(body.PrivacyMode)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.enforceProjectQuota(r.Context()); err != nil {
+		if errors.Is(err, errQuotaExceeded) {
+			writeJSONError(w, http.StatusTooManyRequests, err.Error())
+			return
+		}
+		s.log.Error("project quota lookup", "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "could not evaluate tenant quota")
+		return
 	}
 	switch body.Source.Type {
 	case "push", "git":
@@ -98,6 +126,14 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.attachCreateProjectCredential(w, r, p.ID, body.Credential) {
 		return
+	}
+	if ps, ok := s.store.(store.ProjectPolicyStore); ok {
+		if err := ps.SetProjectPrivacy(r.Context(), p.ID, string(privacyMode)); err != nil {
+			s.log.Error("set project privacy", "err", err)
+			writeJSONError(w, http.StatusInternalServerError, "could not save project privacy policy")
+			return
+		}
+		p.PrivacyMode = string(privacyMode)
 	}
 	writeJSON(w, http.StatusCreated, toProjectView(p))
 }
@@ -150,6 +186,42 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toProjectView(p))
+}
+
+func (s *Server) handleSetProjectPrivacy(w http.ResponseWriter, r *http.Request) {
+	policy, ok := s.store.(store.ProjectPolicyStore)
+	if !ok {
+		writeJSONError(w, http.StatusNotImplemented, "project privacy policies are unavailable")
+		return
+	}
+	project, err := s.store.GetProject(r.Context(), r.PathValue("project"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSONError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	mode, err := privacy.NormalizeMode(body.Mode)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := policy.SetProjectPrivacy(r.Context(), project.ID, string(mode)); err != nil {
+		s.log.Error("set project privacy", "project", project.Name, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "could not save project privacy policy")
+		return
+	}
+	project.PrivacyMode = string(mode)
+	writeJSON(w, http.StatusOK, toProjectView(project))
 }
 
 func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {

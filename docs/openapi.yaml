@@ -90,6 +90,277 @@ paths:
 
   # ─── Projects ───────────────────────────────────────────────────────────────
 
+  /api/v1/tenants:
+    get:
+      summary: List visible tenants
+      operationId: listTenants
+      security:
+        - bearerAuth: ["read"]
+      responses:
+        "200":
+          description: Organizations visible to the authenticated principal.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenants:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Tenant"
+    post:
+      summary: Create a tenant
+      operationId: createTenant
+      security:
+        - bearerAuth: ["admin"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NamedSlugRequest"
+      responses:
+        "201":
+          description: Tenant and its default workspace created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+
+  /api/v1/workspaces:
+    get:
+      summary: List workspaces in the active tenant
+      operationId: listWorkspaces
+      security:
+        - bearerAuth: ["read"]
+      responses:
+        "200":
+          description: Workspaces in the selected tenant.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workspaces:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Workspace"
+    post:
+      summary: Create a workspace
+      operationId: createWorkspace
+      security:
+        - bearerAuth: ["admin"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NamedSlugRequest"
+      responses:
+        "201":
+          description: Workspace created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+
+  /api/v1/usage:
+    get:
+      summary: Read active tenant quota and usage
+      operationId: tenantUsage
+      security:
+        - bearerAuth: ["read"]
+      responses:
+        "200":
+          description: Current tenant plan limits and counters.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageResponse"
+
+  /api/v1/projects/{project}/dependencies:
+    get:
+      summary: List normalized project dependencies
+      operationId: listProjectDependencies
+      security:
+        - bearerAuth: ["read"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Manifest and resolved dependency metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DependencyListResponse"
+
+  /api/v1/projects/{project}/dependencies/shared:
+    get:
+      summary: Find dependencies shared by other projects
+      operationId: sharedProjectDependencies
+      security:
+        - bearerAuth: ["read"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Matching dependency occurrences in the active workspace.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SharedDependencyResponse"
+
+  /api/v1/projects/{project}/dependencies/resolve:
+    post:
+      summary: Resolve dependencies with a managed worker or customer agent
+      operationId: resolveProjectDependencies
+      security:
+        - bearerAuth: ["write"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DependencyResolveRequest"
+      responses:
+        "202":
+          description: Resolution queued or awaiting a customer agent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DependencyResolveResponse"
+
+  /api/v1/projects/{project}/dependencies/submit:
+    post:
+      summary: Submit customer-agent dependency metadata
+      operationId: submitProjectDependencies
+      security:
+        - bearerAuth: ["write"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DependencySubmitRequest"
+      responses:
+        "200":
+          description: Catalog replaced atomically.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DependencySubmitResponse"
+
+  /api/v1/projects/{project}/privacy:
+    put:
+      summary: Set project data-routing policy
+      operationId: setProjectPrivacy
+      security:
+        - bearerAuth: ["write"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectPrivacyRequest"
+      responses:
+        "200":
+          description: Updated project.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+
+  /api/v1/projects/{project}/runtime-edges:
+    get:
+      summary: List observed outbound runtime communication
+      operationId: listRuntimeEdges
+      security:
+        - bearerAuth: ["read"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Runtime edges for the project.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeEdgeListResponse"
+    post:
+      summary: Submit normalized runtime observations
+      operationId: submitRuntimeEdges
+      security:
+        - bearerAuth: ["write"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuntimeEdgeSubmitRequest"
+      responses:
+        "202":
+          description: Observations accepted and aggregated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeEdgeSubmitResponse"
+
+  /api/v1/runtime-graph:
+    get:
+      summary: List observed communication across the active workspace
+      operationId: listRuntimeGraph
+      security:
+        - bearerAuth: ["read"]
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 500
+      responses:
+        "200":
+          description: Portfolio runtime graph.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeEdgeListResponse"
+
   /api/v1/projects:
     post:
       summary: Create a project
@@ -481,6 +752,10 @@ components:
       type: object
       description: A registered project.
       properties:
+        tenant_id:
+          type: integer
+        workspace_id:
+          type: integer
         name:
           type: string
           description: Project name (unique, alphanumeric + `._-`).
@@ -499,11 +774,288 @@ components:
         branch:
           type: string
           description: Git branch (present only when `source_type` is `git`).
+        privacy_mode:
+          type: string
+          enum: [cloud, hybrid, edge]
+          default: hybrid
+          description: Project embedding/data-routing policy.
       required:
         - name
         - model
         - status
         - source_type
+
+    Tenant:
+      type: object
+      properties:
+        id:
+          type: integer
+        slug:
+          type: string
+        name:
+          type: string
+      required: [id, slug, name]
+
+    Workspace:
+      type: object
+      properties:
+        id:
+          type: integer
+        tenant_id:
+          type: integer
+        slug:
+          type: string
+        name:
+          type: string
+      required: [id, tenant_id, slug, name]
+
+    NamedSlugRequest:
+      type: object
+      properties:
+        slug:
+          type: string
+        name:
+          type: string
+      required: [slug, name]
+
+    Dependency:
+      type: object
+      properties:
+        ecosystem:
+          type: string
+          enum: [go, npm, maven, gradle, swift, cocoapods]
+        name:
+          type: string
+        normalized_name:
+          type: string
+        constraint:
+          type: string
+        resolved_version:
+          type: string
+        scope:
+          type: string
+        source:
+          type: string
+        manifest:
+          type: string
+        direct:
+          type: boolean
+      required: [ecosystem, name, normalized_name, manifest, direct]
+
+    DependencyListResponse:
+      type: object
+      properties:
+        project:
+          type: string
+        dependencies:
+          type: array
+          items:
+            $ref: "#/components/schemas/Dependency"
+      required: [project, dependencies]
+
+    SharedDependency:
+      allOf:
+        - $ref: "#/components/schemas/Dependency"
+        - type: object
+          properties:
+            project_id:
+              type: integer
+            project_name:
+              type: string
+
+    SharedDependencyResponse:
+      type: object
+      properties:
+        project:
+          type: string
+        dependencies:
+          type: array
+          items:
+            $ref: "#/components/schemas/SharedDependency"
+      required: [project, dependencies]
+
+    DependencyResolveRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [managed, agent]
+          default: managed
+
+    DependencyResolveResponse:
+      type: object
+      properties:
+        project:
+          type: string
+        mode:
+          type: string
+        status:
+          type: string
+        job_id:
+          type: integer
+        submit:
+          type: string
+      required: [project, mode, status]
+
+    DependencySubmitRequest:
+      type: object
+      properties:
+        source:
+          type: string
+        dependencies:
+          type: array
+          maxItems: 10000
+          items:
+            $ref: "#/components/schemas/Dependency"
+      required: [dependencies]
+
+    DependencySubmitResponse:
+      type: object
+      properties:
+        project:
+          type: string
+        status:
+          type: string
+        count:
+          type: integer
+      required: [project, status, count]
+
+    ProjectPrivacyRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [cloud, hybrid, edge]
+          default: hybrid
+      required: [mode]
+
+    RuntimeEdge:
+      type: object
+      properties:
+        tenant_id:
+          type: integer
+        workspace_id:
+          type: integer
+        source_project_id:
+          type: integer
+        source_project:
+          type: string
+        target_project_id:
+          type: integer
+        target_project:
+          type: string
+        source_component:
+          type: string
+        target_component:
+          type: string
+        protocol:
+          type: string
+        environment:
+          type: string
+        request_count:
+          type: integer
+          format: int64
+        error_count:
+          type: integer
+          format: int64
+        p95_latency_ms:
+          type: number
+          format: double
+        first_seen:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+      required: [target_project, request_count, error_count, p95_latency_ms]
+
+    RuntimeEdgeInput:
+      type: object
+      properties:
+        target_project:
+          type: string
+        source_component:
+          type: string
+        target_component:
+          type: string
+        protocol:
+          type: string
+        environment:
+          type: string
+        request_count:
+          type: integer
+          format: int64
+          minimum: 0
+        error_count:
+          type: integer
+          format: int64
+          minimum: 0
+        p95_latency_ms:
+          type: number
+          format: double
+          minimum: 0
+      required: [target_project]
+
+    RuntimeEdgeSubmitRequest:
+      type: object
+      properties:
+        edges:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/RuntimeEdgeInput"
+      required: [edges]
+
+    RuntimeEdgeListResponse:
+      type: object
+      properties:
+        project:
+          type: string
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuntimeEdge"
+      required: [edges]
+
+    RuntimeEdgeSubmitResponse:
+      type: object
+      properties:
+        project:
+          type: string
+        accepted:
+          type: integer
+      required: [project, accepted]
+
+    UsageResponse:
+      type: object
+      properties:
+        quota:
+          type: object
+          properties:
+            tenant_id:
+              type: integer
+            plan:
+              type: string
+            max_projects:
+              type: integer
+              format: int64
+            max_runtime_edges:
+              type: integer
+              format: int64
+          required: [tenant_id, plan, max_projects, max_runtime_edges]
+        usage:
+          type: object
+          properties:
+            tenant_id:
+              type: integer
+            projects:
+              type: integer
+              format: int64
+            runtime_edges:
+              type: integer
+              format: int64
+          required: [tenant_id, projects, runtime_edges]
+      required: [quota, usage]
 
     CreateProjectRequest:
       type: object
@@ -518,6 +1070,11 @@ components:
           type: string
           description: Embedding model name. Defaults to `bge-m3` if omitted.
           default: bge-m3
+        privacy_mode:
+          type: string
+          enum: [cloud, hybrid, edge]
+          default: hybrid
+          description: Project embedding/data-routing policy.
         source:
           type: object
           description: Source configuration for the project's files.

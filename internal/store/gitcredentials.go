@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/lgldsilva/semidx/internal/tenant"
 )
 
 // ErrCredentialExists is returned when a git credential already exists for the
@@ -94,10 +96,10 @@ func (s *PgStore) CreateGitCredential(ctx context.Context, c *GitCredential) (*G
 	var out GitCredential
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO git_credentials
-			(project_id, host, kind, username, secret_enc, key_version, ssh_known_hosts, label)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			(tenant_id, project_id, host, kind, username, secret_enc, key_version, ssh_known_hosts, label)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING `+gitCredentialColumns,
-		c.ProjectID, c.Host, c.Kind, c.Username, c.SecretEnc, keyVersion,
+		tenant.ID(ctx), c.ProjectID, c.Host, c.Kind, c.Username, c.SecretEnc, keyVersion,
 		c.SSHKnownHosts, c.Label).Scan(out.scanFields()...)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -114,8 +116,8 @@ func (s *PgStore) CreateGitCredential(ctx context.Context, c *GitCredential) (*G
 func (s *PgStore) GetGitCredentialForProject(ctx context.Context, projectID int) (*GitCredential, error) {
 	var c GitCredential
 	err := s.pool.QueryRow(ctx,
-		`SELECT `+gitCredentialColumns+` FROM git_credentials WHERE project_id = $1`,
-		projectID).Scan(c.scanFields()...)
+		`SELECT `+gitCredentialColumns+` FROM git_credentials WHERE tenant_id = $1 AND project_id = $2`,
+		tenant.ID(ctx), projectID).Scan(c.scanFields()...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -131,8 +133,8 @@ func (s *PgStore) GetGitCredentialForHost(ctx context.Context, host string) (*Gi
 	var c GitCredential
 	err := s.pool.QueryRow(ctx, `
 		SELECT `+gitCredentialColumns+` FROM git_credentials
-		WHERE project_id IS NULL AND lower(host) = lower($1)`,
-		host).Scan(c.scanFields()...)
+		WHERE tenant_id = $1 AND project_id IS NULL AND lower(host) = lower($2)`,
+		tenant.ID(ctx), host).Scan(c.scanFields()...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -146,7 +148,7 @@ func (s *PgStore) GetGitCredentialForHost(ctx context.Context, host string) (*Gi
 func (s *PgStore) GetGitCredentialByID(ctx context.Context, id int) (*GitCredential, error) {
 	var c GitCredential
 	err := s.pool.QueryRow(ctx,
-		`SELECT `+gitCredentialColumns+` FROM git_credentials WHERE id = $1`, id).
+		`SELECT `+gitCredentialColumns+` FROM git_credentials WHERE tenant_id = $1 AND id = $2`, tenant.ID(ctx), id).
 		Scan(c.scanFields()...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -161,7 +163,7 @@ func (s *PgStore) GetGitCredentialByID(ctx context.Context, id int) (*GitCredent
 func (s *PgStore) ListGitCredentials(ctx context.Context) ([]GitCredential, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+gitCredentialColumns+` FROM git_credentials
-		ORDER BY project_id NULLS FIRST, id`)
+		WHERE tenant_id = $1 ORDER BY project_id NULLS FIRST, id`, tenant.ID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -191,8 +193,8 @@ func (s *PgStore) UpdateGitCredential(ctx context.Context, c *GitCredential) err
 		UPDATE git_credentials
 		SET kind = $1, username = $2, secret_enc = $3, key_version = $4,
 			ssh_known_hosts = $5, label = $6, updated_at = NOW()
-		WHERE id = $7`,
-		c.Kind, c.Username, c.SecretEnc, keyVersion, c.SSHKnownHosts, c.Label, c.ID)
+		WHERE tenant_id = $7 AND id = $8`,
+		c.Kind, c.Username, c.SecretEnc, keyVersion, c.SSHKnownHosts, c.Label, tenant.ID(ctx), c.ID)
 	if err != nil {
 		return err
 	}
@@ -204,7 +206,7 @@ func (s *PgStore) UpdateGitCredential(ctx context.Context, c *GitCredential) err
 
 // DeleteGitCredential removes a credential by id, or returns ErrNotFound.
 func (s *PgStore) DeleteGitCredential(ctx context.Context, id int) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM git_credentials WHERE id = $1`, id)
+	tag, err := s.pool.Exec(ctx, `DELETE FROM git_credentials WHERE tenant_id = $1 AND id = $2`, tenant.ID(ctx), id)
 	if err != nil {
 		return err
 	}

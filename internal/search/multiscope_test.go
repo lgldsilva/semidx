@@ -170,3 +170,35 @@ func TestSearchAllProjects_listError(t *testing.T) {
 		t.Error("expected a list-projects error")
 	}
 }
+
+func TestFuseRankedResultsUsesReciprocalRankAcrossProjects(t *testing.T) {
+	resp := fuseRankedResults([]rankedResult{
+		{result: store.SearchResult{FilePath: "alpha\x00deep.go", Score: 0.99}, project: "alpha", sourceRank: 2},
+		{result: store.SearchResult{FilePath: "beta\x00main.go", Score: 0.60}, project: "beta", sourceRank: 1},
+	}, 0, 0, 5, aggFlags{})
+	if len(resp.Results) != 2 {
+		t.Fatalf("got %d results, want 2", len(resp.Results))
+	}
+	if resp.Results[0].Project != "beta" {
+		t.Fatalf("RRF order = %q then %q, want beta first", resp.Results[0].Project, resp.Results[1].Project)
+	}
+	if resp.Results[0].FusionScore <= resp.Results[1].FusionScore {
+		t.Fatalf("fusion scores = %v, %v; want descending", resp.Results[0].FusionScore, resp.Results[1].FusionScore)
+	}
+	if resp.Results[0].Score != 0.60 {
+		t.Fatalf("original similarity score was changed: %v", resp.Results[0].Score)
+	}
+}
+
+func TestFuseRankedResultsAggregatesDuplicateCandidate(t *testing.T) {
+	resp := fuseRankedResults([]rankedResult{
+		{result: store.SearchResult{FilePath: "p\x00same.go", StartLine: 1, EndLine: 2, Score: 0.4}, project: "p", sourceRank: 3},
+		{result: store.SearchResult{FilePath: "p\x00same.go", StartLine: 1, EndLine: 2, Score: 0.8}, project: "p", sourceRank: 1},
+	}, 0, 0, 5, aggFlags{})
+	if len(resp.Results) != 1 {
+		t.Fatalf("duplicate candidate count = %d, want 1", len(resp.Results))
+	}
+	if resp.Results[0].Score != 0.8 || resp.Results[0].FusionScore <= 1/61.0 {
+		t.Fatalf("duplicate fusion = %+v, want max original score and summed ranks", resp.Results[0])
+	}
+}

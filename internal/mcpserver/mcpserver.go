@@ -678,6 +678,8 @@ func gitStatusHandler(b GitBackend, defaultProject string) mcp.ToolHandlerFor[gi
 
 type multiSearchInput struct {
 	Identities    []string `json:"identities" jsonschema:"project identities to search (git identity or path:identity)"`
+	Projects      []string `json:"projects,omitempty" jsonschema:"project names to search; use all=true for the whole tenant"`
+	All           bool     `json:"all,omitempty" jsonschema:"search every project in the active tenant"`
 	Query         string   `json:"query" jsonschema:"the natural-language search query"`
 	TopK          int      `json:"top_k,omitempty" jsonschema:"number of results to return (default 5)"`
 	Graph         bool     `json:"graph,omitempty" jsonschema:"expand results via dependency graph (Graph-RAG)"`
@@ -690,6 +692,8 @@ func multiSearchHandler(b MultiSearchBackend) mcp.ToolHandlerFor[multiSearchInpu
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in multiSearchInput) (*mcp.CallToolResult, any, error) {
 		req := search.MultiScopeRequest{
 			Identities:    in.Identities,
+			Projects:      in.Projects,
+			All:           in.All,
 			Query:         in.Query,
 			TopK:          in.TopK,
 			Graph:         in.Graph,

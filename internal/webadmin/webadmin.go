@@ -11,9 +11,11 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/secretbox"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/tenant"
 )
 
 const (
@@ -146,7 +149,10 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/api/login", a.apiLogin)
 	mux.HandleFunc("POST /admin/api/logout", a.protectAPI("", a.apiLogout))
 	mux.HandleFunc("GET /admin/api/me", a.protectAPI("", a.apiMe))
+	mux.HandleFunc("GET /admin/api/tenants", a.protectAPI("", a.apiTenants))
+	mux.HandleFunc("GET /admin/api/workspaces", a.protectAPI("", a.apiWorkspaces))
 	mux.HandleFunc("GET /admin/api/system", a.protectAPI("", a.apiSystem))
+	mux.HandleFunc("GET /admin/api/usage", a.protectAPI("", a.apiUsage))
 	mux.HandleFunc("GET /admin/api/projects", a.protectAPI("", a.projectsAPI))
 	mux.HandleFunc("POST /admin/api/projects", a.protectAPI("", a.apiCreateProject))
 	mux.HandleFunc("GET /admin/api/projects/{project}", a.protectAPI("", a.apiProjectDetail))
@@ -200,6 +206,11 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/api/projects/{project}/callers", a.protectAPI("", a.apiProjectCallers))
 	mux.HandleFunc("GET /admin/api/projects/{project}/deps", a.protectAPI("", a.apiProjectDeps))
 	mux.HandleFunc("GET /admin/api/projects/{project}/graph-stats", a.protectAPI("", a.apiProjectGraphStats))
+	mux.HandleFunc("GET /admin/api/projects/{project}/dependencies", a.protectAPI("", a.apiProjectDependencies))
+	mux.HandleFunc("GET /admin/api/projects/{project}/dependencies/shared", a.protectAPI("", a.apiProjectSharedDependencies))
+	mux.HandleFunc("GET /admin/api/projects/{project}/runtime-edges", a.protectAPI("", a.apiProjectRuntimeEdges))
+	mux.HandleFunc("GET /admin/api/runtime-graph", a.protectAPI("", a.apiRuntimeGraph))
+	mux.HandleFunc("PUT /admin/api/projects/{project}/privacy", a.protectAPI("", a.apiProjectPrivacy))
 	mux.HandleFunc("GET /admin/api/projects/{project}/dead-code", a.protectAPI("", a.apiProjectDeadCode))
 	mux.HandleFunc("GET /admin/api/projects/{project}/sbom", a.protectAPI("", a.apiProjectSbom))
 
@@ -269,8 +280,79 @@ func (a *Admin) protectMode(role string, fn authedHandler, jsonAPI bool) http.Ha
 			a.writeRoleError(w, jsonAPI)
 			return
 		}
+		if tenantReq, ok := a.withTenantContext(w, r, ac, jsonAPI); !ok {
+			return
+		} else {
+			r = tenantReq
+		}
 		fn(w, r, ac)
 	}
+}
+
+// withTenantContext applies the browser's tenant selector after authenticating
+// the session. The header is only a selector; membership (or a platform admin
+// session) remains the authority.
+func (a *Admin) withTenantContext(w http.ResponseWriter, r *http.Request, ac *authCtx, jsonAPI bool) (*http.Request, bool) {
+	ts, ok := a.store.(store.TenantStore)
+	if !ok {
+		return r, true // SQLite/test doubles remain single-tenant.
+	}
+	tc := tenant.Context{ID: tenant.DefaultID, UserID: ac.user.ID, Role: ac.user.Role, GlobalAdmin: ac.user.Role == "admin"}
+	if slug := strings.TrimSpace(r.Header.Get("X-Semidx-Tenant")); slug != "" {
+		t, err := ts.GetTenantBySlug(r.Context(), slug)
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSONErr(w, http.StatusForbidden, "tenant access denied")
+			return nil, false
+		}
+		if err != nil {
+			a.log.Error("tenant lookup failed", "err", err)
+			a.writeInternalError(w, jsonAPI)
+			return nil, false
+		}
+		if !tc.GlobalAdmin {
+			allowed, err := ts.CanAccessTenant(r.Context(), ac.user.ID, t.ID)
+			if err != nil {
+				a.log.Error("tenant membership lookup failed", "err", err)
+				a.writeInternalError(w, jsonAPI)
+				return nil, false
+			}
+			if !allowed {
+				writeJSONErr(w, http.StatusForbidden, "tenant access denied")
+				return nil, false
+			}
+		}
+		tc.ID = t.ID
+	}
+	if ws, supported := a.store.(store.WorkspaceStore); supported {
+		workspaceSlug := strings.TrimSpace(r.Header.Get("X-Semidx-Workspace"))
+		if workspaceSlug == "" {
+			workspaceSlug = "default"
+		}
+		baseCtx, err := tenant.With(r.Context(), tc)
+		if err != nil {
+			a.log.Error("tenant context failed", "err", err)
+			a.writeInternalError(w, jsonAPI)
+			return nil, false
+		}
+		workspace, err := ws.GetWorkspaceBySlug(baseCtx, workspaceSlug)
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSONErr(w, http.StatusForbidden, "workspace access denied")
+			return nil, false
+		}
+		if err != nil {
+			a.log.Error("workspace lookup failed", "err", err)
+			a.writeInternalError(w, jsonAPI)
+			return nil, false
+		}
+		tc.WorkspaceID, tc.Workspace = workspace.ID, workspace.Slug
+	}
+	ctx, err := tenant.With(r.Context(), tc)
+	if err != nil {
+		a.log.Error("tenant context failed", "err", err)
+		a.writeInternalError(w, jsonAPI)
+		return nil, false
+	}
+	return r.WithContext(ctx), true
 }
 
 // --- sessions & cookies ------------------------------------------------------

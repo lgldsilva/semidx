@@ -4,9 +4,34 @@
 package privacy
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 )
+
+// Mode is the project-level data routing policy persisted by the server.
+type Mode string
+
+const (
+	Cloud  Mode = "cloud"
+	Hybrid Mode = "hybrid"
+	Edge   Mode = "edge"
+)
+
+// NormalizeMode validates a project policy. Hybrid preserves the historical
+// semidx behavior and is the compatibility default.
+func NormalizeMode(value string) (Mode, error) {
+	switch Mode(strings.ToLower(strings.TrimSpace(value))) {
+	case Cloud:
+		return Cloud, nil
+	case Hybrid, "":
+		return Hybrid, nil
+	case Edge:
+		return Edge, nil
+	default:
+		return "", fmt.Errorf("privacy mode must be cloud, hybrid, or edge")
+	}
+}
 
 // sensitiveKeywords match any path segment (case-insensitive substring).
 var sensitiveKeywords = []string{

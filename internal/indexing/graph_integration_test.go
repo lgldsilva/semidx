@@ -22,7 +22,7 @@ func TestGraphIntegrationDependenciesRecorded(t *testing.T) {
 	src := t.TempDir()
 
 	// Create a go.mod so the indexer can resolve the module path.
-	writeFile(t, src, "go.mod", "module github.com/semidx/test\n\ngo 1.25\n")
+	writeFile(t, src, "go.mod", "module github.com/semidx/test\n\ngo 1.25\n\nrequire github.com/acme/lib v1.2.3\n")
 
 	// A Go file that imports local packages.
 	writeFile(t, src, "main.go", `package main
@@ -99,6 +99,14 @@ func main() {
 	// Verify README.md is not in the graph at all.
 	if deps, ok := graph["README.md"]; ok {
 		t.Errorf("README.md unexpectedly has dependencies: %v", deps)
+	}
+
+	catalog, err := st.ListProjectDependencies(ctx, pid)
+	if err != nil {
+		t.Fatalf("ListProjectDependencies: %v", err)
+	}
+	if len(catalog) != 1 || catalog[0].Name != "github.com/acme/lib" {
+		t.Errorf("manifest catalog = %+v, want github.com/acme/lib", catalog)
 	}
 }
 
