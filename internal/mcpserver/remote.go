@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/codeintel"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/pkg/client"
@@ -101,6 +102,26 @@ func (b *clientBackend) Reindex(ctx context.Context, project, jobType string) (s
 
 func (b *clientBackend) Capabilities() agent.Capabilities {
 	return agent.Capabilities{Flags: agent.CapRemoteIndex}
+}
+
+func (b *clientBackend) Callers(_ context.Context, _, _ string, _ int) (*codeintel.CallersResult, error) {
+	return nil, errCodeIntelRemote(toolSemanticCallers)
+}
+
+func (b *clientBackend) Explain(_ context.Context, _, _ string, _ int) (*codeintel.ExplainResult, error) {
+	return nil, errCodeIntelRemote(toolSemanticExplain)
+}
+
+func (b *clientBackend) Impact(_ context.Context, _, _ string, _ int, _ int) (*codeintel.ImpactResult, error) {
+	return nil, errCodeIntelRemote(toolSemanticImpact)
+}
+
+func (b *clientBackend) DeadCode(_ context.Context, _ string) (*codeintel.DeadCodeResult, error) {
+	return nil, errCodeIntelRemote(toolSemanticDeadCode)
+}
+
+func (b *clientBackend) Diff(_ context.Context, _ string) (*codeintel.DiffResult, error) {
+	return nil, errCodeIntelRemote(toolSemanticDiff)
 }
 
 var _ MultiSearchBackend = (*clientBackend)(nil)

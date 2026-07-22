@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/codeintel"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
@@ -349,6 +350,22 @@ func (b *stubBackend) Status(ctx context.Context, project string) (*StatusInfo, 
 	return b.statusFunc(ctx, project)
 }
 func (b *stubBackend) Capabilities() agent.Capabilities { return agent.Capabilities{} }
+
+func (b *stubBackend) Callers(context.Context, string, string, int) (*codeintel.CallersResult, error) {
+	return &codeintel.CallersResult{}, nil
+}
+func (b *stubBackend) Explain(context.Context, string, string, int) (*codeintel.ExplainResult, error) {
+	return &codeintel.ExplainResult{}, nil
+}
+func (b *stubBackend) Impact(context.Context, string, string, int, int) (*codeintel.ImpactResult, error) {
+	return &codeintel.ImpactResult{}, nil
+}
+func (b *stubBackend) DeadCode(context.Context, string) (*codeintel.DeadCodeResult, error) {
+	return &codeintel.DeadCodeResult{}, nil
+}
+func (b *stubBackend) Diff(context.Context, string) (*codeintel.DiffResult, error) {
+	return &codeintel.DiffResult{}, nil
+}
 
 func TestStatusHandler(t *testing.T) {
 	t.Parallel()

@@ -9,6 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/codeintel"
 	"github.com/lgldsilva/semidx/internal/mcpserver"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -130,4 +131,26 @@ func (b *serverBackend) safeErr(op, project string, err error) error {
 	}
 	b.s.log.Error("mcp "+op+" failed", "project", project, "err", err)
 	return errors.New(op + " failed")
+}
+
+// Code-intelligence tools are standalone/local-only for now (no server HTTP
+// endpoints yet). Return a structured error the MCP handler surfaces in-band.
+func (b *serverBackend) Callers(_ context.Context, _, _ string, _ int) (*codeintel.CallersResult, error) {
+	return nil, fmt.Errorf("code-intelligence tool %q is available in standalone/local mode only; remote server support is not yet implemented", "semantic_callers")
+}
+
+func (b *serverBackend) Explain(_ context.Context, _, _ string, _ int) (*codeintel.ExplainResult, error) {
+	return nil, fmt.Errorf("code-intelligence tool %q is available in standalone/local mode only; remote server support is not yet implemented", "semantic_explain")
+}
+
+func (b *serverBackend) Impact(_ context.Context, _, _ string, _ int, _ int) (*codeintel.ImpactResult, error) {
+	return nil, fmt.Errorf("code-intelligence tool %q is available in standalone/local mode only; remote server support is not yet implemented", "semantic_impact")
+}
+
+func (b *serverBackend) DeadCode(_ context.Context, _ string) (*codeintel.DeadCodeResult, error) {
+	return nil, fmt.Errorf("code-intelligence tool %q is available in standalone/local mode only; remote server support is not yet implemented", "semantic_deadcode")
+}
+
+func (b *serverBackend) Diff(_ context.Context, _ string) (*codeintel.DiffResult, error) {
+	return nil, fmt.Errorf("code-intelligence tool %q is available in standalone/local mode only; remote server support is not yet implemented", "semantic_diff")
 }

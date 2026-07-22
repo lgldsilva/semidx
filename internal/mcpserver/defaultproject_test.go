@@ -58,6 +58,9 @@ func TestToolDescriptionsMentionDefaultProject(t *testing.T) {
 	projectTools := map[string]bool{
 		toolSemanticSearch: true, toolSemanticReindex: true, toolSemanticStatus: true,
 		toolRepoWorktrees: true, toolRepoBranches: true, toolRepoStatus: true,
+		toolSemanticCallers: true, toolSemanticExplain: true, toolSemanticImpact: true,
+		toolSemanticDeadCode: true,
+		// semantic_diff has no project arg
 	}
 	for _, tool := range res.Tools {
 		mentions := strings.Contains(tool.Description, `"myproj"`)

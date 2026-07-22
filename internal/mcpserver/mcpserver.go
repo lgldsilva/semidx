@@ -24,6 +24,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/analyzer"
+	"github.com/lgldsilva/semidx/internal/codeintel"
 	"github.com/lgldsilva/semidx/internal/repotools"
 	"github.com/lgldsilva/semidx/internal/search"
 )
@@ -88,6 +89,14 @@ type Backend interface {
 	// Capabilities reports what the current runtime backend can do (local git,
 	// chat LLM, etc.). Used for tool gating and agent introspection.
 	Capabilities() agent.Capabilities
+
+	// Code-intelligence tools (fully implemented in standalone/local mode;
+	// remote/server backends return a structured "not yet implemented" error).
+	Callers(ctx context.Context, project, file string, line int) (*codeintel.CallersResult, error)
+	Explain(ctx context.Context, project, file string, line int) (*codeintel.ExplainResult, error)
+	Impact(ctx context.Context, project, file string, line int, depth int) (*codeintel.ImpactResult, error)
+	DeadCode(ctx context.Context, project string) (*codeintel.DeadCodeResult, error)
+	Diff(ctx context.Context, refRange string) (*codeintel.DiffResult, error)
 }
 
 // GitBackend extends Backend with read-only git workspace tools. Only
@@ -183,6 +192,11 @@ const (
 	toolSemanticNeighbors   = "semantic_neighbors"
 	toolSemanticTrace       = "semantic_trace"
 	toolSemanticSymbols     = "semantic_symbols"
+	toolSemanticCallers     = "semantic_callers"
+	toolSemanticExplain     = "semantic_explain"
+	toolSemanticImpact      = "semantic_impact"
+	toolSemanticDeadCode    = "semantic_deadcode"
+	toolSemanticDiff        = "semantic_diff"
 )
 
 // toolNames is the canonical list of every tool this server can register,
@@ -192,6 +206,8 @@ var toolNames = []string{
 	toolRepoWorktrees, toolRepoBranches, toolRepoStatus,
 	toolSemanticSearchMulti, toolSemanticAsk,
 	toolSemanticNeighbors, toolSemanticTrace, toolSemanticSymbols,
+	toolSemanticCallers, toolSemanticExplain, toolSemanticImpact,
+	toolSemanticDeadCode, toolSemanticDiff,
 }
 
 // ToolNames returns the canonical list of registrable tool names. Used by the
@@ -362,6 +378,7 @@ func build(b Backend, allowed map[string]bool, explicit bool, defaultProject str
 	registerMultiSearchTool(s, b, allowed, explicit)
 	registerAskTool(s, b, allowed, explicit, defaultProject)
 	registerGraphTools(s, b, allowed, explicit, defaultProject)
+	registerCodeIntelTools(s, b, allowed, defaultProject)
 	registerResources(s, b)
 	return s
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/analyzer"
+	"github.com/lgldsilva/semidx/internal/codeintel"
 	"github.com/lgldsilva/semidx/internal/repotools"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -35,7 +36,7 @@ type graphLister interface {
 // Backend interface, so `semidx mcp` works without a server.
 type localBackend struct {
 	svc         *search.Service
-	projects    projectLister
+	idx         store.IndexStore
 	keywordOnly bool
 	caps        agent.Capabilities
 }
@@ -43,11 +44,11 @@ type localBackend struct {
 // NewLocalBackend wraps a local search service and store as an MCP Backend
 // (standalone mode). keywordOnly mirrors the index's embedding mode. caps
 // describes what the local runtime offers (local git, chat LLM, etc.).
-func NewLocalBackend(svc *search.Service, projects projectLister, keywordOnly bool, caps agent.Capabilities) Backend {
+func NewLocalBackend(svc *search.Service, idx store.IndexStore, keywordOnly bool, caps agent.Capabilities) Backend {
 	if caps.Flags == 0 {
 		caps.Flags = agent.CapLocalGit | agent.CapIndexLocal
 	}
-	return &localBackend{svc: svc, projects: projects, keywordOnly: keywordOnly, caps: caps}
+	return &localBackend{svc: svc, idx: idx, keywordOnly: keywordOnly, caps: caps}
 }
 
 func (b *localBackend) Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchOutput, error) {
@@ -88,7 +89,7 @@ func safeSearchErr(err error) error {
 }
 
 func (b *localBackend) Projects(ctx context.Context) ([]ProjectInfo, error) {
-	projects, err := b.projects.ListProjects(ctx, 0, 0)
+	projects, err := b.idx.ListProjects(ctx, 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -103,15 +104,15 @@ func (b *localBackend) Projects(ctx context.Context) ([]ProjectInfo, error) {
 
 func (b *localBackend) Status(ctx context.Context, project string) (*StatusInfo, error) {
 	// Try to resolve the project by name first, then by identity.
-	proj, err := b.projects.GetProject(ctx, project)
+	proj, err := b.idx.GetProject(ctx, project)
 	if err != nil {
 		// Fallback: try identity lookup (the project may be a git identity).
-		proj, err = b.projects.GetProjectByIdentity(ctx, project)
+		proj, err = b.idx.GetProjectByIdentity(ctx, project)
 		if err != nil {
 			return nil, fmt.Errorf("project %q not found", project)
 		}
 	}
-	count, err := b.projects.CountProjectFiles(ctx, proj.ID)
+	count, err := b.idx.CountProjectFiles(ctx, proj.ID)
 	if err != nil {
 		return nil, fmt.Errorf("count files: %w", err)
 	}
@@ -136,9 +137,9 @@ func (b *localBackend) Capabilities() agent.Capabilities { return b.caps }
 
 // resolveProject resolves a project name or identity to a store.Project.
 func (b *localBackend) resolveProject(ctx context.Context, project string) (*store.Project, error) {
-	p, err := b.projects.GetProject(ctx, project)
+	p, err := b.idx.GetProject(ctx, project)
 	if err != nil {
-		p, err = b.projects.GetProjectByIdentity(ctx, project)
+		p, err = b.idx.GetProjectByIdentity(ctx, project)
 		if err != nil {
 			return nil, fmt.Errorf("project %q not found locally", project)
 		}
@@ -155,7 +156,7 @@ func (b *localBackend) graphProject(ctx context.Context, project string) (*store
 	if err != nil {
 		return nil, nil, err
 	}
-	gl, ok := b.projects.(graphLister)
+	gl, ok := b.idx.(graphLister)
 	if !ok {
 		return nil, nil, fmt.Errorf("graph operations are not supported by the current store")
 	}
@@ -306,6 +307,51 @@ func validateRelativePath(path string) error {
 		}
 	}
 	return nil
+}
+
+// Callers resolves the project and returns reverse importers of the symbol's file.
+func (b *localBackend) Callers(ctx context.Context, project, file string, line int) (*codeintel.CallersResult, error) {
+	proj, err := codeintel.ResolveProject(ctx, b.idx, project)
+	if err != nil {
+		return nil, err
+	}
+	return codeintel.Callers(ctx, b.idx, proj, codeintel.FileLine{File: file, Line: line})
+}
+
+// Explain resolves the project and returns structured symbol context.
+func (b *localBackend) Explain(ctx context.Context, project, file string, line int) (*codeintel.ExplainResult, error) {
+	proj, err := codeintel.ResolveProject(ctx, b.idx, project)
+	if err != nil {
+		return nil, err
+	}
+	return codeintel.Explain(ctx, b.idx, proj, codeintel.FileLine{File: file, Line: line})
+}
+
+// Impact resolves the project and returns the reverse-dependency blast radius.
+func (b *localBackend) Impact(ctx context.Context, project, file string, line int, depth int) (*codeintel.ImpactResult, error) {
+	proj, err := codeintel.ResolveProject(ctx, b.idx, project)
+	if err != nil {
+		return nil, err
+	}
+	return codeintel.Impact(ctx, b.idx, proj, codeintel.FileLine{File: file, Line: line}, depth)
+}
+
+// DeadCode resolves the project and reports unused symbols.
+func (b *localBackend) DeadCode(ctx context.Context, project string) (*codeintel.DeadCodeResult, error) {
+	proj, err := codeintel.ResolveProject(ctx, b.idx, project)
+	if err != nil {
+		return nil, err
+	}
+	return codeintel.DeadCode(ctx, b.idx, proj)
+}
+
+// Diff parses ref_range and runs a semantic symbol diff against the process CWD.
+func (b *localBackend) Diff(_ context.Context, refRange string) (*codeintel.DiffResult, error) {
+	ref1, ref2, threeDot, err := codeintel.ParseRefRange(refRange)
+	if err != nil {
+		return nil, err
+	}
+	return codeintel.Diff("", ref1, ref2, threeDot)
 }
 
 // Compile-time check: *localBackend satisfies GitBackend, MultiSearchBackend and GraphBackend.

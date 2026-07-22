@@ -315,6 +315,7 @@ func TestLocalBackendProjectsError(t *testing.T) {
 // countFilesFailer is a projectLister that returns a valid project from
 // GetProject but fails on CountProjectFiles to exercise that error branch.
 type countFilesFailer struct {
+	store.IndexStore
 	store.Project
 }
 
@@ -340,7 +341,7 @@ func (m *countFilesFailer) ListFileHashes(_ context.Context, _ int) (map[string]
 // TestLocalBackendStatusCountFilesError verifies the CountProjectFiles error branch.
 func TestLocalBackendStatusCountFilesError(t *testing.T) {
 	lb := &localBackend{
-		projects: &countFilesFailer{Project: store.Project{Name: "testproj"}},
+		idx: &countFilesFailer{Project: store.Project{Name: "testproj"}},
 	}
 	_, err := lb.Status(context.Background(), "testproj")
 	if err == nil {
@@ -352,7 +353,7 @@ func TestLocalBackendStatusCountFilesError(t *testing.T) {
 }
 
 // emptyPathLister is a projectLister that returns a project with an empty path.
-type emptyPathLister struct{}
+type emptyPathLister struct{ store.IndexStore }
 
 func (m *emptyPathLister) ListProjects(_ context.Context, _, _ int) ([]store.Project, error) {
 	return []store.Project{{Name: "testproj"}}, nil
@@ -374,7 +375,7 @@ func (m *emptyPathLister) ListFileHashes(_ context.Context, _ int) (map[string]s
 // TestLocalBackendResolveProjectPath_EmptyPath verifies the error branch when
 // a project exists but has no local path.
 func TestLocalBackendResolveProjectPath_EmptyPath(t *testing.T) {
-	lb := &localBackend{projects: &emptyPathLister{}}
+	lb := &localBackend{idx: &emptyPathLister{}}
 	_, err := lb.resolveProjectPath(context.Background(), "testproj")
 	if err == nil {
 		t.Fatal("expected error for empty-path project")
