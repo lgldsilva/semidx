@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/lgldsilva/semidx/internal/passwd"
+	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/tenant"
 )
 
 // ensure strconv used in this file (apiListAllJobs).
@@ -100,9 +102,11 @@ func (a *Admin) apiLogout(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 }
 
 func (a *Admin) apiMe(w http.ResponseWriter, r *http.Request, ac *authCtx) {
+	tenantID := tenant.ID(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user": map[string]any{"id": ac.user.ID, "username": ac.user.Username, "role": ac.user.Role},
-		"csrf": ac.csrf,
+		"user":      map[string]any{"id": ac.user.ID, "username": ac.user.Username, "role": ac.user.Role},
+		"tenant_id": tenantID,
+		"csrf":      ac.csrf,
 	})
 }
 
@@ -141,13 +145,14 @@ func (a *Admin) apiSystem(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 // --- projects / jobs / search JSON -------------------------------------------
 
 type createProjectBody struct {
-	Name       string                   `json:"name"`
-	Model      string                   `json:"model"`
-	SourceType string                   `json:"source_type"`
-	GitURL     string                   `json:"git_url"`
-	Branch     string                   `json:"branch"`
-	Index      bool                     `json:"index"`
-	Credential *inlineProjectCredential `json:"credential"`
+	Name        string                   `json:"name"`
+	Model       string                   `json:"model"`
+	SourceType  string                   `json:"source_type"`
+	GitURL      string                   `json:"git_url"`
+	Branch      string                   `json:"branch"`
+	Index       bool                     `json:"index"`
+	PrivacyMode string                   `json:"privacy_mode"`
+	Credential  *inlineProjectCredential `json:"credential"`
 }
 
 // normalizeCreateProjectBody validates and normalizes a create-project payload.
@@ -162,6 +167,9 @@ func normalizeCreateProjectBody(body *createProjectBody) (name string, status in
 	}
 	if body.Model == "" {
 		body.Model = "bge-m3"
+	}
+	if _, err := privacy.NormalizeMode(body.PrivacyMode); err != nil {
+		return "", http.StatusBadRequest, err.Error()
 	}
 	name = strings.TrimSpace(body.Name)
 	body.GitURL = strings.TrimSpace(body.GitURL)
@@ -231,6 +239,15 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 	if !validateCreateProjectCredential(w, ac, &body) {
 		return
 	}
+	if err := enforceProjectQuota(r.Context(), a.store); err != nil {
+		if errors.Is(err, errTenantQuotaExceeded) {
+			writeJSONErr(w, http.StatusTooManyRequests, err.Error())
+			return
+		}
+		a.log.Error("project quota lookup failed", "err", err)
+		writeJSONErr(w, http.StatusInternalServerError, "could not evaluate tenant quota")
+		return
+	}
 
 	proj, err := a.store.CreateProject(r.Context(), name, body.Model, body.SourceType, body.GitURL, body.Branch, 0)
 	if errors.Is(err, store.ErrProjectExists) {
@@ -241,6 +258,15 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 		a.log.Error("create project failed", "err", err)
 		writeJSONErr(w, http.StatusInternalServerError, "could not create project")
 		return
+	}
+	if policy, ok := a.store.(store.ProjectPolicyStore); ok {
+		mode, _ := privacy.NormalizeMode(body.PrivacyMode)
+		if err := policy.SetProjectPrivacy(r.Context(), proj.ID, string(mode)); err != nil {
+			a.log.Error("set project privacy failed", "err", err)
+			writeJSONErr(w, http.StatusInternalServerError, "could not save project privacy policy")
+			return
+		}
+		proj.PrivacyMode = string(mode)
 	}
 
 	if err := a.createInlineProjectCredential(r.Context(), proj.ID, body.Credential); err != nil {
@@ -345,7 +371,7 @@ func (a *Admin) apiProjectStatus(w http.ResponseWriter, r *http.Request, ac *aut
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name": proj.Name, "identity": proj.Identity, "path": proj.Path,
 		"model": proj.Model, "status": proj.Status, "source_type": proj.SourceType,
-		"git_url": proj.GitURL, "branch": proj.Branch, "total_files": len(hashes),
+		"git_url": proj.GitURL, "branch": proj.Branch, "privacy_mode": proj.PrivacyMode, "total_files": len(hashes),
 	})
 }
 
@@ -604,12 +630,14 @@ func hitsToJSON(hits []adminSearchHit) []map[string]any {
 	out := make([]map[string]any, 0, len(hits))
 	for _, h := range hits {
 		out = append(out, map[string]any{
-			"project":    h.Project,
-			"path":       h.FilePath,
-			"start_line": h.StartLine,
-			"end_line":   h.EndLine,
-			"score":      h.Score,
-			"content":    h.Content,
+			"project":      h.Project,
+			"path":         h.FilePath,
+			"start_line":   h.StartLine,
+			"end_line":     h.EndLine,
+			"score":        h.Score,
+			"fusion_score": h.FusionScore,
+			"source_rank":  h.SourceRank,
+			"content":      h.Content,
 		})
 	}
 	return out

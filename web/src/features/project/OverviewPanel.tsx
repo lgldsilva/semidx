@@ -59,6 +59,8 @@ export function OverviewPanel({
             {p.model || '—'}
             {p.dims ? ` · ${p.dims}d` : ''}
           </dd>
+          <dt className={DT}>Data policy</dt>
+          <dd className={DD}>{p.privacy_mode || 'hybrid'}</dd>
           <dt className={DT}>License</dt>
           <dd className={DD}>{p.license || '—'}</dd>
           <dt className={DT}>Last commit</dt>

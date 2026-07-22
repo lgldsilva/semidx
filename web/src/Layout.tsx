@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { api, type SystemInfo } from './api'
+import { api, getWorkspaceSelection, setWorkspaceSelection, type SystemInfo, type Workspace } from './api'
 import { Badge } from './components/Badge'
 import { Button } from './components/Button'
 import { ThemeToggle } from './components/ThemeToggle'
 import { cx } from './lib/cx'
+import { Select } from './components/Input'
 import { useAuth } from './auth'
 
 const NAV_LINK = 'no-underline hover:underline'
@@ -16,10 +17,25 @@ function navClass({ isActive }: { isActive: boolean }) {
 export function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
   const { user, logout } = useAuth()
   const [sys, setSys] = useState<SystemInfo | null>(null)
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [workspace, setWorkspace] = useState(getWorkspaceSelection)
 
   useEffect(() => {
     void api.system().then(setSys).catch(() => setSys(null))
+    void api.workspaces().then((items) => {
+      setWorkspaces(items)
+      if (items.length && !items.some((item) => item.slug === getWorkspaceSelection())) {
+        setWorkspace(items[0].slug)
+        setWorkspaceSelection(items[0].slug)
+      }
+    }).catch(() => setWorkspaces([]))
   }, [])
+
+  function onWorkspaceChange(slug: string) {
+    setWorkspace(slug)
+    setWorkspaceSelection(slug)
+    window.location.reload()
+  }
 
   return (
     <div className="min-h-screen">
@@ -44,6 +60,21 @@ export function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
           CLI guide
         </NavLink>
         <span className="flex-1" />
+        {workspaces.length > 0 && (
+          <label className="flex items-center gap-1.5 text-muted" htmlFor="workspace-select">
+            Workspace
+            <Select
+              id="workspace-select"
+              className="py-1 text-xs"
+              value={workspace}
+              onChange={(e) => onWorkspaceChange(e.target.value)}
+            >
+              {workspaces.map((item) => (
+                <option key={item.slug} value={item.slug}>{item.name}</option>
+              ))}
+            </Select>
+          </label>
+        )}
         <ThemeToggle />
         {user && (
           <span className="inline-flex items-center gap-1.5 text-muted">

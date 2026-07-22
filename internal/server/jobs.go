@@ -8,9 +8,14 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/lgldsilva/semidx/internal/depcatalog"
+	"github.com/lgldsilva/semidx/internal/depresolve"
+	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/gitsync"
 	"github.com/lgldsilva/semidx/internal/indexing"
+	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/tenant"
 )
 
 const errJobNotFound = "job not found"
@@ -102,7 +107,19 @@ func (s *Server) claimAndRun(ctx context.Context, dataDir string) bool {
 		return false
 	}
 	s.jobsQueued.Dec()
-	s.runJob(ctx, job, dataDir)
+	tenantID := job.TenantID
+	if tenantID <= 0 {
+		// Store fakes and jobs created before migration 00020 have no tenant
+		// field; retain the single-tenant worker behavior for those callers.
+		tenantID = tenant.DefaultID
+	}
+	jobCtx, err := tenant.With(ctx, tenant.Context{ID: tenantID})
+	if err != nil {
+		s.log.Error("invalid job tenant", "job", job.ID, "tenant", job.TenantID, "err", err)
+		_ = s.store.FailJob(ctx, job.ID, err.Error())
+		return true
+	}
+	s.runJob(jobCtx, job, dataDir)
 	return true
 }
 
@@ -129,6 +146,10 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 		s.runBatchJob(ctx, job, proj)
 		return
 	}
+	if job.Type == "resolve_dependencies" {
+		s.runDependencyResolveJob(ctx, job, proj, dataDir)
+		return
+	}
 
 	path, failMsg := s.resolveJobIndexPath(ctx, proj, dataDir)
 	if failMsg != "" {
@@ -140,7 +161,16 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 		return
 	}
 
-	info, err := s.emb.ModelInfo(ctx, proj.Model)
+	modelCtx := ctx
+	privacyMode, modeErr := privacy.NormalizeMode(proj.PrivacyMode)
+	if modeErr != nil {
+		fail("invalid project privacy policy")
+		return
+	}
+	if privacyMode == privacy.Edge {
+		modelCtx = embed.WithForceLocal(ctx, true)
+	}
+	info, err := s.emb.ModelInfo(modelCtx, proj.Model)
 	if err != nil {
 		fail("model info: " + err.Error())
 		return
@@ -150,11 +180,13 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 		return
 	}
 
-	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, s.indexerOptsForJob(job.Type, func(done, total, filesIndexed, chunksCreated, errorCount int) {
+	opts := s.indexerOptsForJob(job.Type, func(done, total, filesIndexed, chunksCreated, errorCount int) {
 		if err := s.store.UpdateJobProgress(ctx, job.ID, done, total, filesIndexed, chunksCreated, errorCount); err != nil {
 			s.log.Warn("update job progress", "job", job.ID, "err", err)
 		}
-	}))
+	})
+	opts.PrivacyMode = privacyMode
+	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, opts)
 	stats, err := idx.IndexProject(ctx, job.ProjectID, path, proj.Model, s.indexLimits.MaxFilesPerProject)
 	if err != nil {
 		fail("index: " + err.Error())
@@ -168,6 +200,54 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 	s.jobsTotal.WithLabelValues(job.Type, "succeeded").Inc()
 	s.log.Info("index job done", "job", job.ID, "project", proj.Name,
 		"files", stats.FilesIndexed, "chunks", stats.ChunksCreated)
+}
+
+// runDependencyResolveJob executes native package-manager tooling in a
+// managed worker and refreshes the same catalog used by customer agents. The
+// job is deliberately separate from indexing because resolution may access a
+// package registry or mutate a package-manager workspace.
+func (s *Server) runDependencyResolveJob(ctx context.Context, job *store.Job, proj *store.Project, dataDir string) {
+	depStore, ok := s.store.(store.DependencyStore)
+	if !ok {
+		_ = s.store.FailJob(ctx, job.ID, "dependency catalog unavailable")
+		return
+	}
+	path, failMsg := s.resolveJobIndexPath(ctx, proj, dataDir)
+	if failMsg != "" {
+		_ = s.store.FailJob(ctx, job.ID, failMsg)
+		return
+	}
+	if path == "" {
+		_ = s.store.FailJob(ctx, job.ID, "project has no local source path; use a customer agent")
+		return
+	}
+	resolved, err := depresolve.New().ResolveProject(ctx, path)
+	if err != nil {
+		_ = s.store.FailJob(ctx, job.ID, err.Error())
+		return
+	}
+	deps := make([]store.Dependency, 0, len(resolved))
+	for _, dep := range resolved {
+		deps = append(deps, dependencyFromCatalog(dep))
+	}
+	if err := depStore.ReplaceProjectDependencies(ctx, proj.ID, deps); err != nil {
+		_ = s.store.FailJob(ctx, job.ID, "store dependencies: "+err.Error())
+		return
+	}
+	if err := s.store.CompleteJob(ctx, job.ID, 0, 0, 0, 0); err != nil {
+		s.log.Error("mark dependency job complete", "job", job.ID, "err", err)
+		return
+	}
+	s.jobsTotal.WithLabelValues(job.Type, "succeeded").Inc()
+	s.log.Info("dependency resolution job done", "job", job.ID, "project", proj.Name, "dependencies", len(deps))
+}
+
+func dependencyFromCatalog(dep depcatalog.Dependency) store.Dependency {
+	return store.Dependency{
+		Ecosystem: string(dep.Ecosystem), Name: dep.Name, NormalizedName: dep.NormalizedName,
+		Constraint: dep.Constraint, ResolvedVersion: dep.ResolvedVersion, Scope: dep.Scope,
+		Source: dep.Source, Manifest: dep.Manifest, Direct: dep.Direct,
+	}
 }
 
 // resolveJobIndexPath returns the filesystem path to index for proj.
@@ -199,7 +279,16 @@ func (s *Server) runBatchJob(ctx context.Context, job *store.Job, proj *store.Pr
 		return
 	}
 
-	info, err := s.emb.ModelInfo(ctx, proj.Model)
+	modelCtx := ctx
+	privacyMode, modeErr := privacy.NormalizeMode(proj.PrivacyMode)
+	if modeErr != nil {
+		_ = s.store.FailJob(ctx, job.ID, "invalid project privacy policy")
+		return
+	}
+	if privacyMode == privacy.Edge {
+		modelCtx = embed.WithForceLocal(ctx, true)
+	}
+	info, err := s.emb.ModelInfo(modelCtx, proj.Model)
 	if err != nil {
 		_ = s.store.FailJob(ctx, job.ID, "model info: "+err.Error())
 		return

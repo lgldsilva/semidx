@@ -20,6 +20,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/keyword"
+	"github.com/lgldsilva/semidx/internal/tenant"
 )
 
 // maxDims bounds the embedding dimension used to name a chunks_<dims> table.
@@ -35,6 +36,8 @@ const hnswVectorLimit = 2000
 // Project is an indexed repository's metadata row.
 type Project struct {
 	ID            int
+	TenantID      int
+	WorkspaceID   int
 	Name          string
 	Path          string
 	Model         string
@@ -45,6 +48,16 @@ type Project struct {
 	Identity      string // stable dedup key (git remote/common-dir, or absolute path)
 	Dims          int    // embedding dimension used for this project (0 = unknown/probe)
 	LicenseSPDXID string // SPDX identifier detected from project files (e.g. "MIT")
+	// PrivacyMode controls where project content may be embedded. The values are
+	// cloud, hybrid (the default), or edge (local-only providers).
+	PrivacyMode string
+}
+
+func activeWorkspaceID(ctx context.Context) int {
+	if tc, ok := tenant.From(ctx); ok && tc.WorkspaceID > 0 {
+		return tc.WorkspaceID
+	}
+	return 0
 }
 
 // Sentinel errors so callers (e.g. the HTTP layer) can map to status codes
@@ -65,6 +78,8 @@ const KeywordDims = 1
 // hash is the token's jti.
 type Token struct {
 	ID         int
+	TenantID   int
+	UserID     int
 	Name       string
 	Scopes     []string
 	Kind       string
@@ -193,6 +208,66 @@ type ProjectStore interface {
 	ListProjects(ctx context.Context, limit, offset int) ([]Project, error)
 	DeleteProject(ctx context.Context, name string) error
 	UpdateProjectStatus(ctx context.Context, id int, status string) error
+}
+
+// ProjectPolicyStore is an optional extension for stores that persist
+// product-level project policies. It stays separate from ProjectStore so
+// standalone and older test doubles remain source-compatible.
+type ProjectPolicyStore interface {
+	SetProjectPrivacy(ctx context.Context, projectID int, mode string) error
+}
+
+// RuntimeEdge describes an observed communication edge. A target may be
+// another indexed project or an external service; both are useful in a SaaS
+// portfolio graph.
+type RuntimeEdge struct {
+	TenantID          int       `json:"tenant_id"`
+	WorkspaceID       int       `json:"workspace_id"`
+	SourceProjectID   int       `json:"source_project_id"`
+	SourceProjectName string    `json:"source_project"`
+	TargetProjectID   int       `json:"target_project_id,omitempty"`
+	TargetProjectName string    `json:"target_project"`
+	SourceComponent   string    `json:"source_component,omitempty"`
+	TargetComponent   string    `json:"target_component,omitempty"`
+	Protocol          string    `json:"protocol,omitempty"`
+	Environment       string    `json:"environment,omitempty"`
+	RequestCount      int64     `json:"request_count"`
+	ErrorCount        int64     `json:"error_count"`
+	P95LatencyMS      float64   `json:"p95_latency_ms"`
+	FirstSeen         time.Time `json:"first_seen"`
+	LastSeen          time.Time `json:"last_seen"`
+}
+
+// RuntimeGraphStore persists observed runtime communication independently of
+// the static file dependency graph. This optional interface lets the REST API,
+// CLI and SQLite standalone mode share the same contract.
+type RuntimeGraphStore interface {
+	UpsertRuntimeEdges(ctx context.Context, sourceProjectID int, edges []RuntimeEdge) error
+	ListRuntimeEdges(ctx context.Context, projectID int) ([]RuntimeEdge, error)
+	ListWorkspaceRuntimeEdges(ctx context.Context, limit int) ([]RuntimeEdge, error)
+}
+
+// TenantQuota and TenantUsage are the first SaaS operations seam. Limits are
+// zero when unlimited; billing can later map plans to these same fields.
+type TenantQuota struct {
+	TenantID        int
+	Plan            string
+	MaxProjects     int64
+	MaxRuntimeEdges int64
+}
+
+type TenantUsage struct {
+	TenantID     int
+	Projects     int64
+	RuntimeEdges int64
+}
+
+// QuotaStore is optional so old local/test stores continue to work. Server
+// creation paths use it when present and fail open only for legacy stores.
+type QuotaStore interface {
+	GetTenantQuota(ctx context.Context) (*TenantQuota, error)
+	SetTenantQuota(ctx context.Context, quota TenantQuota) error
+	GetTenantUsage(ctx context.Context) (*TenantUsage, error)
 }
 
 // UserStore groups user management operations.
@@ -598,19 +673,20 @@ func (s *PgStore) UpsertProject(ctx context.Context, name, path, model string, d
 	// name is no longer UNIQUE (F14), so upsert on identity instead — for this
 	// legacy by-name API the identity is the name, keeping it idempotent per name.
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO projects (name, path, model, status, identity, dims)
-		VALUES ($1, $2, $3, 'indexing', $1, $4)
-		ON CONFLICT (identity) DO UPDATE SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing', dims = EXCLUDED.dims
+		INSERT INTO projects (tenant_id, workspace_id, name, path, model, status, identity, dims)
+		VALUES ($1, COALESCE(NULLIF($2, 0), (SELECT id FROM workspaces WHERE tenant_id = $1 AND slug = 'default')), $3, $4, $5, 'indexing', $3, $6)
+		ON CONFLICT (workspace_id, identity) DO UPDATE
+		SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing', dims = EXCLUDED.dims
 		RETURNING id
-	`, name, path, model, dims).Scan(&id)
+	`, tenant.ID(ctx), activeWorkspaceID(ctx), name, path, model, dims).Scan(&id)
 	return id, err
 }
 
-const projectColumns = `id, name, path, model, status, source_type, COALESCE(git_url, ''), COALESCE(branch, ''), COALESCE(identity, ''), COALESCE(dims, 0), COALESCE(license_spdx_id, '')`
+const projectColumns = `id, tenant_id, workspace_id, name, path, model, status, source_type, COALESCE(git_url, ''), COALESCE(branch, ''), COALESCE(identity, ''), COALESCE(dims, 0), COALESCE(license_spdx_id, ''), COALESCE(privacy_mode, 'hybrid')`
 
 func scanProject(row pgx.Row) (*Project, error) {
 	var p Project
-	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity, &p.Dims, &p.LicenseSPDXID); err != nil {
+	if err := row.Scan(&p.ID, &p.TenantID, &p.WorkspaceID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity, &p.Dims, &p.LicenseSPDXID, &p.PrivacyMode); err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -622,12 +698,12 @@ func scanProject(row pgx.Row) (*Project, error) {
 func (s *PgStore) EnsureProjectIdentity(ctx context.Context, identity, name, path, model, sourceType string, dims int) (int, error) {
 	var id int
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, identity, dims)
-		VALUES ($1, $2, $3, 'indexing', $4, $5, $6)
-		ON CONFLICT (identity) DO UPDATE
+		INSERT INTO projects (tenant_id, workspace_id, name, path, model, status, source_type, identity, dims)
+		VALUES ($1, COALESCE(NULLIF($2, 0), (SELECT id FROM workspaces WHERE tenant_id = $1 AND slug = 'default')), $3, $4, $5, 'indexing', $6, $7, $8)
+		ON CONFLICT (workspace_id, identity) DO UPDATE
 		  SET path = EXCLUDED.path, model = EXCLUDED.model, status = 'indexing', dims = EXCLUDED.dims
 		RETURNING id
-	`, name, path, model, sourceType, identity, dims).Scan(&id)
+	`, tenant.ID(ctx), activeWorkspaceID(ctx), name, path, model, sourceType, identity, dims).Scan(&id)
 	return id, err
 }
 
@@ -695,7 +771,7 @@ func (s *PgStore) PruneUnreferencedFiles(ctx context.Context, projectID int) (in
 }
 
 func (s *PgStore) GetProject(ctx context.Context, name string) (*Project, error) {
-	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE name = $1`, name))
+	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) AND name = $3`, tenant.ID(ctx), activeWorkspaceID(ctx), name))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -706,7 +782,7 @@ func (s *PgStore) GetProject(ctx context.Context, name string) (*Project, error)
 // or "path:<abs>"), which is unique — unlike the name, which is just a basename
 // and can collide across folders.
 func (s *PgStore) GetProjectByIdentity(ctx context.Context, identity string) (*Project, error) {
-	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE identity = $1`, identity))
+	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) AND identity = $3`, tenant.ID(ctx), activeWorkspaceID(ctx), identity))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -722,10 +798,10 @@ func (s *PgStore) CreateProject(ctx context.Context, name, model, sourceType, gi
 	// gone (F14, so index-path projects can share a basename), so name uniqueness
 	// for API projects is preserved through identity instead.
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO projects (name, path, model, status, source_type, git_url, branch, identity, dims)
-		VALUES ($1, '', $2, 'registered', $3, NULLIF($4, ''), NULLIF($5, ''), $1, $6)
+		INSERT INTO projects (tenant_id, workspace_id, name, path, model, status, source_type, git_url, branch, identity, dims)
+		VALUES ($1, COALESCE(NULLIF($2, 0), (SELECT id FROM workspaces WHERE tenant_id = $1 AND slug = 'default')), $3, '', $4, 'registered', $5, NULLIF($6, ''), NULLIF($7, ''), $3, $8)
 		RETURNING id
-	`, name, model, sourceType, gitURL, branch, dims).Scan(&id)
+	`, tenant.ID(ctx), activeWorkspaceID(ctx), name, model, sourceType, gitURL, branch, dims).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation (identity)
@@ -733,7 +809,24 @@ func (s *PgStore) CreateProject(ctx context.Context, name, model, sourceType, gi
 		}
 		return nil, err
 	}
-	return &Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name, Dims: dims}, nil
+	return &Project{ID: id, TenantID: tenant.ID(ctx), WorkspaceID: activeWorkspaceID(ctx), Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name, Dims: dims, PrivacyMode: "hybrid"}, nil
+}
+
+// SetProjectPrivacy persists the embedding/data-routing policy for one
+// tenant/workspace-scoped project.
+func (s *PgStore) SetProjectPrivacy(ctx context.Context, projectID int, mode string) error {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "cloud" && mode != "hybrid" && mode != "edge" {
+		return fmt.Errorf("invalid privacy mode %q", mode)
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE projects SET privacy_mode = $1 WHERE tenant_id = $2 AND ($3 = 0 OR workspace_id = $3) AND id = $4`, mode, tenant.ID(ctx), activeWorkspaceID(ctx), projectID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *PgStore) ListProjects(ctx context.Context, limit, offset int) ([]Project, error) {
@@ -741,7 +834,7 @@ func (s *PgStore) ListProjects(ctx context.Context, limit, offset int) ([]Projec
 	if limit > 0 {
 		limitArg = limit
 	} // nil → LIMIT NULL (no limit)
-	rows, err := s.pool.Query(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY name LIMIT $1 OFFSET $2`, limitArg, offset)
+	rows, err := s.pool.Query(ctx, `SELECT `+projectColumns+` FROM projects WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) ORDER BY name LIMIT $3 OFFSET $4`, tenant.ID(ctx), activeWorkspaceID(ctx), limitArg, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -761,7 +854,7 @@ func (s *PgStore) ListProjects(ctx context.Context, limit, offset int) ([]Projec
 // DeleteProject removes a project (files and chunks cascade). Returns
 // ErrNotFound when no such project exists.
 func (s *PgStore) DeleteProject(ctx context.Context, name string) error {
-	ct, err := s.pool.Exec(ctx, `DELETE FROM projects WHERE name = $1`, name)
+	ct, err := s.pool.Exec(ctx, `DELETE FROM projects WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) AND name = $3`, tenant.ID(ctx), activeWorkspaceID(ctx), name)
 	if err != nil {
 		return err
 	}
@@ -772,7 +865,7 @@ func (s *PgStore) DeleteProject(ctx context.Context, name string) error {
 }
 
 func (s *PgStore) UpdateProjectStatus(ctx context.Context, id int, status string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE projects SET status = $1 WHERE id = $2`, status, id)
+	_, err := s.pool.Exec(ctx, `UPDATE projects SET status = $1 WHERE tenant_id = $2 AND ($3 = 0 OR workspace_id = $3) AND id = $4`, status, tenant.ID(ctx), activeWorkspaceID(ctx), id)
 	return err
 }
 
@@ -844,14 +937,14 @@ func (s *PgStore) CountProjectChunks(ctx context.Context, projectID, dims int) (
 
 // UpdateProjectCommit stores the last indexed commit SHA for a git project.
 func (s *PgStore) UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE projects SET last_indexed_commit = $1 WHERE id = $2`, commitSHA, projectID)
+	_, err := s.pool.Exec(ctx, `UPDATE projects SET last_indexed_commit = $1 WHERE tenant_id = $2 AND ($3 = 0 OR workspace_id = $3) AND id = $4`, commitSHA, tenant.ID(ctx), activeWorkspaceID(ctx), projectID)
 	return err
 }
 
 // GetProjectCommit returns the last indexed commit SHA, or "" when none stored.
 func (s *PgStore) GetProjectCommit(ctx context.Context, projectID int) (string, error) {
 	var sha string
-	err := s.pool.QueryRow(ctx, `SELECT COALESCE(last_indexed_commit, '') FROM projects WHERE id = $1`, projectID).Scan(&sha)
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(last_indexed_commit, '') FROM projects WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) AND id = $3`, tenant.ID(ctx), activeWorkspaceID(ctx), projectID).Scan(&sha)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
@@ -1066,8 +1159,8 @@ func (s *PgStore) CreateToken(ctx context.Context, name, tokenHash string, scope
 	}
 	var id int
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO api_tokens (name, token_hash, scopes) VALUES ($1, $2, $3) RETURNING id
-	`, name, tokenHash, scopes).Scan(&id)
+		INSERT INTO api_tokens (tenant_id, name, token_hash, scopes) VALUES ($1, $2, $3, $4) RETURNING id
+	`, tenant.ID(ctx), name, tokenHash, scopes).Scan(&id)
 	return id, err
 }
 
@@ -1078,8 +1171,8 @@ func (s *PgStore) TokenByHash(ctx context.Context, tokenHash string) (*Token, er
 	err := s.pool.QueryRow(ctx, `
 		UPDATE api_tokens SET last_used_at = NOW()
 		WHERE token_hash = $1 AND revoked_at IS NULL
-		RETURNING id, name, scopes
-	`, tokenHash).Scan(&t.ID, &t.Name, &t.Scopes)
+		RETURNING id, tenant_id, COALESCE(user_id, 0), name, scopes, kind, created_at, last_used_at, expires_at
+	`, tokenHash).Scan(&t.ID, &t.TenantID, &t.UserID, &t.Name, &t.Scopes, &t.Kind, &t.CreatedAt, &t.LastUsedAt, &t.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -1091,7 +1184,7 @@ func (s *PgStore) TokenByHash(ctx context.Context, tokenHash string) (*Token, er
 
 // RevokeToken marks a token revoked (idempotent).
 func (s *PgStore) RevokeToken(ctx context.Context, id int) error {
-	_, err := s.pool.Exec(ctx, `UPDATE api_tokens SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL`, id)
+	_, err := s.pool.Exec(ctx, `UPDATE api_tokens SET revoked_at = NOW() WHERE tenant_id = $1 AND id = $2 AND revoked_at IS NULL`, tenant.ID(ctx), id)
 	return err
 }
 
@@ -1099,7 +1192,7 @@ func (s *PgStore) RevokeToken(ctx context.Context, id int) error {
 // enforced in the query). Returns ErrNotFound when no matching active token exists.
 func (s *PgStore) RevokeUserToken(ctx context.Context, userID, id int) error {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE api_tokens SET revoked_at = NOW() WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`, id, userID)
+		`UPDATE api_tokens SET revoked_at = NOW() WHERE tenant_id = $1 AND id = $2 AND user_id = $3 AND revoked_at IS NULL`, tenant.ID(ctx), id, userID)
 	if err != nil {
 		return err
 	}
@@ -1118,9 +1211,9 @@ func (s *PgStore) CreateJWTToken(ctx context.Context, userID int, name, jti stri
 	}
 	var id int
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO api_tokens (name, token_hash, scopes, user_id, kind, expires_at)
-		VALUES ($1, $2, $3, $4, 'jwt', $5) RETURNING id
-	`, name, jti, scopes, userID, expiresAt).Scan(&id)
+		INSERT INTO api_tokens (tenant_id, name, token_hash, scopes, user_id, kind, expires_at)
+		VALUES ($1, $2, $3, $4, $5, 'jwt', $6) RETURNING id
+	`, tenant.ID(ctx), name, jti, scopes, userID, expiresAt).Scan(&id)
 	return id, err
 }
 
@@ -1129,8 +1222,8 @@ func (s *PgStore) CreateJWTToken(ctx context.Context, userID int, name, jti stri
 func (s *PgStore) ListUserTokens(ctx context.Context, userID int, kind string) ([]Token, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, name, scopes, kind, created_at, last_used_at, expires_at FROM api_tokens
-		WHERE user_id = $1 AND kind = $2 AND revoked_at IS NULL ORDER BY created_at DESC
-	`, userID, kind)
+		WHERE tenant_id = $1 AND user_id = $2 AND kind = $3 AND revoked_at IS NULL ORDER BY created_at DESC
+	`, tenant.ID(ctx), userID, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -1149,7 +1242,7 @@ func (s *PgStore) ListUserTokens(ctx context.Context, userID int, kind string) (
 // CountTokens returns how many non-revoked tokens exist (used for bootstrap).
 func (s *PgStore) CountTokens(ctx context.Context) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM api_tokens WHERE revoked_at IS NULL`).Scan(&n)
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM api_tokens WHERE tenant_id = $1 AND revoked_at IS NULL`, tenant.ID(ctx)).Scan(&n)
 	return n, err
 }
 
@@ -1160,8 +1253,8 @@ func (s *PgStore) CreateUserToken(ctx context.Context, userID int, name, tokenHa
 	}
 	var id int
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO api_tokens (name, token_hash, scopes, user_id) VALUES ($1, $2, $3, $4) RETURNING id
-	`, name, tokenHash, scopes, userID).Scan(&id)
+		INSERT INTO api_tokens (tenant_id, name, token_hash, scopes, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING id
+	`, tenant.ID(ctx), name, tokenHash, scopes, userID).Scan(&id)
 	return id, err
 }
 

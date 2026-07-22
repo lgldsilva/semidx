@@ -5,12 +5,15 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/lgldsilva/semidx/internal/tenant"
 )
 
 // Job is a durable indexing job.
 type Job struct {
 	ID            int
 	ProjectID     int
+	TenantID      int
 	Type          string // "full" | "git_history" | "batch"
 	Status        string // queued | running | succeeded | failed
 	Error         string
@@ -27,8 +30,12 @@ type Job struct {
 func (s *PgStore) EnqueueJob(ctx context.Context, projectID int, jobType string) (int, error) {
 	var id int
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO index_jobs (project_id, type) VALUES ($1, $2) RETURNING id`,
-		projectID, jobType).Scan(&id)
+		`INSERT INTO index_jobs (project_id, type)
+		 SELECT id, $2 FROM projects WHERE id = $1 AND tenant_id = $3
+		 RETURNING id`, projectID, jobType, tenant.ID(ctx)).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
 	return id, err
 }
 
@@ -36,8 +43,12 @@ func (s *PgStore) EnqueueJob(ctx context.Context, projectID int, jobType string)
 func (s *PgStore) EnqueueBatchJob(ctx context.Context, projectID int, payload string) (int, error) {
 	var id int
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO index_jobs (project_id, type, payload) VALUES ($1, 'batch', $2) RETURNING id`,
-		projectID, payload).Scan(&id)
+		`INSERT INTO index_jobs (project_id, type, payload)
+		 SELECT id, 'batch', $2 FROM projects WHERE id = $1 AND tenant_id = $3
+		 RETURNING id`, projectID, payload, tenant.ID(ctx)).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
 	return id, err
 }
 
@@ -47,13 +58,17 @@ func (s *PgStore) EnqueueBatchJob(ctx context.Context, projectID int, payload st
 func (s *PgStore) ClaimJob(ctx context.Context) (*Job, error) {
 	var j Job
 	err := s.pool.QueryRow(ctx, `
-		UPDATE index_jobs SET status = 'running', started_at = NOW()
-		WHERE id = (
+		WITH next_job AS (
 			SELECT id FROM index_jobs WHERE status = 'queued'
 			ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1
 		)
-		RETURNING id, project_id, type, status, COALESCE(payload, '')
-	`).Scan(&j.ID, &j.ProjectID, &j.Type, &j.Status, &j.Payload)
+		UPDATE index_jobs AS j SET status = 'running', started_at = NOW()
+		FROM next_job
+		WHERE j.id = next_job.id
+		RETURNING j.id, j.project_id,
+			(SELECT p.tenant_id FROM projects p WHERE p.id = j.project_id),
+			j.type, j.status, COALESCE(j.payload, '')
+	`).Scan(&j.ID, &j.ProjectID, &j.TenantID, &j.Type, &j.Status, &j.Payload)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -134,11 +149,12 @@ func (s *PgStore) FailJob(ctx context.Context, id int, errMsg string) error {
 func (s *PgStore) GetJob(ctx context.Context, id int) (*Job, error) {
 	var j Job
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, project_id, type, status, COALESCE(error, ''), files_indexed, chunks_created,
+		SELECT j.id, j.project_id, p.tenant_id, j.type, j.status, COALESCE(j.error, ''), j.files_indexed, j.chunks_created,
 			COALESCE(payload, ''), deleted_files, error_count,
 			progress_total, progress_done
-		FROM index_jobs WHERE id = $1
-	`, id).Scan(&j.ID, &j.ProjectID, &j.Type, &j.Status, &j.Error, &j.FilesIndexed, &j.ChunksCreated,
+		FROM index_jobs j JOIN projects p ON p.id = j.project_id
+		WHERE j.id = $1 AND p.tenant_id = $2
+	`, id, tenant.ID(ctx)).Scan(&j.ID, &j.ProjectID, &j.TenantID, &j.Type, &j.Status, &j.Error, &j.FilesIndexed, &j.ChunksCreated,
 		&j.Payload, &j.DeletedFiles, &j.ErrorCount, &j.ProgressTotal, &j.ProgressDone)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -158,16 +174,20 @@ func (s *PgStore) ListRecentJobs(ctx context.Context, projectID, limit int) ([]J
 	if limit > 50 {
 		limit = 50
 	}
-	const cols = `id, project_id, type, status, COALESCE(error, ''), files_indexed, chunks_created,
-			COALESCE(payload, ''), deleted_files, error_count, progress_total, progress_done`
 	var (
 		rows pgx.Rows
 		err  error
 	)
 	if projectID > 0 {
-		rows, err = s.pool.Query(ctx, `SELECT `+cols+` FROM index_jobs WHERE project_id = $1 ORDER BY id DESC LIMIT $2`, projectID, limit)
+		rows, err = s.pool.Query(ctx, `SELECT j.id, j.project_id, p.tenant_id, j.type, j.status, COALESCE(j.error, ''), j.files_indexed, j.chunks_created,
+			COALESCE(j.payload, ''), j.deleted_files, j.error_count, j.progress_total, j.progress_done
+			FROM index_jobs j JOIN projects p ON p.id = j.project_id
+			WHERE j.project_id = $1 AND p.tenant_id = $2 ORDER BY j.id DESC LIMIT $3`, projectID, tenant.ID(ctx), limit)
 	} else {
-		rows, err = s.pool.Query(ctx, `SELECT `+cols+` FROM index_jobs ORDER BY id DESC LIMIT $1`, limit)
+		rows, err = s.pool.Query(ctx, `SELECT j.id, j.project_id, p.tenant_id, j.type, j.status, COALESCE(j.error, ''), j.files_indexed, j.chunks_created,
+			COALESCE(j.payload, ''), j.deleted_files, j.error_count, j.progress_total, j.progress_done
+			FROM index_jobs j JOIN projects p ON p.id = j.project_id
+			WHERE p.tenant_id = $1 ORDER BY j.id DESC LIMIT $2`, tenant.ID(ctx), limit)
 	}
 	if err != nil {
 		return nil, err
@@ -176,7 +196,7 @@ func (s *PgStore) ListRecentJobs(ctx context.Context, projectID, limit int) ([]J
 	var out []Job
 	for rows.Next() {
 		var j Job
-		if err := rows.Scan(&j.ID, &j.ProjectID, &j.Type, &j.Status, &j.Error, &j.FilesIndexed, &j.ChunksCreated,
+		if err := rows.Scan(&j.ID, &j.ProjectID, &j.TenantID, &j.Type, &j.Status, &j.Error, &j.FilesIndexed, &j.ChunksCreated,
 			&j.Payload, &j.DeletedFiles, &j.ErrorCount, &j.ProgressTotal, &j.ProgressDone); err != nil {
 			return nil, err
 		}
@@ -187,7 +207,7 @@ func (s *PgStore) ListRecentJobs(ctx context.Context, projectID, limit int) ([]J
 
 // GetProjectByID returns a project by id, or ErrNotFound.
 func (s *PgStore) GetProjectByID(ctx context.Context, id int) (*Project, error) {
-	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE id = $1`, id))
+	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) AND id = $3`, tenant.ID(ctx), activeWorkspaceID(ctx), id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

@@ -59,6 +59,23 @@ func TestWithHTTPClientOption(t *testing.T) {
 	}
 }
 
+func TestWithTenantAndWorkspaceAddSelectorHeaders(t *testing.T) {
+	var gotTenant, gotWorkspace string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTenant = r.Header.Get("X-Semidx-Tenant")
+		gotWorkspace = r.Header.Get("X-Semidx-Workspace")
+		_ = json.NewEncoder(w).Encode(SearchResponse{Project: "p"})
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "tok", WithTenant("acme"), WithWorkspace("platform"))
+	if _, err := c.Search(context.Background(), "p", "q", SearchParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if gotTenant != "acme" || gotWorkspace != "platform" {
+		t.Fatalf("selectors = %q/%q, want acme/platform", gotTenant, gotWorkspace)
+	}
+}
+
 func TestAPIErrorString(t *testing.T) {
 	withMsg := &APIError{Status: 404, Message: "project not found"}
 	if got := withMsg.Error(); got != "semidx: 404: project not found" {

@@ -3,8 +3,11 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/search"
+	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
@@ -30,6 +33,30 @@ func (b *clientBackend) Search(ctx context.Context, project, query, model string
 			Path: r.Path, StartLine: r.StartLine, EndLine: r.EndLine,
 			Score: r.Score, Content: r.Content,
 			Confidence: r.Confidence, Symbol: r.Symbol,
+		})
+	}
+	return out, nil
+}
+
+func (b *clientBackend) SearchMulti(ctx context.Context, req search.MultiScopeRequest) (*search.MultiResponse, error) {
+	resp, err := b.c.SearchMulti(ctx, req.Query, client.MultiSearchParams{
+		Projects: req.Projects, Identities: req.Identities, All: req.All, TopK: req.TopK, Keyword: req.KeywordOnly,
+		Graph: req.Graph, GraphDepth: req.GraphMaxDepth,
+		MaxPerFile: req.MaxPerFile, MaxPerProject: req.MaxPerProject,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := &search.MultiResponse{
+		Fallback: resp.Fallback, Keyword: resp.Keyword, Degraded: resp.Degraded,
+		RetryAfter:   time.Duration(resp.RetryAfterMS) * time.Millisecond,
+		ProjectCount: resp.ProjectCount, SkippedCount: resp.SkippedCount,
+	}
+	for _, hit := range resp.Results {
+		out.Results = append(out.Results, search.MultiResult{
+			SearchResult: store.SearchResult{FilePath: hit.Path, StartLine: hit.StartLine,
+				EndLine: hit.EndLine, Score: hit.Score, Content: hit.Content},
+			Project: hit.Project, SourceRank: hit.SourceRank, FusionScore: hit.FusionScore,
 		})
 	}
 	return out, nil
@@ -75,3 +102,5 @@ func (b *clientBackend) Reindex(ctx context.Context, project, jobType string) (s
 func (b *clientBackend) Capabilities() agent.Capabilities {
 	return agent.Capabilities{Flags: agent.CapRemoteIndex}
 }
+
+var _ MultiSearchBackend = (*clientBackend)(nil)

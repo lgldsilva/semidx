@@ -41,8 +41,8 @@ IDs are stable (`REQ-*`). Prefer adding rows over renumbering.
    SQLite, or CLI proxy after `semidx login`.
 4. **Privacy-aware embeddings**: sensitive paths/content prefer local embed or
    keyword-only storage; cloud keys stay on the machine that embeds.
-5. **Agent-friendly**: MCP tools + install helpers + skills; not a SaaS and not
-   a grep replacement.
+5. **Agent-friendly**: MCP tools + install helpers + skills; SaaS-ready tenant
+   boundaries without pretending to replace exact-string search.
 6. **Workspace agent**: in addition to search, semidx provides a conversational
    agent (chat + tools) that answers questions about both **content** and
    **state** of repositories, documents, and projects — git metadata
@@ -53,7 +53,9 @@ IDs are stable (`REQ-*`). Prefer adding rows over renumbering.
 
 ### 1.2 What semidx is not
 
-- Not a hosted multi-tenant SaaS or billing product.
+- Billing, plan enforcement and hosted control-plane operations are not in this
+  increment; the tenant/workspace/project isolation seam is part of the product
+  foundation.
 - Not a full IDE, debugger, or CI quality platform (e.g. PR Sonar analysis).
 - Not a substitute for exact-string tools (`rg`/`grep`).
 - Not a general archive browser (arbitrary `.zip`/`.tar` content) unless listed
@@ -93,6 +95,7 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-IDX-09 | Extract legacy Office (`.doc/.xls/.ppt`), email, images/OCR, generic zip/tar | **wont** (near-term) | Revisit if a real user case appears |
 | REQ-IDX-10 | Progress reporting during long index (CLI + jobs) | **done** | Local index verbose progress + async push and `repo add --wait` live status/%/counters |
 | REQ-IDX-11 | Watcher re-indexes document extracts (PDF/DOCX/…), not only `ShouldIndex` code/text files | **done** | Fix in `internal/indexing/watcher.go` + shared `Eligible` helper; ensures same predicate as the walk indexer |
+| REQ-IDX-12 | Normalize declared dependencies across Go, npm, Maven, Gradle, Swift and CocoaPods | **done** | `internal/depcatalog`; native resolution is explicit via managed worker, local CLI or customer-agent submit |
 
 ### 3.2 Embedding and privacy
 
@@ -106,6 +109,7 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-EMB-06 | Embedding HTTP clients use connection pooling and per-provider timeouts | **done** | OpenAI/Ollama clients use pooled transports + timeouts |
 | REQ-EMB-07 | Content-addressed embedding cache reused across reindexes; no silent gaps on git-history / pre-embedded push paths | **done** | Cache reuse covers reindex/git-history/pre-embedded push |
 | REQ-EMB-08 | Dynamic vector tables by dimension; refuse silent mix of incompatible models in one project | **done** | ADR-style decision |
+| REQ-EMB-09 | Persist project privacy policy (`cloud`, `hybrid`, `edge`) and apply it to managed/push indexing | **done** | REST, SDK, CLI and admin UI |
 
 ### 3.3 Search and ranking
 
@@ -124,6 +128,7 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-SRCH-11 | Optional re-ranker (e.g. local cross-encoder) on top-K | **done** | Pluggable `search.Reranker` seam + dependency-free `LexicalReranker` (blends score with query-term overlap); off unless `SEMIDX_RERANK_WEIGHT` ∈ (0,1]. A cross-encoder can implement the same interface later |
 | REQ-SRCH-12 | Language-aware / AST-aware chunking for major languages | **partial** | AST/symbol-aware chunking when analyzer symbols are available |
 | REQ-SRCH-13 | Query routing: identifier/path/exact → keyword without embed | **done** | `ClassifyQuery` wired in `search.Service` |
+| REQ-SRCH-14 | Cross-project search with explicit provenance and score fusion | **done** | Tenant-scoped REST/SDK/admin path uses reciprocal-rank fusion and diversity caps |
 
 ### 3.4 Storage backends
 
@@ -155,6 +160,9 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-SRV-12 | Configurable per-project resource caps (max chunks/files) | **done** | `SEMIDX_MAX_CHUNKS_PER_PROJECT`, `SEMIDX_MAX_FILES_PER_PROJECT`; enforced in indexer + server jobs |
 | REQ-SRV-13 | Postgres never published; only authenticated HTTP ingress | **done** | Compose design |
 | REQ-SRV-14 | Server can also act as a client (login/push/index remote) — mixed mode | **done** | Mixed backend mode (`--local`/`--backend`) with remote login/push/repo flows is operational |
+| REQ-SRV-15 | Tenant/workspace boundary for projects, tokens, jobs and dependency comparisons | **done** | Default tenant/workspace migrations, membership selectors, worker context and workspace-scoped project queries |
+| REQ-SRV-16 | Tenant quotas for project creation and observed runtime-edge ingestion | **done** | `tenant_quotas`; zero means unlimited |
+| REQ-SRV-17 | Persist and query observed project communication edges without source upload | **done** | REST, SDK, CLI and SQLite/Postgres stores |
 
 ### 3.6 Admin UI (SPA)
 
@@ -169,8 +177,9 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-UI-07 | Bulk folder / archive upload for push projects | **done** | Folder batching + `.zip` ingest in Admin UI/API |
 | REQ-UI-08 | File detail panel: chunks, dependency fan-out, caller fan-in, deep links | **partial** | Chunks + fan-in/fan-out delivered; deeper graph UX pending |
 | REQ-UI-09 | Graph visualization (or progressive disclosure of graph stats) | **done** | Graph overview in Analyze: node/edge counts + top out-/in-degree nodes (`/graph-stats`); CSP-safe, no external viz lib |
-| REQ-UI-10 | Dead-code, SBOM, secrets, diff, alerts, insights surfaces where CLI has them | **partial** | Admin Analyze: dead-code + SBOM + CLI guide for diff/alerts/insights |
+| REQ-UI-10 | Dead-code, SBOM, dependency catalog, secrets, diff, alerts, insights surfaces where CLI has them | **partial** | Admin Analyze: dead-code + SBOM + dependency catalog/shared-project view; CLI guide for diff/alerts/insights |
 | REQ-UI-11 | First-run / empty-state guidance (no projects → how to add) | **done** | Projects empty-state onboarding flow |
+| REQ-UI-12 | Show project privacy and observed runtime communication in the portfolio UI | **done** | Project overview/analyze surfaces |
 
 ### 3.7 CLI
 
@@ -301,7 +310,7 @@ Ordered for product leverage. Items marked *(done)* are delivered — kept here 
 2. ~~REQ-SRCH-08 user-safe errors end-to-end~~ *(done)*
 3. Abuse limits and quotas review across read-heavy endpoints *(partial — global caps done)*
 4. Security regression tests for authz/isolation routes *(ongoing)*
-5. Quotas **persistidas por projeto** no Postgres *(todo — extends REQ-SRV-12)*
+5. Quotas persistidas por tenant *(done for projects/runtime edges; file/chunk entitlements remain a follow-up)*
 
 ### Phase D — Scale
 
@@ -338,7 +347,7 @@ A requirement moves to **done** only when:
 
 | ID | Non-goal |
 |----|----------|
-| REQ-WONT-01 | Multi-tenant SaaS, orgs, billing, cloud-hosted control plane |
+| REQ-WONT-01 | Billing, plan metering and the hosted cloud control plane (tenant isolation is now in scope) |
 | REQ-WONT-02 | Replacing ripgrep for exact string search |
 | REQ-WONT-03 | Full PR/branch analysis on Sonar Community (main-only is intentional) |
 | REQ-WONT-04 | Bundling Ollama or a GPU runtime |

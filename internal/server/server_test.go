@@ -242,6 +242,29 @@ func TestSearchOK(t *testing.T) {
 	}
 }
 
+func TestMultiSearchOK(t *testing.T) {
+	srv := New(&fakeStore{
+		token:   &store.Token{Scopes: []string{"read"}},
+		project: &store.Project{ID: 1, Name: "proj", Model: "bge-m3"},
+		results: []store.SearchResult{{FilePath: "a.go", StartLine: 5, EndLine: 7, Score: 0.9, Content: "x"}},
+	}, fakeEmbedder{}, nil)
+
+	rec := do(t, srv, "POST", "/api/v1/search", "tok", `{"query":"auth","projects":["proj"],"top_k":3}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("multi-search = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var out client.MultiSearchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+	if out.ProjectCount != 1 || len(out.Results) != 1 || out.Results[0].Project != "proj" {
+		t.Fatalf("unexpected multi response: %+v", out)
+	}
+	if out.Results[0].FusionScore <= 0 || out.Results[0].Path != "a.go" {
+		t.Errorf("multi hit = %+v", out.Results[0])
+	}
+}
+
 func TestSearchProjectNotFound(t *testing.T) {
 	srv := New(&fakeStore{token: &store.Token{Scopes: []string{"read"}}, project: nil}, fakeEmbedder{}, nil)
 	rec := do(t, srv, "POST", "/api/v1/projects/ghost/search", "tok", `{"query":"hi"}`)

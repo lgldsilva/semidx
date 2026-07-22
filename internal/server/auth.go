@@ -5,11 +5,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
 
 	"github.com/lgldsilva/semidx/internal/passwd"
+	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/tenant"
 )
 
 // GenerateToken returns a new random API token (plaintext, shown once) and its
@@ -39,7 +42,7 @@ func (s *Server) authed(scope string, h http.HandlerFunc) http.Handler {
 			writeJSONError(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
-		scopes, ok, err := s.resolveScopes(r.Context(), raw)
+		identity, ok, err := s.resolveAuth(r.Context(), raw)
 		if err != nil {
 			s.log.Error("token lookup failed", "err", err)
 			writeJSONError(w, http.StatusInternalServerError, "auth check failed")
@@ -49,14 +52,82 @@ func (s *Server) authed(scope string, h http.HandlerFunc) http.Handler {
 			writeJSONError(w, http.StatusUnauthorized, "invalid token")
 			return
 		}
-		if scope != "" && !slices.Contains(scopes, scope) && !slices.Contains(scopes, "admin") {
+		if scope != "" && !slices.Contains(identity.Scopes, scope) && !slices.Contains(identity.Scopes, "admin") {
 			writeJSONError(w, http.StatusForbidden, "token missing required scope: "+scope)
+			return
+		}
+		tenantID := identity.TenantID
+		tenantSlug := ""
+		if requested := strings.TrimSpace(r.Header.Get("X-Semidx-Tenant")); requested != "" {
+			ts, supported := s.store.(store.TenantStore)
+			if !supported {
+				writeJSONError(w, http.StatusNotImplemented, "tenant selection requires PostgreSQL")
+				return
+			}
+			t, terr := ts.GetTenantBySlug(r.Context(), requested)
+			if errors.Is(terr, store.ErrNotFound) {
+				writeJSONError(w, http.StatusForbidden, "tenant access denied")
+				return
+			}
+			if terr != nil {
+				s.log.Error("tenant lookup failed", "err", terr)
+				writeJSONError(w, http.StatusInternalServerError, "tenant lookup failed")
+				return
+			}
+			allowed := t.ID == tenantID
+			if !allowed && identity.UserID > 0 {
+				allowed, terr = ts.CanAccessTenant(r.Context(), identity.UserID, t.ID)
+				if terr != nil {
+					s.log.Error("tenant membership lookup failed", "err", terr)
+					writeJSONError(w, http.StatusInternalServerError, "tenant access check failed")
+					return
+				}
+			}
+			if !allowed {
+				writeJSONError(w, http.StatusForbidden, "tenant access denied")
+				return
+			}
+			tenantID, tenantSlug = t.ID, t.Slug
+		}
+		baseCtx, err := tenant.With(r.Context(), tenant.Context{
+			ID: tenantID, Slug: tenantSlug, UserID: identity.UserID,
+		})
+		if err != nil {
+			s.log.Error("token tenant context failed", "err", err)
+			writeJSONError(w, http.StatusInternalServerError, "auth context failed")
+			return
+		}
+		workspaceID := 0
+		workspaceSlug := ""
+		if ws, supported := s.store.(store.WorkspaceStore); supported {
+			requestedWorkspace := strings.TrimSpace(r.Header.Get("X-Semidx-Workspace"))
+			if requestedWorkspace == "" {
+				requestedWorkspace = "default"
+			}
+			workspace, werr := ws.GetWorkspaceBySlug(baseCtx, requestedWorkspace)
+			if errors.Is(werr, store.ErrNotFound) {
+				writeJSONError(w, http.StatusForbidden, "workspace access denied")
+				return
+			}
+			if werr != nil {
+				s.log.Error("workspace lookup failed", "err", werr)
+				writeJSONError(w, http.StatusInternalServerError, "workspace lookup failed")
+				return
+			}
+			workspaceID, workspaceSlug = workspace.ID, workspace.Slug
+		}
+		ctx, err := tenant.With(baseCtx, tenant.Context{
+			ID: tenantID, Slug: tenantSlug, WorkspaceID: workspaceID, Workspace: workspaceSlug, UserID: identity.UserID,
+		})
+		if err != nil {
+			s.log.Error("token tenant context failed", "err", err)
+			writeJSONError(w, http.StatusInternalServerError, "auth context failed")
 			return
 		}
 		// Expose the token's scopes downstream so multiplexed handlers (the
 		// /mcp endpoint routes several tools through one HTTP route) can apply
 		// finer-grained checks than the route-level scope.
-		h(w, r.WithContext(contextWithScopes(r.Context(), scopes)))
+		h(w, r.WithContext(contextWithScopes(ctx, identity.Scopes)))
 	})
 }
 
@@ -87,26 +158,44 @@ func hasScope(ctx context.Context, scope string) bool {
 // its jti; an opaque key is looked up by hash. ok=false means invalid or revoked;
 // a non-nil error signals a backend failure (surface 500, not 401).
 func (s *Server) resolveScopes(ctx context.Context, raw string) (scopes []string, ok bool, err error) {
+	identity, ok, err := s.resolveAuth(ctx, raw)
+	return identity.Scopes, ok, err
+}
+
+type authIdentity struct {
+	Scopes   []string
+	TenantID int
+	UserID   int
+}
+
+func (s *Server) resolveAuth(ctx context.Context, raw string) (identity authIdentity, ok bool, err error) {
 	if s.jwt != nil {
 		if claims, verr := s.jwt.Verify(raw); verr == nil {
 			tok, terr := s.store.TokenByHash(ctx, claims.ID) // jti stored in token_hash
 			if terr != nil {
-				return nil, false, terr
+				return authIdentity{}, false, terr
 			}
 			if tok == nil {
-				return nil, false, nil // revoked or unknown jti
+				return authIdentity{}, false, nil // revoked or unknown jti
 			}
-			return claims.Scopes, true, nil
+			return authIdentity{Scopes: claims.Scopes, TenantID: normalizedTenantID(tok.TenantID), UserID: tok.UserID}, true, nil
 		}
 	}
 	tok, terr := s.store.TokenByHash(ctx, HashToken(raw))
 	if terr != nil {
-		return nil, false, terr
+		return authIdentity{}, false, terr
 	}
 	if tok == nil {
-		return nil, false, nil
+		return authIdentity{}, false, nil
 	}
-	return tok.Scopes, true, nil
+	return authIdentity{Scopes: tok.Scopes, TenantID: normalizedTenantID(tok.TenantID), UserID: tok.UserID}, true, nil
+}
+
+func normalizedTenantID(id int) int {
+	if id <= 0 {
+		return tenant.DefaultID
+	}
+	return id
 }
 
 func bearerToken(r *http.Request) string {

@@ -348,6 +348,7 @@ function CreateProjectForm({
   const [gitURL, setGitURL] = useState('')
   const [branch, setBranch] = useState('main')
   const [model, setModel] = useState('bge-m3')
+  const [privacyMode, setPrivacyMode] = useState<'cloud' | 'hybrid' | 'edge'>('hybrid')
   const [indexNow, setIndexNow] = useState(true)
   const [busy, setBusy] = useState(false)
 
@@ -363,6 +364,7 @@ function CreateProjectForm({
         git_url: mode === 'git' ? gitURL : undefined,
         branch: mode === 'git' ? branch : undefined,
         index: mode === 'git' ? indexNow : false,
+        privacy_mode: privacyMode,
       })
       onCreated(res.job_id, name.trim(), res.push_hint)
     } catch (ex) {
@@ -440,6 +442,19 @@ function CreateProjectForm({
               value={model}
               onChange={(e) => setModel(e.target.value)}
             />
+          </label>
+          <label htmlFor="create-privacy" className={FIELD_LABEL}>
+            Data policy
+            <Select
+              id="create-privacy"
+              className="mt-1"
+              value={privacyMode}
+              onChange={(e) => setPrivacyMode(e.target.value as 'cloud' | 'hybrid' | 'edge')}
+            >
+              <option value="hybrid">Hybrid (recommended)</option>
+              <option value="cloud">Cloud</option>
+              <option value="edge">Edge-only</option>
+            </Select>
           </label>
         </div>
         {mode === 'git' && (

@@ -29,6 +29,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/keyword"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/tenant"
 )
 
 // SQLiteStore implements store.IndexStore over a local SQLite database.
@@ -41,7 +42,7 @@ var _ store.IndexStore = (*SQLiteStore)(nil)
 
 // projectColumns is the canonical projection order shared by the project
 // getters so scanProject can read any of them.
-const projectColumns = `id, name, path, model, status, source_type, git_url, branch, COALESCE(identity, ''), COALESCE(dims, 0), COALESCE(license_spdx_id, '')`
+const projectColumns = `id, name, path, model, status, source_type, git_url, branch, COALESCE(identity, ''), COALESCE(dims, 0), COALESCE(license_spdx_id, ''), COALESCE(privacy_mode, 'hybrid')`
 
 // schema mirrors the pgvector layout conceptually as plain tables: an embedding
 // BLOB replaces the vector column and there is one chunks table instead of the
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS projects (
     identity        TEXT,
     dims            INTEGER NOT NULL DEFAULT 0,
     license_spdx_id TEXT NOT NULL DEFAULT '',
+    privacy_mode    TEXT NOT NULL DEFAULT 'hybrid',
     last_indexed_commit TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_identity ON projects(identity);
@@ -87,6 +89,52 @@ CREATE TABLE IF NOT EXISTS file_dependencies (
     PRIMARY KEY (project_id, source_file, target_file)
 );
 CREATE INDEX IF NOT EXISTS idx_file_deps_target ON file_dependencies(project_id, target_file);
+CREATE TABLE IF NOT EXISTS project_dependencies (
+    tenant_id        INTEGER NOT NULL DEFAULT 1,
+    project_id       INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    ecosystem        TEXT NOT NULL,
+    name             TEXT NOT NULL,
+    normalized_name  TEXT NOT NULL,
+    constraint_text  TEXT NOT NULL DEFAULT '',
+    resolved_version TEXT NOT NULL DEFAULT '',
+    scope            TEXT NOT NULL DEFAULT 'runtime',
+    source           TEXT NOT NULL DEFAULT '',
+    manifest         TEXT NOT NULL DEFAULT '',
+    direct           INTEGER NOT NULL DEFAULT 1,
+    observed_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (tenant_id, project_id, ecosystem, normalized_name, scope)
+);
+CREATE INDEX IF NOT EXISTS idx_project_dependencies_lookup
+    ON project_dependencies (tenant_id, ecosystem, normalized_name);
+CREATE TABLE IF NOT EXISTS runtime_edges (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id         INTEGER NOT NULL DEFAULT 1,
+    workspace_id      INTEGER NOT NULL DEFAULT 0,
+    source_project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    target_project_id INTEGER NOT NULL DEFAULT 0,
+    target_name       TEXT NOT NULL,
+    source_component  TEXT NOT NULL DEFAULT '',
+    target_component  TEXT NOT NULL DEFAULT '',
+    protocol          TEXT NOT NULL DEFAULT '',
+    environment       TEXT NOT NULL DEFAULT '',
+    request_count     INTEGER NOT NULL DEFAULT 0,
+    error_count       INTEGER NOT NULL DEFAULT 0,
+    p95_latency_ms    REAL NOT NULL DEFAULT 0,
+    first_seen        TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen         TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (tenant_id, workspace_id, source_project_id, target_project_id,
+        target_name, source_component, target_component, protocol, environment)
+);
+CREATE INDEX IF NOT EXISTS idx_runtime_edges_workspace
+    ON runtime_edges (tenant_id, workspace_id, source_project_id, last_seen);
+CREATE TABLE IF NOT EXISTS tenant_quotas (
+    tenant_id         INTEGER PRIMARY KEY,
+    plan              TEXT NOT NULL DEFAULT 'free',
+    max_projects      INTEGER NOT NULL DEFAULT 0,
+    max_runtime_edges INTEGER NOT NULL DEFAULT 0,
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+INSERT OR IGNORE INTO tenant_quotas (tenant_id) VALUES (1);
 CREATE TABLE IF NOT EXISTS chunks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -252,6 +300,13 @@ func ensureSchema(db *sql.DB) error {
 	}
 	if _, err := db.Exec(schema); err != nil {
 		return err
+	}
+	var hasPrivacyMode int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='privacy_mode'`).Scan(&hasPrivacyMode)
+	if hasPrivacyMode == 0 {
+		if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN privacy_mode TEXT NOT NULL DEFAULT 'hybrid'`); err != nil {
+			return err
+		}
 	}
 	// Add the emb_hash column to a pre-ADR-7 chunks table (CREATE TABLE IF NOT
 	// EXISTS won't alter an existing one). SQLite has no ADD COLUMN IF NOT
@@ -496,14 +551,15 @@ func (s *SQLiteStore) CreateProject(ctx context.Context, name, model, sourceType
 		}
 		return nil, err
 	}
-	return &store.Project{ID: id, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name, Dims: dims}, nil
+	return &store.Project{ID: id, TenantID: tenant.DefaultID, Name: name, Model: model, Status: "registered", SourceType: sourceType, GitURL: gitURL, Branch: branch, Identity: name, Dims: dims, PrivacyMode: "hybrid"}, nil
 }
 
 func scanProject(row interface{ Scan(...any) error }) (*store.Project, error) {
 	var p store.Project
-	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity, &p.Dims, &p.LicenseSPDXID); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.Status, &p.SourceType, &p.GitURL, &p.Branch, &p.Identity, &p.Dims, &p.LicenseSPDXID, &p.PrivacyMode); err != nil {
 		return nil, err
 	}
+	p.TenantID = tenant.DefaultID
 	return &p, nil
 }
 
@@ -573,6 +629,24 @@ func (s *SQLiteStore) DeleteProject(ctx context.Context, name string) error {
 
 func (s *SQLiteStore) UpdateProjectStatus(ctx context.Context, id int, status string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE projects SET status = ? WHERE id = ?`, status, id)
+	return err
+}
+
+// SetProjectPrivacy persists the local project policy. Standalone mode keeps
+// the same contract as the server even though it has no tenant selector.
+func (s *SQLiteStore) SetProjectPrivacy(ctx context.Context, projectID int, mode string) error {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "cloud" && mode != "hybrid" && mode != "edge" {
+		return fmt.Errorf("invalid privacy mode %q", mode)
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE projects SET privacy_mode = ? WHERE id = ?`, mode, projectID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n == 0 {
+		return store.ErrNotFound
+	}
 	return err
 }
 
@@ -1227,4 +1301,83 @@ func (s *SQLiteStore) FetchGraphPathsBFS(ctx context.Context, projectID int, see
 		}
 	}
 	return result, rows.Err()
+}
+
+var _ store.DependencyStore = (*SQLiteStore)(nil)
+
+func (s *SQLiteStore) ReplaceProjectDependencies(ctx context.Context, projectID int, deps []store.Dependency) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM project_dependencies WHERE tenant_id = ? AND project_id = ?`, tenant.ID(ctx), projectID); err != nil {
+		return err
+	}
+	for _, dep := range deps {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO project_dependencies
+			(tenant_id, project_id, ecosystem, name, normalized_name, constraint_text,
+			 resolved_version, scope, source, manifest, direct)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (tenant_id, project_id, ecosystem, normalized_name, scope)
+			DO UPDATE SET name=excluded.name, constraint_text=excluded.constraint_text,
+			 resolved_version=excluded.resolved_version, source=excluded.source,
+			 manifest=excluded.manifest, direct=excluded.direct, observed_at=datetime('now')
+		`, tenant.ID(ctx), projectID, dep.Ecosystem, dep.Name, dep.NormalizedName,
+			dep.Constraint, dep.ResolvedVersion, dep.Scope, dep.Source, dep.Manifest, dep.Direct)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) ListProjectDependencies(ctx context.Context, projectID int) ([]store.Dependency, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT ecosystem, name, normalized_name, constraint_text, resolved_version,
+			scope, source, manifest, direct
+		FROM project_dependencies WHERE tenant_id = ? AND project_id = ?
+		ORDER BY ecosystem, normalized_name, scope`, tenant.ID(ctx), projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []store.Dependency
+	for rows.Next() {
+		var dep store.Dependency
+		if err := rows.Scan(&dep.Ecosystem, &dep.Name, &dep.NormalizedName, &dep.Constraint,
+			&dep.ResolvedVersion, &dep.Scope, &dep.Source, &dep.Manifest, &dep.Direct); err != nil {
+			return nil, err
+		}
+		out = append(out, dep)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) FindProjectsSharingDependency(ctx context.Context, projectID int) ([]store.DependencyUsage, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT p2.id, d2.tenant_id, p2.name, d2.ecosystem, d2.name,
+			d2.normalized_name, d2.constraint_text, d2.resolved_version, d2.scope, d2.direct
+		FROM project_dependencies d1
+		JOIN project_dependencies d2 ON d2.tenant_id = d1.tenant_id
+		 AND d2.ecosystem = d1.ecosystem AND d2.normalized_name = d1.normalized_name
+		JOIN projects p2 ON p2.id = d2.project_id
+		WHERE d1.tenant_id = ? AND d1.project_id = ? AND d2.project_id <> ?
+		ORDER BY p2.name, d2.ecosystem, d2.normalized_name`, tenant.ID(ctx), projectID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []store.DependencyUsage
+	for rows.Next() {
+		var usage store.DependencyUsage
+		if err := rows.Scan(&usage.ProjectID, &usage.TenantID, &usage.ProjectName, &usage.Ecosystem,
+			&usage.Name, &usage.NormalizedName, &usage.Constraint, &usage.ResolvedVersion,
+			&usage.Scope, &usage.Direct); err != nil {
+			return nil, err
+		}
+		out = append(out, usage)
+	}
+	return out, rows.Err()
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/lgldsilva/semidx/internal/chunker"
+	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -156,7 +157,16 @@ func (s *Server) handleFilesBatch(w http.ResponseWriter, r *http.Request) {
 // indexing counts — the original behaviour preserved behind ?sync=true.
 func (s *Server) handleFilesBatchSync(w http.ResponseWriter, r *http.Request, proj *store.Project, body *batchRequestBody) {
 	ctx := r.Context()
-	info, err := s.emb.ModelInfo(ctx, proj.Model)
+	privacyMode, modeErr := privacy.NormalizeMode(proj.PrivacyMode)
+	if modeErr != nil {
+		writeJSONError(w, http.StatusInternalServerError, "invalid project privacy policy")
+		return
+	}
+	modelCtx := ctx
+	if privacyMode == privacy.Edge {
+		modelCtx = embed.WithForceLocal(ctx, true)
+	}
+	info, err := s.emb.ModelInfo(modelCtx, proj.Model)
 	if err != nil {
 		s.log.Warn("model info lookup failed", "project", proj.Name, "model", proj.Model, "err", err)
 		writeJSONError(w, http.StatusBadGateway, "model unavailable")
@@ -197,7 +207,13 @@ func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, fil
 		}
 	}
 
-	idx := indexing.NewIndexer(s.store, s.emb, dims, s.indexerOpts())
+	opts := s.indexerOpts()
+	privacyMode, err := privacy.NormalizeMode(proj.PrivacyMode)
+	if err != nil {
+		return 0, 0, deleted, 1
+	}
+	opts.PrivacyMode = privacyMode
+	idx := indexing.NewIndexer(s.store, s.emb, dims, opts)
 	for _, f := range files {
 		created, hErr := s.indexBatchFile(ctx, proj, idx, f, dims)
 		if hErr != nil {

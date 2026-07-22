@@ -96,7 +96,7 @@ func (d *deps) hasServerConfig() bool {
 
 // apiClient returns an SDK client for the configured server.
 func (d *deps) apiClient() *client.Client {
-	return client.New(d.client.ServerURL, d.client.Token)
+	return client.New(d.client.ServerURL, d.client.Token, client.WithTenant(d.client.Tenant), client.WithWorkspace(d.client.Workspace))
 }
 
 // withRootFlags returns a PersistentPreRunE that resolves the config profile
@@ -243,6 +243,9 @@ func registerCommandGroups(root *cobra.Command, d *deps) {
 		newSgrepCmd(d),
 		newUnlockCmd(d),
 		newStatusCmd(d),
+		newDependenciesCmd(d),
+		newGraphCmd(d),
+		newPrivacyCmd(d),
 		newAlertsCmd(d),
 		newInsightsCmd(d),
 		newDiffCmd(d),
@@ -254,6 +257,8 @@ func registerCommandGroups(root *cobra.Command, d *deps) {
 	addGroup("setup",
 		newConfigCmd(d),
 		newLoginCmd(d),
+		newTenantCmd(d),
+		newWorkspaceCmd(d),
 		newLogoutCmd(),
 		newModelsCmd(d),
 		newInitCmd(d),

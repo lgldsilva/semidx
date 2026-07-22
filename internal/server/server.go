@@ -275,12 +275,27 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.Handle("GET /metrics", s.metricsHandler())
 
+	mux.Handle("GET /api/v1/tenants", s.authed("read", s.handleListTenants))
+	mux.Handle("POST /api/v1/tenants", s.authed("admin", s.handleCreateTenant))
+	mux.Handle("GET /api/v1/workspaces", s.authed("read", s.handleListWorkspaces))
+	mux.Handle("POST /api/v1/workspaces", s.authed("admin", s.handleCreateWorkspace))
+	mux.Handle("GET /api/v1/usage", s.authed("read", s.handleTenantUsage))
+
 	mux.Handle("POST /api/v1/projects", s.limited(1<<20, s.authed("write", s.handleCreateProject)))
 	mux.Handle("GET /api/v1/projects", s.authed("read", s.handleListProjects))
 	mux.Handle("GET /api/v1/projects/{project}", s.authed("read", s.handleGetProject))
+	mux.Handle("PUT /api/v1/projects/{project}/privacy", s.limited(100<<10, s.authed("write", s.handleSetProjectPrivacy)))
 	mux.Handle("DELETE /api/v1/projects/{project}", s.authed("write", s.handleDeleteProject))
 	mux.Handle("GET /api/v1/projects/{project}/status", s.authed("read", s.handleProjectStatus))
+	mux.Handle("GET /api/v1/projects/{project}/dependencies", s.authed("read", s.handleListDependencies))
+	mux.Handle("GET /api/v1/projects/{project}/dependencies/shared", s.authed("read", s.handleSharedDependencies))
+	mux.Handle("GET /api/v1/projects/{project}/runtime-edges", s.authed("read", s.handleListRuntimeEdges))
+	mux.Handle("POST /api/v1/projects/{project}/runtime-edges", s.limited(5<<20, s.authed("write", s.handleSubmitRuntimeEdges)))
+	mux.Handle("GET /api/v1/runtime-graph", s.authed("read", s.handleListWorkspaceRuntimeEdges))
+	mux.Handle("POST /api/v1/projects/{project}/dependencies/resolve", s.limited(5<<20, s.authed("write", s.handleResolveDependencies)))
+	mux.Handle("POST /api/v1/projects/{project}/dependencies/submit", s.limited(5<<20, s.authed("write", s.handleSubmitDependencies)))
 	mux.Handle("POST /api/v1/projects/{project}/search", s.limited(1<<20, s.authed("read", s.handleSearch)))
+	mux.Handle("POST /api/v1/search", s.limited(1<<20, s.authed("read", s.handleMultiSearch)))
 	mux.Handle("POST /api/v1/projects/{project}/index-jobs", s.limited(100<<10, s.authed("write", s.handleEnqueueJob)))
 	mux.Handle("POST /api/v1/projects/{project}/files/diff", s.limited(10<<20, s.authed("write", s.handleFilesDiff)))
 	mux.Handle("POST /api/v1/projects/{project}/files/batch", s.limited(100<<20, s.authed("write", s.handleFilesBatch)))
@@ -378,6 +393,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Project:      resp.Project.Name,
 		Model:        resp.Model,
 		Fallback:     resp.Fallback,
+		Keyword:      resp.Keyword,
 		Degraded:     resp.Degraded,
 		RetryAfterMS: resp.RetryAfter.Milliseconds(),
 		TookMS:       time.Since(start).Milliseconds(),
@@ -391,6 +407,127 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	s.searchDuration.WithLabelValues(project).Observe(time.Since(start).Seconds())
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Query         string   `json:"query"`
+		Projects      []string `json:"projects"`
+		Identities    []string `json:"identities"`
+		All           bool     `json:"all"`
+		TopK          int      `json:"top_k"`
+		Keyword       bool     `json:"keyword"`
+		Graph         bool     `json:"graph"`
+		GraphDepth    int      `json:"graph_depth"`
+		MaxPerFile    int      `json:"max_per_file"`
+		MaxPerProject int      `json:"max_per_project"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	body.Query = strings.TrimSpace(body.Query)
+	if body.Query == "" {
+		writeJSONError(w, http.StatusBadRequest, "query is required")
+		return
+	}
+	if !body.All && len(body.Projects) == 0 && len(body.Identities) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "projects is required unless all is true")
+		return
+	}
+	if body.TopK <= 0 {
+		body.TopK = 10
+	}
+	if body.TopK > 100 {
+		body.TopK = 100
+	}
+	body.GraphDepth = search.ClampGraphDepth(body.GraphDepth)
+	if body.MaxPerFile <= 0 {
+		body.MaxPerFile = 2
+	}
+	start := time.Now()
+	var resp *search.MultiResponse
+	var err error
+	if body.All {
+		resp, err = s.search.SearchAllProjects(r.Context(), search.MultiScopeRequest{
+			Query: body.Query, TopK: body.TopK, KeywordOnly: body.Keyword,
+			Graph: body.Graph, GraphMaxDepth: body.GraphDepth,
+			MaxPerFile: body.MaxPerFile, MaxPerProject: body.MaxPerProject,
+		})
+	} else {
+		identities := make([]string, 0, len(body.Projects)+len(body.Identities))
+		projects := make([]string, 0, len(body.Projects))
+		for _, ref := range body.Projects {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			project, lookupErr := s.store.GetProject(r.Context(), ref)
+			if errors.Is(lookupErr, store.ErrNotFound) {
+				project, lookupErr = s.store.GetProjectByIdentity(r.Context(), ref)
+			}
+			if errors.Is(lookupErr, store.ErrNotFound) {
+				writeJSONError(w, http.StatusNotFound, "project not found")
+				return
+			}
+			if lookupErr != nil {
+				s.log.Warn("multi-search project lookup failed", "project", ref, "err", lookupErr)
+				writeJSONError(w, http.StatusInternalServerError, "search failed")
+				return
+			}
+			if project.Identity != "" {
+				identities = append(identities, project.Identity)
+			} else {
+				projects = append(projects, project.Name)
+			}
+		}
+		for _, ref := range body.Identities {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			project, lookupErr := s.store.GetProjectByIdentity(r.Context(), ref)
+			if errors.Is(lookupErr, store.ErrNotFound) {
+				writeJSONError(w, http.StatusNotFound, "project not found")
+				return
+			}
+			if lookupErr != nil {
+				writeJSONError(w, http.StatusInternalServerError, "search failed")
+				return
+			}
+			identities = append(identities, project.Identity)
+		}
+		if len(identities) == 0 && len(projects) == 0 {
+			writeJSONError(w, http.StatusBadRequest, "at least one project is required")
+			return
+		}
+		resp, err = s.search.SearchMulti(r.Context(), search.MultiScopeRequest{
+			Identities: identities, Projects: projects, Query: body.Query,
+			TopK: body.TopK, KeywordOnly: body.Keyword, Graph: body.Graph,
+			GraphMaxDepth: body.GraphDepth, MaxPerFile: body.MaxPerFile,
+			MaxPerProject: body.MaxPerProject,
+		})
+	}
+	if err != nil {
+		s.log.Warn("multi-project search failed", "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "search failed")
+		return
+	}
+	out := client.MultiSearchResponse{
+		Fallback: resp.Fallback, Keyword: resp.Keyword, Degraded: resp.Degraded,
+		RetryAfterMS: resp.RetryAfter.Milliseconds(), TookMS: time.Since(start).Milliseconds(),
+		ProjectCount: resp.ProjectCount, SkippedCount: resp.SkippedCount,
+		Results: make([]client.SearchHit, 0, len(resp.Results)),
+	}
+	for _, hit := range resp.Results {
+		out.Results = append(out.Results, client.SearchHit{
+			Project: hit.Project, Path: hit.FilePath, StartLine: hit.StartLine,
+			EndLine: hit.EndLine, Score: hit.Score, FusionScore: hit.FusionScore,
+			SourceRank: hit.SourceRank, Content: hit.Content,
+		})
+	}
+	s.searchDuration.WithLabelValues("*").Observe(time.Since(start).Seconds())
 	writeJSON(w, http.StatusOK, out)
 }
 

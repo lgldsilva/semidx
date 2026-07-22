@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, ApiError } from '../../api'
+import { api, ApiError, type Dependency, type DependencyUsage, type RuntimeEdge } from '../../api'
 import { Alert } from '../../components/Alert'
 import { Badge } from '../../components/Badge'
 import { Button } from '../../components/Button'
@@ -30,12 +30,16 @@ export function AnalyzePanel({
   >([])
   const [deadStats, setDeadStats] = useState<{ total: number; confirmed: number; public_api: number } | null>(null)
   const [sbom, setSbom] = useState<{ format: string; component_count: number; cli_equivalent: string } | null>(null)
+  const [catalog, setCatalog] = useState<Dependency[]>([])
+  const [sharedCatalog, setSharedCatalog] = useState<DependencyUsage[]>([])
+  const [catalogLoaded, setCatalogLoaded] = useState(false)
   const [graphStats, setGraphStats] = useState<{
     nodes: number
     edges: number
     top_depends: { node: string; degree: number }[]
     top_depended: { node: string; degree: number }[]
   } | null>(null)
+  const [runtimeEdges, setRuntimeEdges] = useState<RuntimeEdge[]>([])
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState('')
 
@@ -117,6 +121,37 @@ export function AnalyzePanel({
     }
   }
 
+  async function runDependencies() {
+    setBusy('dependencies')
+    setErr('')
+    try {
+      const [own, shared] = await Promise.all([
+        api.projectDependencies(project),
+        api.projectSharedDependencies(project),
+      ])
+      setCatalog(own.dependencies || [])
+      setSharedCatalog(shared.dependencies || [])
+      setCatalogLoaded(true)
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'dependency catalog failed')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function runRuntimeGraph() {
+    setBusy('runtime')
+    setErr('')
+    try {
+      const result = await api.projectRuntimeEdges(project)
+      setRuntimeEdges(result.edges || [])
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'runtime graph failed')
+    } finally {
+      setBusy('')
+    }
+  }
+
   return (
     <div className="grid gap-3.5 md:grid-cols-2">
       <Card className="md:col-span-2">
@@ -159,8 +194,14 @@ export function AnalyzePanel({
           <Button disabled={!!busy} onClick={() => void runSbom()}>
             {busy === 'sbom' ? '…' : 'SBOM'}
           </Button>
+          <Button disabled={!!busy} onClick={() => void runDependencies()}>
+            {busy === 'dependencies' ? '…' : 'Dependencies'}
+          </Button>
           <Button disabled={!!busy} onClick={() => void runGraphStats()}>
             {busy === 'graphstats' ? '…' : 'Graph overview'}
+          </Button>
+          <Button disabled={!!busy} onClick={() => void runRuntimeGraph()}>
+            {busy === 'runtime' ? '…' : 'Runtime calls'}
           </Button>
         </div>
         {explain && (
@@ -284,6 +325,82 @@ export function AnalyzePanel({
               )}
             </Card>
           </div>
+        </Card>
+      )}
+
+      {runtimeEdges.length > 0 && (
+        <Card className="md:col-span-2">
+          <h2 className={H2}>Observed runtime communication</h2>
+          <p className="m-0 text-muted">
+            Evidence submitted by an agent or telemetry adapter. It is kept separate from static imports.
+          </p>
+          <Table>
+            <thead>
+              <tr>
+                <th>Target</th>
+                <th>Protocol</th>
+                <th>Environment</th>
+                <th>Requests</th>
+                <th>Errors</th>
+                <th>p95</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runtimeEdges.map((edge, index) => (
+                <tr key={`${edge.target_project}-${edge.protocol}-${index}`}>
+                  <td>{edge.target_project}</td>
+                  <td>{edge.protocol || '—'}</td>
+                  <td>{edge.environment || '—'}</td>
+                  <td>{edge.request_count}</td>
+                  <td>{edge.error_count}</td>
+                  <td>{edge.p95_latency_ms.toFixed(1)}ms</td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </Card>
+      )}
+      {catalogLoaded && (
+        <Card className="md:col-span-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className={H2}>Dependency catalog — {catalog.length} declarations</h2>
+            <span className="text-xs text-muted">manifest + resolved metadata</span>
+          </div>
+          {catalog.length > 0 && <Table className="mt-2">
+            <thead>
+              <tr>
+                <th>Package</th>
+                <th>Ecosystem</th>
+                <th>Declared</th>
+                <th>Resolved</th>
+                <th>Scope</th>
+              </tr>
+            </thead>
+            <tbody>
+              {catalog.map((dep) => (
+                <tr key={`${dep.ecosystem}:${dep.normalized_name}:${dep.scope}`}>
+                  <td><Code>{dep.name}</Code></td>
+                  <td><Badge tone="neutral">{dep.ecosystem}</Badge></td>
+                  <td>{dep.constraint || '—'}</td>
+                  <td>{dep.resolved_version || 'not resolved'}</td>
+                  <td>{dep.scope || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>}
+          <h3 className="mt-4 mb-1 font-bold">Also used by other projects</h3>
+          {sharedCatalog.length === 0 ? (
+            <p className="text-muted">No shared packages found in this workspace.</p>
+          ) : (
+            <ul className={LIST}>
+              {sharedCatalog.map((dep, i) => (
+                <li key={`${dep.project_id}:${dep.ecosystem}:${dep.normalized_name}:${i}`}>
+                  <Code>{dep.name}</Code> · {dep.ecosystem} · {dep.project_name}
+                  {dep.resolved_version ? ` · ${dep.resolved_version}` : ''}
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       )}
       <Card className="md:col-span-2">

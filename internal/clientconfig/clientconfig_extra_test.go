@@ -21,6 +21,22 @@ func TestLoadDefaultProjectEnvOverride(t *testing.T) {
 	}
 }
 
+func TestLoadTenantAndWorkspaceEnvOverride(t *testing.T) {
+	isolate(t)
+	if err := Save(&Config{Tenant: "file-tenant", Workspace: "file-workspace"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SEMIDX_TENANT", "env-tenant")
+	t.Setenv("SEMIDX_WORKSPACE", "env-workspace")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Tenant != "env-tenant" || c.Workspace != "env-workspace" {
+		t.Fatalf("tenant/workspace = %q/%q", c.Tenant, c.Workspace)
+	}
+}
+
 func TestLoadMalformedYAML(t *testing.T) {
 	dir := isolate(t)
 	p := filepath.Join(dir, "semidx", "config.yaml")

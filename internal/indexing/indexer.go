@@ -28,6 +28,7 @@ import (
 
 	sym "github.com/lgldsilva/semidx/internal/analyzer"
 	"github.com/lgldsilva/semidx/internal/chunker"
+	"github.com/lgldsilva/semidx/internal/depcatalog"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/extract"
 	"github.com/lgldsilva/semidx/internal/gitenv"
@@ -59,11 +60,12 @@ type Indexer struct {
 	verbose             bool
 	gitMode             bool
 	gitSince            string
-	keywordOnly         bool   // when true, store text-only (no embeddings) for keyword search
-	astOnly             bool   // when true, keywordOnly is also true, but symbols are extracted and prepended to chunks
-	noSymbols           bool   // when true, skip symbol enrichment (even when embedding)
-	modulePath          string // Go module path from go.mod (for import-dependency extraction)
-	worktree            string // when set, record this worktree's manifest + prune after indexing
+	keywordOnly         bool         // when true, store text-only (no embeddings) for keyword search
+	astOnly             bool         // when true, keywordOnly is also true, but symbols are extracted and prepended to chunks
+	privacyMode         privacy.Mode // project-level cloud/hybrid/edge routing policy
+	noSymbols           bool         // when true, skip symbol enrichment (even when embedding)
+	modulePath          string       // Go module path from go.mod (for import-dependency extraction)
+	worktree            string       // when set, record this worktree's manifest + prune after indexing
 
 	// Secret scan: when enabled, every file's content is scanned with gitleaks
 	// before chunking. Files with detected secrets are stored text-only (no
@@ -134,6 +136,7 @@ type IndexerOpts struct {
 	GitSince            string
 	Logger              *slog.Logger
 	OnProgress          IndexProgressFunc
+	PrivacyMode         privacy.Mode
 }
 
 // NewIndexer wires an Indexer. dims is the embedding dimension of the model;
@@ -154,7 +157,11 @@ func NewIndexer(db store.IndexStore, emb embed.Embedder, dims int, opts IndexerO
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	idx := &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunksPerProject: opts.MaxChunksPerProject, maxFilesPerProject: opts.MaxFilesPerProject, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger, onProgress: opts.OnProgress}
+	mode := opts.PrivacyMode
+	if mode == "" {
+		mode = privacy.Hybrid
+	}
+	idx := &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunksPerProject: opts.MaxChunksPerProject, maxFilesPerProject: opts.MaxFilesPerProject, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger, onProgress: opts.OnProgress, privacyMode: mode}
 	if opts.MaxChunksPerProject > 0 {
 		idx.chunksRemaining.Store(int64(opts.MaxChunksPerProject))
 	} else {
@@ -229,6 +236,7 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		return nil, err
 	}
 	stats.FilesScanned = len(files)
+	idx.recordDependencyCatalog(ctx, projectID, projectPath, files)
 
 	var (
 		mu        sync.Mutex
@@ -276,6 +284,53 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 
 	idx.finalizeProject(ctx, projectID, projectPath, model, stats, manifest)
 	return stats, nil
+}
+
+// recordDependencyCatalog extracts declarations once per indexing run. It is
+// best-effort because a malformed optional manifest must not make source code
+// unavailable; the normalized catalog is replaced so deleted manifests do not
+// leave stale cross-project matches behind.
+func (idx *Indexer) recordDependencyCatalog(ctx context.Context, projectID int, projectPath string, files []string) {
+	depStore, ok := idx.db.(store.DependencyStore)
+	if !ok {
+		return
+	}
+	var manifests = make(map[string][]byte)
+	for _, path := range files {
+		rel, err := filepath.Rel(projectPath, path)
+		if err != nil || rel == "." || filepath.Base(rel) == "" {
+			continue
+		}
+		base := filepath.Base(rel)
+		if base != "go.mod" && base != "package.json" && base != "pom.xml" &&
+			base != "build.gradle" && base != "build.gradle.kts" &&
+			base != "Package.swift" && base != "Package.resolved" &&
+			base != "Podfile" && base != "Podfile.lock" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Clean(path))
+		if err != nil {
+			idx.log.Warn("dependency manifest unreadable", "path", rel, "err", err)
+			continue
+		}
+		manifests[filepath.ToSlash(rel)] = data
+	}
+	parsed, err := depcatalog.ParseManifests(manifests)
+	if err != nil {
+		idx.log.Warn("dependency catalog parse failed", "err", err)
+		return
+	}
+	deps := make([]store.Dependency, 0, len(parsed))
+	for _, dep := range parsed {
+		deps = append(deps, store.Dependency{
+			Ecosystem: string(dep.Ecosystem), Name: dep.Name, NormalizedName: dep.NormalizedName,
+			Constraint: dep.Constraint, ResolvedVersion: dep.ResolvedVersion, Scope: dep.Scope,
+			Source: dep.Source, Manifest: dep.Manifest, Direct: dep.Direct,
+		})
+	}
+	if err := depStore.ReplaceProjectDependencies(ctx, projectID, deps); err != nil {
+		idx.log.Warn("dependency catalog store failed", "err", err)
+	}
 }
 
 // resolveIndexFiles returns the files to index: git-diff incremental when a
@@ -693,13 +748,24 @@ func (idx *Indexer) storeChunks(ctx context.Context, p chunkStoreParams) (create
 	// (embedding NULL) so it stays findable via keyword search without ever
 	// leaving the machine.
 	embedCtx := ctx
-	if privacy.IsSensitive(p.rel) || (p.hasSecrets && idx.secretBlockEmbedding) {
+	isSensitive := privacy.IsSensitive(p.rel) || (p.hasSecrets && idx.secretBlockEmbedding)
+	if isSensitive {
 		localCtx, doEmbed, sCreated, sSoft, sErr := idx.storeSensitiveChunks(ctx, p)
 		if sErr != nil {
 			return 0, 0, sErr
 		}
 		if !doEmbed {
 			return sCreated, sSoft, nil
+		}
+		embedCtx = localCtx
+	} else if idx.privacyMode == privacy.Edge {
+		localCtx := embed.WithForceLocal(ctx, true)
+		if _, err := idx.embedder.ModelInfo(localCtx, p.model); err != nil {
+			if err := idx.db.InsertChunksTextOnly(ctx, p.projectID, p.fileID, p.chunks, idx.dims); err != nil {
+				return 0, 0, err
+			}
+			idx.logf("  [local-text] %s (edge-only; stored text-only, no cloud embedding)", p.rel)
+			return len(p.chunks), 0, nil
 		}
 		embedCtx = localCtx
 	}

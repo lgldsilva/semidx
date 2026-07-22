@@ -6,12 +6,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/lgldsilva/semidx/internal/tenant"
 )
 
 // Conversation is one persisted chat thread owned by a user. Project is the
 // bound project name, or "" for the global (all-projects) chat.
 type Conversation struct {
 	ID        int
+	TenantID  int
 	UserID    int
 	Project   string
 	Title     string
@@ -53,9 +56,9 @@ func (s *PgStore) CreateConversation(ctx context.Context, userID int, project, t
 	}
 	var c Conversation
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO conversations (user_id, project, title) VALUES ($1, $2, $3)
-		RETURNING id, user_id, project, title, created_at, updated_at
-	`, userID, project, title).Scan(&c.ID, &c.UserID, &c.Project, &c.Title, &c.CreatedAt, &c.UpdatedAt)
+		INSERT INTO conversations (tenant_id, user_id, project, title) VALUES ($1, $2, $3, $4)
+		RETURNING id, tenant_id, user_id, project, title, created_at, updated_at
+	`, tenant.ID(ctx), userID, project, title).Scan(&c.ID, &c.TenantID, &c.UserID, &c.Project, &c.Title, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -68,10 +71,10 @@ func (s *PgStore) ListConversations(ctx context.Context, userID, limit, offset i
 		limit = 50
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, user_id, project, title, created_at, updated_at
-		FROM conversations WHERE user_id = $1
-		ORDER BY updated_at DESC LIMIT $2 OFFSET $3
-	`, userID, limit, offset)
+		SELECT id, tenant_id, user_id, project, title, created_at, updated_at
+		FROM conversations WHERE tenant_id = $1 AND user_id = $2
+		ORDER BY updated_at DESC LIMIT $3 OFFSET $4
+	`, tenant.ID(ctx), userID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +82,7 @@ func (s *PgStore) ListConversations(ctx context.Context, userID, limit, offset i
 	var out []Conversation
 	for rows.Next() {
 		var c Conversation
-		if err := rows.Scan(&c.ID, &c.UserID, &c.Project, &c.Title, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.TenantID, &c.UserID, &c.Project, &c.Title, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -91,9 +94,9 @@ func (s *PgStore) ListConversations(ctx context.Context, userID, limit, offset i
 func (s *PgStore) GetConversation(ctx context.Context, userID, id int) (*Conversation, error) {
 	var c Conversation
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, user_id, project, title, created_at, updated_at
-		FROM conversations WHERE id = $1 AND user_id = $2
-	`, id, userID).Scan(&c.ID, &c.UserID, &c.Project, &c.Title, &c.CreatedAt, &c.UpdatedAt)
+		SELECT id, tenant_id, user_id, project, title, created_at, updated_at
+		FROM conversations WHERE tenant_id = $1 AND id = $2 AND user_id = $3
+	`, tenant.ID(ctx), id, userID).Scan(&c.ID, &c.TenantID, &c.UserID, &c.Project, &c.Title, &c.CreatedAt, &c.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -106,8 +109,8 @@ func (s *PgStore) GetConversation(ctx context.Context, userID, id int) (*Convers
 // RenameConversation updates a conversation's title (owner-scoped).
 func (s *PgStore) RenameConversation(ctx context.Context, userID, id int, title string) error {
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE conversations SET title = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3
-	`, title, id, userID)
+		UPDATE conversations SET title = $1, updated_at = NOW() WHERE tenant_id = $2 AND id = $3 AND user_id = $4
+	`, title, tenant.ID(ctx), id, userID)
 	if err != nil {
 		return err
 	}
@@ -119,7 +122,7 @@ func (s *PgStore) RenameConversation(ctx context.Context, userID, id int, title 
 
 // DeleteConversation removes a conversation (and its messages via cascade).
 func (s *PgStore) DeleteConversation(ctx context.Context, userID, id int) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM conversations WHERE id = $1 AND user_id = $2`, id, userID)
+	tag, err := s.pool.Exec(ctx, `DELETE FROM conversations WHERE tenant_id = $1 AND id = $2 AND user_id = $3`, tenant.ID(ctx), id, userID)
 	if err != nil {
 		return err
 	}
@@ -134,24 +137,28 @@ func (s *PgStore) AddMessage(ctx context.Context, convID int, role, content, sou
 	var m ConversationMessage
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO conversation_messages (conversation_id, role, content, sources_json)
-		VALUES ($1, $2, $3, $4)
+		SELECT id, $2, $3, $4 FROM conversations WHERE id = $1 AND tenant_id = $5
 		RETURNING id, conversation_id, role, content, sources_json, created_at
-	`, convID, role, content, sourcesJSON).Scan(&m.ID, &m.ConvID, &m.Role, &m.Content, &m.SourcesJSON, &m.CreatedAt)
+	`, convID, role, content, sourcesJSON, tenant.ID(ctx)).Scan(&m.ID, &m.ConvID, &m.Role, &m.Content, &m.SourcesJSON, &m.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
 	// Best-effort bump so the conversation sorts to the top of the list.
-	_, _ = s.pool.Exec(ctx, `UPDATE conversations SET updated_at = NOW() WHERE id = $1`, convID)
+	_, _ = s.pool.Exec(ctx, `UPDATE conversations SET updated_at = NOW() WHERE tenant_id = $1 AND id = $2`, tenant.ID(ctx), convID)
 	return &m, nil
 }
 
 // ListMessages returns a conversation's messages in chronological order.
 func (s *PgStore) ListMessages(ctx context.Context, convID, limit int) ([]ConversationMessage, error) {
-	q := `SELECT id, conversation_id, role, content, sources_json, created_at
-		FROM conversation_messages WHERE conversation_id = $1 ORDER BY id`
-	args := []any{convID}
+	q := `SELECT m.id, m.conversation_id, m.role, m.content, m.sources_json, m.created_at
+		FROM conversation_messages m JOIN conversations c ON c.id = m.conversation_id
+		WHERE m.conversation_id = $1 AND c.tenant_id = $2 ORDER BY m.id`
+	args := []any{convID, tenant.ID(ctx)}
 	if limit > 0 {
-		q += ` LIMIT $2`
+		q += ` LIMIT $3`
 		args = append(args, limit)
 	}
 	rows, err := s.pool.Query(ctx, q, args...)

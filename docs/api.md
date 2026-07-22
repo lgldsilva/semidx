@@ -68,17 +68,82 @@ project already exists, `500`/`502` server or upstream (embedding) failure.
 | GET | `/healthz` | none | Liveness. |
 | GET | `/readyz` | none | Readiness (pings the database). |
 | GET | `/metrics` | none | Prometheus metrics. |
+| GET | `/api/v1/tenants` | `read` | List organizations visible to the principal. |
+| POST | `/api/v1/tenants` | `admin` | Create an organization and its default workspace. |
+| GET | `/api/v1/workspaces` | `read` | List workspaces in the active tenant. |
+| POST | `/api/v1/workspaces` | `admin` | Create a workspace in the active tenant. |
 | POST | `/api/v1/projects` | `write` | Create a project. |
 | GET | `/api/v1/projects` | `read` | List projects. |
 | GET | `/api/v1/projects/{project}` | `read` | Get one project. |
 | DELETE | `/api/v1/projects/{project}` | `write` | Delete a project. |
 | POST | `/api/v1/projects/{project}/search` | `read` | Semantic search. |
+| POST | `/api/v1/search` | `read` | Search selected projects or the whole active workspace with RRF fusion. |
+| GET | `/api/v1/projects/{project}/dependencies` | `read` | List normalized manifest dependencies. |
+| GET | `/api/v1/projects/{project}/dependencies/shared` | `read` | Find matching dependencies in other workspace projects. |
+| POST | `/api/v1/projects/{project}/dependencies/resolve` | `write` | Queue managed resolution or return the customer-agent contract. |
+| POST | `/api/v1/projects/{project}/dependencies/submit` | `write` | Atomically submit a customer-agent resolution result. |
 | POST | `/api/v1/projects/{project}/index-jobs` | `write` | Enqueue an index job. |
 | POST | `/api/v1/projects/{project}/files/diff` | `write` | Diff client files vs. the index. |
 | POST | `/api/v1/projects/{project}/files/batch` | `write` | Upload files to index. |
 | GET | `/api/v1/jobs/{id}` | `read` | Get an index job's status. |
 
 `{project}` is the project name (URL-escaped); `{id}` is a numeric job id.
+`X-Semidx-Tenant` and `X-Semidx-Workspace` are selectors, not authorities; the
+bearer principal must be allowed to use both scopes.
+
+### Multi-project search
+
+`POST /api/v1/search` searches `projects` by display name, or all projects when
+`all` is true:
+
+```json
+{
+  "query": "where is authentication configured?",
+  "projects": ["api", "worker"],
+  "top_k": 10,
+  "graph": true,
+  "max_per_file": 2
+}
+```
+
+Results include `project` provenance, the original similarity `score`, and a
+`fusion_score`. The latter is the reciprocal-rank-fusion score used to compare
+projects with different embedding models or score distributions. `keyword`,
+`fallback`, `degraded`, `project_count` and `skipped_count` make degraded or
+partial searches explicit.
+
+### Dependency comparison
+
+`GET /api/v1/projects/{project}/dependencies` returns normalized declarations
+with `ecosystem`, `name`, `constraint`, optional `resolved_version`, `scope` and
+`manifest`. `GET .../dependencies/shared` returns the same package identity in
+other projects of the active workspace. Matching uses `(ecosystem,
+normalized_name)`; versions and scopes remain visible so the UI can distinguish
+the same library used at different constraints.
+
+### Dependency resolution
+
+`POST /api/v1/projects/{project}/dependencies/resolve` accepts `{ "mode":
+"managed" }` (the default) and queues a `resolve_dependencies` worker job for a
+server-accessible checkout. Use `{ "mode": "agent" }` when source and package
+credentials must stay on the customer machine; the response is an
+`awaiting_agent` contract and does not execute tools on the server.
+
+The customer agent submits only normalized metadata, never source files:
+
+```json
+{
+  "source": "customer-agent",
+  "dependencies": [
+    { "ecosystem": "maven", "name": "org.slf4j:slf4j-api", "resolved_version": "2.0.13", "scope": "compile", "manifest": "pom.xml", "direct": true }
+  ]
+}
+```
+
+`POST /api/v1/projects/{project}/dependencies/submit` replaces the catalog in a
+single transaction. Supported native ecosystems are Go, npm, Maven, Gradle,
+Swift and CocoaPods. The CLI maps these contracts to `semidx deps resolve
+PROJECT --mode managed|agent`.
 
 ### Health and metrics
 
@@ -273,6 +338,57 @@ types must use `?sync=true`.
 ```json
 { "indexed": 1, "chunks": 6, "deleted": 1, "errors": 0 }
 ```
+
+### Project privacy policy
+
+Projects persist a `privacy_mode`: `hybrid` (default), `cloud`, or `edge`.
+Hybrid keeps the existing sensitive-file routing; cloud is cloud-first for
+ordinary files; edge forces local providers and falls back to text-only
+keyword-searchable chunks when no local model is available.
+
+Use `PUT /api/v1/projects/{project}/privacy` (scope `write`) with
+`{ "mode": "edge" }`. Managed jobs and push ingestion apply the policy. The
+CLI equivalent is `semidx privacy PROJECT --mode edge`.
+
+### Observed runtime graph
+
+Static imports answer what source declares; runtime edges answer what a
+deployment actually called. A customer agent or telemetry adapter can submit
+normalized observations without uploading source files:
+
+`POST /api/v1/projects/{project}/runtime-edges` (scope `write`)
+
+```json
+{
+  "edges": [
+    {
+      "target_project": "payments",
+      "source_component": "checkout",
+      "target_component": "charge",
+      "protocol": "grpc",
+      "environment": "prod",
+      "request_count": 120,
+      "error_count": 2,
+      "p95_latency_ms": 84.5
+    }
+  ]
+}
+```
+
+`target_project` may be another indexed project or an external service.
+Repeated observations aggregate by source/target/component/protocol/
+environment. Read one project with `GET /api/v1/projects/{project}/runtime-edges`
+or the active portfolio with `GET /api/v1/runtime-graph?limit=500` (scope
+`read`). CLI equivalents: `semidx graph runtime PROJECT --input telemetry.json`
+and `semidx graph portfolio`.
+
+### Tenant quotas and usage
+
+The first SaaS operations seam is persisted per tenant. `tenant_quotas` supports
+`plan`, `max_projects`, and `max_runtime_edges`; zero means unlimited. Project
+creation and runtime-edge submission enforce these limits when the store
+supports the quota contract. Billing can map plans to the same limits later
+without changing indexing or graph APIs.
 
 ## Notes
 

@@ -59,8 +59,12 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
 
 ## What it does NOT do
 
-- **Not a SaaS and not a grep replacement.** Use plain grep/ripgrep for exact
-  strings; semidx is for intent/behavior queries.
+- **SaaS-ready, not yet a billing product, and not a grep replacement.** Tenant
+  and workspace isolation/selection, multi-project search, dependency comparison,
+  project privacy policies, observed runtime edges and initial tenant quotas are
+  part of the server foundation; billing/entitlements remain future work.
+  Use plain grep/ripgrep for exact strings; semidx is for intent/behavior
+  queries.
 - **The CLI `index` command writes directly to a local store**, not through the
   server API. Use `semidx push` to send local files to a server for remote
   indexing — in raw mode (server chunks+embeds) or `--embed-locally` mode
@@ -68,6 +72,12 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
   server-side git cloning.
 - **MCP `semantic_reindex` is server-only.** In standalone mode it returns an
   in-band message pointing at `semidx index`.
+- **Dependency catalog** is available through `semidx deps` and the API for
+  normalized manifest declarations (Go, npm, Maven, Gradle, Swift and
+  CocoaPods). `semidx deps resolve` runs native tools explicitly in local mode;
+  remote mode queues a managed worker or runs the customer-agent submit flow
+  (`--mode managed|agent`) without sending source files to the server. Do not
+  treat a manifest constraint as a resolved version.
 - **No PR/branch SonarCloud analysis by default** — SonarCloud runs on `main`
   (and PRs when `SONAR_TOKEN` is configured). Homelab SonarQube is retired for
   this repo.
@@ -85,12 +95,13 @@ cmd/semidx/        CLI (cobra): index, unlock (password docs), search, sgrep,
 pkg/client/        public Go SDK for the HTTP API (DTOs + client).
 internal/
   config/          SEMIDX_* resolution: env > cwd .env > ~/.config/semidx/semidx.env > default
-  clientconfig/    ~/.config/semidx/config.yaml (server_url, token, default project)
+  clientconfig/    ~/.config/semidx/config.yaml (server_url, token, tenant, default project)
   chunker/         line-aware chunking (Chunk{Content,StartLine,EndLine})
   privacy/         deny-list + route-local policy engine
   embed/           Embedder + ChainEmbedder (privacy is a parameter)
   extract/         pluggable extractor registry (text/pdf/docx/xlsx/…, JAR)
-  store/           PgStore + goose migrations; dynamic chunks_<dims> + HNSW
+  store/           PgStore + goose migrations; dynamic chunks_<dims> + HNSW,
+                   project policies, runtime edges and tenant quota seam
   localstore/      standalone SQLite (WAL, MaxOpenConns=1, identity-isolated)
   indexing/        walk + hash-diff + worktree manifest; content-addressed
   gitmeta/         repo identity + worktree toplevel (exec git)
@@ -109,7 +120,7 @@ docs/              architecture.md, api.md, self-hosting.md, CICD.md, ADRs
 
 | Backend | Select with | Notes |
 |---|---|---|
-| Remote server | `semidx login <url> --token …` | CLI/MCP proxy the HTTP API |
+| Remote server | `semidx login <url> --token … --tenant <slug>` | CLI/MCP proxy the tenant-scoped HTTP API |
 | Local SQLite  | `--local` / `SEMIDX_LOCAL_INDEX` | one file, brute-force cosine |
 | Postgres      | `SEMIDX_DB_DSN` (or the compose default) | pgvector + HNSW; the server's store |
 

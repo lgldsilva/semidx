@@ -60,7 +60,7 @@ func currentWorktreeRoot(ctx context.Context) string {
 // newLoginCmd stores the server URL + token in the client config and verifies the
 // server is reachable.
 func newLoginCmd(d *deps) *cobra.Command {
-	var token, defaultProject string
+	var token, tenantSlug, workspaceSlug, defaultProject string
 	c := &cobra.Command{
 		Use:   "login <server-url>",
 		Short: "Save credentials for a semidx server and verify reachability",
@@ -81,7 +81,7 @@ single command to ignore the login for that run.`,
 			if token == "" {
 				return fmt.Errorf("a token is required: pass --token or set SEMIDX_TOKEN")
 			}
-			cfg := &clientconfig.Config{ServerURL: args[0], Token: token, DefaultProject: defaultProject}
+			cfg := &clientconfig.Config{ServerURL: args[0], Token: token, Tenant: tenantSlug, Workspace: workspaceSlug, DefaultProject: defaultProject}
 			d.client = cfg
 			d.useRemote = true
 			if err := d.apiClient().Healthz(cmd.Context()); err != nil {
@@ -97,6 +97,8 @@ single command to ignore the login for that run.`,
 		},
 	}
 	c.Flags().StringVar(&token, "token", "", "API token (or set SEMIDX_TOKEN)")
+	c.Flags().StringVar(&tenantSlug, "tenant", "", "Tenant slug (also sent by SEMIDX_TENANT)")
+	c.Flags().StringVar(&workspaceSlug, "workspace", "", "Workspace slug (also sent by SEMIDX_WORKSPACE)")
 	c.Flags().StringVar(&defaultProject, "default-project", "", "Default project for search/sgrep")
 	return c
 }

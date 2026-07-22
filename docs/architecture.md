@@ -35,6 +35,72 @@ Both paths share the same indexing pipeline, chunker, extractor, embedding chain
 and search service — only the persistence layer differs (see the store split
 below).
 
+## Tenant, workspace and project model
+
+PostgreSQL is organized as `tenant -> workspace -> project -> indexed content`.
+Projects,
+tokens, jobs, conversations, credentials and the dependency catalog carry the
+tenant boundary. API tokens resolve a default tenant and may select another
+tenant with `X-Semidx-Tenant` only after membership verification; the selector
+is never authority by itself. `X-Semidx-Workspace` selects a workspace already
+belonging to that tenant; otherwise the compatibility `default` workspace is
+used. Background workers carry the job tenant context before loading a project,
+so asynchronous indexing cannot cross tenant boundaries while resolving
+credentials or writing chunks.
+
+The default tenant and workspace keep existing self-hosted installations compatible. The
+same REST contract is used by the CLI, MCP and admin UI, while SQLite remains a
+single-tenant standalone backend. This is the SaaS isolation seam without
+forcing local users to run a service.
+
+## Dependency catalog and cross-project relationships
+
+Indexing records two complementary layers:
+
+```
+manifest declarations  ──▶ normalized project_dependencies rows
+source imports          ──▶ file_dependencies graph
+                              │
+                              ├─ same package in another project
+                              └─ Graph-RAG file-to-file expansion
+```
+
+`internal/depcatalog` parses declarations from `go.mod`, `package.json`,
+`pom.xml`, Gradle scripts, `Package.swift`, `Package.resolved`, `Podfile` and
+`Podfile.lock`. Constraints and exact lockfile versions are kept separately;
+parsing does not claim that a build tool resolved a version. The optional
+`DependencyStore` is implemented by PostgreSQL and SQLite, and the CLI/API
+expose both the catalog and projects that share a normalized dependency. Real
+Maven/Gradle/Swift/CocoaPods resolution belongs behind this same contract, so
+`semidx deps resolve` runs native tools explicitly in local mode because they
+may access the network or mutate a workspace. Managed worker/customer-agent
+execution is available through the SaaS API.
+
+Runtime communication is a separate graph rather than an inferred extension
+of source imports:
+
+```
+ source imports      ──▶ file_dependencies       (static, source-derived)
+ manifest packages  ──▶ project_dependencies    (declared/resolved catalog)
+ telemetry/agent     ──▶ runtime_edges           (observed, aggregated)
+```
+
+`runtime_edges` can point to another project in the current tenant/workspace or
+to an external service. The API accepts normalized counters instead of raw
+traces, which keeps the first increment provider-neutral and safe to submit
+from a customer agent. The portfolio endpoint exposes observed communication
+without claiming it proves a source-level import.
+
+Project privacy is persisted as `cloud`, `hybrid`, or `edge`. The indexer uses
+the policy to force local providers for `edge` projects and retains the
+sensitive-file guard for every mode. The same contract is available through
+REST, SDK, CLI and the admin UI.
+
+`tenant_quotas` is the first SaaS operations seam. It stores plan-independent
+limits for projects and observed runtime edges; zero means unlimited. Checks
+live at project creation and runtime ingestion, so billing and entitlements can
+be added later without coupling them to the indexing or graph stores.
+
 ## Component map
 
 ```
@@ -49,17 +115,22 @@ below).
  internal/chunker ...... file eligibility + splitting into line-ranged chunks.
  internal/indexing ..... walks a project, chunks, embeds, stores (with retry).
  internal/search ....... one search flow (embed query -> vector search ->
-                         keyword fallback), shared by CLI, MCP and admin UI.
+                         keyword fallback), shared by CLI, MCP and admin UI;
+                         cross-project RRF fusion.
+ internal/depcatalog ... normalized manifest adapters for Go, npm, Maven,
+                         Gradle, Swift Package Manager and CocoaPods.
  internal/store ........ Store / IndexStore interfaces; PgStore (pgvector).
  internal/localstore ... SQLiteStore: standalone IndexStore, no CGO.
  internal/gitsync ...... clone/pull a git repo into the server's data dir.
- internal/server ....... HTTP API: auth, projects, jobs, files, search.
+ internal/server ....... HTTP API: auth, tenants, projects, jobs, files,
+                         search and dependency comparison.
  internal/jwtauth ...... mint/verify HS256 control tokens (revocable via jti).
  internal/passwd ....... argon2id password hashing for web-UI users.
  internal/webadmin ..... server-rendered /admin UI (sessions + CSRF).
  internal/mcpserver .... thin MCP server; every tool is an HTTP client call.
  internal/skills ....... embedded agent skills, written by `skills install`.
- pkg/client ............ public Go SDK for the HTTP API (its own DTOs).
+ pkg/client ............ public Go SDK for the HTTP API (its own DTOs),
+                         including tenant and multi-project search selection.
 ```
 
 ## The embedding chain and privacy routing

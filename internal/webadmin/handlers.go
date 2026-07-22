@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lgldsilva/semidx/internal/projectref"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -30,6 +29,8 @@ var errSearchFailed = errors.New("search failed")
 type adminSearchHit struct {
 	Project string
 	store.SearchResult
+	FusionScore float64
+	SourceRank  int
 }
 
 type searchData struct {
@@ -86,27 +87,37 @@ func parseSearchData(r *http.Request) (searchData, int) {
 	return d, topK
 }
 
-// searchAllProjects runs the query against every indexed project, merges the hits,
-// ranks by score, and keeps the top topK overall (playground-scale corpora).
+// searchAllProjects runs the shared multi-project search service. Keeping this
+// path on the same RRF implementation as REST/MCP prevents the admin UI from
+// silently producing a different ranking for the same tenant/query.
 func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) error {
-	projects, err := a.store.ListProjects(ctx, 0, 0)
+	resp, err := a.search.SearchAllProjects(ctx, search.MultiScopeRequest{
+		Query: d.Query, TopK: topK, MaxPerFile: 2,
+	})
 	if err != nil {
-		a.log.Error("list projects for search failed", "err", err)
-		return fmt.Errorf("could not list projects")
+		a.log.Error("all-project search failed", "err", err)
+		if strings.HasPrefix(err.Error(), "list projects:") {
+			return fmt.Errorf("could not list projects")
+		}
+		return errSearchFailed
 	}
-	projects = projectref.UniqueByIdentity(projects)
-	if len(projects) == 0 {
+	if resp.ProjectCount == 0 {
 		return fmt.Errorf("no indexed projects")
 	}
-	d.ProjectCount = len(projects)
-	merged, flags, err := a.mergeProjectSearches(ctx, projects, d.Query, topK)
-	if err != nil {
-		return err
+	if resp.SkippedCount > 0 {
+		return errSearchFailed
 	}
-	d.Results = merged
-	d.Fallback = flags.Fallback
-	d.Degraded = flags.Degraded
-	d.RetryAfter = flags.RetryAfter
+	d.ProjectCount = resp.ProjectCount
+	d.Results = make([]adminSearchHit, 0, len(resp.Results))
+	for _, hit := range resp.Results {
+		d.Results = append(d.Results, adminSearchHit{
+			Project: hit.Project, SearchResult: hit.SearchResult,
+			FusionScore: hit.FusionScore, SourceRank: hit.SourceRank,
+		})
+	}
+	d.Fallback = resp.Fallback
+	d.Degraded = resp.Degraded
+	d.RetryAfter = resp.RetryAfter
 	return nil
 }
 
