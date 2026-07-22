@@ -1,10 +1,139 @@
 package codeintel
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/lgldsilva/semidx/internal/analyzer"
+	"github.com/lgldsilva/semidx/internal/store"
 )
+
+// fakeStore implements store.IndexStore minimally for callers tests.
+type fakeStoreCallers struct {
+	store.IndexStore
+	graph   map[string][]string
+	project *store.Project
+}
+
+func (f *fakeStoreCallers) FetchGraphNeighbors(_ context.Context, _ int) (map[string][]string, error) {
+	return f.graph, nil
+}
+
+func (f *fakeStoreCallers) GetProjectByIdentity(_ context.Context, _ string) (*store.Project, error) {
+	return f.project, nil
+}
+
+func (f *fakeStoreCallers) ListProjects(_ context.Context, _, _ int) ([]store.Project, error) {
+	if f.project == nil {
+		return []store.Project{}, nil
+	}
+	return []store.Project{*f.project}, nil
+}
+
+func TestCallers_WithDirectCallers(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "main.go")
+	content := `package main
+
+func HelloWorld() {
+	println("hello")
+}
+`
+	if err := os.WriteFile(testFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	proj := &store.Project{
+		ID:   1,
+		Name: "test",
+		Path: tmpDir,
+	}
+
+	db := &fakeStoreCallers{
+		project: proj,
+		graph: map[string][]string{
+			"cmd/cli.go": {"./"},
+			"pkg/api.go": {"./"},
+		},
+	}
+
+	ctx := context.Background()
+	fl := FileLine{File: "main.go", Line: 3}
+
+	result, err := Callers(ctx, db, proj, fl)
+	if err != nil {
+		t.Fatalf("Callers() error = %v", err)
+	}
+
+	if result.Symbol == nil {
+		t.Fatal("Callers() returned nil symbol")
+	}
+	if result.Symbol.Name != "HelloWorld" {
+		t.Errorf("Callers() symbol name = %q, want HelloWorld", result.Symbol.Name)
+	}
+	if len(result.Direct) != 2 {
+		t.Errorf("Callers() Direct = %d items, want 2", len(result.Direct))
+	}
+}
+
+func TestCallers_EmptyGraph(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "main.go")
+	content := `package main
+
+func Unused() {}
+`
+	if err := os.WriteFile(testFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	proj := &store.Project{
+		ID:   1,
+		Path: tmpDir,
+	}
+
+	db := &fakeStoreCallers{
+		project: proj,
+		graph:   map[string][]string{},
+	}
+
+	ctx := context.Background()
+	fl := FileLine{File: "main.go", Line: 3}
+
+	result, err := Callers(ctx, db, proj, fl)
+	if err != nil {
+		t.Fatalf("Callers() error = %v", err)
+	}
+
+	if len(result.Direct) != 0 {
+		t.Errorf("Callers() Direct = %v, want empty", result.Direct)
+	}
+	if len(result.Transitive) != 0 {
+		t.Errorf("Callers() Transitive = %v, want empty", result.Transitive)
+	}
+}
+
+func TestCallers_FileNotFound(t *testing.T) {
+	proj := &store.Project{
+		ID:   1,
+		Path: "/nonexistent",
+	}
+
+	db := &fakeStoreCallers{
+		project: proj,
+		graph:   map[string][]string{},
+	}
+
+	ctx := context.Background()
+	fl := FileLine{File: "missing.go", Line: 1}
+
+	_, err := Callers(ctx, db, proj, fl)
+	if err == nil {
+		t.Error("Callers() with missing file should error")
+	}
+}
 
 func TestLookupSymbolAtLine(t *testing.T) {
 	syms := []analyzer.Symbol{

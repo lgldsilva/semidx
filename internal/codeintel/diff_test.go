@@ -347,3 +347,171 @@ func TestSortDiffSymbols(t *testing.T) {
 		t.Errorf("sortDiffSymbols changedSyms wrong order: %v", changedSyms)
 	}
 }
+
+func TestDiff_FullIntegration(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(gitenv.Clean(os.Environ()),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	git("init", "-q")
+
+	// First commit: original function
+	v1Content := `package main
+
+func Original() {
+	println("v1")
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(v1Content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-q", "--no-verify", "-m", "v1")
+
+	// Second commit: add new, remove old, change signature
+	v2Content := `package main
+
+func NewFunc() {
+	println("new")
+}
+
+func Original(param string) {
+	println("changed")
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(v2Content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-q", "--no-verify", "-m", "v2")
+
+	result, err := Diff(dir, "HEAD~1", "HEAD", false)
+	if err != nil {
+		t.Fatalf("Diff() error = %v", err)
+	}
+
+	if result.Ref1 != "HEAD~1" || result.Ref2 != "HEAD" {
+		t.Errorf("Diff() refs = (%q, %q), want (HEAD~1, HEAD)", result.Ref1, result.Ref2)
+	}
+
+	// Should have NewFunc as new
+	foundNew := false
+	for _, s := range result.New {
+		if s.Name == "NewFunc" {
+			foundNew = true
+		}
+	}
+	if !foundNew {
+		t.Errorf("Diff() New missing NewFunc, got %v", result.New)
+	}
+
+	// Should have Original as changed
+	foundChanged := false
+	for _, s := range result.Changed {
+		if s.Name == "Original" {
+			foundChanged = true
+		}
+	}
+	if !foundChanged {
+		t.Errorf("Diff() Changed missing Original, got %v", result.Changed)
+	}
+}
+
+func TestDiff_InvalidRef(t *testing.T) {
+	dir := t.TempDir()
+
+	_, err := Diff(dir, "invalid;ref", "main", false)
+	if err == nil {
+		t.Error("Diff() with invalid ref should error")
+	}
+}
+
+func TestDiff_EmptyDiff(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(gitenv.Clean(os.Environ()),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	git("init", "-q")
+
+	content := `package main
+
+func Hello() {}
+`
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-q", "--no-verify", "-m", "c1")
+	git("commit", "-q", "--no-verify", "--allow-empty", "-m", "c2")
+
+	result, err := Diff(dir, "HEAD~1", "HEAD", false)
+	if err != nil {
+		t.Fatalf("Diff() error = %v", err)
+	}
+
+	if len(result.New) != 0 || len(result.Removed) != 0 || len(result.Changed) != 0 {
+		t.Errorf("Diff() with no changes should return empty result, got %+v", result)
+	}
+}
+
+func TestGetChangedFiles_ErrorPath(t *testing.T) {
+	dir := t.TempDir()
+
+	// No git repo initialized
+	_, err := getChangedFiles(dir, "HEAD", "HEAD~1", false)
+	if err == nil {
+		t.Error("getChangedFiles() on non-git dir should error")
+	}
+}
+
+func TestGetFileAtRef_ErrorPath(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(gitenv.Clean(os.Environ()),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	git("init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-q", "--no-verify", "-m", "c1")
+
+	// Try to get a non-existent file
+	_, err := getFileAtRef(dir, "nonexistent.txt", "HEAD")
+	if err == nil {
+		t.Error("getFileAtRef() with missing file should error")
+	}
+}
