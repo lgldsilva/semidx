@@ -1162,6 +1162,20 @@ components:
         content:
           type: string
           description: The chunk content (source code or text).
+        stale:
+          type: boolean
+          description: >
+            Best-effort flag: `true` when the on-disk file content hash no longer
+            matches the indexed `files.hash`. When the check cannot run (missing
+            path, list error, unreadable tree), the value is `false` — search
+            never fails because of staleness.
+        indexed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            When this file version was last indexed (RFC3339). Omitted or null
+            when unknown.
       required:
         - path
         - start_line

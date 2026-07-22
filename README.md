@@ -45,8 +45,10 @@ to, or a local-only helper with no sharing story. semidx is deliberately the
   key, and no Ollama.
 - **Documents, not just code.** PDF, DOCX, XLSX and HTML are extracted to text
   and indexed alongside source files.
-- **MCP + agent skills.** A thin MCP server exposes search to AI assistants, and
-  bundled skills teach them when to use it.
+- **MCP + agent skills.** A thin MCP server exposes search (with best-effort
+  stale flags on hits) and structural code-intelligence tools to AI assistants;
+  bundled skills (`semantic-search`, `code-intel`, `impact-before-refactor`, …)
+  teach them when to search vs. walk the dependency graph before a refactor.
 
 For the full design, see [docs/architecture.md](docs/architecture.md).
 
@@ -237,12 +239,36 @@ same way. For any other OpenAI-compatible service, set `EMBED_PROVIDER=openai`,
 
 ## MCP setup (AI agents)
 
-The `mcp` subcommand runs a thin MCP server over stdio that proxies to the
-semidx server you logged in to. It exposes `semantic_search`,
-`semantic_projects` and `semantic_reindex`. Tools accept **project names only**,
-never filesystem paths, so an agent can never index an arbitrary directory.
+The `mcp` subcommand runs a thin MCP server over stdio — standalone over the
+local index, or proxying the server you logged in to. Core tools accept
+**project names** (not arbitrary filesystem paths for reindex), so an agent
+cannot index an unregistered directory through the server path.
 
-Log in once, then register the MCP server with your agent. Example
+**Search & project tools** (work in standalone and remote modes):
+
+| Tool | Purpose |
+|---|---|
+| `semantic_search` | Natural-language code search; hits may include best-effort `stale` + `indexed_at` when the on-disk file no longer matches the indexed hash |
+| `semantic_status` | Indexing status for a registered project (file count, status, model) |
+| `semantic_projects` | List registered projects and their status |
+| `semantic_reindex` | Queue a re-index on the **server** (standalone mode returns an in-band tip to run `semidx index`) |
+| `semantic_ask` | RAG-augmented Q&A over indexed code with cited chunks |
+
+**Code-intelligence tools** (standalone/local index only — remote returns an
+in-band "standalone/local mode only" message):
+
+| Tool | Args | Purpose |
+|---|---|---|
+| `semantic_callers` | `project?`, `file`, `line` | Files that import the package of the symbol at `file:line` |
+| `semantic_explain` | `project?`, `file`, `line` | Symbol kind/location, deps, importers, related tests |
+| `semantic_impact` | `project?`, `file`, `line`, `depth?` (default 5, max 10) | Blast radius: transitive reverse deps (**MCP-only**; no CLI yet) |
+| `semantic_deadcode` | `project?` | Unused symbols (`confirmed` safe-to-delete / `public-api` review) |
+| `semantic_diff` | `ref_range` (`ref1..ref2` or `ref1...ref2`) | New/removed/changed-signature symbols between two git refs |
+
+CLI equivalents (local): `semidx callers <file:line>`, `semidx explain <file:line>`,
+`semidx dead-code`, `semidx diff <ref1>..<ref2>`.
+
+Log in once (for remote), then register the MCP server with your agent. Example
 Claude Code / MCP client config entry:
 
 ```json
@@ -256,8 +282,9 @@ Claude Code / MCP client config entry:
 }
 ```
 
-Install the bundled agent skills (which teach an assistant when semantic search
-beats grep) into `~/.claude/skills`:
+Install the bundled agent skills into `~/.claude/skills` (includes
+`semantic-search`, `code-intel`, `impact-before-refactor`, `auto-index`, and
+`workspace-agent` — when to search vs. walk structure before a refactor):
 
 ```bash
 semidx skills install
