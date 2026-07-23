@@ -199,6 +199,16 @@ func safeGitFilepath(path string) bool {
 	return !strings.Contains(path, ":") && !strings.HasPrefix(path, "-") && !strings.Contains(path, "..")
 }
 
+// runGit runs the git binary with the given args in dir and returns stdout.
+// The binary is resolved once via LookPath; args come from validated refs/paths.
+func runGit(dir string, args ...string) ([]byte, error) {
+	gitBin := gitExecutable()
+	cmd := exec.Command(gitBin, args...) // #nosec G204 -- refs/paths validated by callers via safeGitRef/safeGitFilepath; binary resolved via LookPath
+	cmd.Dir = dir
+	cmd.Stderr = os.Stderr
+	return cmd.Output()
+}
+
 // getChangedFiles returns files changed between two refs.
 func getChangedFiles(dir, ref1, ref2 string, threeDot bool) ([]string, error) {
 	if !safeGitRef(ref1) || !safeGitRef(ref2) {
@@ -208,12 +218,7 @@ func getChangedFiles(dir, ref1, ref2 string, threeDot bool) ([]string, error) {
 	if threeDot {
 		sep = "..."
 	}
-	gitBin := gitExecutable()
-	cmd := exec.Command(gitBin) // #nosec G204 -- refs validated via safeGitRef; binary resolved via LookPath; '--' ends options
-	cmd.Args = []string{gitBin, "diff", "--name-only", "--diff-filter=ACMR", ref1 + sep + ref2, "--"}
-	cmd.Dir = dir
-	cmd.Stderr = os.Stderr
-	out, err := cmd.Output()
+	out, err := runGit(dir, "diff", "--name-only", "--diff-filter=ACMR", ref1+sep+ref2, "--")
 	if err != nil {
 		return nil, fmt.Errorf("git diff: %w", err)
 	}
@@ -233,12 +238,7 @@ func getFileAtRef(dir, filePath, ref string) (string, error) {
 	if !safeGitRef(ref) || !safeGitFilepath(filePath) {
 		return "", fmt.Errorf("invalid git ref or file path: %q:%q", ref, filePath)
 	}
-	gitBin := gitExecutable()
-	cmd := exec.Command(gitBin) // #nosec G204 -- ref/path validated via safeGitRef and safeGitFilepath; binary from LookPath
-	cmd.Args = []string{gitBin, "show", ref + ":" + filePath}
-	cmd.Dir = dir
-	cmd.Stderr = os.Stderr
-	out, err := cmd.Output()
+	out, err := runGit(dir, "show", ref+":"+filePath)
 	if err != nil {
 		return "", err
 	}
