@@ -21,7 +21,7 @@ RUN apt-get update \
 # supported client's config via schema regardless of which CLIs installed, so a
 # registry hiccup never makes the image useless — the native `claude mcp list`
 # and real-agent checks simply SKIP. Add more agents here as they publish CLIs.
-RUN npm install -g @anthropic-ai/claude-code @google/gemini-cli || true
+RUN npm install -g @anthropic-ai/claude-code@2.1.218 @google/gemini-cli@0.52.0 || true
 
 COPY --from=build /out/semidx /out/mcp-probe /usr/local/bin/
 COPY deploy/agentics-test/ /harness/
