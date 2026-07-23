@@ -404,6 +404,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			Path: hit.FilePath, StartLine: hit.StartLine, EndLine: hit.EndLine,
 			Score: hit.Score, Content: hit.Content,
 			Confidence: hit.Confidence, Symbol: hit.Symbol,
+			Stale: hit.Stale, IndexedAt: hit.IndexedAt,
 		})
 	}
 	s.searchDuration.WithLabelValues(project).Observe(time.Since(start).Seconds())
@@ -525,6 +526,7 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 			Project: hit.Project, Path: hit.FilePath, StartLine: hit.StartLine,
 			EndLine: hit.EndLine, Score: hit.Score, FusionScore: hit.FusionScore,
 			SourceRank: hit.SourceRank, Content: hit.Content,
+			Stale: hit.Stale, IndexedAt: hit.IndexedAt,
 		})
 	}
 	s.searchDuration.WithLabelValues("*").Observe(time.Since(start).Seconds())

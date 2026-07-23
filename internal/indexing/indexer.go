@@ -627,13 +627,7 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 	if len(strings.TrimSpace(string(content))) == 0 {
 		return 0, 0, outcomeSkippedEmpty, "", nil
 	}
-	// lgtm[go/weak-sensitive-data-hashing]
-	// SHA-256 is a strong cryptographic hash. Used here for content
-	// addressing (deduplication of indexed chunks), not for password
-	// or security-sensitive hashing. CodeQL's rule fires because
-	// `content` originates from user-provided files; the hash itself
-	// is not a security boundary.
-	hash = fmt.Sprintf("%x", sha256.Sum256(content))
+	hash = ContentHash(content)
 
 	// Incremental: skip a unit already indexed with this exact content.
 	if upToDate, err := idx.db.FileUpToDate(ctx, projectID, rel, hash, idx.dims); err == nil && upToDate {
@@ -1104,7 +1098,7 @@ func (idx *Indexer) indexCommit(ctx context.Context, projectID int, model string
 	firstLine := bytes.SplitN(commit, []byte("\n"), 2)
 	filePath := "git:" + string(bytes.TrimSpace(firstLine[0]))
 
-	fileID, err := idx.db.UpsertFile(ctx, projectID, filePath, fmt.Sprintf("%x", sha256.Sum256(commit)), len(commit))
+	fileID, err := idx.db.UpsertFile(ctx, projectID, filePath, ContentHash(commit), len(commit))
 	if err != nil {
 		return false
 	}
@@ -1125,7 +1119,7 @@ func (idx *Indexer) indexCommit(ctx context.Context, projectID int, model string
 // without symbol enrichment, so the key matches the cache schema exactly.
 // Returns (nil, false) on any error (best-effort; the caller skips the commit).
 func (idx *Indexer) embedSingleWithCache(ctx context.Context, model, text string) ([]float32, bool) {
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(text)))
+	hash := ContentHash([]byte(text))
 
 	cached, err := idx.db.LookupEmbeddingCache(ctx, []string{hash}, model, idx.dims)
 	if err == nil {

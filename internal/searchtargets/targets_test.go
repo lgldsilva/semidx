@@ -107,6 +107,10 @@ func (m *memDB) UpdateProjectCommit(ctx context.Context, projectID int, commitSH
 	return nil
 }
 
+func (m *memDB) ListFileHashesWithTime(context.Context, int) (map[string]store.FileHashInfo, error) {
+	return map[string]store.FileHashInfo{}, nil
+}
+
 func TestResolveProjectsByName(t *testing.T) {
 	db := &memDB{projects: []store.Project{{Name: "jackui", Identity: "git:x"}}}
 	got, err := ResolveProjects(context.Background(), db, "jackui", "/tmp")

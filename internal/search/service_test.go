@@ -28,6 +28,8 @@ type fakeStore struct {
 	usedWorktree bool
 	gotTopK      int
 	gotKWDims    int
+	fileInfos    map[string]store.FileHashInfo
+	fileInfosErr error
 }
 
 func (f *fakeStore) GetProject(ctx context.Context, name string) (*store.Project, error) {
@@ -107,6 +109,15 @@ func (f *fakeStore) GetProjectCommit(ctx context.Context, projectID int) (string
 }
 func (f *fakeStore) UpdateProjectCommit(ctx context.Context, projectID int, commitSHA string) error {
 	return nil
+}
+func (f *fakeStore) ListFileHashesWithTime(context.Context, int) (map[string]store.FileHashInfo, error) {
+	if f.fileInfos != nil {
+		return f.fileInfos, f.fileInfosErr
+	}
+	if f.fileInfosErr != nil {
+		return nil, f.fileInfosErr
+	}
+	return map[string]store.FileHashInfo{}, nil
 }
 
 // fakeEmbedder implements embed.Embedder; Search uses ModelInfo + EmbedSingle.

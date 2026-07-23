@@ -24,6 +24,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/analyzer"
+	"github.com/lgldsilva/semidx/internal/codeintel"
 	"github.com/lgldsilva/semidx/internal/repotools"
 	"github.com/lgldsilva/semidx/internal/search"
 )
@@ -42,6 +43,11 @@ type Hit struct {
 	Language   string
 	Confidence string
 	Symbol     string
+	// Stale is true when the file changed since it was indexed — agents must
+	// re-read the file before editing instead of trusting Content.
+	Stale bool
+	// IndexedAt is when the file version was last indexed (zero when unknown).
+	IndexedAt time.Time
 }
 
 // SearchOutput is a backend-neutral search result set.
@@ -88,6 +94,14 @@ type Backend interface {
 	// Capabilities reports what the current runtime backend can do (local git,
 	// chat LLM, etc.). Used for tool gating and agent introspection.
 	Capabilities() agent.Capabilities
+
+	// Code-intelligence tools (fully implemented in standalone/local mode;
+	// remote/server backends return a structured "not yet implemented" error).
+	Callers(ctx context.Context, project, file string, line int) (*codeintel.CallersResult, error)
+	Explain(ctx context.Context, project, file string, line int) (*codeintel.ExplainResult, error)
+	Impact(ctx context.Context, project, file string, line int, depth int) (*codeintel.ImpactResult, error)
+	DeadCode(ctx context.Context, project string) (*codeintel.DeadCodeResult, error)
+	Diff(ctx context.Context, refRange string) (*codeintel.DiffResult, error)
 }
 
 // GitBackend extends Backend with read-only git workspace tools. Only
@@ -183,6 +197,11 @@ const (
 	toolSemanticNeighbors   = "semantic_neighbors"
 	toolSemanticTrace       = "semantic_trace"
 	toolSemanticSymbols     = "semantic_symbols"
+	toolSemanticCallers     = "semantic_callers"
+	toolSemanticExplain     = "semantic_explain"
+	toolSemanticImpact      = "semantic_impact"
+	toolSemanticDeadCode    = "semantic_deadcode"
+	toolSemanticDiff        = "semantic_diff"
 )
 
 // toolNames is the canonical list of every tool this server can register,
@@ -192,6 +211,8 @@ var toolNames = []string{
 	toolRepoWorktrees, toolRepoBranches, toolRepoStatus,
 	toolSemanticSearchMulti, toolSemanticAsk,
 	toolSemanticNeighbors, toolSemanticTrace, toolSemanticSymbols,
+	toolSemanticCallers, toolSemanticExplain, toolSemanticImpact,
+	toolSemanticDeadCode, toolSemanticDiff,
 }
 
 // ToolNames returns the canonical list of registrable tool names. Used by the
@@ -362,6 +383,7 @@ func build(b Backend, allowed map[string]bool, explicit bool, defaultProject str
 	registerMultiSearchTool(s, b, allowed, explicit)
 	registerAskTool(s, b, allowed, explicit, defaultProject)
 	registerGraphTools(s, b, allowed, explicit, defaultProject)
+	registerCodeIntelTools(s, b, allowed, defaultProject)
 	registerResources(s, b)
 	return s
 }
@@ -758,7 +780,15 @@ func formatSearchText(out *SearchOutput) string {
 		} else {
 			loc = fmt.Sprintf("%s:%d", r.Path, r.StartLine)
 		}
-		fmt.Fprintf(&b, "%d. %s  (score %.3f)\n%s\n\n", i+1, loc, r.Score, preview(r.Content, 300))
+		prefix := ""
+		if r.Stale {
+			prefix = "[stale] "
+		}
+		fmt.Fprintf(&b, "%d. %s%s  (score %.3f)\n", i+1, prefix, loc, r.Score)
+		if r.Stale {
+			b.WriteString("file changed since indexing — re-read before editing\n")
+		}
+		fmt.Fprintf(&b, "%s\n\n", preview(r.Content, 300))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -828,6 +858,8 @@ type structuredHit struct {
 	Project    string  `json:"project"`
 	Confidence string  `json:"confidence,omitempty"`
 	Symbol     string  `json:"symbol,omitempty"`
+	Stale      bool    `json:"stale,omitempty"`
+	IndexedAt  string  `json:"indexed_at,omitempty"` // RFC3339 when known
 }
 
 // structuredOutput is the JSON envelope for structured search results.
@@ -865,6 +897,10 @@ func formatSearchStructured(out *SearchOutput) string {
 			Project:    out.Project,
 			Confidence: r.Confidence,
 			Symbol:     r.Symbol,
+			Stale:      r.Stale,
+		}
+		if !r.IndexedAt.IsZero() {
+			hits[i].IndexedAt = r.IndexedAt.UTC().Format(time.RFC3339)
 		}
 	}
 	envelope.Results = hits
@@ -883,6 +919,7 @@ type minimalHit struct {
 	C  string  `json:"c"`            // content preview
 	Cf string  `json:"cf,omitempty"` // confidence tag
 	Sy string  `json:"sy,omitempty"` // symbol name (when classified)
+	St bool    `json:"st,omitempty"` // stale preview
 }
 
 // minimalOutput is the compact JSON envelope.
@@ -913,6 +950,7 @@ func formatSearchMinimal(out *SearchOutput) string {
 			C:  preview(r.Content, 120),
 			Cf: r.Confidence,
 			Sy: r.Symbol,
+			St: r.Stale,
 		}
 	}
 	outJSON := minimalOutput{R: hits, Fb: out.Fallback, Dg: out.Degraded, Ra: out.RetryAfterMS, T: len(hits), Ms: out.TookMS}

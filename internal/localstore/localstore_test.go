@@ -2,6 +2,7 @@ package localstore
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -158,48 +159,61 @@ func TestTextOnlyExcludedFromVectorSearch(t *testing.T) {
 }
 
 // TestIncrementalFileUpToDate covers the indexer's skip-unchanged fast path.
+// Assertions are split into helpers so the body stays under the cognitive-
+// complexity gate (SonarQube).
 func TestIncrementalFileUpToDate(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-
 	projectID, _ := s.UpsertProject(ctx, "inc", "/tmp/inc", "bge-m3", 0)
 
-	// Unknown file → not up to date.
-	if up, err := s.FileUpToDate(ctx, projectID, "a.go", "h1", 2); err != nil || up {
-		t.Fatalf("FileUpToDate(unknown) = %v err=%v, want false", up, err)
-	}
+	assertFileNotUpToDate(t, s, ctx, projectID, "a.go", "h1", 2)
 
 	fileID, _ := s.UpsertFile(ctx, projectID, "a.go", "h1", 10)
-
-	// Right hash but no chunks yet → still needs indexing.
-	if up, err := s.FileUpToDate(ctx, projectID, "a.go", "h1", 2); err != nil || up {
-		t.Fatalf("FileUpToDate(no chunks) = %v err=%v, want false", up, err)
-	}
+	assertFileNotUpToDate(t, s, ctx, projectID, "a.go", "h1", 2)
 
 	if err := s.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{{Content: "x", StartLine: 1, EndLine: 1}}, [][]float32{{1, 0}}, 2); err != nil {
 		t.Fatalf("InsertChunks: %v", err)
 	}
 
-	// Same hash and chunks present → up to date.
-	if up, err := s.FileUpToDate(ctx, projectID, "a.go", "h1", 2); err != nil || !up {
+	assertFileUpToDate(t, s, ctx, projectID, "a.go", "h1", 2)
+	// Dims-aware: chunks at dims=2 must not skip a dims=3 re-index.
+	assertFileNotUpToDate(t, s, ctx, projectID, "a.go", "h1", 3)
+	assertFileNotUpToDate(t, s, ctx, projectID, "a.go", "h2", 2)
+	assertListFileHashes(t, s, ctx, projectID)
+}
+
+func assertFileNotUpToDate(t *testing.T, s *SQLiteStore, ctx context.Context, projectID int, path, hash string, dims int) {
+	t.Helper()
+	label := fmt.Sprintf("%s dims=%d", path, dims)
+	up, err := s.FileUpToDate(ctx, projectID, path, hash, dims)
+	if err != nil || up {
+		t.Fatalf("FileUpToDate(%s) = %v err=%v, want false", label, up, err)
+	}
+}
+
+func assertFileUpToDate(t *testing.T, s *SQLiteStore, ctx context.Context, projectID int, path, hash string, dims int) {
+	t.Helper()
+	up, err := s.FileUpToDate(ctx, projectID, path, hash, dims)
+	if err != nil || !up {
 		t.Fatalf("FileUpToDate(indexed) = %v err=%v, want true", up, err)
 	}
-	// Dims-aware: the file has chunks at dims=2 but NOT at dims=3, so re-indexing
-	// under a different model/dimension must NOT be skipped. Regression: this used
-	// to ignore dims and skip the new bucket, leaving semantic search empty when
-	// switching model (or keyword → semantic) on the same local index.
-	if up, err := s.FileUpToDate(ctx, projectID, "a.go", "h1", 3); err != nil || up {
-		t.Fatalf("FileUpToDate(other dims) = %v err=%v, want false", up, err)
-	}
-	// Changed hash → not up to date.
-	if up, err := s.FileUpToDate(ctx, projectID, "a.go", "h2", 2); err != nil || up {
-		t.Fatalf("FileUpToDate(changed) = %v err=%v, want false", up, err)
-	}
+}
 
-	// ListFileHashes reflects the current state.
+func assertListFileHashes(t *testing.T, s *SQLiteStore, ctx context.Context, projectID int) {
+	t.Helper()
 	hashes, err := s.ListFileHashes(ctx, projectID)
 	if err != nil || hashes["a.go"] != "h1" {
 		t.Fatalf("ListFileHashes = %v err=%v", hashes, err)
+	}
+	infos, err := s.ListFileHashesWithTime(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListFileHashesWithTime: %v", err)
+	}
+	if infos["a.go"].Hash != "h1" {
+		t.Fatalf("ListFileHashesWithTime hash = %q", infos["a.go"].Hash)
+	}
+	if infos["a.go"].IndexedAt.IsZero() {
+		t.Fatal("ListFileHashesWithTime IndexedAt should be set")
 	}
 }
 

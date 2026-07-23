@@ -91,6 +91,9 @@ func (f *fakeIndexStore) FileUpToDate(context.Context, int, string, string, int)
 func (f *fakeIndexStore) ListFileHashes(context.Context, int) (map[string]string, error) {
 	return nil, errors.New("unimplemented")
 }
+func (f *fakeIndexStore) ListFileHashesWithTime(context.Context, int) (map[string]store.FileHashInfo, error) {
+	return nil, errors.New("unimplemented")
+}
 func (f *fakeIndexStore) DeleteFileByPath(context.Context, int, string) error {
 	return errors.New("unimplemented")
 }

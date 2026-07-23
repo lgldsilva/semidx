@@ -225,7 +225,15 @@ chunks cascade). `404` if unknown.
   "fallback": false,
   "took_ms": 42,
   "results": [
-    { "path": "internal/auth/verify.go", "start_line": 12, "end_line": 34, "score": 0.87, "content": "func Verify(...) {" }
+    {
+      "path": "internal/auth/verify.go",
+      "start_line": 12,
+      "end_line": 34,
+      "score": 0.87,
+      "content": "func Verify(...) {",
+      "stale": false,
+      "indexed_at": "2026-07-22T12:00:00Z"
+    }
   ]
 }
 ```
@@ -237,6 +245,13 @@ chunks cascade). `404` if unknown.
   Use it for latency monitoring but do not rely on its precision for
   benchmarking — it is measured with `time.Since` and reflects coarse
   application-level timing.
+- `stale` (boolean, additive, best-effort) is `true` when the hit's on-disk
+  content hash no longer matches the indexed `files.hash`. When the check cannot
+  run (missing path, list error, remote without a readable tree), the field is
+  `false` — search never fails because of staleness. Text/CLI output may also
+  mark the hit `[stale]` with a "re-read before editing" note.
+- `indexed_at` (RFC3339 string when known, omitempty/null when unknown) is when
+  that file version was last indexed.
 - `404` if the project does not exist.
 
 ### Enqueue an index job
@@ -390,11 +405,46 @@ creation and runtime-edge submission enforce these limits when the store
 supports the quota contract. Billing can map plans to the same limits later
 without changing indexing or graph APIs.
 
+## MCP tools
+
+`semidx mcp` runs a thin MCP server over stdio. In **remote** mode it proxies the
+HTTP API above; in **standalone/local** mode it talks to the local index
+directly. Tools always register; behavior that needs a local tree returns an
+in-band message instead of failing the whole server.
+
+### Search & project tools (standalone and remote)
+
+| Tool | Args | Behavior |
+|---|---|---|
+| `semantic_search` | `project?`, `query`, `top_k?`, `model?`, `graph?`, `graph_depth?`, `format?` | Semantic search; each hit may include best-effort `stale` + `indexed_at` (see Search). Text/`format=text` output prefixes stale hits with `[stale]`. |
+| `semantic_status` | `project?` | Indexing status for a registered project (file count, status, model). |
+| `semantic_projects` | _(none)_ | List registered projects and their indexing status. |
+| `semantic_reindex` | `project?`, `type?` (`full` \| `git_history`, default `full`) | **Server-only:** enqueue a re-index job for a registered project. In standalone mode returns an in-band tip to run `semidx index`. |
+| `semantic_ask` | `project?`, `question`, `top_k?` | RAG-augmented Q&A over indexed chunks with citations. |
+
+### Code-intelligence tools (standalone/local only)
+
+These read the local dependency graph and tree-sitter symbols. Against a remote
+server they return an in-band **"standalone/local mode only"** message.
+
+| Tool | Args | Behavior |
+|---|---|---|
+| `semantic_callers` | `project?`, `file`, `line` | Files that import/depend on the package containing the symbol at `file:line` ("who calls this?"). CLI: `semidx callers <file:line>`. |
+| `semantic_explain` | `project?`, `file`, `line` | Symbol kind/location, dependencies, importers, related tests. CLI: `semidx explain <file:line>`. |
+| `semantic_impact` | `project?`, `file`, `line`, `depth?` (default 5, max 10) | Blast radius: transitive reverse deps of the symbol, tagged by depth. **MCP-only** (no CLI command today). |
+| `semantic_deadcode` | `project?` | Unused symbols, classified `confirmed` (safe-to-delete unexported) / `public-api` (exported — review). CLI: `semidx dead-code`. |
+| `semantic_diff` | `ref_range` (`ref1..ref2` or `ref1...ref2`) | New / removed / changed-signature symbols between two git refs. CLI: `semidx diff <ref1>..<ref2>`. |
+
+Bundled agent skills (`semidx skills install`) include `code-intel` (when to use
+the structural tools vs search/grep) and `impact-before-refactor` (run
+`semantic_impact` before editing an unfamiliar symbol), alongside
+`semantic-search`, `auto-index`, and `workspace-agent`.
+
 ## Notes
 
 - All handlers accept and return `application/json`.
 - The server has a `ReadHeaderTimeout` and shuts down gracefully on
   SIGINT/SIGTERM.
-- The MCP server (`semidx mcp`) is a thin client over these same endpoints: its
-  `semantic_search`, `semantic_projects` and `semantic_reindex` tools map to
-  search, list-projects and enqueue-job respectively.
+- The MCP server (`semidx mcp`) is a thin client over these same endpoints for
+  search/list/reindex; the code-intelligence tools above are local-index only
+  and do not map to HTTP routes yet.

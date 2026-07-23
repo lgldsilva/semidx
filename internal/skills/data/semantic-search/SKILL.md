@@ -82,6 +82,14 @@ When semidx is wired in as an MCP server, four tools are available:
 - `semantic_reindex` — args `project`, optional `type` (`full` | `git_history`).
   Queues a re-index of an already-registered project.
 
+**Structural code-intelligence tools**: beyond search, five MCP tools answer
+*relationship* questions grep/search can't: `semantic_callers`, `semantic_explain`,
+`semantic_impact` (blast radius), `semantic_deadcode`, and `semantic_diff`. Use
+them for "who calls this?", "what breaks if I change it?", "is this unused?",
+and "what symbols changed between refs?". See the **code-intel** and
+**impact-before-refactor** skills, and reach for `semantic_impact` *before* any
+refactor of a symbol you didn't write.
+
 **New since v0.x**: `semidx status` CLI command and `semantic_status` MCP tool. Use
 `semidx status --project .` to check indexing health before searching. Use
 `semidx index --branch <name>` to index another branch as a separate project

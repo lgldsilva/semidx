@@ -8,6 +8,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/codeintel"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
@@ -35,6 +36,22 @@ func (f *fakeAskBackend) Status(_ context.Context, _ string) (*StatusInfo, error
 
 func (f *fakeAskBackend) Capabilities() agent.Capabilities {
 	return agent.Capabilities{}
+}
+
+func (f *fakeAskBackend) Callers(context.Context, string, string, int) (*codeintel.CallersResult, error) {
+	return &codeintel.CallersResult{}, nil
+}
+func (f *fakeAskBackend) Explain(context.Context, string, string, int) (*codeintel.ExplainResult, error) {
+	return &codeintel.ExplainResult{}, nil
+}
+func (f *fakeAskBackend) Impact(context.Context, string, string, int, int) (*codeintel.ImpactResult, error) {
+	return &codeintel.ImpactResult{}, nil
+}
+func (f *fakeAskBackend) DeadCode(context.Context, string) (*codeintel.DeadCodeResult, error) {
+	return &codeintel.DeadCodeResult{}, nil
+}
+func (f *fakeAskBackend) Diff(context.Context, string) (*codeintel.DiffResult, error) {
+	return &codeintel.DiffResult{}, nil
 }
 
 func (f *fakeAskBackend) Ask(_ context.Context, _, _ string, _ int) (*AskOutput, error) {

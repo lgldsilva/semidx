@@ -42,13 +42,27 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
   unique identity, so same-basename folders never collide) or a name; with no
   `--project`, search resolves the project enclosing the current directory, and
   falls back to searching **all** projects (labeled per project).
+- **Stale-preview flagging on search hits** (best-effort): each result may carry
+  `stale` + `indexed_at` by comparing the on-disk content hash to the indexed
+  `files.hash`. Differing hashes mark `stale=true` and text output with
+  `[stale]` / "re-read before editing"; uncheckable hits stay `stale=false`
+  (search never fails on staleness). Works in standalone, in-process server, and
+  remote modes.
+- **Structural code intelligence** (standalone/local index): callers, explain,
+  impact (blast radius), dead-code, and symbol-level diff via MCP + CLI
+  (`semidx callers|explain|dead-code|diff`; `semantic_impact` is MCP-only).
+  Remote mode returns an in-band "standalone/local mode only" message.
 - **Embedding chain** with privacy routing: Gemini → Groq → OpenRouter → Ollama
   Cloud → local Ollama (fallback). Sensitive files are routed local or stored
   text-only.
 - **Three storage backends** (see below): PostgreSQL/pgvector, local SQLite, or a
   remote server.
 - **MCP** server over stdio (standalone over the local index, or proxying a
-  server) exposing `semantic_search`, `semantic_projects`, `semantic_reindex`.
+  server) exposing `semantic_search` (with per-hit staleness), `semantic_status`,
+  `semantic_projects`, `semantic_reindex`, `semantic_ask`, plus standalone/local
+  code-intel tools `semantic_callers`, `semantic_explain`, `semantic_impact`,
+  `semantic_deadcode`, `semantic_diff`. Bundled skills include `semantic-search`,
+  `auto-index`, `workspace-agent`, `code-intel`, and `impact-before-refactor`.
 - **`semidx mcp install`** wires the MCP server into 12 agent clients
   (Claude Code/Desktop, Cursor, Windsurf, Gemini CLI, Antigravity, GitHub
   Copilot, VS Code, OpenCode, Crush, Codex; **cagent** is print-only (YAML toolset has no safe merge)).
@@ -108,9 +122,11 @@ internal/
   gitsync/         server-side clone/pull
   search/          one Service (vector + keyword fallback, worktree filter)
   server/ webadmin/ jwtauth/ passwd/   HTTP API + admin UI + auth
-  mcpserver/       MCP tools over a Backend (remote client | local index)
+  mcpserver/       MCP tools over a Backend (remote client | local index),
+                   incl. code-intel (callers/explain/impact/deadcode/diff)
   mcpinstall/      `mcp install` client registry (per-client config formats)
-  skills/          embedded agent skills
+  skills/          embedded agent skills (semantic-search, code-intel,
+                   impact-before-refactor, auto-index, workspace-agent)
 deploy/            docker-compose (self-host),
                    agentics-test/ (the MCP integration harness)
 docs/              architecture.md, api.md, self-hosting.md, CICD.md, ADRs

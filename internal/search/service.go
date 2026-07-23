@@ -148,6 +148,13 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 
 	s.applyRerank(ctx, req.Query, resp)
 	s.applyGraphExpansion(ctx, &req, resp, project.ID, dims)
+	// Prefer the caller's worktree checkout when set so staleness reflects the
+	// files the agent is actually editing; otherwise use the project's path.
+	root := req.Worktree
+	if root == "" {
+		root = project.Path
+	}
+	s.annotateStaleness(ctx, project, root, resp.Results)
 	return resp, nil
 }
 

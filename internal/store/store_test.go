@@ -632,6 +632,13 @@ func TestListFileHashesAndDeleteByPath(t *testing.T) {
 	if err != nil || hashes["a.go"] != "h1" || hashes["b.go"] != "h2" || len(hashes) != 2 {
 		t.Fatalf("ListFileHashes = %v, err %v", hashes, err)
 	}
+	infos, err := s.ListFileHashesWithTime(ctx, pid)
+	if err != nil || infos["a.go"].Hash != "h1" || infos["b.go"].Hash != "h2" {
+		t.Fatalf("ListFileHashesWithTime = %v, err %v", infos, err)
+	}
+	if infos["a.go"].IndexedAt.IsZero() || infos["b.go"].IndexedAt.IsZero() {
+		t.Fatalf("ListFileHashesWithTime missing indexed_at: %+v", infos)
+	}
 
 	// Deleting a.go removes it and cascades its chunks.
 	if err := s.DeleteFileByPath(ctx, pid, "a.go"); err != nil {
