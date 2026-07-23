@@ -9,9 +9,10 @@ import (
 // indexer stores in files.hash. Search staleness checks must use this exact
 // function so on-disk comparisons match the indexed value.
 //
-// The hash is for content-addressed dedup of indexed units, not for
-// password/security-sensitive material.
+// This is a content-addressed digest for deduplication of indexed units (akin
+// to a git blob hash); it is not a security control.
 func ContentHash(content []byte) string {
-	sum := sha256.Sum256(content) // codeql[go/weak-sensitive-data-hashing] : content-addressed dedup, not password hashing
+	// codeql[go/weak-sensitive-data-hashing] : content-addressed digest, not a security control.
+	sum := sha256.Sum256(content)
 	return fmt.Sprintf("%x", sum)
 }

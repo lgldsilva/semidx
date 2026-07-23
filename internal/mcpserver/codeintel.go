@@ -12,19 +12,9 @@ import (
 	"github.com/lgldsilva/semidx/internal/deadcode"
 )
 
-type callersInput struct {
-	Project string `json:"project,omitempty" jsonschema:"the registered project name (optional when a default project is configured or cwd is inside an indexed project)"`
-	File    string `json:"file" jsonschema:"project-relative path of the source file containing the symbol"`
-	Line    int    `json:"line" jsonschema:"1-based line number of the symbol"`
-}
-
-type explainInput struct {
-	Project string `json:"project,omitempty" jsonschema:"the registered project name (optional when a default project is configured or cwd is inside an indexed project)"`
-	File    string `json:"file" jsonschema:"project-relative path of the source file containing the symbol"`
-	Line    int    `json:"line" jsonschema:"1-based line number of the symbol"`
-}
-
-type impactInput struct {
+// fileLineInput is the shared argument shape for the file:line code-intel tools
+// (callers, explain, impact). impact additionally accepts a Depth field.
+type fileLineInput struct {
 	Project string `json:"project,omitempty" jsonschema:"the registered project name (optional when a default project is configured or cwd is inside an indexed project)"`
 	File    string `json:"file" jsonschema:"project-relative path of the source file containing the symbol"`
 	Line    int    `json:"line" jsonschema:"1-based line number of the symbol"`
@@ -87,8 +77,8 @@ func registerCodeIntelTools(s *mcp.Server, b Backend, allowed map[string]bool, d
 	}
 }
 
-func callersHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[callersInput, any] {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, in callersInput) (*mcp.CallToolResult, any, error) {
+func callersHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[fileLineInput, any] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in fileLineInput) (*mcp.CallToolResult, any, error) {
 		if err := requireFileLine(in.File, in.Line); err != nil {
 			return errorResult(err), nil, nil
 		}
@@ -100,8 +90,8 @@ func callersHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[callers
 	}
 }
 
-func explainHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[explainInput, any] {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, in explainInput) (*mcp.CallToolResult, any, error) {
+func explainHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[fileLineInput, any] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in fileLineInput) (*mcp.CallToolResult, any, error) {
 		if err := requireFileLine(in.File, in.Line); err != nil {
 			return errorResult(err), nil, nil
 		}
@@ -113,8 +103,8 @@ func explainHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[explain
 	}
 }
 
-func impactHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[impactInput, any] {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, in impactInput) (*mcp.CallToolResult, any, error) {
+func impactHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[fileLineInput, any] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in fileLineInput) (*mcp.CallToolResult, any, error) {
 		if err := requireFileLine(in.File, in.Line); err != nil {
 			return errorResult(err), nil, nil
 		}
