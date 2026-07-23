@@ -103,15 +103,11 @@ jobs:
         uses: CycloneDX/gh-gomod-generate-sbom@efc74245d6802c8cefd925620515442756c70d8f # v2.0.0
         with:
           version: v1.9.0
-          # cyclonedx-gomod >= v1.10.0 requires a subcommand (app, mod,
-          # or bin) before the module path. v0.44.4 release failed because
-          # the action passed `./...` as the first positional arg, which
-          # cyclonedx-gomod now treats as invalid and prints help instead
-          # of generating the SBOM. Use `app ./...` for application-level
-          # SBOMs (what's actually linked into the binary). Pin v1.9.0
-          # to keep the working CLI shape — v1.10+ would need a different
-          # args layout and the action hasn't been updated yet.
-          args: app ./... -licenses -json -output bom.json
+          # cyclonedx-gomod v1.9.0 CLI: `cyclonedx-gomod [flags] [module-path]`
+          # — no subcommands. The `app` subcommand only exists in v1.10+.
+          # v1.9.0 is pinned because the gh-gomod-generate-sbom action
+          # hasn't been updated for the v1.10+ CLI layout.
+          args: ./... -licenses -json -output bom.json
       - name: Upload SBOM to release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
