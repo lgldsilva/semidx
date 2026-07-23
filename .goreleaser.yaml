@@ -95,6 +95,8 @@ release:
 # Track: https://github.com/lgldsilva/semidx/issues/16
 brews:
   - name: semidx
+    # Skip when TAP_GITHUB_TOKEN is absent (secret not yet configured).
+    skip_upload: '{{ if .Env.TAP_GITHUB_TOKEN }}false{{ else }}true{{ end }}'
     repository:
       owner: lgldsilva
       name: homebrew-tap
@@ -111,6 +113,8 @@ brews:
 
 scoops:
   - name: semidx
+    # Skip when TAP_GITHUB_TOKEN is absent (secret not yet configured).
+    skip_upload: '{{ if .Env.TAP_GITHUB_TOKEN }}false{{ else }}true{{ end }}'
     repository:
       owner: lgldsilva
       name: scoop-bucket
