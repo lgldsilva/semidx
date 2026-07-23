@@ -34,21 +34,15 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.26.5"
-          cache: false
       # GitHub Actions runners have ~14 GB of ephemeral disk. Cross-compiling
       # 12 binaries (semidx + chatrag × 6 platform combos) fills the disk
       # and the Go linker aborts with "no space left on device". Free up
       # space before the heavy goreleaser build.
+      # IMPORTANT: this MUST run before setup-go — it deletes the
+      # pre-installed Go toolchains from /opt/hostedtoolcache/go/.
+      # setup-go then installs the exact version we need into the
+      # freshly-cleaned cache dir.
       - name: Free disk space before build
-        # set -euo pipefail is the default in GHA shell steps. df
-        # returns exit 1 if any path argument doesn't exist; on
-        # Ubuntu 24.04 runners /github/workspace is not a valid path
-        # (the workspace is mounted under /home/runner/work/...).
-        # Use `|| true` on every command so a missing path doesn't
-        # abort the entire cleanup before the actual rm -rf runs.
         run: |
           set -uo pipefail
           echo "=== disk before ==="
@@ -63,12 +57,14 @@ jobs:
                        /opt/hostedtoolcache/dotnet \
                        /opt/hostedtoolcache/php \
                        /opt/hostedtoolcache/go/1.* 2>/dev/null || true
-          # Clear any pre-existing Go build cache.
-          go clean -cache -modcache 2>/dev/null || true
           # Clear /tmp.
           sudo rm -rf /tmp/* 2>/dev/null || true
           echo "=== disk after ==="
           df -h /tmp /github/workspace 2>/dev/null || true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: false
       - name: Login to GHCR
         # Pin third-party actions by full commit SHA (SonarCloud S7637).
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
