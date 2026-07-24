@@ -188,7 +188,7 @@ func TestNopAndStoreRecorder(t *testing.T) {
 	})
 	r.LogQueries = true
 	r.Record(context.Background(), Event{
-		TS: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		TS:      time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
 		Project: "p", Source: SourceCLI, Outcome: OutcomeEmpty,
 		QueryText: "keep me", QueryHash: "",
 	})
