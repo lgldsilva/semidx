@@ -160,10 +160,47 @@ This document records the main architectural decisions made during the evolution
 
 ---
 
+## 9. GPU ownership: Ollama embeds, Postgres searches (no FAISS/cuVS)
+
+- **Decision**: Keep the GPU outside the `semidx` process. Embeddings run on the
+  host's Ollama (or cloud providers); vector ANN stays on CPU via
+  PostgreSQL/pgvector HNSW (or SQLite brute-force cosine at laptop scale). Do
+  **not** add FAISS/cuVS GPU search, CUDA into the Go binary, or a Postgres
+  "GPU mode". Detect GPU only by probing Ollama's `/api/ps` (`size_vram`), never
+  via `nvidia-smi`. Defer a dedicated async chunk→embed queue until profiling
+  shows the GPU idle with `SEMIDX_INDEX_WORKERS` / `SEMIDX_EMBED_BATCH_SIZE` /
+  `SEMIDX_OLLAMA_URLS` already tuned.
+- **Why**:
+  - Reindex time is dominated by embedding HTTP (Ollama/GPU or cloud), not by
+    pgvector `<=>`. Internal dedup benches already show HNSW at ~0.5–1.1 ms —
+    search UX is limited by query embedding + network, not ANN.
+  - File workers already overlap CPU work with embed waits (`IndexWorkers`); a
+    producer–consumer queue only helps when the GPU is measurably idle between
+    batches.
+  - An external GPU vector index (FAISS/cuVS) would dual-write outside Postgres,
+    break worktree/project scoping consistency, and conflict with REQ-WONT-04
+    (do not bundle Ollama or a GPU runtime).
+- **How**:
+  - Documented in `docs/architecture.md` (GPU boundary).
+  - Ops UX: `semidx config list` and `semidx doctor` call
+    `embed.ProbeOllamaRuntime` against `SEMIDX_OLLAMA_URL` /
+    `SEMIDX_OLLAMA_URLS` and report GPU vs CPU from resident models'
+    `size_vram`/`size`.
+  - Scale knobs remain config: workers, embed batch size, parallel Ollama URLs.
+- **Trade-offs**:
+  - Without a loaded model, `/api/ps` cannot prove GPU availability (reported as
+    reachable / idle). Cloud-only setups have no local GPU line to show.
+  - A future async embed queue remains an option after evidence; GPU ANN does
+    not.
+
+---
+
 ## 🚫 What we will NOT do (for now)
 
 - **`models` table in the database**: `InferDims` (name→dimension map) is already the single source in `internal/embed`; moving it to a database table would couple `embed`→`store` for marginal benefit. Re-evaluate if/when per-model config (provider/local) without recompilation is needed.
 - **Indexing Large Files (>1MB)**: Giant files are ignored or truncated. This project is optimized for source code and structured markdown documentation.
+- **GPU vector search (FAISS / cuVS / CUDA in-process)**: see ADR 9 — pgvector HNSW (or SQLite brute-force) is enough; GPU stays with Ollama for embeddings only.
+- **`nvidia-smi` (or other host GPU inventory) inside semidx**: fragile under Docker/remote Ollama; probe Ollama's HTTP API instead.
 
 ---
 

@@ -179,6 +179,23 @@ entirely: every chunk is stored text-only and search runs purely on keyword
 matching. `Fallback` is not set in this mode — it is the chosen strategy, not a
 degradation.
 
+## GPU boundary (embeddings only)
+
+semidx itself never talks to CUDA. A GPU on the machine accelerates indexing and
+query embedding only when the **Ollama** process (or another embed provider) uses
+it. PostgreSQL/pgvector search stays on CPU with an HNSW index; SQLite standalone
+search is a brute-force cosine scan in Go.
+
+```
+  semidx index/search ──HTTP──▶ Ollama (optional GPU) ──▶ embedding vectors
+  semidx search       ──SQL───▶ Postgres/pgvector HNSW (CPU) ──▶ ranked hits
+```
+
+`semidx config list` and `semidx doctor` probe configured Ollama URLs via
+`GET /api/ps` and report whether resident models have `size_vram > 0` (GPU) or
+are CPU-only. Empty `ps` means reachable but idle — GPU presence is unknown
+until a model is loaded. See design decision §9.
+
 ## The store split: `IndexStore` vs `Store`
 
 `internal/store` defines two interfaces so the standalone backend does not have

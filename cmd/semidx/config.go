@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/lgldsilva/semidx/internal/config"
+	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/xdg"
 )
 
@@ -103,22 +108,25 @@ func newConfigListCmd(d *deps) *cobra.Command {
 		Short: "Show the effective configuration (secrets masked) and the active backend",
 		Example: `  semidx config list
   semidx config list --show-secrets`,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var b strings.Builder
 			if p := xdg.Profile(); p != "" {
-				fmt.Printf("Profile: %s\n", p)
+				fmt.Fprintf(&b, "Profile: %s\n", p)
 			}
-			fmt.Printf("Active backend: %s\n\n", activeBackend(d))
-			fmt.Println("Settings (effective; env > .env > user config):")
+			fmt.Fprintf(&b, "Active backend: %s\n\n", activeBackend(d))
+			fmt.Fprintln(&b, "Settings (effective; env > .env > user config):")
 			for _, k := range config.KnownKeys {
 				v := config.EffectiveValue(k.Name)
 				if v == "" {
 					continue
 				}
-				fmt.Printf("  %-24s %s\n", k.Name, displayValue(k.Name, v, showSecrets))
+				fmt.Fprintf(&b, "  %-24s %s\n", k.Name, displayValue(k.Name, v, showSecrets))
 			}
+			printOllamaRuntime(&b, d)
 			p, _ := config.UserEnvPath()
-			fmt.Printf("\nUser config file: %s\n", p)
-			return nil
+			fmt.Fprintf(&b, "\nUser config file: %s\n", p)
+			_, err := fmt.Fprint(cmd.OutOrStdout(), b.String())
+			return err
 		},
 	}
 	c.Flags().BoolVar(&showSecrets, "show-secrets", false, "print secret values instead of masking them")
@@ -239,4 +247,46 @@ func mask(s string) string {
 		return "****"
 	}
 	return "****" + s[len(s)-4:]
+}
+
+// printOllamaRuntime soft-probes configured local Ollama URLs (GET /api/ps) and
+// reports GPU vs CPU from size_vram. Never fails the parent command.
+// Prefer a *strings.Builder (errcheck-friendly); other writers ignore write errors.
+func printOllamaRuntime(out io.Writer, d *deps) {
+	var b strings.Builder
+	if d != nil && d.keywordOnly {
+		fmt.Fprintln(&b, "\nOllama runtime: skipped (keyword-only mode)")
+		_, _ = io.WriteString(out, b.String())
+		return
+	}
+	urls := ollamaProbeURLs(d)
+	if len(urls) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	fmt.Fprintln(&b, "\nOllama runtime (local; GPU via size_vram, not nvidia-smi):")
+	for _, p := range embed.ProbeOllamaRuntimes(ctx, urls) {
+		fmt.Fprintf(&b, "  %-40s %s\n", p.URL, p.Summary())
+	}
+	_, _ = io.WriteString(out, b.String())
+}
+
+func ollamaProbeURLs(d *deps) []string {
+	var url string
+	var urls []string
+	if d != nil && d.cfg != nil {
+		url = d.cfg.OllamaURL
+		urls = d.cfg.OllamaURLs
+	} else {
+		url = config.EffectiveValue("SEMIDX_OLLAMA_URL")
+		if url == "" {
+			url = config.EffectiveValue("OLLAMA_URL")
+		}
+	}
+	out := embed.OllamaProbeURLs(url, urls)
+	if len(out) == 0 {
+		return []string{"http://localhost:11434"}
+	}
+	return out
 }
