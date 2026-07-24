@@ -158,7 +158,7 @@ func runLocalNeighbors(ctx context.Context, w io.Writer, d *deps, projectArg, fi
 	if err != nil {
 		return err
 	}
-	sg := idx.Subgraph(file, graph.Budget{MaxDepth: depth, MaxEdgesOut: limit})
+	sg := idx.Subgraph(ctx, file, graph.Budget{MaxDepth: depth, MaxEdgesOut: limit})
 	if asJSON {
 		return encodeGraphJSON(w, sg)
 	}
@@ -237,7 +237,7 @@ func runLocalPath(ctx context.Context, w io.Writer, d *deps, projectArg, from, t
 	if err != nil {
 		return false, err
 	}
-	pr := idx.ShortestPath(from, to, graph.Budget{MaxDepth: maxDepth}, undirected)
+	pr := idx.ShortestPath(ctx, from, to, graph.Budget{MaxDepth: maxDepth}, undirected)
 	if err := emitPath(w, asJSON, pr, pr.Found, pr.Directed, pr.Truncated, pr.Hops, pr.Length); err != nil {
 		return false, err
 	}

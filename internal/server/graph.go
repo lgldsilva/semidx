@@ -31,7 +31,7 @@ func (s *Server) handleGraphSubgraph(w http.ResponseWriter, r *http.Request) {
 		MaxDepth:    clampQueryInt(r.URL.Query().Get("depth"), 0, maxSubgraphDepthQuery),
 		MaxEdgesOut: clampQueryInt(r.URL.Query().Get("limit"), 0, maxSubgraphEdgesQuery),
 	}
-	sg := idx.Subgraph(r.URL.Query().Get("seed"), budget)
+	sg := idx.Subgraph(r.Context(), r.URL.Query().Get("seed"), budget)
 	writeJSON(w, http.StatusOK, client.GraphSubgraphResponse{
 		Nodes:     toClientNodes(sg.Nodes),
 		Edges:     toClientEdges(sg.Edges),
@@ -63,7 +63,7 @@ func (s *Server) handleGraphPath(w http.ResponseWriter, r *http.Request) {
 	}
 	undirected := r.URL.Query().Get("undirected") == "1" ||
 		r.URL.Query().Get("undirected") == "true"
-	pr := idx.ShortestPath(from, to, budget, undirected)
+	pr := idx.ShortestPath(r.Context(), from, to, budget, undirected)
 	writeJSON(w, http.StatusOK, client.GraphPathResponse{
 		From:      pr.From,
 		To:        pr.To,

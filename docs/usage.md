@@ -28,6 +28,18 @@ API: `GET /api/v1/search-usage?days=30` (not to be confused with
 
 Prometheus also exposes `semidx_search_total{project,source,outcome}`.
 
+## Related: dependency graph walks
+
+Intent/search analytics above are orthogonal to the file↔package graph:
+
+```bash
+semidx graph neighbors --file cmd/semidx/main.go
+semidx graph path --from cmd/semidx/main.go --to internal/store/store.go --json
+```
+
+MCP: `semantic_subgraph` / `semantic_path`. Details: `docs/api.md` § Dependency
+graph and ADR §10.
+
 ## Privacy
 
 - No outbound phone-home.

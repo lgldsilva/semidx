@@ -56,6 +56,20 @@ func TestGraphSubgraphAndPath(t *testing.T) {
 	if rec.Code != 404 {
 		t.Fatalf("missing project = %d", rec.Code)
 	}
+
+	writeOnly := &fakeStore{
+		token:   &store.Token{Scopes: []string{"write"}},
+		project: &store.Project{ID: 1, Name: "demo", Status: "ready", Model: "m"},
+	}
+	wo := New(writeOnly, fakeEmbedder{}, nil)
+	rec = do(t, wo, "GET", "/api/v1/projects/demo/graph/subgraph?seed=main.go", "tok", "")
+	if rec.Code != 403 {
+		t.Fatalf("write-only subgraph = %d, want 403", rec.Code)
+	}
+	rec = do(t, wo, "GET", "/api/v1/projects/demo/graph/path?from=a&to=b", "tok", "")
+	if rec.Code != 403 {
+		t.Fatalf("write-only path = %d, want 403", rec.Code)
+	}
 }
 
 func TestGraphLoadErrors(t *testing.T) {

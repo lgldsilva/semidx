@@ -85,6 +85,22 @@ of source imports:
  telemetry/agent     ──▶ runtime_edges           (observed, aggregated)
 ```
 
+### File↔package walks (`internal/graph`)
+
+Indexed import edges are usually **file → package-dir** (e.g. `main.go →
+internal/worker/`), not file→file. `internal/graph` expands that into a
+walkable bipartite graph:
+
+1. file → each stored import target (package-dir)
+2. package-dir → each indexed file in that directory (synthetic `contains`)
+
+Callers share one contract across HTTP (`GET …/graph/subgraph|path`), CLI
+(`semidx graph stats|neighbors|path`), MCP (`semantic_subgraph` /
+`semantic_path`), and the admin Analyze BFF. Budgets
+(`max_depth` / `max_visit_nodes` / `max_edges_out`), `truncated`, and
+`directed: false` metadata for undirected fallbacks are part of the response —
+see ADR §10 in `docs/design-decisions.md`.
+
 `runtime_edges` can point to another project in the current tenant/workspace or
 to an external service. The API accepts normalized counters instead of raw
 traces, which keeps the first increment provider-neutral and safe to submit
@@ -104,7 +120,8 @@ be added later without coupling them to the indexing or graph stores.
 ## Component map
 
 ```
- cmd/semidx ............ cobra CLI: login, index, search, sgrep, repo, skills,
+ cmd/semidx ............ cobra CLI: login, index, search, sgrep, graph
+                         (stats|neighbors|path|runtime|portfolio), repo, skills,
                          models, drop, serve, mcp; global --local / --keyword.
  internal/config ....... resolves SEMIDX_* env (+ .env) into a Config.
  internal/clientconfig . ~/.config/semidx/config.yaml: server URL, token.
@@ -114,6 +131,7 @@ be added later without coupling them to the indexing or graph stores.
  internal/extract ...... PDF/DOCX/XLSX/HTML/text -> plain text (pure Go).
  internal/chunker ...... file eligibility + splitting into line-ranged chunks.
  internal/indexing ..... walks a project, chunks, embeds, stores (with retry).
+ internal/graph ........ file↔package Subgraph + ShortestPath with budgets.
  internal/search ....... one search flow (embed query -> vector search ->
                          keyword fallback), shared by CLI, MCP and admin UI;
                          cross-project RRF fusion.
@@ -123,7 +141,7 @@ be added later without coupling them to the indexing or graph stores.
  internal/localstore ... SQLiteStore: standalone IndexStore, no CGO.
  internal/gitsync ...... clone/pull a git repo into the server's data dir.
  internal/server ....... HTTP API: auth, tenants, projects, jobs, files,
-                         search and dependency comparison.
+                         search, dependency comparison, graph subgraph/path.
  internal/jwtauth ...... mint/verify HS256 control tokens (revocable via jti).
  internal/passwd ....... argon2id password hashing for web-UI users.
  internal/webadmin ..... server-rendered /admin UI (sessions + CSRF).

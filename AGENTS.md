@@ -108,8 +108,9 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
 
 ```
 cmd/semidx/        CLI (cobra): index, unlock (password docs), search, sgrep,
-                   migrate (SQLite→Postgres), config, mcp[/install], skills,
-                   models, repo, login, drop, serve; main.go wires deps.
+                   graph (stats|neighbors|path|runtime|portfolio), migrate
+                   (SQLite→Postgres), config, mcp[/install], skills, models,
+                   repo, login, drop, serve; main.go wires deps.
 pkg/client/        public Go SDK for the HTTP API (DTOs + client).
 internal/
   config/          SEMIDX_* resolution: env > cwd .env > ~/.config/semidx/semidx.env > default
@@ -118,6 +119,7 @@ internal/
   privacy/         deny-list + route-local policy engine
   embed/           Embedder + ChainEmbedder (privacy is a parameter)
   extract/         pluggable extractor registry (text/pdf/docx/xlsx/…, JAR)
+  graph/           file↔package Subgraph + ShortestPath (budgets, directed metadata)
   store/           PgStore + goose migrations; dynamic chunks_<dims> + HNSW,
                    project policies, runtime edges and tenant quota seam
   localstore/      standalone SQLite (WAL, MaxOpenConns=1, identity-isolated)
@@ -127,10 +129,10 @@ internal/
   search/          one Service (vector + keyword fallback, worktree filter)
   server/ webadmin/ jwtauth/ passwd/   HTTP API + admin UI + auth
   mcpserver/       MCP tools over a Backend (remote client | local index),
-                   incl. code-intel (callers/explain/impact/deadcode/diff)
+                   incl. code-intel + semantic_subgraph/semantic_path
   mcpinstall/      `mcp install` client registry (per-client config formats)
-  skills/          embedded agent skills (semantic-search, code-intel,
-                   impact-before-refactor, auto-index, workspace-agent)
+  skills/          embedded agent skills (semantic-search, semantic-graph,
+                   code-intel, impact-before-refactor, auto-index, workspace-agent)
 deploy/            docker-compose (self-host),
                    agentics-test/ (the MCP integration harness)
 docs/              architecture.md, api.md, self-hosting.md, CICD.md, ADRs

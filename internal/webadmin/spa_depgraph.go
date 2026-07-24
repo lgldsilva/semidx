@@ -27,7 +27,7 @@ func (a *Admin) apiProjectGraphSubgraph(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return
 	}
-	sg := idx.Subgraph(r.URL.Query().Get("seed"), graph.Budget{
+	sg := idx.Subgraph(r.Context(), r.URL.Query().Get("seed"), graph.Budget{
 		MaxDepth:    clampAdminQueryInt(r.URL.Query().Get("depth"), maxAdminSubgraphDepth),
 		MaxEdgesOut: clampAdminQueryInt(r.URL.Query().Get("limit"), maxAdminSubgraphEdges),
 	})
@@ -50,7 +50,7 @@ func (a *Admin) apiProjectGraphPath(w http.ResponseWriter, r *http.Request, ac *
 		return
 	}
 	undirected := r.URL.Query().Get("undirected") == "1" || r.URL.Query().Get("undirected") == "true"
-	pr := idx.ShortestPath(from, to, graph.Budget{
+	pr := idx.ShortestPath(r.Context(), from, to, graph.Budget{
 		MaxDepth: clampAdminQueryInt(r.URL.Query().Get("max_depth"), maxAdminPathDepth),
 	}, undirected)
 	writeJSON(w, http.StatusOK, map[string]any{

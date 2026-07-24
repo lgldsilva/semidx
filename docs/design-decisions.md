@@ -206,10 +206,12 @@ This document records the main architectural decisions made during the evolution
   - Normalize paths with `filepath.ToSlash`; package dirs always end with `/` (except `.`).
   - Hop rules: (1) file → each import target; (2) package → each known file in that directory (from graph source keys and/or an explicit file list).
   - Shortest path: BFS directed first; optional undirected fallback only when requested, with `directed: false` and per-edge orientation preserved.
-  - Budgets: `max_depth`, `max_visit_nodes`, `max_edges_out`; responses may set `truncated: true`.
+  - Budgets: `max_depth`, `max_visit_nodes`, `max_edges_out`; walks honour `context.Context` cancellation (`truncated: true`); responses may set `truncated: true` on budget hit.
   - Public HTTP under `/api/v1/.../graph/subgraph` and `/graph/path` (Bearer `read`); admin UI is a BFF over the same contract.
   - CLI: `semidx graph stats|neighbors|path` (alongside existing `runtime`/`portfolio`).
   - MCP: `semantic_subgraph` + `semantic_path` (existing `semantic_neighbors`/`semantic_trace`/`semantic_symbols` stay Graph-RAG oriented).
+  - Errors: store/load failures return sanitized client messages (e.g. `"could not load dependency graph"`); raw DSN/SQL never leaves the server log path (REQ-SRCH-08).
+  - Example: `main.go` imports `internal/worker/` → synthetic contains hop → `internal/worker/run.go` (path length 2 edges; middle node is the package-dir).
 - **Trade-offs**:
   - Package→file expansion needs a file inventory; using only graph source keys misses files with zero outbound imports unless callers pass the full file list.
   - Multi-file packages collapse to one package node in the middle of a path (clearer for “who imports this package”, less precise for symbol-level calls).

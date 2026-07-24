@@ -119,7 +119,7 @@ func (b *localBackend) GraphSubgraph(ctx context.Context, project, seed string, 
 	if err != nil {
 		return nil, err
 	}
-	sg := idx.Subgraph(seed, graph.Budget{MaxDepth: depth, MaxEdgesOut: limit})
+	sg := idx.Subgraph(ctx, seed, graph.Budget{MaxDepth: depth, MaxEdgesOut: limit})
 	return &client.GraphSubgraphResponse{
 		Nodes:     toClientGraphNodes(sg.Nodes),
 		Edges:     toClientGraphEdges(sg.Edges),
@@ -137,7 +137,7 @@ func (b *localBackend) GraphPath(ctx context.Context, project, from, to string, 
 	if err != nil {
 		return nil, err
 	}
-	pr := idx.ShortestPath(from, to, graph.Budget{MaxDepth: maxDepth}, undirected)
+	pr := idx.ShortestPath(ctx, from, to, graph.Budget{MaxDepth: maxDepth}, undirected)
 	return &client.GraphPathResponse{
 		From: pr.From, To: pr.To, Found: pr.Found, Directed: pr.Directed,
 		Hops: pr.Hops, Edges: toClientGraphEdges(pr.Edges),

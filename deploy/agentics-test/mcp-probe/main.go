@@ -63,7 +63,13 @@ func main() {
 	if err != nil {
 		die("tools/list failed: %v", err)
 	}
-	want := map[string]bool{"semantic_search": false, "semantic_projects": false, "semantic_reindex": false}
+	want := map[string]bool{
+		"semantic_search":   false,
+		"semantic_projects": false,
+		"semantic_reindex":  false,
+		"semantic_subgraph": false,
+		"semantic_path":     false,
+	}
 	for _, tool := range lt.Tools {
 		if _, ok := want[tool.Name]; ok {
 			want[tool.Name] = true
@@ -77,8 +83,15 @@ func main() {
 			die("tools/list is missing %q (have %d tools)", name, len(lt.Tools))
 		}
 	}
-	fmt.Println("OK   tools/list exposes semantic_search, semantic_projects, semantic_reindex")
+	fmt.Println("OK   tools/list exposes search/projects/reindex + semantic_subgraph/semantic_path")
 
+	// Optional smoke: call subgraph when a project is provided (empty seed = hub sample).
+	if project != "" {
+		if txt, isErr := call(ctx, sess, "semantic_subgraph", map[string]any{"project": project}); isErr {
+			die("semantic_subgraph errored: %s", txt)
+		}
+		fmt.Println("OK   semantic_subgraph")
+	}
 	// semantic_projects should succeed (even if the index is empty).
 	if txt, isErr := call(ctx, sess, "semantic_projects", nil); isErr {
 		die("semantic_projects returned an error: %s", txt)

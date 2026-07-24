@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"context"
 	"path"
 	"sort"
 	"strings"
@@ -295,8 +296,11 @@ type bfsParent struct {
 // ShortestPath finds a shortest hop path from → to.
 // If allowUndirected is false, only directed dependency flow is used.
 // If directed search fails and allowUndirected is true, retries undirected and
-// sets Directed=false on success.
-func (idx *Index) ShortestPath(from, to string, budget Budget, allowUndirected bool) PathResult {
+// sets Directed=false on success. A cancelled ctx stops the walk with Truncated.
+func (idx *Index) ShortestPath(ctx context.Context, from, to string, budget Budget, allowUndirected bool) PathResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	budget = budget.withPathDefaults()
 	from, to = Normalize(from), Normalize(to)
 	res := PathResult{From: from, To: to, Directed: true}
@@ -309,7 +313,7 @@ func (idx *Index) ShortestPath(from, to string, budget Budget, allowUndirected b
 		return res
 	}
 
-	if hops, edges, trunc, ok := idx.bfs(from, to, budget, false); ok {
+	if hops, edges, trunc, ok := idx.bfs(ctx, from, to, budget, false); ok {
 		return fillPath(res, hops, edges, true, trunc)
 	} else if trunc {
 		res.Truncated = true
@@ -317,7 +321,7 @@ func (idx *Index) ShortestPath(from, to string, budget Budget, allowUndirected b
 	if !allowUndirected {
 		return res
 	}
-	hops, edges, trunc2, ok := idx.bfs(from, to, budget, true)
+	hops, edges, trunc2, ok := idx.bfs(ctx, from, to, budget, true)
 	res.Truncated = res.Truncated || trunc2
 	if ok {
 		return fillPath(res, hops, edges, false, res.Truncated)
@@ -344,7 +348,7 @@ func sortEdgesStable(nbrs []Edge) {
 	})
 }
 
-func (idx *Index) bfs(from, to string, budget Budget, undirected bool) (hops []string, edges []Edge, truncated, found bool) {
+func (idx *Index) bfs(ctx context.Context, from, to string, budget Budget, undirected bool) (hops []string, edges []Edge, truncated, found bool) {
 	type item struct {
 		node  string
 		depth int
@@ -355,6 +359,9 @@ func (idx *Index) bfs(from, to string, budget Budget, undirected bool) (hops []s
 	visited := 0
 
 	for len(q) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, true, false
+		}
 		cur := q[0]
 		q = q[1:]
 		visited++
@@ -429,7 +436,11 @@ func reverseEdges(in []Edge) []Edge {
 
 // Subgraph returns the neighborhood around seed up to budget.MaxDepth.
 // If seed is empty, seeds are the highest out-degree files (hub sample).
-func (idx *Index) Subgraph(seed string, budget Budget) SubgraphResult {
+// A cancelled ctx stops expansion and sets Truncated.
+func (idx *Index) Subgraph(ctx context.Context, seed string, budget Budget) SubgraphResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	budget = budget.withSubgraphDefaults()
 	seed = Normalize(seed)
 	res := SubgraphResult{}
@@ -464,6 +475,10 @@ func (idx *Index) Subgraph(seed string, budget Budget) SubgraphResult {
 	truncated := false
 
 	for len(q) > 0 {
+		if err := ctx.Err(); err != nil {
+			truncated = true
+			break
+		}
 		cur := q[0]
 		q = q[1:]
 		visited++
