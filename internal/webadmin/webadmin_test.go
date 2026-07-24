@@ -16,6 +16,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/passwd"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/usage"
 )
 
 // fakeStore is an in-memory Store covering only what the web admin touches.
@@ -299,6 +300,11 @@ func (f *fakeStore) SearchSimilarKeywords(context.Context, int, string, int, int
 	out := append([]store.SearchResult{}, f.searchResults...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	return out, nil
+}
+
+func (f *fakeStore) RecordUsageEvent(context.Context, usage.Event) error { return nil }
+func (f *fakeStore) UsageAggregate(context.Context, time.Time, string, int) (usage.Aggregate, error) {
+	return usage.Aggregate{}, nil
 }
 
 func (f *fakeStore) CountProjectFiles(context.Context, int) (int, error) {

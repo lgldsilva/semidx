@@ -13,6 +13,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/usage"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
@@ -80,6 +81,10 @@ func (f *fakeStore) ListFileHashes(context.Context, int) (map[string]string, err
 }
 func (f *fakeStore) CountProjectFiles(context.Context, int) (int, error) {
 	return f.fileCount, f.fileCountErr
+}
+func (f *fakeStore) RecordUsageEvent(context.Context, usage.Event) error { return nil }
+func (f *fakeStore) UsageAggregate(context.Context, time.Time, string, int) (usage.Aggregate, error) {
+	return usage.Aggregate{}, nil
 }
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
 func (f *fakeStore) TokenByHash(context.Context, string) (*store.Token, error) {

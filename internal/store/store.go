@@ -347,6 +347,7 @@ type Store interface {
 	TokenStore
 	SessionStore
 	JobStore
+	UsageStore
 }
 
 // PgStore is the PostgreSQL/pgvector implementation of Store.

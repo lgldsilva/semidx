@@ -135,6 +135,31 @@ This document records the main architectural decisions made during the evolution
 
 ---
 
+## 8. Product usage analytics without query text (default)
+
+- **Decision**: Persist append-only `usage_events` (project, source enum, outcome,
+  hit_count, latency, flags) and expose `semidx usage` / `GET /api/v1/search-usage` /
+  admin Usage / MCP `semantic_usage`, modeled on ai-memory's
+  `auto-improve-report` (aggregates + findings + blind_spots). Do **not** store
+  query text unless `SEMIDX_USAGE_LOG_QUERIES=true`. Attribute remote clients via
+  closed enum header `X-Semidx-Client: cli|mcp|admin|sdk`. Redact git URL userinfo
+  in list/MCP/admin surfaces.
+- **Why**: Ops Prometheus could not answer "which projects are searched, via MCP
+  or CLI, succeeding or empty". Phone-home SaaS telemetry conflicts with the
+  self-hosted privacy posture (§4). Query text encodes code intent and can
+  leak secrets if logged. `GET /api/v1/search-usage` is a distinct path from
+  the pre-existing `GET /api/v1/usage` (tenant billing quota) to avoid a
+  naming collision.
+- **How**: `internal/usage` + goose migration + SQLite table; `search.Service`
+  records via optional `usage.Recorder`; server/CLI/MCP/admin set source via
+  context or header. `semidx doctor` inventories MCP/skills install (ai-memory
+  install-mcp mold already used by `mcp install`).
+- **Trade-offs**: Historical searches before this feature are a blind spot;
+  clients without the header show as `unknown`. Relevance quality still needs
+  offline `semidx bench`, not usage counts.
+
+---
+
 ## 🚫 What we will NOT do (for now)
 
 - **`models` table in the database**: `InferDims` (name→dimension map) is already the single source in `internal/embed`; moving it to a database table would couple `embed`→`store` for marginal benefit. Re-evaluate if/when per-model config (provider/local) without recompilation is needed.

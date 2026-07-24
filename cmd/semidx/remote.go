@@ -161,12 +161,16 @@ See "semidx skills install".`,
 
 func newSkillsInstallCmd() *cobra.Command {
 	var target, dir string
+	var force bool
 	c := &cobra.Command{
 		Use:   "install",
 		Short: "Write the bundled skills into a target directory",
 		Long: `Write semidx's bundled agent skills into a target directory: claude-code
 (~/.claude/skills), cursor (~/.cursor/skills), windsurf (~/.codeium/windsurf/skills),
-project (./.claude/skills), or an explicit --dir.`,
+project (./.claude/skills), or an explicit --dir.
+
+Files carry a <!-- semidx-managed: skill --> marker. Re-running refreshes managed
+skills; unmanaged same-name skills are left alone unless --force.`,
 		Example: `  semidx skills install --target claude-code
   semidx skills install --target cursor
   semidx skills install --dir ./.claude/skills`,
@@ -175,7 +179,7 @@ project (./.claude/skills), or an explicit --dir.`,
 			if err != nil {
 				return err
 			}
-			written, err := skills.Install(dest)
+			written, err := skills.Install(dest, skills.InstallOptions{Force: force})
 			if err != nil {
 				return err
 			}
@@ -188,6 +192,7 @@ project (./.claude/skills), or an explicit --dir.`,
 	}
 	c.Flags().StringVar(&target, "target", "claude-code", "Install target: claude-code (~/.claude/skills), cursor (~/.cursor/skills), windsurf (~/.codeium/windsurf/skills), or project (./.claude/skills)")
 	c.Flags().StringVar(&dir, "dir", "", "Explicit destination directory (overrides --target)")
+	c.Flags().BoolVar(&force, "force", false, "Overwrite unmanaged same-name skills")
 	return c
 }
 

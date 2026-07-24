@@ -19,6 +19,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/observ"
 	"github.com/lgldsilva/semidx/internal/projectref"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/usage"
 )
 
 // Service runs semantic searches against an IndexStore using an Embedder.
@@ -26,11 +27,20 @@ type Service struct {
 	store    store.IndexStore
 	emb      embed.Embedder
 	reranker Reranker // optional top-K reranker (REQ-SRCH-11); nil = disabled
+	usage    usage.Recorder
 }
 
 // NewService wires a search Service.
 func NewService(s store.IndexStore, e embed.Embedder) *Service {
-	return &Service{store: s, emb: e}
+	return &Service{store: s, emb: e, usage: usage.Nop{}}
+}
+
+// WithUsage attaches a usage Recorder (product analytics). Nil is ignored.
+func (s *Service) WithUsage(r usage.Recorder) *Service {
+	if r != nil {
+		s.usage = r
+	}
+	return s
 }
 
 // Request describes one search.
@@ -83,6 +93,7 @@ type Response struct {
 func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	ctx, span := observ.StartSpan(ctx, "search.Service.Search")
 	defer span.End()
+	start := time.Now()
 
 	if req.TopK <= 0 {
 		req.TopK = 5
@@ -97,6 +108,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 
 	project, err := s.resolveProject(ctx, req)
 	if err != nil {
+		s.recordUsage(ctx, req, "", usage.OutcomeError, 0, start)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, err
 		}
@@ -111,10 +123,11 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	if req.Model != "" {
 		model = req.Model
 	}
+	// Note: the raw query text is deliberately NOT set as a span attribute
+	// (privacy — see internal/usage, which only stores a query hash by default).
 	span.SetAttributes(
 		attribute.String("project", project.Name),
 		attribute.String("model", model),
-		attribute.String("query", req.Query),
 		attribute.Int("topk", req.TopK),
 	)
 
@@ -143,6 +156,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		resp, err = s.searchSemantic(ctx, project.ID, req, model, dims, worktree, resp)
 	}
 	if err != nil {
+		s.recordUsage(ctx, req, project.Name, usage.OutcomeError, 0, start)
 		return nil, err
 	}
 
@@ -155,7 +169,34 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		root = project.Path
 	}
 	s.annotateStaleness(ctx, project, root, resp.Results)
+
+	outcome := usage.Classify(len(resp.Results), resp.Fallback, resp.Keyword)
+	s.recordUsage(ctx, req, project.Name, outcome, len(resp.Results), start)
 	return resp, nil
+}
+
+// recordUsage emits a usage.Event for this search attempt. Failures inside the
+// recorder are swallowed (analytics must never fail a search). project may be
+// "" when project resolution itself failed, in which case req.Project (the raw
+// ref the caller passed) is used instead.
+func (s *Service) recordUsage(ctx context.Context, req Request, project string, outcome usage.Outcome, hits int, start time.Time) {
+	if s.usage == nil {
+		return
+	}
+	if project == "" {
+		project = req.Project
+	}
+	s.usage.Record(ctx, usage.Event{
+		Project:   project,
+		Source:    usage.SourceFrom(ctx),
+		Outcome:   outcome,
+		HitCount:  hits,
+		LatencyMS: time.Since(start).Milliseconds(),
+		Keyword:   req.KeywordOnly,
+		Graph:     req.Graph,
+		QueryHash: usage.HashQuery(req.Query),
+		QueryText: req.Query,
+	})
 }
 
 // applyRerank reorders the top-K with the configured reranker (REQ-SRCH-11),

@@ -12,9 +12,11 @@ import (
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/analyzer"
 	"github.com/lgldsilva/semidx/internal/codeintel"
+	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/repotools"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/usage"
 )
 
 type graphLister interface {
@@ -44,6 +46,7 @@ func NewLocalBackend(svc *search.Service, idx store.IndexStore, keywordOnly bool
 func (b *localBackend) Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchOutput, error) {
 	// A standalone MCP server is not tied to a git worktree, so no worktree filter
 	// is applied — it searches the whole project index.
+	ctx = usage.WithSource(ctx, usage.SourceMCP)
 	resp, err := b.svc.Search(ctx, search.Request{
 		Project: project, Query: query, Model: model, TopK: topK, KeywordOnly: b.keywordOnly,
 		Graph: graph, GraphMaxDepth: graphDepth,
@@ -87,7 +90,7 @@ func (b *localBackend) Projects(ctx context.Context) ([]ProjectInfo, error) {
 	out := make([]ProjectInfo, 0, len(projects))
 	for _, p := range projects {
 		out = append(out, ProjectInfo{
-			Name: p.Name, SourceType: p.SourceType, GitURL: p.GitURL, Status: p.Status, Model: p.Model,
+			Name: p.Name, SourceType: p.SourceType, GitURL: gitmeta.RedactURL(p.GitURL), Status: p.Status, Model: p.Model,
 		})
 	}
 	return out, nil

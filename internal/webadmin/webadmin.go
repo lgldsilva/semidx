@@ -27,6 +27,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/secretbox"
 	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/internal/tenant"
+	"github.com/lgldsilva/semidx/internal/usage"
 )
 
 const (
@@ -117,10 +118,12 @@ func New(st store.Store, emb embedpkg.Embedder, log *slog.Logger, secureCookies 
 	}
 	limiter := &loginLimiter{tries: map[string][]time.Time{}}
 	go limiter.reap()
+	svc := search.NewService(st, emb)
+	svc.WithUsage(&usage.StoreRecorder{Store: st, LogQueries: false})
 	return &Admin{
 		store:   st,
 		emb:     emb,
-		search:  search.NewService(st, emb),
+		search:  svc,
 		log:     log,
 		secure:  secureCookies,
 		csrfKey: key,
@@ -153,6 +156,7 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/api/workspaces", a.protectAPI("", a.apiWorkspaces))
 	mux.HandleFunc("GET /admin/api/system", a.protectAPI("", a.apiSystem))
 	mux.HandleFunc("GET /admin/api/usage", a.protectAPI("", a.apiUsage))
+	mux.HandleFunc("GET /admin/api/search-usage", a.protectAPI("", a.apiSearchUsage))
 	mux.HandleFunc("GET /admin/api/projects", a.protectAPI("", a.projectsAPI))
 	mux.HandleFunc("POST /admin/api/projects", a.protectAPI("", a.apiCreateProject))
 	mux.HandleFunc("GET /admin/api/projects/{project}", a.protectAPI("", a.apiProjectDetail))

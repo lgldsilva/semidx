@@ -69,7 +69,7 @@ func searchGraphOpts(cmd *cobra.Command) (graph bool, graphDepth int) {
 }
 
 func (d *deps) runRemoteSearch(ctx context.Context, call searchCall) ([]projSearch, error) {
-	api := d.apiClient()
+	api := d.searchAPI()
 	p, err := searchtargets.ResolveRemoteProject(ctx, api, call.projectArg)
 	if err != nil {
 		return nil, err

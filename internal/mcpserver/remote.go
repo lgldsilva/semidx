@@ -7,8 +7,10 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/codeintel"
+	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/usage"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
@@ -16,7 +18,12 @@ import (
 type clientBackend struct{ c *client.Client }
 
 // NewClientBackend wraps a semidx API client as an MCP Backend (remote mode).
-func NewClientBackend(c *client.Client) Backend { return &clientBackend{c: c} }
+func NewClientBackend(c *client.Client) Backend {
+	if c != nil && c.ClientSource == "" {
+		c.ClientSource = string(usage.SourceMCP)
+	}
+	return &clientBackend{c: c}
+}
 
 func (b *clientBackend) Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchOutput, error) {
 	resp, err := b.c.Search(ctx, project, query, client.SearchParams{
@@ -72,7 +79,7 @@ func (b *clientBackend) Projects(ctx context.Context) ([]ProjectInfo, error) {
 	out := make([]ProjectInfo, 0, len(projects))
 	for _, p := range projects {
 		out = append(out, ProjectInfo{
-			Name: p.Name, SourceType: p.SourceType, GitURL: p.GitURL, Status: p.Status, Model: p.Model,
+			Name: p.Name, SourceType: p.SourceType, GitURL: gitmeta.RedactURL(p.GitURL), Status: p.Status, Model: p.Model,
 		})
 	}
 	return out, nil

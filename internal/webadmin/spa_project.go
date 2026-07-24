@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -67,7 +68,7 @@ func projectToItem(p store.Project) projectItem {
 	return projectItem{
 		TenantID: p.TenantID, WorkspaceID: p.WorkspaceID,
 		Name: p.Name, Identity: p.Identity, Path: p.Path, Model: p.Model,
-		Status: p.Status, SourceType: p.SourceType, GitURL: p.GitURL,
+		Status: p.Status, SourceType: p.SourceType, GitURL: gitmeta.RedactURL(p.GitURL),
 		Branch: p.Branch, Dims: p.Dims, License: p.LicenseSPDXID, PrivacyMode: p.PrivacyMode,
 	}
 }

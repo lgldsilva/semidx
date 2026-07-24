@@ -10,6 +10,7 @@ import { ChatPage } from './pages/ChatPage'
 import { CliGuidePage } from './pages/CliGuidePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { JobsPage } from './pages/JobsPage'
+import { UsagePage } from './pages/UsagePage'
 
 function Private({ children }: Readonly<{ children: React.ReactNode }>) {
   const { user, loading } = useAuth()
@@ -40,6 +41,7 @@ export default function App() {
                     <Route path="/projects/:name" element={<ProjectWorkspace />} />
                     <Route path="/search" element={<SearchPage />} />
                     <Route path="/chat" element={<ChatPage />} />
+                    <Route path="/usage" element={<UsagePage />} />
                     <Route path="/jobs" element={<JobsPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
                     <Route path="/cli" element={<CliGuidePage />} />

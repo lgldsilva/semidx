@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -47,7 +48,7 @@ func toProjectView(p *store.Project) projectView {
 		TenantID:    p.TenantID,
 		WorkspaceID: p.WorkspaceID,
 		Name:        p.Name, Model: p.Model, Status: p.Status,
-		SourceType: p.SourceType, GitURL: p.GitURL, Branch: p.Branch,
+		SourceType: p.SourceType, GitURL: gitmeta.RedactURL(p.GitURL), Branch: p.Branch,
 		Identity: p.Identity, Path: p.Path, PrivacyMode: projectPrivacyMode(p.PrivacyMode),
 	}
 }

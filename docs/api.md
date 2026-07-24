@@ -254,6 +254,20 @@ chunks cascade). `404` if unknown.
   that file version was last indexed.
 - `404` if the project does not exist.
 
+### Search usage analytics
+
+`GET /api/v1/search-usage?days=30&project=` (scope `read`)
+
+Product-level search analytics: counts by project/source/outcome, rates, and
+findings, in the same shape as `semidx usage` (see `docs/usage.md`). Not to be
+confused with `GET /api/v1/usage`, which reports tenant billing quota.
+
+- `days` (default 30, max 365) sets the lookback window.
+- `project` optionally filters to one project.
+- Requests are attributed to a source (`cli` / `mcp` / `admin` / `sdk` /
+  `unknown`) via the `X-Semidx-Client` header set by semidx's own CLI/MCP/admin
+  clients.
+
 ### Enqueue an index job
 
 `POST /api/v1/projects/{project}/index-jobs` (scope `write`)
