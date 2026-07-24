@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -108,23 +109,24 @@ func newConfigListCmd(d *deps) *cobra.Command {
 		Example: `  semidx config list
   semidx config list --show-secrets`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			out := cmd.OutOrStdout()
+			var b strings.Builder
 			if p := xdg.Profile(); p != "" {
-				fmt.Fprintf(out, "Profile: %s\n", p)
+				fmt.Fprintf(&b, "Profile: %s\n", p)
 			}
-			fmt.Fprintf(out, "Active backend: %s\n\n", activeBackend(d))
-			fmt.Fprintln(out, "Settings (effective; env > .env > user config):")
+			fmt.Fprintf(&b, "Active backend: %s\n\n", activeBackend(d))
+			fmt.Fprintln(&b, "Settings (effective; env > .env > user config):")
 			for _, k := range config.KnownKeys {
 				v := config.EffectiveValue(k.Name)
 				if v == "" {
 					continue
 				}
-				fmt.Fprintf(out, "  %-24s %s\n", k.Name, displayValue(k.Name, v, showSecrets))
+				fmt.Fprintf(&b, "  %-24s %s\n", k.Name, displayValue(k.Name, v, showSecrets))
 			}
-			printOllamaRuntime(out, d)
+			printOllamaRuntime(&b, d)
 			p, _ := config.UserEnvPath()
-			fmt.Fprintf(out, "\nUser config file: %s\n", p)
-			return nil
+			fmt.Fprintf(&b, "\nUser config file: %s\n", p)
+			_, err := fmt.Fprint(cmd.OutOrStdout(), b.String())
+			return err
 		},
 	}
 	c.Flags().BoolVar(&showSecrets, "show-secrets", false, "print secret values instead of masking them")
@@ -249,9 +251,12 @@ func mask(s string) string {
 
 // printOllamaRuntime soft-probes configured local Ollama URLs (GET /api/ps) and
 // reports GPU vs CPU from size_vram. Never fails the parent command.
+// Prefer a *strings.Builder (errcheck-friendly); other writers ignore write errors.
 func printOllamaRuntime(out io.Writer, d *deps) {
+	var b strings.Builder
 	if d != nil && d.keywordOnly {
-		fmt.Fprintln(out, "\nOllama runtime: skipped (keyword-only mode)")
+		fmt.Fprintln(&b, "\nOllama runtime: skipped (keyword-only mode)")
+		_, _ = io.WriteString(out, b.String())
 		return
 	}
 	urls := ollamaProbeURLs(d)
@@ -260,10 +265,11 @@ func printOllamaRuntime(out io.Writer, d *deps) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	fmt.Fprintln(out, "\nOllama runtime (local; GPU via size_vram, not nvidia-smi):")
+	fmt.Fprintln(&b, "\nOllama runtime (local; GPU via size_vram, not nvidia-smi):")
 	for _, p := range embed.ProbeOllamaRuntimes(ctx, urls) {
-		fmt.Fprintf(out, "  %-40s %s\n", p.URL, p.Summary())
+		fmt.Fprintf(&b, "  %-40s %s\n", p.URL, p.Summary())
 	}
+	_, _ = io.WriteString(out, b.String())
 }
 
 func ollamaProbeURLs(d *deps) []string {
