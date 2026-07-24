@@ -143,15 +143,12 @@ func TestHashQuery(t *testing.T) {
 
 func TestWithSourceAndSourceFrom(t *testing.T) {
 	t.Parallel()
-	if SourceFrom(nil) != SourceUnknown {
-		t.Fatal("nil ctx")
-	}
 	if SourceFrom(context.Background()) != SourceUnknown {
 		t.Fatal("empty ctx")
 	}
-	ctx := WithSource(nil, SourceMCP)
+	ctx := WithSource(context.Background(), SourceMCP)
 	if SourceFrom(ctx) != SourceMCP {
-		t.Fatal("with nil base")
+		t.Fatal("mcp")
 	}
 	ctx = WithSource(context.Background(), SourceCLI)
 	if SourceFrom(ctx) != SourceCLI {

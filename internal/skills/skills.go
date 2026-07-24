@@ -70,7 +70,7 @@ func Install(dir string, opts ...InstallOptions) ([]string, error) {
 		if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
 			return err
 		}
-		if existing, err := os.ReadFile(dest); err == nil {
+		if existing, err := os.ReadFile(dest); err == nil { // #nosec G304 -- dest is under Install Options.Dir + skill rel path
 			if !o.Force && !strings.Contains(string(existing), ManagedMarker) {
 				// Leave user-owned skill alone.
 				return nil

@@ -27,30 +27,30 @@ installed. Inspired by ai-memory's install-mcp / install-skills inventory.`,
 }
 
 func runDoctor(cmd *cobra.Command, d *deps) error {
-	out := cmd.OutOrStdout()
+	var b strings.Builder
 	bin, _ := os.Executable()
-	fmt.Fprintf(out, "# semidx doctor\n\n")
-	fmt.Fprintf(out, "## Binary\n\n- path: `%s`\n\n", bin)
+	fmt.Fprintf(&b, "# semidx doctor\n\n")
+	fmt.Fprintf(&b, "## Binary\n\n- path: `%s`\n\n", bin)
 
-	fmt.Fprintf(out, "## Backend\n\n")
+	fmt.Fprintf(&b, "## Backend\n\n")
 	switch {
 	case d.remote():
-		fmt.Fprintf(out, "- active: **remote** (`%s`)\n", d.client.ServerURL)
+		fmt.Fprintf(&b, "- active: **remote** (`%s`)\n", d.client.ServerURL)
 	case d.localIndexPath != "":
-		fmt.Fprintf(out, "- active: **local SQLite** (`%s`)\n", d.localIndexPath)
+		fmt.Fprintf(&b, "- active: **local SQLite** (`%s`)\n", d.localIndexPath)
 	default:
-		fmt.Fprintf(out, "- active: **Postgres** (SEMIDX_DB_DSN configured or default)\n")
+		fmt.Fprintf(&b, "- active: **Postgres** (SEMIDX_DB_DSN configured or default)\n")
 	}
 	if d.hasServerConfig() && !d.remote() {
-		fmt.Fprintf(out, "- note: server credentials exist on disk but this invocation is not using remote mode\n")
+		fmt.Fprintf(&b, "- note: server credentials exist on disk but this invocation is not using remote mode\n")
 	}
-	fmt.Fprintln(out)
+	b.WriteByte('\n')
 
 	home, _ := os.UserHomeDir()
 	cfgDir, _ := os.UserConfigDir()
 	cwd, _ := os.Getwd()
 
-	fmt.Fprintf(out, "## MCP clients\n\n")
+	fmt.Fprintf(&b, "## MCP clients\n\n")
 	var missingClaude bool
 	for _, c := range mcpinstall.Clients {
 		opts := mcpinstall.Options{Client: c.ID, Home: home, ConfigDir: cfgDir, Project: cwd, ExePath: bin}
@@ -69,21 +69,21 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 				state = "unreadable"
 			}
 		}
-		fmt.Fprintf(out, "- `%s`: %s", c.ID, state)
+		fmt.Fprintf(&b, "- `%s`: %s", c.ID, state)
 		if path != "" {
-			fmt.Fprintf(out, " (`%s`)", path)
+			fmt.Fprintf(&b, " (`%s`)", path)
 		}
-		fmt.Fprintln(out)
+		b.WriteByte('\n')
 		if c.ID == "claude-code" && state != "configured" {
 			missingClaude = true
 		}
 	}
-	fmt.Fprintln(out)
+	b.WriteByte('\n')
 
-	fmt.Fprintf(out, "## Skills\n\n")
+	fmt.Fprintf(&b, "## Skills\n\n")
 	names, err := skills.Names()
 	if err != nil {
-		fmt.Fprintf(out, "- error listing embedded skills: %v\n\n", err)
+		fmt.Fprintf(&b, "- error listing embedded skills: %v\n\n", err)
 	} else {
 		roots := []string{
 			filepath.Join(home, ".claude", "skills"),
@@ -101,22 +101,23 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 				}
 			}
 			if len(found) == 0 {
-				fmt.Fprintf(out, "- `%s`: not installed\n", name)
+				fmt.Fprintf(&b, "- `%s`: not installed\n", name)
 			} else {
-				fmt.Fprintf(out, "- `%s`: installed\n", name)
+				fmt.Fprintf(&b, "- `%s`: installed\n", name)
 				for _, p := range found {
-					fmt.Fprintf(out, "  - `%s`\n", p)
+					fmt.Fprintf(&b, "  - `%s`\n", p)
 				}
 			}
 		}
-		fmt.Fprintln(out)
+		b.WriteByte('\n')
 	}
 
-	fmt.Fprintf(out, "## Findings\n\n")
+	fmt.Fprintf(&b, "## Findings\n\n")
 	if missingClaude {
-		fmt.Fprintf(out, "- **claude-code MCP missing** — run `semidx mcp install --client claude-code --apply`\n")
+		fmt.Fprintf(&b, "- **claude-code MCP missing** — run `semidx mcp install --client claude-code --apply`\n")
 	}
-	fmt.Fprintf(out, "- Search usage history: `semidx usage` (empty until searches are recorded)\n")
-	fmt.Fprintf(out, "- Test/fixture projects named `semidx-*` may clutter `semantic_projects`; drop unused ones with `semidx drop`\n")
-	return nil
+	fmt.Fprintf(&b, "- Search usage history: `semidx usage` (empty until searches are recorded)\n")
+	fmt.Fprintf(&b, "- Test/fixture projects named `semidx-*` may clutter `semantic_projects`; drop unused ones with `semidx drop`\n")
+	_, err = fmt.Fprint(cmd.OutOrStdout(), b.String())
+	return err
 }
