@@ -61,15 +61,19 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
   server) exposing `semantic_search` (with per-hit staleness), `semantic_status`,
   `semantic_projects`, `semantic_reindex`, `semantic_ask`, plus standalone/local
   code-intel tools `semantic_callers`, `semantic_explain`, `semantic_impact`,
-  `semantic_deadcode`, `semantic_diff`. Bundled skills include `semantic-search`,
-  `auto-index`, `workspace-agent`, `code-intel`, and `impact-before-refactor`.
-- **`semidx mcp install`** wires the MCP server into 12 agent clients
-  (Claude Code/Desktop, Cursor, Windsurf, Gemini CLI, Antigravity, GitHub
-  Copilot, VS Code, OpenCode, Crush, Codex; **cagent** is print-only (YAML toolset has no safe merge)).
+  `semantic_deadcode`, `semantic_diff`, and file↔package tools
+  `semantic_subgraph` / `semantic_path`. Bundled skills include `semantic-search`,
+  `semantic-graph`, `auto-index`, `workspace-agent`, `code-intel`, and
+  `impact-before-refactor`.
+- **`semidx mcp install`** wires the MCP server into agent clients
+  (Claude Code/Desktop, Cursor, Windsurf, Gemini CLI, Antigravity/agy, GitHub
+  Copilot, VS Code, OpenCode, Crush, Codex, Pi, Kimi, MiMo; **cagent** is
+  print-only).
 - **`semidx config`** persists provider keys + the backend choice
-  (`~/.config/semidx/semidx.env`); `semidx skills install` ships agent skills.
+  (`~/.config/semidx/semidx.env`); `semidx skills install` ships agent skills
+  (targets include claude/codex/opencode/pi/kimi/crush/mimo/agy + cursor/windsurf/project).
 - **Web admin** (`/admin`, embedded via `embed.FS`): users, API keys, JWT control
-  tokens, projects; argon2id, CSRF, server-side sessions.
+  tokens, projects; argon2id, CSRF, server-side sessions; Analyze ego-graph + path.
 
 ## What it does NOT do
 

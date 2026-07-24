@@ -122,6 +122,29 @@ export type RuntimeEdge = {
   last_seen?: string
 }
 
+/** A vertex of the file↔package dependency graph. `kind` is file or package. */
+export type GraphNode = { id: string; label: string; kind: string; seed?: boolean }
+
+/** A directed dependency edge. `reverse` marks a hop walked against the stored direction. */
+export type GraphEdge = { source: string; target: string; kind: string; reverse?: boolean }
+
+export type GraphSubgraph = {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  truncated?: boolean
+}
+
+export type GraphPath = {
+  from: string
+  to: string
+  found: boolean
+  directed: boolean
+  hops?: string[]
+  edges?: GraphEdge[]
+  length: number
+  truncated?: boolean
+}
+
 export type UsageResponse = {
   quota: {
     plan: string
@@ -508,6 +531,24 @@ export const api = {
       top_depends: { node: string; degree: number }[]
       top_depended: { node: string; degree: number }[]
     }>(`/admin/api/projects/${encodeURIComponent(name)}/graph-stats`),
+  projectGraphSubgraph: (name: string, seed = '', depth = 0, limit = 0) => {
+    const q = new URLSearchParams()
+    if (seed) q.set('seed', seed)
+    if (depth > 0) q.set('depth', String(depth))
+    if (limit > 0) q.set('limit', String(limit))
+    const qs = q.toString()
+    return request<GraphSubgraph>(
+      `/admin/api/projects/${encodeURIComponent(name)}/graph/subgraph${qs ? `?${qs}` : ''}`,
+    )
+  },
+  projectGraphPath: (name: string, from: string, to: string, undirected = false, maxDepth = 0) => {
+    const q = new URLSearchParams({ from, to })
+    if (undirected) q.set('undirected', '1')
+    if (maxDepth > 0) q.set('max_depth', String(maxDepth))
+    return request<GraphPath>(
+      `/admin/api/projects/${encodeURIComponent(name)}/graph/path?${q.toString()}`,
+    )
+  },
   projectDependencies: (name: string) =>
     request<{ project: string; dependencies: Dependency[] }>(
       `/admin/api/projects/${encodeURIComponent(name)}/dependencies`,

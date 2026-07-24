@@ -295,6 +295,41 @@ type StatusResponse struct {
 	TotalFiles int    `json:"total_files"`
 }
 
+// GraphNode is one vertex in a dependency subgraph.
+type GraphNode struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Kind  string `json:"kind"`
+	Seed  bool   `json:"seed,omitempty"`
+}
+
+// GraphEdge is a directed dependency relation.
+type GraphEdge struct {
+	Source  string `json:"source"`
+	Target  string `json:"target"`
+	Kind    string `json:"kind"`
+	Reverse bool   `json:"reverse,omitempty"`
+}
+
+// GraphSubgraphResponse is GET …/graph/subgraph.
+type GraphSubgraphResponse struct {
+	Nodes     []GraphNode `json:"nodes"`
+	Edges     []GraphEdge `json:"edges"`
+	Truncated bool        `json:"truncated,omitempty"`
+}
+
+// GraphPathResponse is GET …/graph/path.
+type GraphPathResponse struct {
+	From      string      `json:"from"`
+	To        string      `json:"to"`
+	Found     bool        `json:"found"`
+	Directed  bool        `json:"directed"`
+	Hops      []string    `json:"hops,omitempty"`
+	Edges     []GraphEdge `json:"edges,omitempty"`
+	Length    int         `json:"length"`
+	Truncated bool        `json:"truncated,omitempty"`
+}
+
 // ---- Methods ------------------------------------------------------------------
 
 // ListTenants returns tenants visible to the authenticated principal.
@@ -642,6 +677,57 @@ func (c *Client) SetProjectPrivacy(ctx context.Context, project, mode string) (*
 }
 
 // Status returns the indexing status and file count for a project.
+// GraphSubgraph returns the dependency neighborhood around seed (a
+// project-relative file path). An empty seed asks the server for a hub sample.
+// depth and limit are only sent when positive, so the server's defaults apply.
+func (c *Client) GraphSubgraph(ctx context.Context, project, seed string, depth, limit int) (*GraphSubgraphResponse, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	if seed != "" {
+		q.Set("seed", seed)
+	}
+	if depth > 0 {
+		q.Set("depth", strconv.Itoa(depth))
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	path := projectsPath + esc(project) + "/graph/subgraph"
+	if enc := q.Encode(); enc != "" {
+		path += "?" + enc
+	}
+	var out GraphSubgraphResponse
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GraphPath finds a shortest dependency path between two files.
+// When undirected is true, reverse hops are allowed and Directed may be false.
+func (c *Client) GraphPath(ctx context.Context, project, from, to string, maxDepth int, undirected bool) (*GraphPathResponse, error) {
+	if err := requireProject(project); err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	q.Set("from", from)
+	q.Set("to", to)
+	if maxDepth > 0 {
+		q.Set("max_depth", strconv.Itoa(maxDepth))
+	}
+	if undirected {
+		q.Set("undirected", "1")
+	}
+	path := projectsPath + esc(project) + "/graph/path?" + q.Encode()
+	var out GraphPathResponse
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *Client) Status(ctx context.Context, project string) (*StatusResponse, error) {
 	if err := requireProject(project); err != nil {
 		return nil, err

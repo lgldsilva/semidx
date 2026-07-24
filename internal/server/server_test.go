@@ -31,6 +31,7 @@ type fakeStore struct {
 	enqueuedID   int                  // EnqueueJob result
 	job          *store.Job           // GetJob result (nil → ErrNotFound)
 	fileHashes   map[string]string    // ListFileHashes result
+	graph        map[string][]string  // FetchGraphNeighbors result
 	fileCount    int                  // CountProjectFiles result
 	fileCountErr error                // CountProjectFiles error
 	userCount    int                  // CountUsers result
@@ -41,6 +42,7 @@ type fakeStore struct {
 	getErr          error // GetProject generic (non-NotFound) error
 	tokenErr        error // TokenByHash error
 	fileHashErr     error // ListFileHashes error
+	graphErr        error // FetchGraphNeighbors error
 	enqueueErr      error // EnqueueJob error
 	enqueueBatchErr error // EnqueueBatchJob error
 	jobErr          error // GetJob generic (non-NotFound) error
@@ -78,6 +80,9 @@ func (f *fakeStore) CreateUser(_ context.Context, username, hash, role string) (
 
 func (f *fakeStore) ListFileHashes(context.Context, int) (map[string]string, error) {
 	return f.fileHashes, f.fileHashErr
+}
+func (f *fakeStore) FetchGraphNeighbors(context.Context, int) (map[string][]string, error) {
+	return f.graph, f.graphErr
 }
 func (f *fakeStore) CountProjectFiles(context.Context, int) (int, error) {
 	return f.fileCount, f.fileCountErr

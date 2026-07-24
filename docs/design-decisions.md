@@ -195,6 +195,27 @@ This document records the main architectural decisions made during the evolution
 
 ---
 
+## 10. File↔package dependency graph contract
+
+- **Decision**: Treat indexed `file_dependencies` as a bipartite-style walk — **file → package-dir** (stored import edges) plus synthetic **package-dir → file** hops (every indexed file whose directory equals that package) — and expose Subgraph / ShortestPath through `internal/graph` with explicit budgets and directed vs undirected metadata.
+- **Why**:
+  - Import extractors store Go (and similar) targets as package directories with a trailing slash (e.g. `main.go → internal/worker/`), not as leaf files. A naïve file→file BFS never connects `main.go` to `internal/worker/run.go`.
+  - Returning an undirected walk as if it were a directed dependency path misleads agents (“A communicates with B” vs “B imports A”).
+  - `FetchGraphNeighbors` loads the full adjacency; unbounded expansion is a DoS risk on large repos.
+- **How**:
+  - Normalize paths with `filepath.ToSlash`; package dirs always end with `/` (except `.`).
+  - Hop rules: (1) file → each import target; (2) package → each known file in that directory (from graph source keys and/or an explicit file list).
+  - Shortest path: BFS directed first; optional undirected fallback only when requested, with `directed: false` and per-edge orientation preserved.
+  - Budgets: `max_depth`, `max_visit_nodes`, `max_edges_out`; responses may set `truncated: true`.
+  - Public HTTP under `/api/v1/.../graph/subgraph` and `/graph/path` (Bearer `read`); admin UI is a BFF over the same contract.
+  - CLI: `semidx graph stats|neighbors|path` (alongside existing `runtime`/`portfolio`).
+  - MCP: `semantic_subgraph` + `semantic_path` (existing `semantic_neighbors`/`semantic_trace`/`semantic_symbols` stay Graph-RAG oriented).
+- **Trade-offs**:
+  - Package→file expansion needs a file inventory; using only graph source keys misses files with zero outbound imports unless callers pass the full file list.
+  - Multi-file packages collapse to one package node in the middle of a path (clearer for “who imports this package”, less precise for symbol-level calls).
+
+---
+
 ## 🚫 What we will NOT do (for now)
 
 - **`models` table in the database**: `InferDims` (name→dimension map) is already the single source in `internal/embed`; moving it to a database table would couple `embed`→`store` for marginal benefit. Re-evaluate if/when per-model config (provider/local) without recompilation is needed.

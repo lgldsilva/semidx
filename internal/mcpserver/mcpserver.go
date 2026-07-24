@@ -220,6 +220,8 @@ const (
 	toolSemanticDeadCode    = "semantic_deadcode"
 	toolSemanticDiff        = "semantic_diff"
 	toolSemanticUsage       = "semantic_usage"
+	toolSemanticSubgraph    = "semantic_subgraph"
+	toolSemanticPath        = "semantic_path"
 )
 
 // toolNames is the canonical list of every tool this server can register,
@@ -231,6 +233,7 @@ var toolNames = []string{
 	toolSemanticNeighbors, toolSemanticTrace, toolSemanticSymbols,
 	toolSemanticCallers, toolSemanticExplain, toolSemanticImpact,
 	toolSemanticDeadCode, toolSemanticDiff, toolSemanticUsage,
+	toolSemanticSubgraph, toolSemanticPath,
 }
 
 // ToolNames returns the canonical list of registrable tool names. Used by the
@@ -401,6 +404,7 @@ func build(b Backend, allowed map[string]bool, explicit bool, defaultProject str
 	registerMultiSearchTool(s, b, allowed, explicit)
 	registerAskTool(s, b, allowed, explicit, defaultProject)
 	registerGraphTools(s, b, allowed, explicit, defaultProject)
+	registerDepGraphTools(s, b, allowed, explicit, defaultProject)
 	registerCodeIntelTools(s, b, allowed, defaultProject)
 	registerUsageTool(s, b, allowed, explicit)
 	registerResources(s, b)

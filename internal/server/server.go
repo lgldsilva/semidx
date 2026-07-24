@@ -299,6 +299,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/projects/{project}/privacy", s.limited(100<<10, s.authed("write", s.handleSetProjectPrivacy)))
 	mux.Handle("DELETE /api/v1/projects/{project}", s.authed("write", s.handleDeleteProject))
 	mux.Handle("GET /api/v1/projects/{project}/status", s.authed("read", s.handleProjectStatus))
+	mux.Handle("GET /api/v1/projects/{project}/graph/subgraph", s.authed("read", s.handleGraphSubgraph))
+	mux.Handle("GET /api/v1/projects/{project}/graph/path", s.authed("read", s.handleGraphPath))
 	mux.Handle("GET /api/v1/projects/{project}/dependencies", s.authed("read", s.handleListDependencies))
 	mux.Handle("GET /api/v1/projects/{project}/dependencies/shared", s.authed("read", s.handleSharedDependencies))
 	mux.Handle("GET /api/v1/projects/{project}/runtime-edges", s.authed("read", s.handleListRuntimeEdges))

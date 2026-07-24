@@ -12,7 +12,10 @@ func TestNamesIncludesSemanticSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	required := []string{"semantic-search", "auto-index", "workspace-agent"}
+	required := []string{
+		"semantic-search", "auto-index", "workspace-agent",
+		"code-intel", "impact-before-refactor", "semantic-graph",
+	}
 	for _, want := range required {
 		found := false
 		for _, n := range names {

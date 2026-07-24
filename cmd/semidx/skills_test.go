@@ -11,36 +11,50 @@ import (
 )
 
 var (
-	// semidxLine matches an invocation line in the skill's code fences.
-	semidxLine = regexp.MustCompile(`semidx\s+([^\n` + "`" + `]+)`)
+	// semidxLine matches an invocation line in a skill's code fences. Requiring
+	// semidx at line start (after an optional shell prompt) keeps prose comments
+	// like "# semidx handles this" from looking like commands.
+	semidxLine = regexp.MustCompile(`(?m)^[\$>\s]*(?:sudo\s+)?semidx\s+([^\n` + "`" + `]+)`)
 	// cmdWord is a cobra subcommand token (lowercase word); URLs/flags/values fail it.
 	cmdWord = regexp.MustCompile(`^[a-z][a-z-]*$`)
 )
 
 // TestSkillCommandsExist is the F6 anti-drift guarantee: every `semidx <cmd>`
-// cited in the shipped SKILL.md must resolve to a real command in the cobra tree.
-// If someone renames or removes a command without updating the skill (or vice
-// versa), this fails — the skill can never document a command that doesn't exist.
+// cited in ANY shipped SKILL.md must resolve to a real command in the cobra
+// tree. If someone renames or removes a command without updating the skills (or
+// vice versa), this fails — a skill can never document a command that does not
+// exist.
 func TestSkillCommandsExist(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := skills.Install(dir); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "semantic-search", "SKILL.md"))
+	names, err := skills.Names()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(names) == 0 {
+		t.Fatal("no embedded skills")
+	}
 
 	root := newRootCmd()
-	paths := citedCommandPaths(string(data))
-	if len(paths) == 0 {
-		t.Fatal("no semidx commands found in SKILL.md — the extractor or the skill is broken")
-	}
-	for _, path := range paths {
-		cmd, _, err := root.Find(path)
-		if err != nil || cmd == nil || cmd.Name() != path[len(path)-1] {
-			t.Errorf("SKILL.md cites `semidx %s`, which is not a real command", strings.Join(path, " "))
+	totalPaths := 0
+	for _, name := range names {
+		data, err := os.ReadFile(filepath.Join(dir, name, "SKILL.md"))
+		if err != nil {
+			t.Fatalf("%s/SKILL.md: %v", name, err)
 		}
+		paths := citedCommandPaths(string(data))
+		totalPaths += len(paths)
+		for _, path := range paths {
+			cmd, _, err := root.Find(path)
+			if err != nil || cmd == nil || cmd.Name() != path[len(path)-1] {
+				t.Errorf("%s cites `semidx %s`, which is not a real command", name, strings.Join(path, " "))
+			}
+		}
+	}
+	if totalPaths == 0 {
+		t.Fatal("no semidx commands found in any SKILL.md — the extractor or skills are broken")
 	}
 }
 

@@ -43,6 +43,9 @@ func TestSnippetPerClientShape(t *testing.T) {
 		"vscode":         {"servers", `"command"`},
 		"opencode":       {"mcp", `"type": "local"`},
 		"crush":          {"mcp", `"type": "stdio"`},
+		"pi":             {"mcpServers", `"command"`},
+		"kimi":           {"mcpServers", `"command"`},
+		"mimo":           {"mcp", `"type": "local"`},
 	}
 	for id, want := range cases {
 		_, snip, err := Snippet(Options{Client: id, Name: "semidx", ExePath: "/opt/semidx"})
@@ -253,6 +256,62 @@ func TestApplyRejectsInvalidExistingJSON(t *testing.T) {
 	}
 }
 
+func TestClientAliasAgyAndClaude(t *testing.T) {
+	if CanonicalClientID("agy") != "antigravity" {
+		t.Error(`CanonicalClientID("agy") should resolve to antigravity`)
+	}
+	if CanonicalClientID("vscode") != "vscode" {
+		t.Error("a canonical id must pass through unchanged")
+	}
+	c, ok := clientByID("agy")
+	if !ok || c.ID != "antigravity" {
+		t.Fatalf("agy resolve = %+v ok=%v", c, ok)
+	}
+	c, ok = clientByID("claude")
+	if !ok || c.ID != "claude-code" {
+		t.Fatalf("claude resolve = %+v ok=%v", c, ok)
+	}
+	path, _, err := Snippet(Options{Client: "agy", Name: "semidx", ExePath: "/x", Home: "/h", ConfigDir: "/c", Project: "/p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(path, "antigravity-cli") {
+		t.Errorf("agy path = %s", path)
+	}
+}
+
+func TestKimiHomeEnvOverride(t *testing.T) {
+	t.Setenv("KIMI_CODE_HOME", "/custom/kimi")
+	path, _, err := Snippet(Options{Client: "kimi", Name: "semidx", ExePath: "/x", Home: "/h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != filepath.Join("/custom/kimi", "mcp.json") {
+		t.Fatalf("path=%s", path)
+	}
+}
+
+// TestMimoFallsBackToHomeConfig covers the empty-ConfigDir path, which only
+// mimo has: os.UserConfigDir can fail, and the entry must still resolve.
+func TestMimoFallsBackToHomeConfig(t *testing.T) {
+	path, _, err := Snippet(Options{Client: "mimo", Name: "semidx", ExePath: "/x", Home: "/h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join("/h", ".config", "mimocode", "mimocode.json"); path != want {
+		t.Errorf("mimo path = %s; want %s", path, want)
+	}
+}
+
+func TestClientListMentionsAliases(t *testing.T) {
+	list := ClientList()
+	for _, want := range []string{"agy→antigravity", "claude→claude-code"} {
+		if !strings.Contains(list, want) {
+			t.Errorf("ClientList missing alias %q:\n%s", want, list)
+		}
+	}
+}
+
 func TestClientIDsAndListCoverAll(t *testing.T) {
 	ids := ClientIDs()
 	if len(ids) != len(Clients) {
@@ -282,7 +341,13 @@ func TestDefaultPathsAreClientAppropriate(t *testing.T) {
 		"opencode":       filepath.Join(project, "opencode.json"),
 		"crush":          filepath.Join(config, "crush", "crush.json"),
 		"codex":          filepath.Join(home, ".codex", "config.toml"),
+		"pi":             filepath.Join(home, ".pi", "agent", "mcp.json"),
+		"kimi":           filepath.Join(home, ".kimi-code", "mcp.json"),
+		"mimo":           filepath.Join(config, "mimocode", "mimocode.json"),
 	}
+	// kimi honours $KIMI_CODE_HOME, so a developer with it set would otherwise
+	// see a spurious failure here.
+	t.Setenv("KIMI_CODE_HOME", "")
 	for id, want := range cases {
 		path, _, err := Snippet(Options{Client: id, Name: "semidx", ExePath: "x", Home: home, ConfigDir: config, Project: project})
 		if err != nil {
