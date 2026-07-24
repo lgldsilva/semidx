@@ -210,6 +210,8 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/api/projects/{project}/callers", a.protectAPI("", a.apiProjectCallers))
 	mux.HandleFunc("GET /admin/api/projects/{project}/deps", a.protectAPI("", a.apiProjectDeps))
 	mux.HandleFunc("GET /admin/api/projects/{project}/graph-stats", a.protectAPI("", a.apiProjectGraphStats))
+	mux.HandleFunc("GET /admin/api/projects/{project}/graph/subgraph", a.protectAPI("", a.apiProjectGraphSubgraph))
+	mux.HandleFunc("GET /admin/api/projects/{project}/graph/path", a.protectAPI("", a.apiProjectGraphPath))
 	mux.HandleFunc("GET /admin/api/projects/{project}/dependencies", a.protectAPI("", a.apiProjectDependencies))
 	mux.HandleFunc("GET /admin/api/projects/{project}/dependencies/shared", a.protectAPI("", a.apiProjectSharedDependencies))
 	mux.HandleFunc("GET /admin/api/projects/{project}/runtime-edges", a.protectAPI("", a.apiProjectRuntimeEdges))

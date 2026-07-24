@@ -113,7 +113,13 @@ func connectLocal(t *testing.T) *mcp.ClientSession {
 
 func writeFile(t *testing.T, dir, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+	full := filepath.Join(dir, name)
+	// Nested fixture paths (e.g. "pkg/util.go") are what the dependency-graph
+	// tests need to get a real package hop, so create the parents.
+	if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

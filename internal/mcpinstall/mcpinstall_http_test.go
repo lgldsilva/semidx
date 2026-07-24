@@ -240,6 +240,7 @@ func TestSupportsHTTPMatchesClientTable(t *testing.T) {
 		"claude-code": true, "cursor": true, "gemini-cli": true, "vscode": true,
 		"copilot": true, "opencode": true, "crush": true, "codex": true,
 		"claude-desktop": false, "windsurf": false, "antigravity": false, "cagent": false,
+		"pi": false, "kimi": false, "mimo": false,
 	}
 	for _, c := range Clients {
 		if got := c.SupportsHTTP(); got != want[c.ID] {

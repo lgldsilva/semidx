@@ -1,0 +1,4 @@
+# GHSA-qwww-vcr4-c8h2 (react-router): CSRF in unstable RSC action paths.
+# Admin SPA uses classic BrowserRouter (no RSC / unstable RSC APIs).
+# No 7.x patch; first fixed release is 8.3.0 (major). Revisit on RR v8 upgrade.
+GHSA-qwww-vcr4-c8h2

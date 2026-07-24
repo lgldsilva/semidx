@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -161,63 +161,73 @@ See "semidx skills install".`,
 
 func newSkillsInstallCmd() *cobra.Command {
 	var target, dir string
-	var force bool
+	var force, all bool
 	c := &cobra.Command{
 		Use:   "install",
 		Short: "Write the bundled skills into a target directory",
-		Long: `Write semidx's bundled agent skills into a target directory: claude-code
-(~/.claude/skills), cursor (~/.cursor/skills), windsurf (~/.codeium/windsurf/skills),
-project (./.claude/skills), or an explicit --dir.
+		Long: `Write semidx's bundled agent skills into a target directory.
 
+Supported targets:
+
+` + skillsTargetList() + `
 Files carry a <!-- semidx-managed: skill --> marker. Re-running refreshes managed
-skills; unmanaged same-name skills are left alone unless --force.`,
+skills; unmanaged same-name skills are left alone unless --force.
+
+Pass --all to install into every user-level target (skips project). Failures are
+reported and the remaining targets still run.`,
 		Example: `  semidx skills install --target claude-code
-  semidx skills install --target cursor
+  semidx skills install --target kimi
+  semidx skills install --target agy
+  semidx skills install --all
   semidx skills install --dir ./.claude/skills`,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			dest, err := resolveSkillsDir(target, dir)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			home, _ := os.UserHomeDir()
+			configDir, _ := os.UserConfigDir()
+			if all {
+				return installSkillsAll(cmd.OutOrStdout(), cmd.ErrOrStderr(), home, configDir, force)
+			}
+			dest, err := resolveSkillsDir(target, dir, home, configDir)
 			if err != nil {
 				return err
 			}
-			written, err := skills.Install(dest, skills.InstallOptions{Force: force})
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Installed %d skill file(s) into %s:\n", len(written), dest)
-			for _, w := range written {
-				fmt.Printf("  %s\n", w)
-			}
-			return nil
+			return installSkillsOne(cmd.OutOrStdout(), dest, force)
 		},
 	}
-	c.Flags().StringVar(&target, "target", "claude-code", "Install target: claude-code (~/.claude/skills), cursor (~/.cursor/skills), windsurf (~/.codeium/windsurf/skills), or project (./.claude/skills)")
+	c.Flags().StringVar(&target, "target", "claude-code", "Install target id (see --help for the full list)")
 	c.Flags().StringVar(&dir, "dir", "", "Explicit destination directory (overrides --target)")
 	c.Flags().BoolVar(&force, "force", false, "Overwrite unmanaged same-name skills")
+	c.Flags().BoolVar(&all, "all", false, "Install into every user-level target")
 	return c
 }
 
-// resolveSkillsDir maps a --target keyword (or an explicit --dir) to a skills
-// directory.
-func resolveSkillsDir(target, dir string) (string, error) {
-	if dir != "" {
-		return dir, nil
-	}
-	home, err := os.UserHomeDir()
+func installSkillsOne(w io.Writer, dest string, force bool) error {
+	written, err := skills.Install(dest, skills.InstallOptions{Force: force})
 	if err != nil {
-		return "", err
+		return err
 	}
-	switch target {
-	case "claude-code":
-		return filepath.Join(home, ".claude", "skills"), nil
-	case "cursor":
-		return filepath.Join(home, ".cursor", "skills"), nil
-	case "windsurf":
-		return filepath.Join(home, ".codeium", "windsurf", "skills"), nil
-	case "project":
-		return filepath.Join(".claude", "skills"), nil
-	default:
-		return "", fmt.Errorf("unknown --target %q (use claude-code, cursor, windsurf, or project, or pass --dir)", target)
+	_, _ = fmt.Fprintf(w, "Installed %d skill file(s) into %s:\n", len(written), dest)
+	for _, f := range written {
+		_, _ = fmt.Fprintf(w, "  %s\n", f)
 	}
+	return nil
+}
+
+// installSkillsAll writes the skills into every user-level target. A failing
+// target is reported and skipped so one unwritable home dir cannot abort the
+// rest; the command still exits non-zero when any target failed.
+func installSkillsAll(w, errW io.Writer, home, configDir string, force bool) error {
+	var failed int
+	for _, t := range userLevelSkillsTargets() {
+		dest := t.path(home, configDir)
+		if err := installSkillsOne(w, dest, force); err != nil {
+			_, _ = fmt.Fprintf(errW, "skipping %s (%s): %v\n", t.ID, dest, err)
+			failed++
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d target(s) failed", failed)
+	}
+	return nil
 }
 
 func newRepoAddCmd(d *deps) *cobra.Command {

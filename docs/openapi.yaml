@@ -483,6 +483,132 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  # ─── Dependency graph (file↔package) ─────────────────────────────────────
+
+  /api/v1/projects/{project}/graph/subgraph:
+    get:
+      summary: Dependency subgraph
+      description: |
+        Returns a neighborhood of the project's dependency graph (file → package
+        dir hops). Optional `seed` centers on a file; without it, hub files are
+        sampled. Responses may set `truncated: true` when budgets are hit.
+      operationId: graphSubgraph
+      tags: [Graph]
+      security:
+        - bearerAuth: ["read"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema: { type: string }
+        - name: seed
+          in: query
+          schema: { type: string }
+        - name: depth
+          in: query
+          schema: { type: integer, maximum: 5 }
+        - name: limit
+          in: query
+          description: Max edges returned
+          schema: { type: integer, maximum: 2000 }
+      responses:
+        "200":
+          description: Subgraph nodes and edges
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nodes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        label: { type: string }
+                        kind: { type: string, enum: [file, package] }
+                        seed: { type: boolean }
+                  edges:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        source: { type: string }
+                        target: { type: string }
+                        kind: { type: string }
+                        reverse: { type: boolean }
+                  truncated: { type: boolean }
+        "404":
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/projects/{project}/graph/path:
+    get:
+      summary: Shortest dependency path
+      description: |
+        Finds a shortest path between two files following import edges and
+        synthetic package→file hops. Set `undirected=1` to allow reverse hops;
+        then `directed` may be false and edges may have `reverse: true`.
+      operationId: graphPath
+      tags: [Graph]
+      security:
+        - bearerAuth: ["read"]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema: { type: string }
+        - name: from
+          in: query
+          required: true
+          schema: { type: string }
+        - name: to
+          in: query
+          required: true
+          schema: { type: string }
+        - name: max_depth
+          in: query
+          schema: { type: integer, maximum: 16 }
+        - name: undirected
+          in: query
+          schema: { type: string, enum: ["1", "true"] }
+      responses:
+        "200":
+          description: Path result (found may be false)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  from: { type: string }
+                  to: { type: string }
+                  found: { type: boolean }
+                  directed: { type: boolean }
+                  hops:
+                    type: array
+                    items: { type: string }
+                  edges:
+                    type: array
+                    items:
+                      type: object
+                  length: { type: integer }
+                  truncated: { type: boolean }
+        "400":
+          description: Missing from/to
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   # ─── Search ─────────────────────────────────────────────────────────────────
 
   /api/v1/projects/{project}/search:

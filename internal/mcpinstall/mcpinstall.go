@@ -97,11 +97,49 @@ var Clients = []Client{
 	{ID: "codex", Desc: "OpenAI Codex CLI — ~/.codex/config.toml", kind: tomlCodex, applyable: true,
 		httpKind: httpCodexTOML,
 		path:     func(o Options) string { return filepath.Join(o.Home, ".codex", "config.toml") }},
+	// pi/kimi/mimo are stdio-only here on purpose: their remote-MCP encoding is
+	// not verified, and httpUnsupported makes `install --transport http` say so
+	// instead of writing a config that silently does not work.
+	{ID: "pi", Desc: "Pi coding agent — ~/.pi/agent/mcp.json", kind: jsonMCPServers, applyable: true,
+		path: func(o Options) string { return filepath.Join(o.Home, ".pi", "agent", "mcp.json") }},
+	{ID: "kimi", Desc: "Kimi Code CLI — $KIMI_CODE_HOME/mcp.json (default ~/.kimi-code/mcp.json)", kind: jsonMCPServers, applyable: true,
+		path: func(o Options) string { return filepath.Join(kimiHome(o.Home), "mcp.json") }},
+	{ID: "mimo", Desc: "MiMo Code — <config>/mimocode/mimocode.json", kind: jsonOpenCode, applyable: true,
+		path: func(o Options) string {
+			base := o.ConfigDir
+			if base == "" {
+				base = filepath.Join(o.Home, ".config")
+			}
+			return filepath.Join(base, "mimocode", "mimocode.json")
+		}},
 	{ID: "cagent", Desc: "Docker cagent — per-agent YAML toolset (print-only)", kind: yamlCagent, applyable: false,
 		path: func(o Options) string { return filepath.Join(o.Project, "<your-agent>.yaml") }},
 }
 
+// clientAliases maps short names users type to canonical Client.ID values.
+var clientAliases = map[string]string{
+	"agy":    "antigravity",
+	"claude": "claude-code",
+}
+
+// kimiHome resolves Kimi's data root: $KIMI_CODE_HOME, else ~/.kimi-code.
+func kimiHome(userHome string) string {
+	if v := strings.TrimSpace(os.Getenv("KIMI_CODE_HOME")); v != "" {
+		return v
+	}
+	return filepath.Join(userHome, ".kimi-code")
+}
+
+// CanonicalClientID resolves aliases (agy, claude) to a registered client id.
+func CanonicalClientID(id string) string {
+	if canon, ok := clientAliases[id]; ok {
+		return canon
+	}
+	return id
+}
+
 func clientByID(id string) (Client, bool) {
+	id = CanonicalClientID(id)
 	for _, c := range Clients {
 		if c.ID == id {
 			return c, true
@@ -567,5 +605,6 @@ func ClientList() string {
 	for _, c := range Clients {
 		fmt.Fprintf(&b, "  %-12s %s\n", c.ID, c.Desc)
 	}
+	fmt.Fprintf(&b, "\nAliases: agy→antigravity, claude→claude-code\n")
 	return b.String()
 }

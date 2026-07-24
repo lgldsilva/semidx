@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react'
-import { api, ApiError, type Dependency, type DependencyUsage, type RuntimeEdge } from '../../api'
+import {
+  api,
+  ApiError,
+  type Dependency,
+  type DependencyUsage,
+  type GraphPath,
+  type GraphSubgraph,
+  type RuntimeEdge,
+} from '../../api'
 import { Alert } from '../../components/Alert'
 import { Badge } from '../../components/Badge'
 import { Button } from '../../components/Button'
@@ -7,6 +15,7 @@ import { Card } from '../../components/Card'
 import { Input } from '../../components/Input'
 import { Code, Snippet } from '../../components/Snippet'
 import { Table } from '../../components/Table'
+import { DependencyGraphView } from './DependencyGraphView'
 
 const H2 = 'mb-2 text-[1.1rem] font-bold'
 const LIST = 'my-2 list-disc pl-5'
@@ -40,6 +49,10 @@ export function AnalyzePanel({
     top_depended: { node: string; degree: number }[]
   } | null>(null)
   const [runtimeEdges, setRuntimeEdges] = useState<RuntimeEdge[]>([])
+  const [subgraph, setSubgraph] = useState<GraphSubgraph | null>(null)
+  const [pathTo, setPathTo] = useState('')
+  const [undirected, setUndirected] = useState(false)
+  const [graphPath, setGraphPath] = useState<GraphPath | null>(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState('')
 
@@ -85,6 +98,39 @@ export function AnalyzePanel({
       setGraphStats(await api.projectGraphStats(project))
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'graph stats failed')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function runSubgraph() {
+    setBusy('subgraph')
+    setErr('')
+    try {
+      // An empty path is valid: the server then samples the busiest hubs.
+      setSubgraph(await api.projectGraphSubgraph(project, path.trim(), 2))
+      setGraphPath(null)
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'graph load failed')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function runGraphPath() {
+    if (!path.trim() || !pathTo.trim()) return
+    setBusy('path')
+    setErr('')
+    try {
+      const result = await api.projectGraphPath(project, path.trim(), pathTo.trim(), undirected)
+      setGraphPath(result)
+      // Load the neighborhood around the source so the path has a canvas to be
+      // highlighted on, even when the user never pressed "Load graph".
+      if (result.found && !subgraph) {
+        setSubgraph(await api.projectGraphSubgraph(project, path.trim(), 2))
+      }
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'path search failed')
     } finally {
       setBusy('')
     }
@@ -202,6 +248,33 @@ export function AnalyzePanel({
           </Button>
           <Button disabled={!!busy} onClick={() => void runRuntimeGraph()}>
             {busy === 'runtime' ? '…' : 'Runtime calls'}
+          </Button>
+          <Button disabled={!!busy} onClick={() => void runSubgraph()}>
+            {busy === 'subgraph' ? '…' : 'Load graph'}
+          </Button>
+        </div>
+        <div className="mt-2 flex flex-wrap items-end gap-3.5">
+          <label htmlFor="analyze-path-to" className="block min-w-[180px] flex-1 text-sm font-medium">
+            Trace path to
+            <Input
+              id="analyze-path-to"
+              className="mt-1"
+              value={pathTo}
+              onChange={(e) => setPathTo(e.target.value)}
+              placeholder="internal/store/store.go"
+            />
+          </label>
+          <label htmlFor="analyze-undirected" className="flex items-center gap-1.5 text-sm font-medium">
+            <input
+              id="analyze-undirected"
+              type="checkbox"
+              checked={undirected}
+              onChange={(e) => setUndirected(e.target.checked)}
+            />
+            Allow reverse hops
+          </label>
+          <Button disabled={!!busy || !path.trim() || !pathTo.trim()} onClick={() => void runGraphPath()}>
+            {busy === 'path' ? '…' : 'Trace path'}
           </Button>
         </div>
         {explain && (
@@ -325,6 +398,55 @@ export function AnalyzePanel({
               )}
             </Card>
           </div>
+        </Card>
+      )}
+
+      {(subgraph || graphPath) && (
+        <Card className="md:col-span-2">
+          <h2 className={H2}>
+            Dependency graph
+            {subgraph ? ` — ${subgraph.nodes.length} nodes · ${subgraph.edges.length} edges` : ''}
+          </h2>
+          <p className="m-0 text-xs text-muted">
+            Edges are file → package, with synthetic package → file hops, so a path
+            between two files runs through their packages. Squares are packages,
+            circles are files; dashed edges were walked in reverse.
+          </p>
+          {subgraph?.truncated && (
+            <Alert kind="warning">
+              Truncated by the walk budget — narrow the seed file or lower the depth.
+            </Alert>
+          )}
+          {graphPath && (
+            <p className="my-2 text-sm">
+              {graphPath.found ? (
+                <>
+                  <Badge tone={graphPath.directed ? 'neutral' : 'warning'}>
+                    {graphPath.directed ? 'directed' : 'undirected'}
+                  </Badge>{' '}
+                  {graphPath.length} hops: <Code>{(graphPath.hops || []).join(' → ')}</Code>
+                </>
+              ) : (
+                <>
+                  No path from <Code>{graphPath.from}</Code> to <Code>{graphPath.to}</Code>
+                  {graphPath.truncated ? ' (search truncated by budget)' : ''}
+                  {!undirected ? ' — try allowing reverse hops.' : ''}
+                </>
+              )}
+            </p>
+          )}
+          {subgraph && (
+            <div className="mt-2">
+              <DependencyGraphView
+                nodes={subgraph.nodes}
+                edges={subgraph.edges}
+                highlightPath={graphPath?.found ? graphPath.hops || [] : []}
+                onOpenNode={(id, kind) => {
+                  if (kind !== 'package') onOpenFile(id)
+                }}
+              />
+            </div>
+          )}
         </Card>
       )}
 

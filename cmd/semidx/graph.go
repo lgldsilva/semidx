@@ -14,8 +14,33 @@ import (
 )
 
 func newGraphCmd(d *deps) *cobra.Command {
-	c := &cobra.Command{Use: "graph", Short: "Inspect static and observed project communication"}
-	c.AddCommand(newRuntimeGraphCmd(d), newPortfolioGraphCmd(d))
+	c := &cobra.Command{
+		Use:   "graph",
+		Short: "Inspect static and observed project communication",
+		Long: `Query how a project's code and services connect.
+
+Observed (runtime) communication:
+
+  runtime    list or submit observed runtime edges for one project
+  portfolio  list observed communication across the active workspace
+
+Static file↔package dependencies:
+
+  stats      node/edge counts and top hubs
+  neighbors  ego neighborhood around a file
+  path       shortest dependency path between two files (how A reaches B)
+
+Use --json for machine-readable output. In remote mode neighbors/path talk to
+the server API; with --local they read the SQLite/Postgres index directly.`,
+		Example: `  semidx graph portfolio
+  semidx graph stats --project .
+  semidx graph neighbors --project . --file internal/store/store.go
+  semidx graph path --from cmd/semidx/main.go --to internal/store/store.go --json`,
+	}
+	c.AddCommand(
+		newRuntimeGraphCmd(d), newPortfolioGraphCmd(d),
+		newGraphStatsCmd(d), newGraphNeighborsCmd(d), newGraphPathCmd(d),
+	)
 	return c
 }
 

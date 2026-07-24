@@ -77,6 +77,8 @@ project already exists, `500`/`502` server or upstream (embedding) failure.
 | GET | `/api/v1/projects/{project}` | `read` | Get one project. |
 | DELETE | `/api/v1/projects/{project}` | `write` | Delete a project. |
 | POST | `/api/v1/projects/{project}/search` | `read` | Semantic search. |
+| GET | `/api/v1/projects/{project}/graph/subgraph` | `read` | Ego neighborhood around a file (file↔package). |
+| GET | `/api/v1/projects/{project}/graph/path` | `read` | Shortest dependency path A→B. |
 | POST | `/api/v1/search` | `read` | Search selected projects or the whole active workspace with RRF fusion. |
 | GET | `/api/v1/projects/{project}/dependencies` | `read` | List normalized manifest dependencies. |
 | GET | `/api/v1/projects/{project}/dependencies/shared` | `read` | Find matching dependencies in other workspace projects. |
@@ -252,6 +254,22 @@ chunks cascade). `404` if unknown.
   mark the hit `[stale]` with a "re-read before editing" note.
 - `indexed_at` (RFC3339 string when known, omitempty/null when unknown) is when
   that file version was last indexed.
+
+### Dependency graph (file↔package)
+
+Indexed imports are **file → package-dir**, walked with synthetic **package → file**
+hops (ADR §10 in `design-decisions.md`).
+
+`GET /api/v1/projects/{project}/graph/subgraph?seed=<file>&depth=&limit=`
+(scope `read`) — ego neighborhood. Response: `nodes` (`kind` file|package),
+`edges`, optional `truncated`.
+
+`GET /api/v1/projects/{project}/graph/path?from=&to=&max_depth=&undirected=`
+(scope `read`) — shortest path. Response: `found`, `directed`, `hops`, `edges`
+(may set `reverse: true` when undirected).
+
+CLI: `semidx graph {stats|neighbors|path}`. MCP: `semantic_subgraph`,
+`semantic_path`.
 - `404` if the project does not exist.
 
 ### Search usage analytics

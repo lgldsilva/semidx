@@ -176,7 +176,7 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-UI-06 | Table actions stay inside the grid (Open + overflow menu) | **partial** | UX polish in progress |
 | REQ-UI-07 | Bulk folder / archive upload for push projects | **done** | Folder batching + `.zip` ingest in Admin UI/API |
 | REQ-UI-08 | File detail panel: chunks, dependency fan-out, caller fan-in, deep links | **partial** | Chunks + fan-in/fan-out delivered; deeper graph UX pending |
-| REQ-UI-09 | Graph visualization (or progressive disclosure of graph stats) | **done** | Graph overview in Analyze: node/edge counts + top out-/in-degree nodes (`/graph-stats`); CSP-safe, no external viz lib |
+| REQ-UI-09 | Graph visualization (or progressive disclosure of graph stats) | **done** | Stats + ego/subgraph SVG + Trace path A→B; public `/api/v1/.../graph/*`; CLI `graph stats|neighbors|path`; MCP `semantic_subgraph`/`semantic_path` |
 | REQ-UI-10 | Dead-code, SBOM, dependency catalog, secrets, diff, alerts, insights surfaces where CLI has them | **partial** | Admin Analyze: dead-code + SBOM + dependency catalog/shared-project view; CLI guide for diff/alerts/insights |
 | REQ-UI-11 | First-run / empty-state guidance (no projects → how to add) | **done** | Projects empty-state onboarding flow |
 | REQ-UI-12 | Show project privacy and observed runtime communication in the portfolio UI | **done** | Project overview/analyze surfaces |
@@ -185,7 +185,7 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 
 | ID | Requirement | Status | Notes |
 |----|-------------|--------|-------|
-| REQ-CLI-01 | Core: `index`, `search`, `sgrep`, `serve`, `mcp`, `config`, `login`, `push`, `repo`, `drop`, `migrate` | **done** | |
+| REQ-CLI-01 | Core: `index`, `search`, `sgrep`, `graph`, `serve`, `mcp`, `config`, `login`, `push`, `repo`, `drop`, `migrate` | **done** | `graph` covers runtime/portfolio + dependency stats/neighbors/path |
 | REQ-CLI-02 | Analysis: `callers`, `explain`, `dead-code`, `diff`, `sbom`, secrets-related flows | **done** / **partial** | |
 | REQ-CLI-03 | Productivity: `alerts`, `insights`, `init`, `upgrade`, profiles | **partial** | Often local JSON; not always server-backed |
 | REQ-CLI-04 | Destructive commands require confirmation (`--confirm` / prompt) | **partial** | `drop` and `alerts delete` now require explicit confirmation |
@@ -199,7 +199,7 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 |----|-------------|--------|-------|
 | REQ-MCP-01 | Stdio MCP tools: search, projects, reindex (server mode) | **done** | Logs on stderr only |
 | REQ-MCP-02 | Standalone MCP over local index when no server | **done** | Reindex returns guidance to CLI |
-| REQ-MCP-03 | `semidx mcp install` for major agent clients | **done** | 12 clients; **cagent** print-only; Codex TOML `--apply` supported |
+| REQ-MCP-03 | `semidx mcp install` for major agent clients | **done** | Claude Code/Desktop, Cursor, Windsurf, Gemini, Antigravity/agy, VS Code, Copilot, OpenCode, Crush, Codex, Pi, Kimi, MiMo; cagent print-only |
 | REQ-MCP-04 | Bundled skills install | **done** | |
 | REQ-MCP-05 | Integration harness in CI (at least keyword mode) | **done** | CI now runs `deploy/agentics-test/run.sh keyword` as a gate |
 

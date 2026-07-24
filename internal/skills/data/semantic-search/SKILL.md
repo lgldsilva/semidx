@@ -90,6 +90,11 @@ and "what symbols changed between refs?". See the **code-intel** and
 **impact-before-refactor** skills, and reach for `semantic_impact` *before* any
 refactor of a symbol you didn't write.
 
+**Dependency-graph tools**: `semantic_subgraph` (neighborhood around a file) and
+`semantic_path` (how file A reaches file B) walk the indexed file↔package import
+graph. Use them for "how do these two files connect?" — see the
+**semantic-graph** skill for the node/edge model and the walk budgets.
+
 **New since v0.x**: `semidx status` CLI command and `semantic_status` MCP tool. Use
 `semidx status --project .` to check indexing health before searching. Use
 `semidx index --branch <name>` to index another branch as a separate project
