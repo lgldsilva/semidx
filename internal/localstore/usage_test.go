@@ -40,4 +40,19 @@ func TestUsageEventsRoundTrip(t *testing.T) {
 	if report.Total != 2 {
 		t.Fatalf("report total=%d", report.Total)
 	}
+
+	filtered, err := s.UsageAggregate(ctx, time.Now().UTC().Add(-time.Hour), "demo", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filtered.Total != 2 {
+		t.Fatalf("filtered=%d", filtered.Total)
+	}
+	other, err := s.UsageAggregate(ctx, time.Now().UTC().Add(-time.Hour), "missing", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Total != 0 {
+		t.Fatalf("missing project total=%d", other.Total)
+	}
 }
