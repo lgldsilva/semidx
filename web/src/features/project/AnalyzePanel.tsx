@@ -255,7 +255,7 @@ export function AnalyzePanel({
         </div>
         <div className="mt-2 flex flex-wrap items-end gap-3.5">
           <label htmlFor="analyze-path-to" className="block min-w-[180px] flex-1 text-sm font-medium">
-            Trace path to
+            <span className="block">Trace path to</span>
             <Input
               id="analyze-path-to"
               className="mt-1"
@@ -270,8 +270,8 @@ export function AnalyzePanel({
               type="checkbox"
               checked={undirected}
               onChange={(e) => setUndirected(e.target.checked)}
-            />
-            <span>Allow reverse hops</span>
+            />{/*
+            */}<span>Allow reverse hops</span>
           </label>
           <Button disabled={!!busy || !path.trim() || !pathTo.trim()} onClick={() => void runGraphPath()}>
             {busy === 'path' ? '…' : 'Trace path'}
