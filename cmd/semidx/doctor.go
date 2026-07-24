@@ -17,8 +17,8 @@ func newDoctorCmd(d *deps) *cobra.Command {
 		Use:   "doctor",
 		Short: "Check MCP install, skills, backend, and binary readiness",
 		Long: `Inspect how semidx is wired on this machine: active backend, binary path,
-which agent MCP configs contain a semidx entry, and whether bundled skills are
-installed. Inspired by ai-memory's install-mcp / install-skills inventory.`,
+which agent MCP configs contain a semidx entry, whether bundled skills are
+installed, and whether local Ollama reports GPU-resident models.`,
 		Example: `  semidx doctor`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runDoctor(cmd, d)
@@ -44,6 +44,10 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 	if d.hasServerConfig() && !d.remote() {
 		fmt.Fprintf(&b, "- note: server credentials exist on disk but this invocation is not using remote mode\n")
 	}
+	b.WriteByte('\n')
+
+	fmt.Fprintf(&b, "## Ollama / GPU\n\n")
+	printOllamaRuntime(&b, d)
 	b.WriteByte('\n')
 
 	home, _ := os.UserHomeDir()
@@ -118,6 +122,7 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 	}
 	fmt.Fprintf(&b, "- Search usage history: `semidx usage` (empty until searches are recorded)\n")
 	fmt.Fprintf(&b, "- Test/fixture projects named `semidx-*` may clutter `semantic_projects`; drop unused ones with `semidx drop`\n")
+	fmt.Fprintf(&b, "- GPU for embeddings is owned by Ollama (probe above); Postgres/pgvector search stays on CPU\n")
 	_, err = fmt.Fprint(cmd.OutOrStdout(), b.String())
 	return err
 }

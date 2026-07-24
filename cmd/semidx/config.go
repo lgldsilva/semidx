@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/lgldsilva/semidx/internal/config"
+	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/xdg"
 )
 
@@ -103,21 +107,23 @@ func newConfigListCmd(d *deps) *cobra.Command {
 		Short: "Show the effective configuration (secrets masked) and the active backend",
 		Example: `  semidx config list
   semidx config list --show-secrets`,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			out := cmd.OutOrStdout()
 			if p := xdg.Profile(); p != "" {
-				fmt.Printf("Profile: %s\n", p)
+				fmt.Fprintf(out, "Profile: %s\n", p)
 			}
-			fmt.Printf("Active backend: %s\n\n", activeBackend(d))
-			fmt.Println("Settings (effective; env > .env > user config):")
+			fmt.Fprintf(out, "Active backend: %s\n\n", activeBackend(d))
+			fmt.Fprintln(out, "Settings (effective; env > .env > user config):")
 			for _, k := range config.KnownKeys {
 				v := config.EffectiveValue(k.Name)
 				if v == "" {
 					continue
 				}
-				fmt.Printf("  %-24s %s\n", k.Name, displayValue(k.Name, v, showSecrets))
+				fmt.Fprintf(out, "  %-24s %s\n", k.Name, displayValue(k.Name, v, showSecrets))
 			}
+			printOllamaRuntime(out, d)
 			p, _ := config.UserEnvPath()
-			fmt.Printf("\nUser config file: %s\n", p)
+			fmt.Fprintf(out, "\nUser config file: %s\n", p)
 			return nil
 		},
 	}
@@ -239,4 +245,42 @@ func mask(s string) string {
 		return "****"
 	}
 	return "****" + s[len(s)-4:]
+}
+
+// printOllamaRuntime soft-probes configured local Ollama URLs (GET /api/ps) and
+// reports GPU vs CPU from size_vram. Never fails the parent command.
+func printOllamaRuntime(out io.Writer, d *deps) {
+	if d != nil && d.keywordOnly {
+		fmt.Fprintln(out, "\nOllama runtime: skipped (keyword-only mode)")
+		return
+	}
+	urls := ollamaProbeURLs(d)
+	if len(urls) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	fmt.Fprintln(out, "\nOllama runtime (local; GPU via size_vram, not nvidia-smi):")
+	for _, p := range embed.ProbeOllamaRuntimes(ctx, urls) {
+		fmt.Fprintf(out, "  %-40s %s\n", p.URL, p.Summary())
+	}
+}
+
+func ollamaProbeURLs(d *deps) []string {
+	var url string
+	var urls []string
+	if d != nil && d.cfg != nil {
+		url = d.cfg.OllamaURL
+		urls = d.cfg.OllamaURLs
+	} else {
+		url = config.EffectiveValue("SEMIDX_OLLAMA_URL")
+		if url == "" {
+			url = config.EffectiveValue("OLLAMA_URL")
+		}
+	}
+	out := embed.OllamaProbeURLs(url, urls)
+	if len(out) == 0 {
+		return []string{"http://localhost:11434"}
+	}
+	return out
 }

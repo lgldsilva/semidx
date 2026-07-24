@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,7 +57,8 @@ func TestConfigListKeysPathRun(t *testing.T) {
 	if err := runCLI(t, "config", "set", "GEMINI_API_KEY", "abcd1234"); err != nil {
 		t.Fatal(err)
 	}
-	if err := runCLI(t, "config", "set", "SEMIDX_OLLAMA_URL", "http://h:11434"); err != nil {
+	// Unreachable port: probe must soft-fail fast (no hang, no command error).
+	if err := runCLI(t, "config", "set", "SEMIDX_OLLAMA_URL", "http://127.0.0.1:1"); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
@@ -67,6 +70,33 @@ func TestConfigListKeysPathRun(t *testing.T) {
 		if err := runCLI(t, args...); err != nil {
 			t.Errorf("`semidx %s` errored: %v", strings.Join(args, " "), err)
 		}
+	}
+}
+
+func TestPrintOllamaRuntimeGPULine(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/ps" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"models":[{"name":"nomic","size":100,"size_vram":100}]}`))
+	}))
+	defer srv.Close()
+
+	d := &deps{cfg: &config.Config{OllamaURL: srv.URL}}
+	var buf strings.Builder
+	printOllamaRuntime(&buf, d)
+	got := buf.String()
+	if !strings.Contains(got, "Ollama runtime") || !strings.Contains(got, "GPU:") {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestPrintOllamaRuntimeKeywordOnly(t *testing.T) {
+	var buf strings.Builder
+	printOllamaRuntime(&buf, &deps{keywordOnly: true})
+	if !strings.Contains(buf.String(), "keyword-only") {
+		t.Fatalf("output = %q", buf.String())
 	}
 }
 
