@@ -69,14 +69,14 @@ Local-only: the server API exposes neighbors and path, not aggregate stats.`,
 					"top_depended": topDegreeEntries(inDeg, 10),
 				})
 			}
-			fmt.Fprintf(w, "project %s: %d nodes, %d edges\n", proj.Name, len(nodes), edges)
-			fmt.Fprintln(w, "top outbound:")
+			_, _ = fmt.Fprintf(w, "project %s: %d nodes, %d edges\n", proj.Name, len(nodes), edges)
+			_, _ = fmt.Fprintln(w, "top outbound:")
 			for _, e := range topDegreeEntries(outDeg, 10) {
-				fmt.Fprintf(w, "  %s (%d)\n", e["node"], e["degree"])
+				_, _ = fmt.Fprintf(w, "  %s (%d)\n", e["node"], e["degree"])
 			}
-			fmt.Fprintln(w, "top inbound:")
+			_, _ = fmt.Fprintln(w, "top inbound:")
 			for _, e := range topDegreeEntries(inDeg, 10) {
-				fmt.Fprintf(w, "  %s (%d)\n", e["node"], e["degree"])
+				_, _ = fmt.Fprintf(w, "  %s (%d)\n", e["node"], e["degree"])
 			}
 			return nil
 		},
@@ -217,13 +217,13 @@ and edges may include reverse:true.`,
 }
 
 func printSubgraph(w io.Writer, nodes int, truncated bool, edges []string) {
-	fmt.Fprintf(w, "%d nodes, %d edges", nodes, len(edges))
+	_, _ = fmt.Fprintf(w, "%d nodes, %d edges", nodes, len(edges))
 	if truncated {
-		fmt.Fprint(w, " (truncated)")
+		_, _ = fmt.Fprint(w, " (truncated)")
 	}
-	fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w)
 	for _, line := range edges {
-		fmt.Fprintf(w, "  %s\n", line)
+		_, _ = fmt.Fprintf(w, "  %s\n", line)
 	}
 }
 
@@ -245,9 +245,9 @@ func clientGraphEdgeLines(edges []client.GraphEdge) []string {
 
 func printPathResult(w io.Writer, found, directed, truncated bool, hops []string, length int) {
 	if !found {
-		fmt.Fprintln(w, "not found")
+		_, _ = fmt.Fprintln(w, "not found")
 		if truncated {
-			fmt.Fprintln(w, "(search truncated by budget)")
+			_, _ = fmt.Fprintln(w, "(search truncated by budget)")
 		}
 		return
 	}
@@ -255,7 +255,7 @@ func printPathResult(w io.Writer, found, directed, truncated bool, hops []string
 	if !directed {
 		mode = "undirected"
 	}
-	fmt.Fprintf(w, "%s path (%d hops):\n  %s\n", mode, length, strings.Join(hops, " → "))
+	_, _ = fmt.Fprintf(w, "%s path (%d hops):\n  %s\n", mode, length, strings.Join(hops, " → "))
 }
 
 func encodeGraphJSON(w io.Writer, v any) error {

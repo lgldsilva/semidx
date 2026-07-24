@@ -205,9 +205,9 @@ func installSkillsOne(w io.Writer, dest string, force bool) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(w, "Installed %d skill file(s) into %s:\n", len(written), dest)
+	_, _ = fmt.Fprintf(w, "Installed %d skill file(s) into %s:\n", len(written), dest)
 	for _, f := range written {
-		fmt.Fprintf(w, "  %s\n", f)
+		_, _ = fmt.Fprintf(w, "  %s\n", f)
 	}
 	return nil
 }
@@ -220,7 +220,7 @@ func installSkillsAll(w, errW io.Writer, home, configDir string, force bool) err
 	for _, t := range userLevelSkillsTargets() {
 		dest := t.path(home, configDir)
 		if err := installSkillsOne(w, dest, force); err != nil {
-			fmt.Fprintf(errW, "skipping %s (%s): %v\n", t.ID, dest, err)
+			_, _ = fmt.Fprintf(errW, "skipping %s (%s): %v\n", t.ID, dest, err)
 			failed++
 		}
 	}

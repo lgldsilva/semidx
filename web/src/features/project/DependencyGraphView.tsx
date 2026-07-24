@@ -56,7 +56,7 @@ export function DependencyGraphView({
       {/* Reserve the hover line's height so hovering never reflows the canvas. */}
       <p className="m-0 min-h-[1.25rem] px-2 py-1 text-xs text-muted">{hover ?? '\u00a0'}</p>
 
-      <svg width={width} height={height} role="img" aria-label="Dependency graph">
+      <svg width={width} height={height} aria-label="Dependency graph">
         <defs>
           <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
             <path d="M0,0 L6,3 L0,6 Z" fill="#64748b" />
