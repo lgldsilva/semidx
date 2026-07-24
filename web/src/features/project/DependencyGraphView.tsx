@@ -1,7 +1,15 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import type { GraphEdge, GraphNode } from '../../api'
 
 type Pos = { x: number; y: number }
+
+type DependencyGraphViewProps = Readonly<{
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  highlightPath?: string[]
+  onOpenNode?: (id: string, kind: string) => void
+  height?: number
+}>
 
 /** Circular layout — no external force-layout dependency (CSP-safe, tiny). */
 function layout(nodes: GraphNode[], width: number, height: number): Map<string, Pos> {
@@ -22,19 +30,66 @@ function layout(nodes: GraphNode[], width: number, height: number): Map<string, 
   return map
 }
 
+function edgeKey(e: GraphEdge): string {
+  return `${e.source}->${e.target}:${e.kind}${e.reverse ? ':rev' : ''}`
+}
+
+function nodeRadius(n: GraphNode): number {
+  if (n.seed) return 14
+  if (n.kind === 'package') return 10
+  return 11
+}
+
+function GraphNodeMark({
+  node,
+  pos,
+  highlight,
+  dim,
+  onOpenNode,
+  onHover,
+}: Readonly<{
+  node: GraphNode
+  pos: Pos
+  highlight: boolean
+  dim: boolean
+  onOpenNode?: (id: string, kind: string) => void
+  onHover: (id: string | null) => void
+}>): ReactNode {
+  const isPkg = node.kind === 'package'
+  const r = nodeRadius(node)
+  const fill = highlight ? '#ccfbf1' : isPkg ? '#f1f5f9' : '#fff'
+  const stroke = highlight ? '#0f766e' : isPkg ? '#64748b' : '#334155'
+  const strokeWidth = highlight ? (isPkg ? 2 : 2.5) : isPkg ? 1 : 1.5
+  const label = node.label.length > 18 ? `${node.label.slice(0, 16)}…` : node.label
+
+  return (
+    <g
+      transform={`translate(${pos.x},${pos.y})`}
+      style={{ cursor: onOpenNode && !isPkg ? 'pointer' : 'default', opacity: dim ? 0.35 : 1 }}
+      onClick={() => onOpenNode?.(node.id, node.kind)}
+      onMouseEnter={() => onHover(node.id)}
+      onMouseLeave={() => onHover(null)}
+    >
+      {isPkg ? (
+        <rect x={-r} y={-r} width={r * 2} height={r * 2} rx={3} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
+      ) : (
+        <circle r={r} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
+      )}
+      <title>{node.id}</title>
+      <text y={r + 12} textAnchor="middle" fontSize={10} fill="#334155" style={{ pointerEvents: 'none' }}>
+        {label}
+      </text>
+    </g>
+  )
+}
+
 export function DependencyGraphView({
   nodes,
   edges,
   highlightPath = [],
   onOpenNode,
   height = 360,
-}: {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  highlightPath?: string[]
-  onOpenNode?: (id: string, kind: string) => void
-  height?: number
-}) {
+}: DependencyGraphViewProps) {
   const width = 720
   const [hover, setHover] = useState<string | null>(null)
   const positions = useMemo(() => layout(nodes, width, height), [nodes, height])
@@ -65,15 +120,16 @@ export function DependencyGraphView({
             <path d="M0,0 L6,3 L0,6 Z" fill="#0f766e" />
           </marker>
         </defs>
-        {edges.map((e, i) => {
+        {edges.map((e) => {
           const a = positions.get(e.source)
           const b = positions.get(e.target)
           if (!a || !b) return null
           const hi = pathEdge.has(`${e.source}\0${e.target}`)
           const dim = highlightPath.length > 0 && !hi
+          const revSuffix = e.reverse ? ', reverse' : ''
           return (
             <line
-              key={i}
+              key={edgeKey(e)}
               x1={a.x}
               y1={a.y}
               x2={b.x}
@@ -83,7 +139,7 @@ export function DependencyGraphView({
               strokeOpacity={dim ? 0.25 : 0.85}
               strokeDasharray={e.reverse ? '4 3' : undefined}
               markerEnd={hi ? 'url(#arrow-hi)' : 'url(#arrow)'}
-              onMouseEnter={() => setHover(`${e.source} → ${e.target} (${e.kind}${e.reverse ? ', reverse' : ''})`)}
+              onMouseEnter={() => setHover(`${e.source} → ${e.target} (${e.kind}${revSuffix})`)}
               onMouseLeave={() => setHover(null)}
             />
           )
@@ -91,49 +147,18 @@ export function DependencyGraphView({
         {nodes.map((n) => {
           const p = positions.get(n.id)
           if (!p) return null
-          const hi = pathSet.has(n.id) || n.seed
+          const highlight = pathSet.has(n.id) || Boolean(n.seed)
           const dim = highlightPath.length > 0 && !pathSet.has(n.id) && !n.seed
-          const isPkg = n.kind === 'package'
-          const r = n.seed ? 14 : isPkg ? 10 : 11
           return (
-            <g
+            <GraphNodeMark
               key={n.id}
-              transform={`translate(${p.x},${p.y})`}
-              style={{ cursor: onOpenNode && !isPkg ? 'pointer' : 'default', opacity: dim ? 0.35 : 1 }}
-              onClick={() => onOpenNode?.(n.id, n.kind)}
-              onMouseEnter={() => setHover(n.id)}
-              onMouseLeave={() => setHover(null)}
-            >
-              {isPkg ? (
-                <rect
-                  x={-r}
-                  y={-r}
-                  width={r * 2}
-                  height={r * 2}
-                  rx={3}
-                  fill={hi ? '#ccfbf1' : '#f1f5f9'}
-                  stroke={hi ? '#0f766e' : '#64748b'}
-                  strokeWidth={hi ? 2 : 1}
-                />
-              ) : (
-                <circle
-                  r={r}
-                  fill={hi ? '#ccfbf1' : '#fff'}
-                  stroke={hi ? '#0f766e' : '#334155'}
-                  strokeWidth={hi ? 2.5 : 1.5}
-                />
-              )}
-              <title>{n.id}</title>
-              <text
-                y={r + 12}
-                textAnchor="middle"
-                fontSize={10}
-                fill="#334155"
-                style={{ pointerEvents: 'none' }}
-              >
-                {n.label.length > 18 ? `${n.label.slice(0, 16)}…` : n.label}
-              </text>
-            </g>
+              node={n}
+              pos={p}
+              highlight={highlight}
+              dim={dim}
+              onOpenNode={onOpenNode}
+              onHover={setHover}
+            />
           )
         })}
       </svg>

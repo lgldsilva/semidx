@@ -537,9 +537,9 @@ export const api = {
     if (depth > 0) q.set('depth', String(depth))
     if (limit > 0) q.set('limit', String(limit))
     const qs = q.toString()
-    return request<GraphSubgraph>(
-      `/admin/api/projects/${encodeURIComponent(name)}/graph/subgraph${qs ? `?${qs}` : ''}`,
-    )
+    const base = `/admin/api/projects/${encodeURIComponent(name)}/graph/subgraph`
+    const path = qs ? `${base}?${qs}` : base
+    return request<GraphSubgraph>(path)
   },
   projectGraphPath: (name: string, from: string, to: string, undirected = false, maxDepth = 0) => {
     const q = new URLSearchParams({ from, to })

@@ -271,7 +271,7 @@ export function AnalyzePanel({
               checked={undirected}
               onChange={(e) => setUndirected(e.target.checked)}
             />
-            Allow reverse hops
+            <span>Allow reverse hops</span>
           </label>
           <Button disabled={!!busy || !path.trim() || !pathTo.trim()} onClick={() => void runGraphPath()}>
             {busy === 'path' ? '…' : 'Trace path'}

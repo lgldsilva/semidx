@@ -26,6 +26,8 @@ const (
 	jsonCrush                  // {"mcp": {name: {type:"stdio", command, args}}}  (Charm Crush)
 	tomlCodex                  // [mcp_servers.name]\ncommand=..\nargs=[..]  (TOML merge)
 	yamlCagent                 // toolsets: [{type: mcp, command, args}]  (print-only)
+
+	mcpJSONFile = "mcp.json"
 )
 
 // httpStyle is how a client's config encodes a REMOTE (Streamable HTTP) MCP
@@ -74,7 +76,7 @@ var Clients = []Client{
 		path: func(o Options) string { return filepath.Join(o.ConfigDir, "Claude", "claude_desktop_config.json") }},
 	{ID: "cursor", Desc: "Cursor IDE — ~/.cursor/mcp.json", kind: jsonMCPServers, applyable: true,
 		httpKind: httpURLHeaders, envRef: "${%s}",
-		path: func(o Options) string { return filepath.Join(o.Home, ".cursor", "mcp.json") }},
+		path: func(o Options) string { return filepath.Join(o.Home, ".cursor", mcpJSONFile) }},
 	{ID: "windsurf", Desc: "Windsurf (Codeium) — ~/.codeium/windsurf/mcp_config.json", kind: jsonMCPServers, applyable: true,
 		path: func(o Options) string { return filepath.Join(o.Home, ".codeium", "windsurf", "mcp_config.json") }},
 	{ID: "gemini-cli", Desc: "Google Gemini CLI — ~/.gemini/settings.json", kind: jsonMCPServers, applyable: true,
@@ -84,7 +86,7 @@ var Clients = []Client{
 		path: func(o Options) string { return filepath.Join(o.Home, ".gemini", "antigravity-cli", "mcp_config.json") }},
 	{ID: "vscode", Desc: "VS Code / GitHub Copilot (agent mode) — .vscode/mcp.json", kind: jsonServers, applyable: true,
 		httpKind: httpTypeHTTP, envRef: "${env:%s}",
-		path: func(o Options) string { return filepath.Join(o.Project, ".vscode", "mcp.json") }},
+		path: func(o Options) string { return filepath.Join(o.Project, ".vscode", mcpJSONFile) }},
 	{ID: "copilot", Desc: "GitHub Copilot CLI — <config>/github-copilot/mcp-config.json", kind: jsonMCPServers, applyable: true,
 		httpKind: httpTypeHTTP, envRef: "${%s}",
 		path: func(o Options) string { return filepath.Join(o.ConfigDir, "github-copilot", "mcp-config.json") }},
@@ -101,9 +103,9 @@ var Clients = []Client{
 	// not verified, and httpUnsupported makes `install --transport http` say so
 	// instead of writing a config that silently does not work.
 	{ID: "pi", Desc: "Pi coding agent — ~/.pi/agent/mcp.json", kind: jsonMCPServers, applyable: true,
-		path: func(o Options) string { return filepath.Join(o.Home, ".pi", "agent", "mcp.json") }},
+		path: func(o Options) string { return filepath.Join(o.Home, ".pi", "agent", mcpJSONFile) }},
 	{ID: "kimi", Desc: "Kimi Code CLI — $KIMI_CODE_HOME/mcp.json (default ~/.kimi-code/mcp.json)", kind: jsonMCPServers, applyable: true,
-		path: func(o Options) string { return filepath.Join(kimiHome(o.Home), "mcp.json") }},
+		path: func(o Options) string { return filepath.Join(kimiHome(o.Home), mcpJSONFile) }},
 	{ID: "mimo", Desc: "MiMo Code — <config>/mimocode/mimocode.json", kind: jsonOpenCode, applyable: true,
 		path: func(o Options) string {
 			base := o.ConfigDir

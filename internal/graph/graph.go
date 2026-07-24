@@ -166,50 +166,17 @@ func Build(neighbors map[string][]string, files []string) *Index {
 		filesInPkg: make(map[string][]string),
 	}
 	seenFile := map[string]struct{}{}
-	addFile := func(f string) {
-		f = Normalize(f)
-		if f == "" || IsPackageDir(f) {
-			return
-		}
-		if _, ok := seenFile[f]; ok {
-			return
-		}
-		seenFile[f] = struct{}{}
-		idx.files = append(idx.files, f)
-		pkg := PackageDir(f)
-		if pkg != "" {
-			idx.filesInPkg[pkg] = append(idx.filesInPkg[pkg], f)
-		}
-	}
-
 	for src, targets := range neighbors {
 		s := Normalize(src)
 		if s == "" {
 			continue
 		}
-		addFile(s)
-		uniq := make([]string, 0, len(targets))
-		seenT := map[string]struct{}{}
-		for _, t := range targets {
-			t = Normalize(t)
-			if t == "" {
-				continue
-			}
-			// Prefer package-dir form for directory-like targets.
-			if !strings.Contains(path.Base(t), ".") && !strings.HasSuffix(t, "/") {
-				t += "/"
-			}
-			if _, ok := seenT[t]; ok {
-				continue
-			}
-			seenT[t] = struct{}{}
-			uniq = append(uniq, t)
-		}
-		sort.Strings(uniq)
+		idx.addFile(s, seenFile)
+		uniq := normalizeImportTargets(targets)
 		idx.out[s] = uniq
 	}
 	for _, f := range files {
-		addFile(f)
+		idx.addFile(f, seenFile)
 	}
 	sort.Strings(idx.files)
 	for pkg, list := range idx.filesInPkg {
@@ -219,23 +186,66 @@ func Build(neighbors map[string][]string, files []string) *Index {
 	return idx
 }
 
+func (idx *Index) addFile(f string, seenFile map[string]struct{}) {
+	f = Normalize(f)
+	if f == "" || IsPackageDir(f) {
+		return
+	}
+	if _, ok := seenFile[f]; ok {
+		return
+	}
+	seenFile[f] = struct{}{}
+	idx.files = append(idx.files, f)
+	pkg := PackageDir(f)
+	if pkg != "" {
+		idx.filesInPkg[pkg] = append(idx.filesInPkg[pkg], f)
+	}
+}
+
+func normalizeImportTargets(targets []string) []string {
+	uniq := make([]string, 0, len(targets))
+	seenT := map[string]struct{}{}
+	for _, t := range targets {
+		t = Normalize(t)
+		if t == "" {
+			continue
+		}
+		// Prefer package-dir form for directory-like targets.
+		if !strings.Contains(path.Base(t), ".") && !strings.HasSuffix(t, "/") {
+			t += "/"
+		}
+		if _, ok := seenT[t]; ok {
+			continue
+		}
+		seenT[t] = struct{}{}
+		uniq = append(uniq, t)
+	}
+	sort.Strings(uniq)
+	return uniq
+}
+
+func ensurePkgSlash(pkg string) string {
+	if pkg != "" && !strings.HasSuffix(pkg, "/") {
+		return pkg + "/"
+	}
+	return pkg
+}
+
 // neighborsDirected returns outgoing walk edges from node (file or package).
 func (idx *Index) neighborsDirected(node string) []Edge {
 	node = Normalize(node)
 	if node == "" {
 		return nil
 	}
-	var out []Edge
 	if IsPackageDir(node) {
-		pkg := node
-		if pkg != "" && !strings.HasSuffix(pkg, "/") {
-			pkg += "/"
-		}
+		pkg := ensurePkgSlash(node)
+		out := make([]Edge, 0, len(idx.filesInPkg[pkg]))
 		for _, f := range idx.filesInPkg[pkg] {
 			out = append(out, Edge{Source: pkg, Target: f, Kind: EdgeContains})
 		}
 		return out
 	}
+	out := make([]Edge, 0, len(idx.out[node]))
 	for _, t := range idx.out[node] {
 		out = append(out, Edge{Source: node, Target: t, Kind: EdgeImports})
 	}
@@ -246,40 +256,35 @@ func (idx *Index) neighborsDirected(node string) []Edge {
 func (idx *Index) neighborsUndirected(node string) []Edge {
 	node = Normalize(node)
 	fwd := idx.neighborsDirected(node)
-	var rev []Edge
+	return append(fwd, idx.reverseNeighbors(node)...)
+}
+
+func (idx *Index) reverseNeighbors(node string) []Edge {
 	if IsPackageDir(node) {
-		// Reverse of file→package imports: who imports this package?
-		pkg := node
-		if pkg != "" && !strings.HasSuffix(pkg, "/") {
-			pkg += "/"
-		}
-		for src, targets := range idx.out {
-			for _, t := range targets {
-				if packageEqual(t, pkg) {
-					rev = append(rev, Edge{Source: pkg, Target: src, Kind: EdgeImports, Reverse: true})
-					break
-				}
+		return idx.importersOfPackage(ensurePkgSlash(node))
+	}
+	pkg := PackageDir(node)
+	if pkg == "" {
+		return nil
+	}
+	return []Edge{{Source: node, Target: pkg, Kind: EdgeContains, Reverse: true}}
+}
+
+func (idx *Index) importersOfPackage(pkg string) []Edge {
+	var rev []Edge
+	for src, targets := range idx.out {
+		for _, t := range targets {
+			if packageEqual(t, pkg) {
+				rev = append(rev, Edge{Source: pkg, Target: src, Kind: EdgeImports, Reverse: true})
+				break
 			}
 		}
-	} else {
-		// Reverse of package→file contains: file → its package
-		pkg := PackageDir(node)
-		if pkg != "" {
-			rev = append(rev, Edge{Source: node, Target: pkg, Kind: EdgeContains, Reverse: true})
-		}
 	}
-	return append(fwd, rev...)
+	return rev
 }
 
 func packageEqual(a, b string) bool {
-	a, b = Normalize(a), Normalize(b)
-	if !strings.HasSuffix(a, "/") && a != "" {
-		a += "/"
-	}
-	if !strings.HasSuffix(b, "/") && b != "" {
-		b += "/"
-	}
-	return a == b
+	return ensurePkgSlash(Normalize(a)) == ensurePkgSlash(Normalize(b))
 }
 
 type bfsParent struct {
@@ -304,16 +309,9 @@ func (idx *Index) ShortestPath(from, to string, budget Budget, allowUndirected b
 		return res
 	}
 
-	hops, edges, trunc, ok := idx.bfs(from, to, budget, false)
-	if ok {
-		res.Found = true
-		res.Hops = hops
-		res.Edges = edges
-		res.Length = len(edges)
-		res.Truncated = trunc
-		return res
-	}
-	if trunc {
+	if hops, edges, trunc, ok := idx.bfs(from, to, budget, false); ok {
+		return fillPath(res, hops, edges, true, trunc)
+	} else if trunc {
 		res.Truncated = true
 	}
 	if !allowUndirected {
@@ -322,13 +320,28 @@ func (idx *Index) ShortestPath(from, to string, budget Budget, allowUndirected b
 	hops, edges, trunc2, ok := idx.bfs(from, to, budget, true)
 	res.Truncated = res.Truncated || trunc2
 	if ok {
-		res.Found = true
-		res.Directed = false
-		res.Hops = hops
-		res.Edges = edges
-		res.Length = len(edges)
+		return fillPath(res, hops, edges, false, res.Truncated)
 	}
 	return res
+}
+
+func fillPath(res PathResult, hops []string, edges []Edge, directed, trunc bool) PathResult {
+	res.Found = true
+	res.Directed = directed
+	res.Hops = hops
+	res.Edges = edges
+	res.Length = len(edges)
+	res.Truncated = trunc
+	return res
+}
+
+func sortEdgesStable(nbrs []Edge) {
+	sort.Slice(nbrs, func(i, j int) bool {
+		if nbrs[i].Target != nbrs[j].Target {
+			return nbrs[i].Target < nbrs[j].Target
+		}
+		return nbrs[i].Kind < nbrs[j].Kind
+	})
 }
 
 func (idx *Index) bfs(from, to string, budget Budget, undirected bool) (hops []string, edges []Edge, truncated, found bool) {
@@ -351,19 +364,8 @@ func (idx *Index) bfs(from, to string, budget Budget, undirected bool) (hops []s
 		if cur.depth >= budget.MaxDepth {
 			continue
 		}
-		var nbrs []Edge
-		if undirected {
-			nbrs = idx.neighborsUndirected(cur.node)
-		} else {
-			nbrs = idx.neighborsDirected(cur.node)
-		}
-		// Stable order
-		sort.Slice(nbrs, func(i, j int) bool {
-			if nbrs[i].Target != nbrs[j].Target {
-				return nbrs[i].Target < nbrs[j].Target
-			}
-			return nbrs[i].Kind < nbrs[j].Kind
-		})
+		nbrs := idx.expand(cur.node, undirected)
+		sortEdgesStable(nbrs)
 		for _, e := range nbrs {
 			next := Normalize(e.Target)
 			if next == "" {
@@ -383,6 +385,13 @@ func (idx *Index) bfs(from, to string, budget Budget, undirected bool) (hops []s
 	return nil, nil, false, false
 }
 
+func (idx *Index) expand(node string, undirected bool) []Edge {
+	if undirected {
+		return idx.neighborsUndirected(node)
+	}
+	return idx.neighborsDirected(node)
+}
+
 func reconstruct(from, to string, parent map[string]bfsParent) ([]string, []Edge, bool, bool) {
 	var hopsRev []string
 	var edgesRev []Edge
@@ -397,16 +406,25 @@ func reconstruct(from, to string, parent map[string]bfsParent) ([]string, []Edge
 		cur = p.prev
 	}
 	hopsRev = append(hopsRev, from)
-	// reverse
-	hops := make([]string, len(hopsRev))
-	for i := range hopsRev {
-		hops[i] = hopsRev[len(hopsRev)-1-i]
-	}
-	edges := make([]Edge, len(edgesRev))
-	for i := range edgesRev {
-		edges[i] = edgesRev[len(edgesRev)-1-i]
-	}
+	hops := reverseStrings(hopsRev)
+	edges := reverseEdges(edgesRev)
 	return hops, edges, false, true
+}
+
+func reverseStrings(in []string) []string {
+	out := make([]string, len(in))
+	for i := range in {
+		out[i] = in[len(in)-1-i]
+	}
+	return out
+}
+
+func reverseEdges(in []Edge) []Edge {
+	out := make([]Edge, len(in))
+	for i := range in {
+		out[i] = in[len(in)-1-i]
+	}
+	return out
 }
 
 // Subgraph returns the neighborhood around seed up to budget.MaxDepth.
@@ -443,37 +461,29 @@ func (idx *Index) Subgraph(seed string, budget Budget) SubgraphResult {
 	var edges []Edge
 	edgeSeen := map[string]struct{}{}
 	visited := 0
+	truncated := false
 
 	for len(q) > 0 {
 		cur := q[0]
 		q = q[1:]
 		visited++
 		if visited > budget.MaxVisitNodes {
-			res.Truncated = true
+			truncated = true
 			break
 		}
 		nodeSet[cur.node] = struct{}{}
 		if cur.depth >= budget.MaxDepth {
 			continue
 		}
-		nbrs := idx.neighborsDirected(cur.node)
-		sort.Slice(nbrs, func(i, j int) bool { return nbrs[i].Target < nbrs[j].Target })
-		for _, e := range nbrs {
-			key := e.Source + "\x00" + e.Target + "\x00" + e.Kind
-			if _, ok := edgeSeen[key]; !ok {
-				edgeSeen[key] = struct{}{}
-				if len(edges) >= budget.MaxEdgesOut {
-					res.Truncated = true
-				} else {
-					edges = append(edges, e)
-					nodeSet[e.Target] = struct{}{}
-				}
-			}
-			t := Normalize(e.Target)
+		more, hitCap := idx.collectOutEdges(cur.node, budget.MaxEdgesOut, &edges, edgeSeen, nodeSet)
+		if hitCap {
+			truncated = true
+		}
+		for _, t := range more {
 			if _, ok := seen[t]; ok {
 				continue
 			}
-			if res.Truncated && len(edges) >= budget.MaxEdgesOut {
+			if truncated && len(edges) >= budget.MaxEdgesOut {
 				continue
 			}
 			seen[t] = struct{}{}
@@ -481,6 +491,49 @@ func (idx *Index) Subgraph(seed string, budget Budget) SubgraphResult {
 		}
 	}
 
+	res.Nodes = nodesFromSet(nodeSet, seedSet)
+	res.Edges = edges
+	res.Truncated = truncated
+	sort.Slice(res.Edges, func(i, j int) bool {
+		if res.Edges[i].Source != res.Edges[j].Source {
+			return res.Edges[i].Source < res.Edges[j].Source
+		}
+		return res.Edges[i].Target < res.Edges[j].Target
+	})
+	return res
+}
+
+// collectOutEdges appends directed neighbors of node into edges (respecting maxEdges)
+// and returns the list of neighbor targets to enqueue, plus whether the edge cap was hit.
+func (idx *Index) collectOutEdges(
+	node string,
+	maxEdges int,
+	edges *[]Edge,
+	edgeSeen map[string]struct{},
+	nodeSet map[string]struct{},
+) (targets []string, hitCap bool) {
+	nbrs := idx.neighborsDirected(node)
+	sort.Slice(nbrs, func(i, j int) bool { return nbrs[i].Target < nbrs[j].Target })
+	for _, e := range nbrs {
+		key := e.Source + "\x00" + e.Target + "\x00" + e.Kind
+		if _, ok := edgeSeen[key]; !ok {
+			edgeSeen[key] = struct{}{}
+			if len(*edges) >= maxEdges {
+				hitCap = true
+			} else {
+				*edges = append(*edges, e)
+				nodeSet[e.Target] = struct{}{}
+			}
+		}
+		t := Normalize(e.Target)
+		if t != "" {
+			targets = append(targets, t)
+		}
+	}
+	return targets, hitCap
+}
+
+func nodesFromSet(nodeSet, seedSet map[string]struct{}) []Node {
 	nodes := make([]Node, 0, len(nodeSet))
 	for id := range nodeSet {
 		kind := KindFile
@@ -496,15 +549,7 @@ func (idx *Index) Subgraph(seed string, budget Budget) SubgraphResult {
 		})
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].Source != edges[j].Source {
-			return edges[i].Source < edges[j].Source
-		}
-		return edges[i].Target < edges[j].Target
-	})
-	res.Nodes = nodes
-	res.Edges = edges
-	return res
+	return nodes
 }
 
 func (idx *Index) hubSeeds(n int) []string {
