@@ -14,6 +14,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/internal/tenant"
+	"github.com/lgldsilva/semidx/internal/usage"
 )
 
 // ensure strconv used in this file (apiListAllJobs).
@@ -552,8 +553,35 @@ type searchJSONBody struct {
 	GraphDepth int    `json:"graph_depth"`
 }
 
+// apiSearchUsage serves the product-level search analytics report (counts by
+// project/source/outcome, findings, blind spots) at GET /admin/api/search-usage.
+// Not to be confused with apiUsage (GET /admin/api/usage), which reports
+// billing quota/counters for the active tenant.
+func (a *Admin) apiSearchUsage(w http.ResponseWriter, r *http.Request, _ *authCtx) {
+	days := 30
+	if raw := strings.TrimSpace(r.URL.Query().Get("days")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 || n > 365 {
+			writeJSONErr(w, http.StatusBadRequest, "days must be 1..365")
+			return
+		}
+		days = n
+	}
+	project := strings.TrimSpace(r.URL.Query().Get("project"))
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	agg, err := a.store.UsageAggregate(r.Context(), since, project, 10)
+	if err != nil {
+		a.log.Error("usage aggregate failed", "err", err)
+		writeJSONErr(w, http.StatusInternalServerError, "usage query failed")
+		return
+	}
+	report := usage.BuildReport(agg, usage.Params{SinceDays: days, TopLimit: 10, Project: project}, time.Now().UTC())
+	writeJSON(w, http.StatusOK, report)
+}
+
 func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	_ = ac
+	ctx := usage.WithSource(r.Context(), usage.SourceAdmin)
 	var body searchJSONBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidJSONBody)
@@ -572,7 +600,7 @@ func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 
 	if body.All {
 		d := &searchData{Query: body.Query, AllProjects: true, Top: topK, Ran: true}
-		if err := a.searchAllProjects(r.Context(), d, topK); err != nil {
+		if err := a.searchAllProjects(ctx, d, topK); err != nil {
 			// Infra failures are collapsed to a safe sentinel upstream
 			// (REQ-SRCH-08) and reported as 500; the remaining errors are
 			// intentional, safe user messages (e.g. "no indexed projects").
@@ -602,7 +630,7 @@ func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 		Project: project, Query: body.Query, TopK: topK,
 		Graph: body.Graph, GraphMaxDepth: body.GraphDepth,
 	}
-	resp, err := a.search.Search(r.Context(), req)
+	resp, err := a.search.Search(ctx, req)
 	if errors.Is(err, store.ErrNotFound) {
 		writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 		return

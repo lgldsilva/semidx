@@ -134,6 +134,39 @@ export type UsageResponse = {
   }
 }
 
+export type UsageCount = { key: string; count: number }
+
+export type UsageFinding = {
+  kind: string
+  severity: string
+  message: string
+}
+
+// UsageReport is the product-level search analytics report (counts by
+// project/source/outcome, findings, blind spots) served at
+// GET /admin/api/search-usage. Not to be confused with UsageResponse (tenant
+// quota, GET /admin/api/usage).
+export type UsageReport = {
+  generated_at: string
+  since_days: number
+  project?: string
+  summary: string
+  total: number
+  by_project: UsageCount[]
+  by_source: UsageCount[]
+  by_outcome: UsageCount[]
+  rates: {
+    ok: number
+    empty: number
+    fallback: number
+    error: number
+    mcp: number
+    cli: number
+  }
+  findings: UsageFinding[]
+  blind_spots: string[]
+}
+
 export type ChatSource = {
   file: string
   start_line: number
@@ -344,6 +377,11 @@ export const api = {
   me: () => request<MeResponse>('/admin/api/me'),
   system: () => request<SystemInfo>('/admin/api/system'),
   usage: () => request<UsageResponse>('/admin/api/usage'),
+  searchUsage: (days: number, project?: string) => {
+    const params = new URLSearchParams({ days: String(days) })
+    if (project) params.set('project', project)
+    return request<UsageReport>(`/admin/api/search-usage?${params.toString()}`)
+  },
   login: (username: string, password: string, remember: boolean) =>
     request<MeResponse>('/admin/api/login', {
       method: 'POST',

@@ -50,6 +50,9 @@ export function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
         <NavLink to="/chat" className={navClass}>
           Chat
         </NavLink>
+        <NavLink to="/usage" className={navClass}>
+          Usage
+        </NavLink>
         <NavLink to="/jobs" className={navClass}>
           Jobs
         </NavLink>

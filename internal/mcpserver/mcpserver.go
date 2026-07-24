@@ -25,6 +25,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/analyzer"
 	"github.com/lgldsilva/semidx/internal/codeintel"
+	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/repotools"
 	"github.com/lgldsilva/semidx/internal/search"
 )
@@ -180,6 +181,22 @@ func asGraphBackend(b Backend) (GraphBackend, bool) {
 	return nil, false
 }
 
+// asUsageBackend finds a UsageBackend (see usage.go) in b or its wrapped
+// chain, so semantic_usage registers regardless of wrap order.
+func asUsageBackend(b Backend) (UsageBackend, bool) {
+	for b != nil {
+		if ub, ok := b.(UsageBackend); ok {
+			return ub, true
+		}
+		u, ok := b.(unwrapper)
+		if !ok {
+			return nil, false
+		}
+		b = u.Unwrap()
+	}
+	return nil, false
+}
+
 // Canonical tool names. toolNames below is the single source the allowlist
 // validation checks against: when you register a new tool in NewWithOptions,
 // add its name here too, and the validation error message (and the CLI help
@@ -202,6 +219,7 @@ const (
 	toolSemanticImpact      = "semantic_impact"
 	toolSemanticDeadCode    = "semantic_deadcode"
 	toolSemanticDiff        = "semantic_diff"
+	toolSemanticUsage       = "semantic_usage"
 )
 
 // toolNames is the canonical list of every tool this server can register,
@@ -212,7 +230,7 @@ var toolNames = []string{
 	toolSemanticSearchMulti, toolSemanticAsk,
 	toolSemanticNeighbors, toolSemanticTrace, toolSemanticSymbols,
 	toolSemanticCallers, toolSemanticExplain, toolSemanticImpact,
-	toolSemanticDeadCode, toolSemanticDiff,
+	toolSemanticDeadCode, toolSemanticDiff, toolSemanticUsage,
 }
 
 // ToolNames returns the canonical list of registrable tool names. Used by the
@@ -384,8 +402,27 @@ func build(b Backend, allowed map[string]bool, explicit bool, defaultProject str
 	registerAskTool(s, b, allowed, explicit, defaultProject)
 	registerGraphTools(s, b, allowed, explicit, defaultProject)
 	registerCodeIntelTools(s, b, allowed, defaultProject)
+	registerUsageTool(s, b, allowed, explicit)
 	registerResources(s, b)
 	return s
+}
+
+// registerUsageTool registers semantic_usage when the backend (or one it
+// wraps, see WithUsage/WithRemoteUsage) implements UsageBackend.
+func registerUsageTool(s *mcp.Server, b Backend, allowed map[string]bool, explicit bool) {
+	ub, ok := asUsageBackend(b)
+	if !ok {
+		if explicit {
+			warnUnavailable(allowed, "a usage-analytics-capable store", toolSemanticUsage)
+		}
+		return
+	}
+	if allowed[toolSemanticUsage] {
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        toolSemanticUsage,
+			Description: "Read-only search usage analytics: counts by project, source (mcp/cli/admin), and outcome (ok/empty/fallback/error) for a lookback window.",
+		}, usageHandler(ub))
+	}
 }
 
 // registerGitTools registers the git tools when the backend (or a backend it
@@ -488,7 +525,10 @@ func registerResources(s *mcp.Server, b Backend) {
 		}
 		rows := make([]projectRow, len(projects))
 		for i, p := range projects {
-			rows[i] = projectRow(p)
+			rows[i] = projectRow{
+				Name: p.Name, SourceType: p.SourceType, GitURL: gitmeta.RedactURL(p.GitURL),
+				Status: p.Status, Model: p.Model,
+			}
 		}
 		data, _ := json.MarshalIndent(rows, "", "  ")
 		return &mcp.ReadResourceResult{
@@ -801,7 +841,7 @@ func formatProjects(projects []ProjectInfo) string {
 	for _, p := range projects {
 		src := p.SourceType
 		if p.GitURL != "" {
-			src = fmt.Sprintf("%s (%s)", p.SourceType, p.GitURL)
+			src = fmt.Sprintf("%s (%s)", p.SourceType, gitmeta.RedactURL(p.GitURL))
 		}
 		fmt.Fprintf(&b, "- %s  [%s]  status=%s  model=%s\n", p.Name, src, p.Status, p.Model)
 	}

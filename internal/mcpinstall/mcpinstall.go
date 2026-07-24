@@ -163,6 +163,18 @@ func (o Options) resolve() (Client, string, error) {
 	return c, p, nil
 }
 
+// ConfigPath resolves the config file path for a client (or o.FilePath when
+// set), without rendering a snippet or touching the filesystem. Used by
+// `semidx doctor` to report whether each client's config already has a semidx
+// entry.
+func ConfigPath(o Options) (string, error) {
+	_, p, err := o.resolve()
+	if err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
 // Snippet returns the config file path and the config text a user would add for
 // the client (used for the dry-run print).
 func Snippet(o Options) (path, snippet string, err error) {

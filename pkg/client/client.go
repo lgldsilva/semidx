@@ -26,6 +26,9 @@ type Client struct {
 	tenant    string
 	workspace string
 	http      *http.Client
+	// ClientSource is sent as X-Semidx-Client (cli|mcp|sdk|admin) so the server
+	// can attribute search usage analytics. Empty → header omitted.
+	ClientSource string
 }
 
 // Option customizes a Client.
@@ -43,6 +46,15 @@ func WithTenant(slug string) Option { return func(c *Client) { c.tenant = string
 func WithWorkspace(slug string) Option {
 	return func(c *Client) { c.workspace = strings.TrimSpace(slug) }
 }
+
+// WithClientSource sets the X-Semidx-Client header value (cli|mcp|sdk|admin).
+func WithClientSource(src string) Option {
+	return func(c *Client) { c.ClientSource = src }
+}
+
+// HeaderClientSource is the HTTP header remote clients send so the server can
+// attribute search usage to cli vs mcp vs sdk vs admin.
+const HeaderClientSource = "X-Semidx-Client"
 
 // New returns a client for baseURL authenticating with token.
 func New(baseURL, token string, opts ...Option) *Client {
@@ -340,6 +352,61 @@ func (c *Client) CreateWorkspace(ctx context.Context, slug, name string) (*Works
 // Healthz reports whether the server is reachable.
 func (c *Client) Healthz(ctx context.Context) error {
 	return c.do(ctx, http.MethodGet, "/healthz", nil, nil)
+}
+
+// UsageReport is the JSON shape of GET /api/v1/search-usage — product-level
+// search analytics (counts by project/source/outcome), not tenant billing
+// quota (see UsageResponse/Usage for that).
+type UsageReport struct {
+	GeneratedAt string `json:"generated_at"`
+	SinceDays   int    `json:"since_days"`
+	Project     string `json:"project,omitempty"`
+	Summary     string `json:"summary"`
+	Total       int    `json:"total"`
+	ByProject   []struct {
+		Key   string `json:"key"`
+		Count int    `json:"count"`
+	} `json:"by_project"`
+	BySource []struct {
+		Key   string `json:"key"`
+		Count int    `json:"count"`
+	} `json:"by_source"`
+	ByOutcome []struct {
+		Key   string `json:"key"`
+		Count int    `json:"count"`
+	} `json:"by_outcome"`
+	Rates struct {
+		OK       float64 `json:"ok"`
+		Empty    float64 `json:"empty"`
+		Fallback float64 `json:"fallback"`
+		Error    float64 `json:"error"`
+		MCP      float64 `json:"mcp"`
+		CLI      float64 `json:"cli"`
+	} `json:"rates"`
+	Findings []struct {
+		Kind     string `json:"kind"`
+		Severity string `json:"severity"`
+		Message  string `json:"message"`
+	} `json:"findings"`
+	BlindSpots []string `json:"blind_spots"`
+}
+
+// SearchUsage fetches the product search-usage analytics report from the
+// server (GET /api/v1/search-usage). Not to be confused with Usage, which
+// returns the active tenant's billing quota/counters.
+func (c *Client) SearchUsage(ctx context.Context, days int, project string) (*UsageReport, error) {
+	if days <= 0 {
+		days = 30
+	}
+	path := "/api/v1/search-usage?days=" + strconv.Itoa(days)
+	if project != "" {
+		path += "&project=" + url.QueryEscape(project)
+	}
+	var out UsageReport
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // SearchParams carries the optional knobs for Client.Search. Grouping them in a
@@ -736,6 +803,9 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	if c.workspace != "" {
 		req.Header.Set("X-Semidx-Workspace", c.workspace)
 	}
+	if c.ClientSource != "" {
+		req.Header.Set(HeaderClientSource, c.ClientSource)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -783,6 +853,9 @@ func (c *Client) doResponse(ctx context.Context, method, path string, body any) 
 	}
 	if c.workspace != "" {
 		req.Header.Set("X-Semidx-Workspace", c.workspace)
+	}
+	if c.ClientSource != "" {
+		req.Header.Set(HeaderClientSource, c.ClientSource)
 	}
 	return c.http.Do(req)
 }

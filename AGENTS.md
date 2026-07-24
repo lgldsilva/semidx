@@ -232,7 +232,7 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ## Docs
 
 `docs/architecture.md` · `docs/requirements.md` (product requirements) ·
-`docs/api.md` · `docs/self-hosting.md` ·
+`docs/api.md` · `docs/self-hosting.md` · `docs/usage.md` (usage analytics + doctor) ·
 `docs/design-decisions.md` (ADRs) ·
 `docs/research/large-scale-semantic-code-search.md` (scale research + roadmap) ·
 `docs/install.md` (install matrix and CI/private-host setup) ·

@@ -99,6 +99,13 @@ func (d *deps) apiClient() *client.Client {
 	return client.New(d.client.ServerURL, d.client.Token, client.WithTenant(d.client.Tenant), client.WithWorkspace(d.client.Workspace))
 }
 
+// searchAPI is apiClient tagged as CLI for usage attribution.
+func (d *deps) searchAPI() *client.Client {
+	c := d.apiClient()
+	c.ClientSource = "cli"
+	return c
+}
+
 // withRootFlags returns a PersistentPreRunE that resolves the config profile
 // and backend mode before calling setup. Flag values are read via pointers so
 // cobra's flag binding is visible at run time (passing bools by value at
@@ -253,6 +260,7 @@ func registerCommandGroups(root *cobra.Command, d *deps) {
 		newCallersCmd(d),
 		newExplainCmd(d),
 		newBenchCmd(d),
+		newUsageCmd(d),
 	)
 	addGroup("setup",
 		newConfigCmd(d),
@@ -262,6 +270,7 @@ func registerCommandGroups(root *cobra.Command, d *deps) {
 		newLogoutCmd(),
 		newModelsCmd(d),
 		newInitCmd(d),
+		newDoctorCmd(d),
 	)
 	addGroup("advanced",
 		newServeCmd(d),

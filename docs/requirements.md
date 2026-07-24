@@ -216,6 +216,8 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-OPS-07 | CI builds SPA and embeds dist (no hand-committed stale assets as sole path) | **done** | CI test job builds SPA before Go gates |
 | REQ-OPS-08 | CI runs on `main` pushes (Sonar Community main-only gate) | **todo** | Known Gitea trigger issue |
 | REQ-OPS-09 | Reliable integration tests without container-per-test flakes | **done** | Package-scoped pgvector container in `internal/store/store_test.go` |
+| REQ-OPS-10 | Product usage analytics (search counts by project/source/outcome) | **done** | `usage_events` + `semidx usage` / `GET /api/v1/search-usage` / admin Usage / MCP `semantic_usage`; no query text by default |
+| REQ-OPS-11 | Install/doctor inventory for MCP + skills | **done** | `semidx doctor`; skills managed marker |
 
 ### 3.10 Workspace agent — conversational + tools
 

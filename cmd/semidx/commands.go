@@ -27,6 +27,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/secretbox"
 	"github.com/lgldsilva/semidx/internal/server"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/usage"
 )
 
 // systemDirs must never be indexed (runaway scan / disk blow-up guard).
@@ -858,13 +859,19 @@ func runMCPServer(ctx context.Context, d *deps, allowedTools []string) error {
 		opts.DefaultProject = d.client.DefaultProject
 	}
 	if d.remote() {
-		return mcpserver.RunWithOptions(ctx, mcpserver.NewClientBackend(d.apiClient()), opts)
+		cli := d.apiClient()
+		return mcpserver.RunWithOptions(ctx, mcpserver.WithRemoteUsage(mcpserver.NewClientBackend(cli), cli), opts)
 	}
 	db, err := d.indexStore(ctx)
 	if err != nil {
 		return err
 	}
 	svc := search.NewService(db, d.emb)
+	if uw, ok := db.(usage.StoreWriter); ok {
+		logQueries := os.Getenv("SEMIDX_USAGE_LOG_QUERIES") == "1" ||
+			strings.EqualFold(os.Getenv("SEMIDX_USAGE_LOG_QUERIES"), "true")
+		svc.WithUsage(&usage.StoreRecorder{Store: uw, LogQueries: logQueries})
+	}
 
 	var sel config.ChatLLM
 	chatOK := false
@@ -877,6 +884,9 @@ func runMCPServer(ctx context.Context, d *deps, allowedTools []string) error {
 		caps.Flags |= agent.CapChatLLM | agent.CapToolCalling
 	}
 	backend := mcpserver.NewLocalBackend(svc, db, d.keywordOnly, caps)
+	if us, ok := db.(store.UsageStore); ok {
+		backend = mcpserver.WithUsage(backend, us)
+	}
 	if chatOK {
 		backend = wrapMCPServerWithAgent(ctx, d, db, svc, sel, backend)
 	}

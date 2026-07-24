@@ -25,6 +25,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/secretbox"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/usage"
 	"github.com/lgldsilva/semidx/internal/webadmin"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
@@ -42,6 +43,7 @@ type Server struct {
 	reg             *prometheus.Registry
 	reqs            *prometheus.CounterVec
 	searchDuration  *prometheus.HistogramVec
+	searchTotal     *prometheus.CounterVec
 	requestDuration *prometheus.HistogramVec
 	activeRequests  *prometheus.GaugeVec
 	jobsQueued      prometheus.Gauge
@@ -109,6 +111,11 @@ func New(st store.Store, emb embed.Embedder, log *slog.Logger) *Server {
 		Buckets: prometheus.DefBuckets,
 	}, []string{"project"})
 	reg.MustRegister(searchDuration)
+	searchTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "semidx_search_total",
+		Help: "Search attempts by project, client source, and outcome.",
+	}, []string{"project", "source", "outcome"})
+	reg.MustRegister(searchTotal)
 
 	requestDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "semidx_http_request_duration_seconds",
@@ -176,6 +183,9 @@ func New(st store.Store, emb embed.Embedder, log *slog.Logger) *Server {
 	emb = embed.Instrument(emb, &embedObserver{dur: embedDuration, inputs: embedInputs})
 
 	svc := search.NewService(st, emb)
+	logQueries := strings.EqualFold(strings.TrimSpace(os.Getenv("SEMIDX_USAGE_LOG_QUERIES")), "true") ||
+		os.Getenv("SEMIDX_USAGE_LOG_QUERIES") == "1"
+	svc.WithUsage(&usage.StoreRecorder{Store: st, LogQueries: logQueries})
 	// Optional top-K reranker (REQ-SRCH-11), off unless SEMIDX_RERANK_WEIGHT is a
 	// value in (0,1]. Kept env-gated so the default search path is unchanged.
 	if r := rerankerFromEnv(log); r != nil {
@@ -190,6 +200,7 @@ func New(st store.Store, emb embed.Embedder, log *slog.Logger) *Server {
 		reg:             reg,
 		reqs:            reqs,
 		searchDuration:  searchDuration,
+		searchTotal:     searchTotal,
 		requestDuration: requestDuration,
 		activeRequests:  activeRequests,
 		jobsQueued:      jobsQueued,
@@ -280,6 +291,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/workspaces", s.authed("read", s.handleListWorkspaces))
 	mux.Handle("POST /api/v1/workspaces", s.authed("admin", s.handleCreateWorkspace))
 	mux.Handle("GET /api/v1/usage", s.authed("read", s.handleTenantUsage))
+	mux.Handle("GET /api/v1/search-usage", s.authed("read", s.handleSearchUsage))
 
 	mux.Handle("POST /api/v1/projects", s.limited(1<<20, s.authed("write", s.handleCreateProject)))
 	mux.Handle("GET /api/v1/projects", s.authed("read", s.handleListProjects))
@@ -371,13 +383,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	body.GraphDepth = search.ClampGraphDepth(body.GraphDepth)
 
+	src := usage.ParseSource(r.Header.Get(client.HeaderClientSource))
+	ctx := usage.WithSource(r.Context(), src)
 	start := time.Now()
-	resp, err := s.search.Search(r.Context(), search.Request{
+	resp, err := s.search.Search(ctx, search.Request{
 		Project: project, Query: body.Query, Model: body.Model, TopK: body.TopK,
 		KeywordOnly: body.Keyword, Graph: body.Graph, GraphMaxDepth: body.GraphDepth,
 	})
 	if err != nil {
 		s.log.Warn("search failed", "project", project, "err", err)
+		s.searchTotal.WithLabelValues(project, string(src), string(usage.OutcomeError)).Inc()
 		if errors.Is(err, store.ErrNotFound) {
 			writeJSONError(w, http.StatusNotFound, "project not found")
 			return
@@ -388,6 +403,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "search failed")
 		return
 	}
+
+	outcome := usage.Classify(len(resp.Results), resp.Fallback, resp.Keyword)
+	s.searchTotal.WithLabelValues(project, string(src), string(outcome)).Inc()
 
 	out := client.SearchResponse{
 		Project:      resp.Project.Name,
@@ -531,6 +549,32 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	s.searchDuration.WithLabelValues("*").Observe(time.Since(start).Seconds())
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleSearchUsage serves the product-level search analytics report (counts
+// by project/source/outcome, findings, blind spots) at GET /api/v1/search-usage.
+// Not to be confused with handleTenantUsage (GET /api/v1/usage), which reports
+// billing quota/counters for the active tenant.
+func (s *Server) handleSearchUsage(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if raw := r.URL.Query().Get("days"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 || n > 365 {
+			writeJSONError(w, http.StatusBadRequest, "days must be 1..365")
+			return
+		}
+		days = n
+	}
+	project := strings.TrimSpace(r.URL.Query().Get("project"))
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	agg, err := s.store.UsageAggregate(r.Context(), since, project, 10)
+	if err != nil {
+		s.log.Warn("usage aggregate failed", "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "usage query failed")
+		return
+	}
+	report := usage.BuildReport(agg, usage.Params{SinceDays: days, TopLimit: 10, Project: project}, time.Now().UTC())
+	writeJSON(w, http.StatusOK, report)
 }
 
 // instrument wraps the mux to count requests by method and status, track

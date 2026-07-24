@@ -169,6 +169,21 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
     PRIMARY KEY (input_hash, model)
 );
 CREATE INDEX IF NOT EXISTS idx_embedding_cache_lookup ON embedding_cache(input_hash, model);
+CREATE TABLE IF NOT EXISTS usage_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL DEFAULT (datetime('now')),
+    project     TEXT NOT NULL DEFAULT '',
+    source      TEXT NOT NULL DEFAULT 'unknown',
+    outcome     TEXT NOT NULL DEFAULT 'ok',
+    hit_count   INTEGER NOT NULL DEFAULT 0,
+    latency_ms  INTEGER NOT NULL DEFAULT 0,
+    keyword     INTEGER NOT NULL DEFAULT 0,
+    graph       INTEGER NOT NULL DEFAULT 0,
+    query_hash  TEXT NOT NULL DEFAULT '',
+    query_text  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_usage_events_ts ON usage_events(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_events_project_ts ON usage_events(project, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);

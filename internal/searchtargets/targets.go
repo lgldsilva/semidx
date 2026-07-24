@@ -6,12 +6,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/projectref"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/usage"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
@@ -105,6 +107,12 @@ func ResolveRemoteProject(ctx context.Context, lister ProjectLister, ref string)
 // SearchLocal runs a query against each resolved local target.
 func SearchLocal(ctx context.Context, db store.IndexStore, emb embed.Embedder, targets []*store.Project, req search.Request, cwdGit gitmeta.Info) ([]NamedResult, error) {
 	svc := search.NewService(db, emb)
+	if uw, ok := db.(usage.StoreWriter); ok {
+		logQueries := os.Getenv("SEMIDX_USAGE_LOG_QUERIES") == "1" ||
+			strings.EqualFold(os.Getenv("SEMIDX_USAGE_LOG_QUERIES"), "true")
+		svc.WithUsage(&usage.StoreRecorder{Store: uw, LogQueries: logQueries})
+	}
+	ctx = usage.WithSource(ctx, usage.SourceCLI)
 	out := make([]NamedResult, 0, len(targets))
 	for _, p := range targets {
 		one := req
