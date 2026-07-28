@@ -169,6 +169,46 @@ func TestSearchVectorPath(t *testing.T) {
 	}
 }
 
+func TestSearchVectorOnlySkipsKeywordAndRouting(t *testing.T) {
+	st := &fakeStore{
+		project:    &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		simResults: []store.SearchResult{{FilePath: "auth.go", Score: 0.9}},
+		kwResults:  []store.SearchResult{{FilePath: "wrong.go", Score: 1}},
+	}
+	svc := NewService(st, &fakeEmbedder{vec: []float32{1, 2, 3}, dims: 3})
+	resp, err := svc.Search(context.Background(), Request{
+		Project: "p", Query: "VerifyPassword", TopK: 7, VectorOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.usedKW {
+		t.Fatal("vector-only search used the keyword retriever")
+	}
+	if st.gotTopK != 7 {
+		t.Fatalf("vector-only topK = %d, want 7 without hybrid candidate expansion", st.gotTopK)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].FilePath != "auth.go" {
+		t.Fatalf("vector-only results = %+v", resp.Results)
+	}
+}
+
+func TestSearchVectorOnlyDoesNotFallback(t *testing.T) {
+	st := &fakeStore{
+		project:   &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		kwResults: []store.SearchResult{{FilePath: "wrong.go", Score: 1}},
+	}
+	svc := NewService(st, &fakeEmbedder{embedErr: errors.New("offline"), dims: 3})
+	if _, err := svc.Search(context.Background(), Request{
+		Project: "p", Query: "natural language behavior", VectorOnly: true,
+	}); err == nil {
+		t.Fatal("vector-only search should fail when embeddings are unavailable")
+	}
+	if st.usedKW {
+		t.Fatal("vector-only search silently fell back to keyword")
+	}
+}
+
 func TestSearchKeywordFallback(t *testing.T) {
 	st := &fakeStore{
 		project:   &store.Project{ID: 1, Name: "p", Model: "bge-m3"},

@@ -17,6 +17,26 @@ type memIndex struct {
 	listErr  error
 }
 
+type directLookupIndex struct {
+	store.IndexStore
+	project store.Project
+}
+
+func (d *directLookupIndex) ListProjects(context.Context, int, int) ([]store.Project, error) {
+	return nil, nil
+}
+
+func (d *directLookupIndex) GetProject(_ context.Context, name string) (*store.Project, error) {
+	if name == d.project.Name {
+		return &d.project, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+func (d *directLookupIndex) GetProjectByIdentity(context.Context, string) (*store.Project, error) {
+	return nil, store.ErrNotFound
+}
+
 func (m *memIndex) ListProjects(context.Context, int, int) ([]store.Project, error) {
 	if m.listErr != nil {
 		return nil, m.listErr
@@ -100,6 +120,67 @@ func TestResolveByPathIdentityKey(t *testing.T) {
 	}
 }
 
+func TestResolveExplicitPathWinsForSameBasenameProjects(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "one", "app")
+	second := filepath.Join(root, "two", "app")
+	for _, dir := range []string{first, second} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db := &memIndex{projects: []store.Project{
+		{ID: 1, Name: "app", Identity: "path:" + first, Path: first},
+		{ID: 2, Name: "app", Identity: "path:" + second, Path: second},
+	}}
+	project, err := Resolve(context.Background(), db, second)
+	if err != nil || project.ID != 2 {
+		t.Fatalf("Resolve(second path) = %+v, %v; want project 2", project, err)
+	}
+}
+
+func TestResolveTreatsSymlinkAndRealPathAsEquivalent(t *testing.T) {
+	root := t.TempDir()
+	realPath := filepath.Join(root, "real")
+	if err := os.Mkdir(realPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasPath := filepath.Join(root, "alias")
+	if err := os.Symlink(realPath, aliasPath); err != nil {
+		t.Skipf("create symlink: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		indexedPath string
+		ref         string
+	}{
+		{name: "indexed alias queried by real path", indexedPath: aliasPath, ref: realPath},
+		{name: "indexed real path queried by alias", indexedPath: realPath, ref: aliasPath},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := &memIndex{projects: []store.Project{{
+				ID: 1, Name: "docs", Identity: "path:" + tt.indexedPath, Path: tt.indexedPath,
+			}}}
+			project, err := Resolve(context.Background(), db, tt.ref)
+			if err != nil || project == nil || project.ID != 1 {
+				t.Fatalf("Resolve(%q) = %+v, %v; want equivalent indexed path %q", tt.ref, project, err, tt.indexedPath)
+			}
+		})
+	}
+}
+
+func TestResolveRejectsAmbiguousProjectName(t *testing.T) {
+	db := &memIndex{projects: []store.Project{
+		{ID: 1, Name: "app", Identity: "path:/one/app", Path: "/one/app"},
+		{ID: 2, Name: "app", Identity: "path:/two/app", Path: "/two/app"},
+	}}
+	if _, err := Resolve(context.Background(), db, "app"); err == nil {
+		t.Fatal("ambiguous project name should not select the first project")
+	}
+}
+
 func TestResolveInListByPathIdentityKey(t *testing.T) {
 	dir := t.TempDir()
 	abs, err := filepath.Abs(dir)
@@ -127,9 +208,7 @@ func TestResolveInListEmptyRef(t *testing.T) {
 }
 
 func TestResolveExactNameViaGetProject(t *testing.T) {
-	db := &memIndex{projects: []store.Project{
-		{ID: 1, Name: "alpha", Path: "/tmp/alpha"},
-	}}
+	db := &directLookupIndex{project: store.Project{ID: 1, Name: "alpha", Path: "/tmp/alpha"}}
 	p, err := Resolve(context.Background(), db, "alpha")
 	if err != nil || p == nil || p.Name != "alpha" {
 		t.Fatalf("Resolve(alpha) = %+v, %v", p, err)
@@ -157,6 +236,24 @@ func TestEnclosingPicksLongestPrefix(t *testing.T) {
 	}
 	if p := Enclosing(sub, projects); p == nil || p.Name != "root" {
 		t.Fatalf("Enclosing = %+v, want root", p)
+	}
+}
+
+func TestEnclosingTreatsSymlinkAndRealPathAsEquivalent(t *testing.T) {
+	root := t.TempDir()
+	realPath := filepath.Join(root, "real")
+	child := filepath.Join(realPath, "pkg")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasPath := filepath.Join(root, "alias")
+	if err := os.Symlink(realPath, aliasPath); err != nil {
+		t.Skipf("create symlink: %v", err)
+	}
+
+	projects := []store.Project{{ID: 1, Name: "root", Path: aliasPath}}
+	if project := Enclosing(child, projects); project == nil || project.ID != 1 {
+		t.Fatalf("Enclosing(%q) = %+v; want project indexed through %q", child, project, aliasPath)
 	}
 }
 

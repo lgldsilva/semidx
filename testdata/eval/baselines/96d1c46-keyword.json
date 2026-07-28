@@ -1,0 +1,530 @@
+{
+  "version": 2,
+  "metadata": {
+    "commit": "96d1c4626818448fd765837756d575858dce8f8f",
+    "dataset_sha256": "02672122fdbeab34520e70ea59564e0937bff03e29bb643dd73e686abb139361",
+    "backend": "sqlite",
+    "model": "bge-m3",
+    "dimensions": 1,
+    "project": "corpus",
+    "project_identity": "remote:github.com/lgldsilva/semidx",
+    "worktree": "/private/tmp/semidx-corpus.TeF7fX/corpus",
+    "index_fingerprint": "ef1253727c31afbdce31a454c0ae317b59e2fca4ea6e220bfea55a8e950350c9",
+    "mode": "keyword",
+    "environment": "darwin/arm64 go1.26.5",
+    "seed": 42,
+    "runs": 5
+  },
+  "total_queries": 50,
+  "failed_queries": 0,
+  "fallback_queries": 0,
+  "ndcg_at_10": 0.0582670055910855,
+  "mrr": 0.03816666666666666,
+  "precision_at_5": 0.021,
+  "recall_at_10": 0.12,
+  "latency_p50_ms": 28.013,
+  "latency_p95_ms": 32.831209,
+  "latency_p99_ms": 36.881,
+  "queries": [
+    {
+      "id": "behavior-embedding-fallback",
+      "query": "where does semantic search fall back to keyword when embedding fails",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "behavior-hybrid-fusion",
+      "query": "how are vector and keyword candidates fused with reciprocal rank",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "behavior-sensitive-local-routing",
+      "query": "route sensitive files to local embeddings based on privacy rules",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "behavior-sqlite-wal",
+      "query": "configure the local SQLite index for WAL and serialized writers",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 1
+    },
+    {
+      "id": "behavior-incremental-index",
+      "query": "skip unchanged files using hashes during incremental indexing",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 1
+    },
+    {
+      "id": "behavior-project-reference",
+      "query": "resolve a project reference by path identity before display name",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "behavior-http-client-search",
+      "query": "send an authenticated semantic search request through the public Go client",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 1
+    },
+    {
+      "id": "behavior-local-mcp-search",
+      "query": "execute semantic_search through the standalone MCP backend",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "behavior-password-hash",
+      "query": "hash and verify administrative passwords securely",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 1
+    },
+    {
+      "id": "behavior-git-identity",
+      "query": "derive a stable repository identity from git metadata and remotes",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "behavior-stale-hit",
+      "query": "mark search hits stale by comparing current file content hashes",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "behavior-extractor-registry",
+      "query": "select a document extractor from the pluggable registry by extension",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 1
+    },
+    {
+      "id": "behavior-dependency-catalog",
+      "query": "normalize dependency declarations from supported package manifests",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 1
+    },
+    {
+      "id": "behavior-push-files",
+      "query": "push local project files to a remote semidx server for indexing",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "behavior-config-precedence",
+      "query": "load configuration with environment taking precedence over cwd and user files",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "symbol-candidate-top-k",
+      "query": "candidateTopK",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 0,
+      "relevant_total": 1
+    },
+    {
+      "id": "symbol-classify-query",
+      "query": "ClassifyQuery",
+      "ndcg_at_10": 0.38685280723454163,
+      "mrr": 0.2,
+      "precision_at_5": 0.2,
+      "recall_at_10": 1,
+      "results_found": 10,
+      "relevant_total": 1
+    },
+    {
+      "id": "symbol-hash-query",
+      "query": "HashQuery",
+      "ndcg_at_10": 0.6309297535714574,
+      "mrr": 0.5,
+      "precision_at_5": 0.25,
+      "recall_at_10": 1,
+      "results_found": 4,
+      "relevant_total": 1
+    },
+    {
+      "id": "symbol-resolve-remote-project",
+      "query": "ResolveRemoteProject",
+      "ndcg_at_10": 0.43067655807339306,
+      "mrr": 0.25,
+      "precision_at_5": 0.2,
+      "recall_at_10": 1,
+      "results_found": 9,
+      "relevant_total": 1
+    },
+    {
+      "id": "symbol-chain-embedder",
+      "query": "ChainEmbedder",
+      "ndcg_at_10": 0.33396140710342537,
+      "mrr": 0.125,
+      "precision_at_5": 0,
+      "recall_at_10": 1,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "symbol-new-pg-store",
+      "query": "NewPgStore",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 8,
+      "relevant_total": 1
+    },
+    {
+      "id": "symbol-localstore-new",
+      "query": "SQLiteStore New local index",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 1
+    },
+    {
+      "id": "symbol-clamp-graph-depth",
+      "query": "ClampGraphDepth",
+      "ndcg_at_10": 0.5,
+      "mrr": 0.3333333333333333,
+      "precision_at_5": 0.2,
+      "recall_at_10": 1,
+      "results_found": 7,
+      "relevant_total": 1
+    },
+    {
+      "id": "symbol-analyzer-symbols",
+      "query": "analyzer Symbols",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 1
+    },
+    {
+      "id": "symbol-active-backend",
+      "query": "activeBackend",
+      "ndcg_at_10": 0.6309297535714574,
+      "mrr": 0.5,
+      "precision_at_5": 0.2,
+      "recall_at_10": 1,
+      "results_found": 6,
+      "relevant_total": 1
+    },
+    {
+      "id": "flow-cli-to-search-service",
+      "query": "flow from the search CLI through project target resolution into the search service",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 3
+    },
+    {
+      "id": "flow-index-command",
+      "query": "flow from semidx index command setup to per-file indexing and project finalization",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "flow-mcp-install",
+      "query": "flow that installs and verifies MCP configuration for agent clients",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "flow-web-admin-api",
+      "query": "web admin request routing from the HTTP server into SPA API handlers",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 3
+    },
+    {
+      "id": "flow-dependency-resolution",
+      "query": "resolve declared dependencies using native tools and return normalized results",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 3
+    },
+    {
+      "id": "flow-jwt-authentication",
+      "query": "authenticate an API request by validating a JWT control token",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "flow-graph-expansion",
+      "query": "expand initial semantic search hits through dependency graph neighbors",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "flow-remote-push",
+      "query": "remote push flow from filesystem traversal to authenticated upload request",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "flow-configuration-loading",
+      "query": "configuration loading flow across environment cwd dotenv and user configuration",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 3
+    },
+    {
+      "id": "flow-react-search-page",
+      "query": "React search page flow from form submission through API response rendering",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 3
+    },
+    {
+      "id": "docs-system-architecture",
+      "query": "client server and standalone architecture with storage backend precedence",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "docs-http-api",
+      "query": "HTTP API authentication endpoints and request response examples",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "docs-self-hosting",
+      "query": "self host semidx with Docker Compose Postgres and Watchtower",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 3
+    },
+    {
+      "id": "docs-usage-analytics",
+      "query": "usage analytics privacy retention and doctor diagnostics",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "docs-agentics-harness",
+      "query": "how to run keyword and standalone MCP integration harness variations",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "ambiguous-cache",
+      "query": "cache invalidation",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "ambiguous-config",
+      "query": "config file",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "ambiguous-project-status",
+      "query": "project status",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "ambiguous-search-page",
+      "query": "search page",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 1
+    },
+    {
+      "id": "ambiguous-graph",
+      "query": "graph",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "resolution-explicit-path",
+      "query": "explicit filesystem path resolves to project identity before name",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 1
+    },
+    {
+      "id": "resolution-current-worktree",
+      "query": "scope local search to the current git worktree checkout",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "resolution-remote-identity",
+      "query": "resolve remote server project by immutable identity instead of name",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "resolution-same-basename",
+      "query": "distinguish two indexed folders that have the same basename",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    },
+    {
+      "id": "resolution-no-project",
+      "query": "choose enclosing project or search all projects when no project argument is supplied",
+      "ndcg_at_10": 0,
+      "mrr": 0,
+      "precision_at_5": 0,
+      "recall_at_10": 0,
+      "results_found": 10,
+      "relevant_total": 2
+    }
+  ]
+}
