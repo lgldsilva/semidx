@@ -36,7 +36,7 @@ const (
 	defaultOpenRouterURL       = "https://openrouter.ai/api/v1"
 	defaultOllamaCloudURL      = "https://ollama.com/v1"
 	defaultIndexWorkers        = 4
-	defaultEmbedBatchSize      = 8
+	defaultEmbedBatchSize      = 32
 	defaultMaxFileSize         = 1024 * 1024 // 1MB
 	defaultMaxChunksPerFile    = 32
 	defaultMaxChunksPerProject = 0 // 0 = unlimited

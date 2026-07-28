@@ -40,8 +40,9 @@ import (
 )
 
 const (
-	logEvery            = 10
-	defaultIndexWorkers = 4
+	logEvery              = 10
+	defaultIndexWorkers   = 4
+	defaultEmbedBatchSize = 32
 )
 
 // Indexer indexes a project into an IndexStore using an Embedder.
@@ -146,7 +147,7 @@ func NewIndexer(db store.IndexStore, emb embed.Embedder, dims int, opts IndexerO
 		opts.Workers = defaultIndexWorkers
 	}
 	if opts.EmbedBatchSize < 1 {
-		opts.EmbedBatchSize = 8
+		opts.EmbedBatchSize = defaultEmbedBatchSize
 	}
 	if opts.MaxFileSize < 1 {
 		opts.MaxFileSize = 1024 * 1024

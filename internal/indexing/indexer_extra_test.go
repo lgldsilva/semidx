@@ -70,8 +70,8 @@ func TestNewIndexerDefaultsWorkers(t *testing.T) {
 	if idx.workers != defaultIndexWorkers {
 		t.Errorf("workers = %d, want default %d", idx.workers, defaultIndexWorkers)
 	}
-	if idx.embedBatchSize != 8 {
-		t.Errorf("embedBatchSize = %d, want 8", idx.embedBatchSize)
+	if idx.embedBatchSize != 32 {
+		t.Errorf("embedBatchSize = %d, want 32", idx.embedBatchSize)
 	}
 	if idx.maxFileSize != 1024*1024 {
 		t.Errorf("maxFileSize = %d, want %d", idx.maxFileSize, 1024*1024)
