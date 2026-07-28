@@ -150,3 +150,22 @@ jobs:
         run: |
           trivy filesystem --exit-code 1 --severity CRITICAL,HIGH \
             --ignore-unfixed --quiet .
+
+  dispatch-release:
+    name: dispatch release
+    needs: [test, lint, secretscan, vulncheck, gosec, trivy]
+    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch autotag for the tested commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TESTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh workflow run autotag.yml \
+            --ref main \
+            --field "tested_sha=$TESTED_SHA"
+          echo "dispatched autotag.yml for $TESTED_SHA"

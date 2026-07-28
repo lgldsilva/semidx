@@ -3,14 +3,15 @@
 # explicitly dispatches release.yml on that tag.
 name: autotag
 
-# workflow_run keeps publishing behind the complete main CI gate. The manual
-# trigger remains the recovery path for a missed/failed automatic run.
+# The final main-only job in ci.yml dispatches this workflow after every gate
+# succeeds. A direct manual dispatch remains the recovery path.
 on:
-  workflow_run:
-    workflows: ["ci"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      tested_sha:
+        description: Main commit that passed CI (empty for manual recovery)
+        required: false
+        type: string
 
 permissions:
   actions: write
@@ -25,11 +26,7 @@ env:
 
 jobs:
   autotag:
-    if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main')
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,7 +41,7 @@ jobs:
       - name: Confirm the tested commit is current main
         id: freshness
         env:
-          TESTED_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          TESTED_SHA: ${{ inputs.tested_sha || github.sha }}
         run: |
           set -euo pipefail
           current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
@@ -72,7 +69,7 @@ jobs:
         if: steps.svu.outputs.current != steps.svu.outputs.next
         env:
           RELEASE_TAG: ${{ steps.svu.outputs.next }}
-          TESTED_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          TESTED_SHA: ${{ inputs.tested_sha || github.sha }}
         run: |
           set -euo pipefail
           current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
