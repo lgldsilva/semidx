@@ -20,6 +20,8 @@ import (
 	"github.com/ledongthuc/pdf"
 	"github.com/xuri/excelize/v2"
 	"golang.org/x/net/html"
+	"golang.org/x/text/encoding/htmlindex"
+	"golang.org/x/text/transform"
 )
 
 // ErrUnsupported is returned by Extract for a file whose extension it does not
@@ -157,12 +159,41 @@ func Supported(name string) bool {
 
 // passthrough returns already-textual formats (.txt, .md, .markdown) as-is,
 // rejecting content that is not valid UTF-8 so binary blobs mislabelled with a
-// text extension do not pollute the index.
+// text extension do not pollute the index. When the content is not valid UTF-8,
+// it attempts to detect common single-byte encodings (Latin-1, Windows-1252)
+// and convert to UTF-8 before giving up.
 func passthrough(data []byte) (string, error) {
-	if !utf8.Valid(data) {
+	if utf8.Valid(data) {
+		return string(data), nil
+	}
+	// A file that is not valid UTF-8 and contains NUL bytes is almost certainly
+	// a binary format (like UTF-16 or a mislabelled binary blob), not a legacy
+	// single-byte text encoding.
+	if bytes.IndexByte(data, 0) >= 0 {
 		return "", ErrNotText
 	}
-	return string(data), nil
+	// Attempt to decode as common single-byte encodings that look like
+	// garbled UTF-8. We try Windows-1252 (superset of Latin-1 and the most
+	// common legacy encoding for Western-European text) first.
+	for _, name := range []string{"windows-1252", "iso-8859-1"} {
+		enc, err := htmlindex.Get(name)
+		if err != nil {
+			continue
+		}
+		decoded, err := io.ReadAll(transform.NewReader(bytes.NewReader(data), enc.NewDecoder()))
+		if err != nil {
+			continue
+		}
+		// If the decoder had to insert replacement characters, it means the
+		// byte sequence was invalid for this encoding.
+		if bytes.ContainsRune(decoded, utf8.RuneError) {
+			continue
+		}
+		if utf8.Valid(decoded) {
+			return string(decoded), nil
+		}
+	}
+	return "", ErrNotText
 }
 
 // extractHTML strips tags to readable text, dropping <script>/<style> bodies and

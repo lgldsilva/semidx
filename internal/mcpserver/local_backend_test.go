@@ -159,8 +159,10 @@ func TestLocalBackendWorktreesBranchesStatus(t *testing.T) {
 	if len(worktrees) == 0 {
 		t.Fatal("expected at least one worktree")
 	}
-	if worktrees[0].Path != repoDir {
-		t.Errorf("worktree path = %q, want %q", worktrees[0].Path, repoDir)
+	wtPath, _ := filepath.EvalSymlinks(worktrees[0].Path)
+	expectedPath, _ := filepath.EvalSymlinks(repoDir)
+	if wtPath != expectedPath {
+		t.Errorf("worktree path = %q (eval %q), want %q (eval %q)", worktrees[0].Path, wtPath, repoDir, expectedPath)
 	}
 
 	// Branches — should have main and feature-x.

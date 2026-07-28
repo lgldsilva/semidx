@@ -42,6 +42,9 @@ func (s *Service) HybridSearch(ctx context.Context, projectID int, query string,
 
 // hybridFuse merges vector and keyword ranked lists (caller supplies the query vector).
 func (s *Service) hybridFuse(ctx context.Context, projectID int, query string, vec []float32, dims, topK int, worktree string) ([]store.SearchResult, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	type result struct {
 		results []store.SearchResult
 		err     error
