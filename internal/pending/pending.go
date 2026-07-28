@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/lgldsilva/semidx/internal/xdg"
 )
 
 // Registry is the per-project pending set.
@@ -22,7 +24,7 @@ type Registry struct {
 }
 
 func dir() (string, error) {
-	c, err := os.UserConfigDir()
+	c, err := xdg.ConfigDir()
 	if err != nil {
 		return "", err
 	}

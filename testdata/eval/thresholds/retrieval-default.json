@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "max_ndcg_at_10_drop": 0.01,
+  "max_mrr_drop": 0.01,
+  "max_precision_at_5_drop": 0.01,
+  "max_recall_at_10_drop": 0.01,
+  "max_failed_queries_increase": 0,
+  "max_fallback_queries_increase": 0,
+  "max_latency_p95_increase_ms": 50
+}

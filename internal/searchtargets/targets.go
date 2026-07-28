@@ -4,6 +4,7 @@ package searchtargets
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -41,7 +42,10 @@ func ResolveProjects(ctx context.Context, db store.IndexStore, projectArg, cwd s
 	if projectArg != "" {
 		p, err := projectref.Resolve(ctx, db, projectArg)
 		if err != nil {
-			return nil, fmt.Errorf("project not found: %s (index it, or pass a path/name that exists)", projectArg)
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, fmt.Errorf("project not found: %s (index it, or pass a path/name that exists)", projectArg)
+			}
+			return nil, fmt.Errorf("resolve project %q: %w", projectArg, err)
 		}
 		return []*store.Project{p}, nil
 	}
@@ -99,7 +103,10 @@ func ResolveRemoteProject(ctx context.Context, lister ProjectLister, ref string)
 	}
 	p, err := projectref.ResolveInList(ctx, ref, "", FromClientProjects(projects))
 	if err != nil {
-		return nil, fmt.Errorf("project not found: %s (index it, or pass a path/name that exists)", ref)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("project not found: %s (index it, or pass a path/name that exists)", ref)
+		}
+		return nil, fmt.Errorf("resolve remote project %q: %w", ref, err)
 	}
 	return p, nil
 }

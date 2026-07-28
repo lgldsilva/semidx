@@ -1,0 +1,59 @@
+{
+  "version": 2,
+  "queries": [
+    {
+      "id": "fixture-password-verification",
+      "query": "where is password verification handled",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "testdata/graphrag-fixture/auth/auth.go", "grade": 3}
+      ],
+      "negative_files": ["README.md"]
+    },
+    {
+      "id": "fixture-jwt-middleware",
+      "query": "JWT token validation middleware",
+      "intent": "flow",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "testdata/graphrag-fixture/jwt/jwt.go", "grade": 3},
+        {"file": "testdata/graphrag-fixture/gateway/gateway.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "server-bootstrap-token",
+      "query": "bootstrap admin token generation",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/server/server.go", "grade": 3},
+        {"file": "cmd/semidx/commands.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "hybrid-search-fusion",
+      "query": "semantic search hybrid RRF fusion",
+      "intent": "symbol",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/search/hybrid.go", "grade": 3},
+        {"file": "internal/search/routing.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "postgres-integration-harness",
+      "query": "testcontainers shared postgres integration test",
+      "intent": "testing",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/store/store_test.go", "grade": 3}
+      ]
+    }
+  ]
+}

@@ -248,6 +248,16 @@ func TestResolveRemoteProjectNotFound(t *testing.T) {
 	}
 }
 
+func TestResolveRemoteProjectRejectsAmbiguousName(t *testing.T) {
+	l := &fakeLister{projects: []client.Project{
+		{Name: "app", Identity: "git:one/app"},
+		{Name: "app", Identity: "git:two/app"},
+	}}
+	if _, err := ResolveRemoteProject(context.Background(), l, "app"); err == nil {
+		t.Fatal("ambiguous remote project name should not select the first project")
+	}
+}
+
 func TestSearchLocalUsesProjectNameWhenNoIdentity(t *testing.T) {
 	db := &memDB{projects: []store.Project{{Name: "legacy", Model: "bge-m3"}}}
 	out, err := SearchLocal(context.Background(), db, stubEmbed{}, []*store.Project{&db.projects[0]},

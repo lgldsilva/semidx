@@ -55,6 +55,9 @@ type Request struct {
 	// KeywordOnly forces keyword search with no embedding (used when the index
 	// was built without a model). It is not a fallback, so Fallback stays false.
 	KeywordOnly bool
+	// VectorOnly forces the embedding/vector retriever without keyword routing,
+	// keyword fusion, or fallback. It is intended for controlled evaluation.
+	VectorOnly bool
 	// Worktree, when set, restricts results to the file versions that worktree
 	// currently has checked out (git projects indexed from multiple worktrees).
 	Worktree string
@@ -147,6 +150,9 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		// exists for keyword-only-indexed projects and 500s ("relation chunks_1
 		// does not exist") on a project indexed with embeddings.
 		resp, err = s.searchKeywordOnly(ctx, project.ID, req, project.Dims, worktree, resp)
+	} else if req.VectorOnly {
+		span.SetAttributes(attribute.String("query_type", QueryNaturalLanguage.String()))
+		resp, err = s.searchVectorOnly(ctx, project.ID, req, model, dims, worktree, resp)
 	} else if qt := ClassifyQuery(req.Query); RoutesToKeyword(qt) {
 		kwQuery := KeywordQueryForRouting(req.Query, qt)
 		span.SetAttributes(attribute.String("query_type", qt.String()))
@@ -172,6 +178,19 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 
 	outcome := usage.Classify(len(resp.Results), resp.Fallback, resp.Keyword)
 	s.recordUsage(ctx, req, project.Name, outcome, len(resp.Results), start)
+	return resp, nil
+}
+
+func (s *Service) searchVectorOnly(ctx context.Context, projectID int, req Request, model string, dims int, worktree string, resp *Response) (*Response, error) {
+	vec, err := s.emb.EmbedSingle(ctx, model, req.Query)
+	if err != nil {
+		return nil, fmt.Errorf("vector-only embedding: %w", err)
+	}
+	results, err := s.vectorSearch(ctx, projectID, vec, dims, req.TopK, worktree)
+	if err != nil {
+		return nil, err
+	}
+	resp.Results = results
 	return resp, nil
 }
 

@@ -1,0 +1,553 @@
+{
+  "version": 2,
+  "queries": [
+    {
+      "id": "behavior-embedding-fallback",
+      "query": "where does semantic search fall back to keyword when embedding fails",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/search/service.go", "grade": 3, "symbols": ["searchSemantic"]},
+        {"file": "internal/search/hybrid.go", "grade": 1}
+      ]
+    },
+    {
+      "id": "behavior-hybrid-fusion",
+      "query": "how are vector and keyword candidates fused with reciprocal rank",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/search/hybrid.go", "grade": 3, "symbols": ["rerankRRF", "hybridFuse"]},
+        {"file": "internal/search/service.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "behavior-sensitive-local-routing",
+      "query": "route sensitive files to local embeddings based on privacy rules",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/privacy/privacy.go", "grade": 3},
+        {"file": "internal/embed/chain.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "behavior-sqlite-wal",
+      "query": "configure the local SQLite index for WAL and serialized writers",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/localstore/localstore.go", "grade": 3}
+      ]
+    },
+    {
+      "id": "behavior-incremental-index",
+      "query": "skip unchanged files using hashes during incremental indexing",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/indexing/indexer.go", "grade": 3}
+      ]
+    },
+    {
+      "id": "behavior-project-reference",
+      "query": "resolve a project reference by path identity before display name",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/projectref/resolve.go", "grade": 3},
+        {"file": "internal/searchtargets/targets.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "behavior-http-client-search",
+      "query": "send an authenticated semantic search request through the public Go client",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "pkg/client/client.go", "grade": 3}
+      ]
+    },
+    {
+      "id": "behavior-local-mcp-search",
+      "query": "execute semantic_search through the standalone MCP backend",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/mcpserver/local.go", "grade": 3},
+        {"file": "internal/mcpserver/mcpserver.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "behavior-password-hash",
+      "query": "hash and verify administrative passwords securely",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/passwd/passwd.go", "grade": 3}
+      ]
+    },
+    {
+      "id": "behavior-git-identity",
+      "query": "derive a stable repository identity from git metadata and remotes",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/gitmeta/gitmeta.go", "grade": 3},
+        {"file": "internal/gitmeta/redact.go", "grade": 1}
+      ]
+    },
+    {
+      "id": "behavior-stale-hit",
+      "query": "mark search hits stale by comparing current file content hashes",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/search/staleness.go", "grade": 3},
+        {"file": "internal/search/service.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "behavior-extractor-registry",
+      "query": "select a document extractor from the pluggable registry by extension",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/extract/registry.go", "grade": 3}
+      ]
+    },
+    {
+      "id": "behavior-dependency-catalog",
+      "query": "normalize dependency declarations from supported package manifests",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/depcatalog/catalog.go", "grade": 3}
+      ]
+    },
+    {
+      "id": "behavior-push-files",
+      "query": "push local project files to a remote semidx server for indexing",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "cmd/semidx/push.go", "grade": 3},
+        {"file": "pkg/client/client.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "behavior-config-precedence",
+      "query": "load configuration with environment taking precedence over cwd and user files",
+      "intent": "behavior",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/config/config.go", "grade": 3},
+        {"file": "internal/xdg/xdg.go", "grade": 2}
+      ]
+    },
+
+    {
+      "id": "symbol-candidate-top-k",
+      "query": "candidateTopK",
+      "intent": "symbol",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/search/hybrid.go", "grade": 3, "symbols": ["candidateTopK"]}
+      ]
+    },
+    {
+      "id": "symbol-classify-query",
+      "query": "ClassifyQuery",
+      "intent": "symbol",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/search/routing.go", "grade": 3, "symbols": ["ClassifyQuery"]}
+      ]
+    },
+    {
+      "id": "symbol-hash-query",
+      "query": "HashQuery",
+      "intent": "symbol",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/usage/usage.go", "grade": 3, "symbols": ["HashQuery"]}
+      ]
+    },
+    {
+      "id": "symbol-resolve-remote-project",
+      "query": "ResolveRemoteProject",
+      "intent": "symbol",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/searchtargets/targets.go", "grade": 3, "symbols": ["ResolveRemoteProject"]}
+      ]
+    },
+    {
+      "id": "symbol-chain-embedder",
+      "query": "ChainEmbedder",
+      "intent": "symbol",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/embed/embed.go", "grade": 3, "symbols": ["ChainEmbedder"]},
+        {"file": "internal/embed/chain.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "symbol-new-pg-store",
+      "query": "NewPgStore",
+      "intent": "symbol",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/store/store.go", "grade": 3, "symbols": ["NewPgStore"]}
+      ]
+    },
+    {
+      "id": "symbol-localstore-new",
+      "query": "SQLiteStore New local index",
+      "intent": "symbol",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/localstore/localstore.go", "grade": 3, "symbols": ["New", "SQLiteStore"]}
+      ]
+    },
+    {
+      "id": "symbol-clamp-graph-depth",
+      "query": "ClampGraphDepth",
+      "intent": "symbol",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/search/limits.go", "grade": 3, "symbols": ["ClampGraphDepth"]}
+      ]
+    },
+    {
+      "id": "symbol-analyzer-symbols",
+      "query": "analyzer Symbols",
+      "intent": "symbol",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/analyzer/analyzer.go", "grade": 3, "symbols": ["Symbols"]}
+      ]
+    },
+    {
+      "id": "symbol-active-backend",
+      "query": "activeBackend",
+      "intent": "symbol",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "cmd/semidx/config.go", "grade": 3, "symbols": ["activeBackend"]}
+      ]
+    },
+
+    {
+      "id": "flow-cli-to-search-service",
+      "query": "flow from the search CLI through project target resolution into the search service",
+      "intent": "flow",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "cmd/semidx/searchtargets.go", "grade": 3},
+        {"file": "internal/searchtargets/targets.go", "grade": 3},
+        {"file": "internal/search/service.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "flow-index-command",
+      "query": "flow from semidx index command setup to per-file indexing and project finalization",
+      "intent": "flow",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "cmd/semidx/commands.go", "grade": 3},
+        {"file": "internal/indexing/indexer.go", "grade": 3}
+      ]
+    },
+    {
+      "id": "flow-mcp-install",
+      "query": "flow that installs and verifies MCP configuration for agent clients",
+      "intent": "flow",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/mcpinstall/mcpinstall.go", "grade": 3},
+        {"file": "cmd/semidx/commands.go", "grade": 1}
+      ]
+    },
+    {
+      "id": "flow-web-admin-api",
+      "query": "web admin request routing from the HTTP server into SPA API handlers",
+      "intent": "flow",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/webadmin/webadmin.go", "grade": 3},
+        {"file": "internal/webadmin/spa_api.go", "grade": 3},
+        {"file": "internal/server/server.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "flow-dependency-resolution",
+      "query": "resolve declared dependencies using native tools and return normalized results",
+      "intent": "flow",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/depresolve/resolve.go", "grade": 3},
+        {"file": "internal/depcatalog/catalog.go", "grade": 2},
+        {"file": "cmd/semidx/dependencies.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "flow-jwt-authentication",
+      "query": "authenticate an API request by validating a JWT control token",
+      "intent": "flow",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/jwtauth/jwtauth.go", "grade": 3},
+        {"file": "internal/server/server.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "flow-graph-expansion",
+      "query": "expand initial semantic search hits through dependency graph neighbors",
+      "intent": "flow",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/search/service.go", "grade": 3, "symbols": ["applyGraphExpansion", "expandByGraph"]},
+        {"file": "internal/search/limits.go", "grade": 1}
+      ]
+    },
+    {
+      "id": "flow-remote-push",
+      "query": "remote push flow from filesystem traversal to authenticated upload request",
+      "intent": "flow",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "cmd/semidx/push.go", "grade": 3},
+        {"file": "pkg/client/client.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "flow-configuration-loading",
+      "query": "configuration loading flow across environment cwd dotenv and user configuration",
+      "intent": "flow",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/config/config.go", "grade": 3},
+        {"file": "internal/xdg/xdg.go", "grade": 2},
+        {"file": "cmd/semidx/deps_setup.go", "grade": 1}
+      ]
+    },
+    {
+      "id": "flow-react-search-page",
+      "query": "React search page flow from form submission through API response rendering",
+      "intent": "flow",
+      "language": "typescript",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "web/src/pages/SearchPage.tsx", "grade": 3},
+        {"file": "web/src/api.ts", "grade": 2},
+        {"file": "web/src/components/Snippet.tsx", "grade": 1}
+      ]
+    },
+
+    {
+      "id": "docs-system-architecture",
+      "query": "client server and standalone architecture with storage backend precedence",
+      "intent": "documentation",
+      "language": "markdown",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "docs/architecture.md", "grade": 3},
+        {"file": "README.md", "grade": 1}
+      ]
+    },
+    {
+      "id": "docs-http-api",
+      "query": "HTTP API authentication endpoints and request response examples",
+      "intent": "documentation",
+      "language": "markdown",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "docs/api.md", "grade": 3},
+        {"file": "docs/openapi.yaml", "grade": 2}
+      ]
+    },
+    {
+      "id": "docs-self-hosting",
+      "query": "self host semidx with Docker Compose Postgres and Watchtower",
+      "intent": "documentation",
+      "language": "markdown",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "docs/self-hosting.md", "grade": 3},
+        {"file": "deploy/docker-compose.yml", "grade": 2},
+        {"file": "deploy/docker-compose.pull.yml", "grade": 1}
+      ]
+    },
+    {
+      "id": "docs-usage-analytics",
+      "query": "usage analytics privacy retention and doctor diagnostics",
+      "intent": "documentation",
+      "language": "markdown",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "docs/usage.md", "grade": 3},
+        {"file": "cmd/semidx/usage.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "docs-agentics-harness",
+      "query": "how to run keyword and standalone MCP integration harness variations",
+      "intent": "documentation",
+      "language": "markdown",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "deploy/agentics-test/README.md", "grade": 3},
+        {"file": "deploy/agentics-test/run.sh", "grade": 2}
+      ]
+    },
+
+    {
+      "id": "ambiguous-cache",
+      "query": "cache invalidation",
+      "intent": "ambiguous",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/search/cache.go", "grade": 3},
+        {"file": "internal/embed/circuit.go", "grade": 1}
+      ],
+      "negative_files": ["deploy/agentics-test/testdata/fixture/cache/cache.go"]
+    },
+    {
+      "id": "ambiguous-config",
+      "query": "config file",
+      "intent": "ambiguous",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/config/config.go", "grade": 3},
+        {"file": "internal/clientconfig/clientconfig.go", "grade": 2}
+      ],
+      "negative_files": ["web/vite.config.ts"]
+    },
+    {
+      "id": "ambiguous-project-status",
+      "query": "project status",
+      "intent": "ambiguous",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/store/store.go", "grade": 3},
+        {"file": "web/src/pages/ProjectsPage.tsx", "grade": 1}
+      ]
+    },
+    {
+      "id": "ambiguous-search-page",
+      "query": "search page",
+      "intent": "ambiguous",
+      "language": "typescript",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "web/src/pages/SearchPage.tsx", "grade": 3}
+      ],
+      "negative_files": ["cmd/semidx/bench.go"]
+    },
+    {
+      "id": "ambiguous-graph",
+      "query": "graph",
+      "intent": "ambiguous",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/graph/graph.go", "grade": 3},
+        {"file": "internal/mcpserver/graph.go", "grade": 2}
+      ],
+      "negative_files": ["web/src/features/project/DependencyGraphView.tsx"]
+    },
+
+    {
+      "id": "resolution-explicit-path",
+      "query": "explicit filesystem path resolves to project identity before name",
+      "intent": "project-resolution",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/projectref/resolve.go", "grade": 3}
+      ]
+    },
+    {
+      "id": "resolution-current-worktree",
+      "query": "scope local search to the current git worktree checkout",
+      "intent": "project-resolution",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/searchtargets/targets.go", "grade": 3},
+        {"file": "internal/gitmeta/gitmeta.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "resolution-remote-identity",
+      "query": "resolve remote server project by immutable identity instead of name",
+      "intent": "project-resolution",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/searchtargets/targets.go", "grade": 3},
+        {"file": "internal/projectref/resolve.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "resolution-same-basename",
+      "query": "distinguish two indexed folders that have the same basename",
+      "intent": "project-resolution",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/projectref/resolve.go", "grade": 3},
+        {"file": "internal/gitmeta/gitmeta.go", "grade": 2}
+      ]
+    },
+    {
+      "id": "resolution-no-project",
+      "query": "choose enclosing project or search all projects when no project argument is supplied",
+      "intent": "project-resolution",
+      "language": "go",
+      "project_ref": ".",
+      "relevant": [
+        {"file": "internal/searchtargets/targets.go", "grade": 3},
+        {"file": "internal/projectref/resolve.go", "grade": 2}
+      ]
+    }
+  ]
+}

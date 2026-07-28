@@ -51,6 +51,8 @@ type deps struct {
 	// search/status/mcp/push should talk to the configured server. Cleared by
 	// --local or --backend=local even if login credentials are still on disk.
 	useRemote bool
+	// vectorOnly is an evaluation-only retrieval override set by bench.
+	vectorOnly bool
 }
 
 // database opens (once) and returns the full PostgreSQL store, or the connection

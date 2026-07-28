@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 
@@ -30,6 +31,7 @@ type searchCall struct {
 	topK        int
 	privacy     bool
 	keywordOnly bool
+	vectorOnly  bool
 	graph       bool
 	graphDepth  int
 }
@@ -53,6 +55,7 @@ func (d *deps) runSearchTargets(cmd *cobra.Command, projectArg, query, model str
 		topK:        topK,
 		privacy:     privacy,
 		keywordOnly: d.keywordOnly,
+		vectorOnly:  d.vectorOnly,
 		graph:       graph,
 		graphDepth:  graphDepth,
 	}
@@ -69,6 +72,9 @@ func searchGraphOpts(cmd *cobra.Command) (graph bool, graphDepth int) {
 }
 
 func (d *deps) runRemoteSearch(ctx context.Context, call searchCall) ([]projSearch, error) {
+	if call.vectorOnly {
+		return nil, fmt.Errorf("vector-only benchmark is available in local or postgres mode; remote API does not expose an isolated vector retriever")
+	}
 	api := d.searchAPI()
 	p, err := searchtargets.ResolveRemoteProject(ctx, api, call.projectArg)
 	if err != nil {
@@ -100,7 +106,8 @@ func (d *deps) runLocalSearch(ctx context.Context, call searchCall) ([]projSearc
 	}
 	req := search.Request{
 		Query: call.query, Model: call.model, TopK: call.topK, KeywordOnly: d.keywordOnly,
-		Graph: call.graph, GraphMaxDepth: call.graphDepth,
+		VectorOnly: d.vectorOnly,
+		Graph:      call.graph, GraphMaxDepth: call.graphDepth,
 	}
 	results, err := searchtargets.SearchLocal(ctx, db, d.emb, targets, req, cwdGit)
 	if err != nil {

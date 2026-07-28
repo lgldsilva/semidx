@@ -5,6 +5,7 @@ package projectref
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,14 +23,21 @@ func Resolve(ctx context.Context, db store.IndexStore, ref string) (*store.Proje
 	if p := lookupByPathOrIdentity(ctx, db, ref); p != nil {
 		return p, nil
 	}
-	if p, err := db.GetProject(ctx, ref); err == nil && p != nil {
+	projects, err := db.ListProjects(ctx, 0, 0)
+	if err == nil && len(projects) > 0 {
+		return resolveInList(ref, "", projects)
+	}
+	// Some IndexStore adapters intentionally implement direct lookup without
+	// materializing a project list. Keep those adapters working while using the
+	// list whenever it is available, because only the list can detect ambiguous
+	// display names.
+	if p, getErr := db.GetProject(ctx, ref); getErr == nil {
 		return p, nil
 	}
-	projects, err := db.ListProjects(ctx, 0, 0)
 	if err != nil {
 		return nil, err
 	}
-	return resolveInList(ref, "", projects)
+	return nil, store.ErrNotFound
 }
 
 // ResolveInList resolves ref against a project list (remote API clients that
@@ -51,8 +59,8 @@ func lookupByPathOrIdentity(ctx context.Context, db store.IndexStore, arg string
 			return p
 		}
 	}
-	if abs, err := filepath.Abs(arg); err == nil {
-		if p, err := db.GetProjectByIdentity(ctx, "path:"+abs); err == nil {
+	for _, path := range equivalentPathForms(arg) {
+		if p, err := db.GetProjectByIdentity(ctx, "path:"+path); err == nil {
 			return p
 		}
 	}
@@ -65,8 +73,8 @@ func lookupInListByPathOrIdentity(ctx context.Context, arg string, projects []st
 			return p
 		}
 	}
-	if abs, err := filepath.Abs(arg); err == nil {
-		if p := findByIdentity(projects, "path:"+abs); p != nil {
+	for _, path := range equivalentPathForms(arg) {
+		if p := findByIdentity(projects, "path:"+path); p != nil {
 			return p
 		}
 	}
@@ -74,8 +82,8 @@ func lookupInListByPathOrIdentity(ctx context.Context, arg string, projects []st
 }
 
 func resolveInList(ref, cwd string, projects []store.Project) (*store.Project, error) {
-	if p := findByName(ref, projects); p != nil {
-		return p, nil
+	if p, err := findByName(ref, projects); p != nil || err != nil {
+		return p, err
 	}
 	if p := findByIdentity(projects, ref); p != nil {
 		return p, nil
@@ -91,23 +99,35 @@ func resolveInList(ref, cwd string, projects []store.Project) (*store.Project, e
 	return nil, store.ErrNotFound
 }
 
-func findByName(ref string, projects []store.Project) *store.Project {
+func findByName(ref string, projects []store.Project) (*store.Project, error) {
+	var match *store.Project
+	var identities []string
 	for i := range projects {
 		if projects[i].Name == ref || strings.EqualFold(projects[i].Name, ref) {
-			return &projects[i]
+			if match == nil {
+				match = &projects[i]
+			}
+			identity := projects[i].Identity
+			if identity == "" {
+				identity = projects[i].Path
+			}
+			identities = append(identities, identity)
 		}
 	}
-	return nil
+	if len(identities) > 1 {
+		return nil, fmt.Errorf("ambiguous project name %q; use a path or identity (%s)", ref, strings.Join(identities, ", "))
+	}
+	return match, nil
 }
 
 func findByIndexedPath(ref string, projects []store.Project) *store.Project {
-	abs, err := filepath.Abs(ref)
-	if err != nil {
+	refPath, ok := canonicalPath(ref)
+	if !ok {
 		return nil
 	}
 	for i := range projects {
-		pp, perr := filepath.Abs(projects[i].Path)
-		if perr == nil && pp == abs {
+		projectPath, valid := canonicalPath(projects[i].Path)
+		if valid && projectPath == refPath {
 			return &projects[i]
 		}
 	}
@@ -128,21 +148,55 @@ func findByIdentity(projects []store.Project, identity string) *store.Project {
 
 // Enclosing returns the project whose indexed path is the longest prefix of cwd.
 func Enclosing(cwd string, projects []store.Project) *store.Project {
+	cwdPath, ok := canonicalPath(cwd)
+	if !ok {
+		return nil
+	}
 	var best *store.Project
 	bestLen := -1
 	for i := range projects {
-		pp, err := filepath.Abs(projects[i].Path)
-		if err != nil {
+		projectPath, valid := canonicalPath(projects[i].Path)
+		if !valid {
 			continue
 		}
-		if cwd == pp || strings.HasPrefix(cwd, pp+string(os.PathSeparator)) {
-			if len(pp) > bestLen {
-				bestLen = len(pp)
+		if cwdPath == projectPath || strings.HasPrefix(cwdPath, projectPath+string(os.PathSeparator)) {
+			if len(projectPath) > bestLen {
+				bestLen = len(projectPath)
 				best = &projects[i]
 			}
 		}
 	}
 	return best
+}
+
+// equivalentPathForms returns both the lexical absolute path and, when the
+// filesystem can resolve it, the symlink-canonical path. Keeping both forms
+// preserves identities already stored with aliases such as /tmp while allowing
+// lookups from their canonical form such as /private/tmp.
+func equivalentPathForms(path string) []string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil
+	}
+	abs = filepath.Clean(abs)
+	forms := []string{abs}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return forms
+	}
+	resolved = filepath.Clean(resolved)
+	if resolved != abs {
+		forms = append(forms, resolved)
+	}
+	return forms
+}
+
+func canonicalPath(path string) (string, bool) {
+	forms := equivalentPathForms(path)
+	if len(forms) == 0 {
+		return "", false
+	}
+	return forms[len(forms)-1], true
 }
 
 // UniqueByIdentity returns at most one project per non-empty identity so the
