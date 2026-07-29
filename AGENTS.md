@@ -176,9 +176,13 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 - **`release.yml` = publish**, on `v*` tags / dispatch: **GoReleaser** artifacts
   (linux/darwin/windows × amd64/arm64 tar.gz/zip + SHA-256) to a **GitHub
   Release**, plus Docker image to **ghcr.io/lgldsilva/semidx**.
-- **`autotag.yml`** is **manual-only** (`workflow_dispatch`) via
-  [`svu`](https://github.com/caarlos0/svu). Do not re-enable push-to-main
-  tagging until release publishing is stable — it flooded tags during cutover.
+- The final main-only job in **`ci.yml`** dispatches **`autotag.yml`** after all
+  gates pass, supplying the tested SHA (`workflow_dispatch` remains the manual
+  recovery path). Autotag verifies that SHA is still current, asks
+  [`svu`](https://github.com/caarlos0/svu) for the next semantic version, pushes
+  a tag only when a bump is warranted, then explicitly dispatches `release.yml`
+  on that tag. Explicit dispatches are required because events created with
+  `GITHUB_TOKEN` do not trigger another workflow automatically.
 - **Code scanning** uses GitHub's default CodeQL setup (not a workflow file) —
   do not re-add `.github/workflows/codeql.yml` while default setup is enabled
   (the two conflict and the advanced workflow fails every run).

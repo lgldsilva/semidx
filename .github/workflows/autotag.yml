@@ -1,34 +1,62 @@
 # Semantic versioning from Conventional Commits (svu).
-# Pushes a new v* tag on main when commits warrant a bump.
+# After main CI succeeds, pushes a new v* tag when commits warrant a bump and
+# explicitly dispatches release.yml on that tag.
 name: autotag
 
-# Autotag on every main push flooded tags/releases during the GitHub
-# migration (v0.41–v0.44 spam + failed goreleaser runs). Keep the workflow
-# for intentional bumps via Actions → Run workflow; cut release tags by hand
-# (or re-enable push after the cutover settles).
+# The final main-only job in ci.yml dispatches this workflow after every gate
+# succeeds. A direct manual dispatch remains the recovery path.
 on:
   workflow_dispatch:
+    inputs:
+      tested_sha:
+        description: Main commit that passed CI (empty for manual recovery)
+        required: false
+        type: string
 
 permissions:
+  actions: write
   contents: write
+
+concurrency:
+  group: autotag-main
+  cancel-in-progress: false
 
 env:
   GOTOOLCHAIN: go1.26.5
 
 jobs:
   autotag:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.5"
           cache: false
+      - name: Confirm the tested commit is current main
+        id: freshness
+        env:
+          TESTED_SHA: ${{ inputs.tested_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+          checked_out=$(git rev-parse HEAD)
+          if [ "$TESTED_SHA" = "$current_main" ] &&
+             [ "$checked_out" = "$current_main" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+            echo "tested commit is current main: $TESTED_SHA"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "skip stale run: tested=$TESTED_SHA checked_out=$checked_out current=$current_main"
+          fi
       - name: Compute next tag with svu
         id: svu
+        if: steps.freshness.outputs.current == 'true'
         run: |
           set -euo pipefail
           current=$(go run github.com/caarlos0/svu/v3@v3.2.3 current 2>/dev/null || echo "v0.0.0")
@@ -37,10 +65,31 @@ jobs:
           echo "next=$next" >> "$GITHUB_OUTPUT"
           echo "current=$current next=$next"
       - name: Push tag if new
+        id: tag
         if: steps.svu.outputs.current != steps.svu.outputs.next
+        env:
+          RELEASE_TAG: ${{ steps.svu.outputs.next }}
+          TESTED_SHA: ${{ inputs.tested_sha || github.sha }}
         run: |
           set -euo pipefail
+          current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+          checked_out=$(git rev-parse HEAD)
+          if [ "$TESTED_SHA" != "$current_main" ] ||
+             [ "$checked_out" != "$current_main" ]; then
+            echo "skip tag after main advanced: tested=$TESTED_SHA checked_out=$checked_out current=$current_main"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "${{ steps.svu.outputs.next }}"
-          git push origin "${{ steps.svu.outputs.next }}"
+          git tag "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+      - name: Dispatch release workflow
+        if: steps.tag.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.svu.outputs.next }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml --ref "$RELEASE_TAG"
+          echo "dispatched release.yml for $RELEASE_TAG"
