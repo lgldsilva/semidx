@@ -175,6 +175,7 @@ jobs:
         run: |
           set -euo pipefail
           gh workflow run autotag.yml \
+            --repo "$GITHUB_REPOSITORY" \
             --ref main \
             --field "tested_sha=$TESTED_SHA"
           echo "dispatched autotag.yml for $TESTED_SHA"
