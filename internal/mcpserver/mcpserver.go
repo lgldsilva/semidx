@@ -278,7 +278,7 @@ func NewWithOptions(b Backend, o Options) (*mcp.Server, error) {
 // errProjectRequired is returned when a project-taking tool is called with no
 // project argument and no configured default. Kept as a package-level string so
 // tests can assert on the exact wording agents see.
-const errProjectRequired = `project is required: pass "project", set default_project / SEMIDX_DEFAULT_PROJECT, or (standalone MCP) run from an indexed repo so cwd can resolve it. Call semantic_projects to list indexed names.`
+const errProjectRequired = `project is required: pass "project", set default_project / SEMIDX_DEFAULT_PROJECT, or (standalone MCP) run from an indexed repo so cwd can resolve it — call semantic_projects to list indexed names`
 
 // cwdProjectResolver is implemented by standalone backends that can resolve the
 // enclosing indexed project from the process working directory.
@@ -310,17 +310,6 @@ func resolveProject(reqProject, defaultProject string) string {
 	return defaultProject
 }
 
-// requireResolvedProject is resolveProject plus a hard fail on empty, so we
-// never call the HTTP API with project="" (which produces a 307→405 via the
-// reverse proxy collapsing //search into /projects/search).
-func requireResolvedProject(reqProject, defaultProject string) (string, error) {
-	p := resolveProject(reqProject, defaultProject)
-	if strings.TrimSpace(p) == "" {
-		return "", errors.New(errProjectRequired)
-	}
-	return p, nil
-}
-
 // resolveProjectForTool prefers explicit/default project, then standalone cwd
 // resolution when the backend supports it.
 func resolveProjectForTool(ctx context.Context, b Backend, reqProject, defaultProject string) (string, error) {
@@ -340,14 +329,10 @@ func resolveProjectForTool(ctx context.Context, b Backend, reqProject, defaultPr
 // projectToolDescription appends the configured default-project hint to a
 // project-taking tool's description, so agents know "project" may be omitted.
 func projectToolDescription(base, defaultProject string) string {
-	hint := base
-	switch {
-	case defaultProject != "":
-		hint = fmt.Sprintf("%s If \"project\" is omitted, the configured default project %q is used.", base, defaultProject)
-	default:
-		hint = base + ` If "project" is omitted in standalone mode, the indexed project enclosing the current working directory is used when available.`
+	if defaultProject != "" {
+		return fmt.Sprintf("%s If \"project\" is omitted, the configured default project %q is used.", base, defaultProject)
 	}
-	return hint
+	return base + ` If "project" is omitted in standalone mode, the indexed project enclosing the current working directory is used when available.`
 }
 
 // mustProjectInputSchema infers the JSON schema for In and, when
