@@ -467,11 +467,13 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 	if body.MaxPerFile <= 0 {
 		body.MaxPerFile = 2
 	}
+	src := usage.ParseSource(r.Header.Get(client.HeaderClientSource))
+	ctx := usage.WithSource(r.Context(), src)
 	start := time.Now()
 	var resp *search.MultiResponse
 	var err error
 	if body.All {
-		resp, err = s.search.SearchAllProjects(r.Context(), search.MultiScopeRequest{
+		resp, err = s.search.SearchAllProjects(ctx, search.MultiScopeRequest{
 			Query: body.Query, TopK: body.TopK, KeywordOnly: body.Keyword,
 			Graph: body.Graph, GraphMaxDepth: body.GraphDepth,
 			MaxPerFile: body.MaxPerFile, MaxPerProject: body.MaxPerProject,
@@ -484,9 +486,9 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 			if ref == "" {
 				continue
 			}
-			project, lookupErr := s.store.GetProject(r.Context(), ref)
+			project, lookupErr := s.store.GetProject(ctx, ref)
 			if errors.Is(lookupErr, store.ErrNotFound) {
-				project, lookupErr = s.store.GetProjectByIdentity(r.Context(), ref)
+				project, lookupErr = s.store.GetProjectByIdentity(ctx, ref)
 			}
 			if errors.Is(lookupErr, store.ErrNotFound) {
 				writeJSONError(w, http.StatusNotFound, "project not found")
@@ -508,7 +510,7 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 			if ref == "" {
 				continue
 			}
-			project, lookupErr := s.store.GetProjectByIdentity(r.Context(), ref)
+			project, lookupErr := s.store.GetProjectByIdentity(ctx, ref)
 			if errors.Is(lookupErr, store.ErrNotFound) {
 				writeJSONError(w, http.StatusNotFound, "project not found")
 				return
@@ -523,7 +525,7 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadRequest, "at least one project is required")
 			return
 		}
-		resp, err = s.search.SearchMulti(r.Context(), search.MultiScopeRequest{
+		resp, err = s.search.SearchMulti(ctx, search.MultiScopeRequest{
 			Identities: identities, Projects: projects, Query: body.Query,
 			TopK: body.TopK, KeywordOnly: body.Keyword, Graph: body.Graph,
 			GraphMaxDepth: body.GraphDepth, MaxPerFile: body.MaxPerFile,

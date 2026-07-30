@@ -104,15 +104,24 @@ verify_claude_native() {
   fi
 }
 
-# install_skill: verify `semidx skills install` writes the skill file.
+# install_skill: verify `semidx skills install` writes every bundled skill.
 install_skill() {
   local dir; dir="$(mktemp -d)"
-  if semidx skills install --dir "$dir" >/dev/null 2>&1 \
-    && [ -f "$dir/semantic-search/SKILL.md" ] \
-    && [ -f "$dir/workspace-agent/SKILL.md" ]; then
-    pass "semidx skills install wrote semantic-search and workspace-agent skills"
+  if ! semidx skills install --dir "$dir" >/dev/null 2>&1; then
+    fail "semidx skills install failed"
+    return
+  fi
+  local missing=0 name
+  for name in auto-index code-intel impact-before-refactor semantic-graph semantic-search workspace-agent; do
+    if [ ! -f "$dir/$name/SKILL.md" ]; then
+      missing=1
+      log "missing skill: $name"
+    fi
+  done
+  if [ "$missing" -eq 0 ]; then
+    pass "semidx skills install wrote all 6 bundled skills"
   else
-    fail "semidx skills install did not produce the skill files"
+    fail "semidx skills install did not produce all bundled skill files"
   fi
 }
 
@@ -139,6 +148,9 @@ install_all_clients() {
   install_json_client vscode         'c.servers.semidx.command && c.servers.semidx.args[0]==="mcp"'
   install_json_client opencode       'c.mcp.semidx.command.includes("mcp") && c.mcp.semidx.type==="local"'
   install_json_client crush          'c.mcp.semidx.type==="stdio" && c.mcp.semidx.args[0]==="mcp"'
+  install_json_client pi             "$mcpservers"
+  install_json_client kimi           "$mcpservers"
+  install_json_client mimo           'c.mcp.semidx.command.includes("mcp") && c.mcp.semidx.type==="local"'
   install_toml_client codex '\[mcp_servers.semidx\]'
   print_only_client cagent 'type: mcp'
   install_preserves_others cursor "$mcpservers"

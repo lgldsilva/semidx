@@ -56,6 +56,9 @@ type Aggregate struct {
 	BySource           []Count
 	ByOutcome          []Count
 	ProjectsWithEvents map[string]struct{}
+	// Latency percentiles over recorded latency_ms (0 when Total is 0).
+	LatencyP50MS float64
+	LatencyP95MS float64
 }
 
 // Count is one key→count row in an aggregate table.
@@ -79,17 +82,19 @@ func DefaultParams() Params {
 // Report mirrors ai-memory's telemetry report shape: summary, aggregates,
 // findings, and known blind spots.
 type Report struct {
-	GeneratedAt string    `json:"generated_at"`
-	SinceDays   int       `json:"since_days"`
-	Project     string    `json:"project,omitempty"`
-	Summary     string    `json:"summary"`
-	Total       int       `json:"total"`
-	ByProject   []Count   `json:"by_project"`
-	BySource    []Count   `json:"by_source"`
-	ByOutcome   []Count   `json:"by_outcome"`
-	Rates       Rates     `json:"rates"`
-	Findings    []Finding `json:"findings"`
-	BlindSpots  []string  `json:"blind_spots"`
+	GeneratedAt  string    `json:"generated_at"`
+	SinceDays    int       `json:"since_days"`
+	Project      string    `json:"project,omitempty"`
+	Summary      string    `json:"summary"`
+	Total        int       `json:"total"`
+	ByProject    []Count   `json:"by_project"`
+	BySource     []Count   `json:"by_source"`
+	ByOutcome    []Count   `json:"by_outcome"`
+	Rates        Rates     `json:"rates"`
+	LatencyP50MS float64   `json:"latency_p50_ms,omitempty"`
+	LatencyP95MS float64   `json:"latency_p95_ms,omitempty"`
+	Findings     []Finding `json:"findings"`
+	BlindSpots   []string  `json:"blind_spots"`
 }
 
 // Rates are outcome fractions over Total (0 when Total is 0).

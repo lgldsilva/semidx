@@ -7,6 +7,7 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/lgldsilva/semidx/internal/store"
@@ -165,6 +166,8 @@ func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 		Content    string  `json:"content"`
 		Confidence string  `json:"confidence,omitempty"`
 		Symbol     string  `json:"symbol,omitempty"`
+		Stale      bool    `json:"stale,omitempty"`
+		IndexedAt  string  `json:"indexed_at,omitempty"`
 	}
 	out := struct {
 		Project      string `json:"project"`
@@ -182,9 +185,14 @@ func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 		out.Project = resp.Project.Name
 	}
 	for _, r := range resp.Results {
+		indexedAt := ""
+		if !r.IndexedAt.IsZero() {
+			indexedAt = r.IndexedAt.UTC().Format(time.RFC3339)
+		}
 		out.Results = append(out.Results, row{
 			File: r.FilePath, Score: r.Score, Content: r.Content,
 			Confidence: r.Confidence, Symbol: r.Symbol,
+			Stale: r.Stale, IndexedAt: indexedAt,
 		})
 	}
 	enc := json.NewEncoder(w)

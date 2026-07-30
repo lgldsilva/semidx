@@ -8,6 +8,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/agent"
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/rag"
+	"github.com/lgldsilva/semidx/internal/usage"
 )
 
 // ragAsker is the Ask surface shared by rag.FantasyPipeline (and historically
@@ -34,6 +35,7 @@ func NewChatRAGBackend(b Backend, pipeline ragAsker) Backend {
 // sends the prompt to the chat LLM. topK is advisory — the pipeline uses its
 // own configured TopK (set at creation time).
 func (b *chatRAGBackend) Ask(ctx context.Context, project, question string, topK int) (*AskOutput, error) {
+	ctx = usage.WithSource(ctx, usage.SourceMCP)
 	// history is nil because the MCP tool is stateless (single-turn).
 	answer, err := b.pipeline.Ask(ctx, question, project, nil)
 	if err != nil {
@@ -84,6 +86,7 @@ type agenticAskBackend struct {
 // The agent has access to semantic_search, repo tools, etc. The MCP tool is
 // single-turn (no history), so tool memory lives only within this loop.
 func (b *agenticAskBackend) Ask(ctx context.Context, project, question string, _ int) (*AskOutput, error) {
+	ctx = usage.WithSource(ctx, usage.SourceMCP)
 	// Bind the turn to the project so semantic_search is scoped by contract —
 	// the prompt hint alone (below) is not a guarantee the model honors.
 	if project != "" {

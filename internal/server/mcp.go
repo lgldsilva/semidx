@@ -13,6 +13,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/mcpserver"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/usage"
 )
 
 // EnableMCPHTTP mounts the MCP server over Streamable HTTP at /mcp (default
@@ -39,6 +40,7 @@ func (s *Server) EnableMCPHTTP() {
 type serverBackend struct{ s *Server }
 
 func (b *serverBackend) Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*mcpserver.SearchOutput, error) {
+	ctx = usage.WithSource(ctx, usage.SourceMCP)
 	if graphDepth <= 0 {
 		graphDepth = search.DefaultGraphDepth
 	}

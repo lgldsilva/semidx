@@ -85,21 +85,25 @@ single command to ignore the login for that run.`,
 			d.client = cfg
 			d.useRemote = true
 			if err := d.apiClient().Healthz(cmd.Context()); err != nil {
-				return fmt.Errorf("cannot reach server at %s: %w", args[0], err)
+				return fmt.Errorf("cannot reach server at %s: %w\nHint: use a hostname covered by the TLS certificate (mismatched SAN fails MCP clients)", args[0], err)
 			}
 			if err := clientconfig.Save(cfg); err != nil {
 				return fmt.Errorf("save config: %w", err)
 			}
 			path, _ := clientconfig.Path()
 			fmt.Printf("Logged in to %s (saved to %s)\n", args[0], path)
+			if defaultProject != "" {
+				fmt.Printf("Default project for MCP/CLI search: %s\n", defaultProject)
+			}
 			fmt.Println("Search/status/mcp use this server. Index locally with `semidx --local index`, or push with `semidx push`.")
+			fmt.Println("Tip: `semidx skills install --all` installs auto-index so agents route intent searches here.")
 			return nil
 		},
 	}
 	c.Flags().StringVar(&token, "token", "", "API token (or set SEMIDX_TOKEN)")
 	c.Flags().StringVar(&tenantSlug, "tenant", "", "Tenant slug (also sent by SEMIDX_TENANT)")
 	c.Flags().StringVar(&workspaceSlug, "workspace", "", "Workspace slug (also sent by SEMIDX_WORKSPACE)")
-	c.Flags().StringVar(&defaultProject, "default-project", "", "Default project for search/sgrep")
+	c.Flags().StringVar(&defaultProject, "default-project", "", "Default project for search/sgrep/MCP when agents omit project")
 	return c
 }
 

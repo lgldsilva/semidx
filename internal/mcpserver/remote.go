@@ -18,8 +18,10 @@ import (
 type clientBackend struct{ c *client.Client }
 
 // NewClientBackend wraps a semidx API client as an MCP Backend (remote mode).
+// Always forces ClientSource=mcp so usage is never mis-attributed when the
+// underlying client was built for CLI/SDK traffic.
 func NewClientBackend(c *client.Client) Backend {
-	if c != nil && c.ClientSource == "" {
+	if c != nil {
 		c.ClientSource = string(usage.SourceMCP)
 	}
 	return &clientBackend{c: c}

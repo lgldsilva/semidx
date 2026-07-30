@@ -36,6 +36,9 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 	switch {
 	case d.remote():
 		fmt.Fprintf(&b, "- active: **remote** (`%s`)\n", d.client.ServerURL)
+		if host := d.client.ServerURL; strings.Contains(host, "raspberrypi.lan") || strings.Contains(host, ".lan/") {
+			fmt.Fprintf(&b, "- note: prefer a hostname covered by your TLS certificate (e.g. `*.internal…`) — mismatched SAN causes MCP TLS failures\n")
+		}
 	case d.localIndexPath != "":
 		fmt.Fprintf(&b, "- active: **local SQLite** (`%s`)\n", d.localIndexPath)
 	default:
@@ -56,6 +59,7 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 
 	fmt.Fprintf(&b, "## MCP clients\n\n")
 	var missingClaude bool
+	configuredMCP := map[string]bool{}
 	for _, c := range mcpinstall.Clients {
 		opts := mcpinstall.Options{Client: c.ID, Home: home, ConfigDir: cfgDir, Project: cwd, ExePath: bin}
 		path, err := mcpinstall.ConfigPath(opts)
@@ -66,6 +70,7 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 			if data, err := os.ReadFile(path); err == nil { // #nosec G304 -- path from known client locator
 				if strings.Contains(string(data), "semidx") {
 					state = "configured"
+					configuredMCP[c.ID] = true
 				} else {
 					state = "config exists (no semidx entry)"
 				}
@@ -86,16 +91,11 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 
 	fmt.Fprintf(&b, "## Skills\n\n")
 	names, err := skills.Names()
+	missingActivation := false
 	if err != nil {
 		fmt.Fprintf(&b, "- error listing embedded skills: %v\n\n", err)
 	} else {
-		roots := []string{
-			filepath.Join(home, ".claude", "skills"),
-			filepath.Join(home, ".agents", "skills"),
-			filepath.Join(home, ".cursor", "skills"),
-			filepath.Join(cwd, ".claude", "skills"),
-			filepath.Join(cwd, ".agents", "skills"),
-		}
+		roots := doctorSkillRoots(home, cfgDir, cwd)
 		for _, name := range names {
 			found := []string{}
 			for _, root := range roots {
@@ -106,6 +106,9 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 			}
 			if len(found) == 0 {
 				fmt.Fprintf(&b, "- `%s`: not installed\n", name)
+				if name == "auto-index" {
+					missingActivation = true
+				}
 			} else {
 				fmt.Fprintf(&b, "- `%s`: installed\n", name)
 				for _, p := range found {
@@ -120,9 +123,46 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 	if missingClaude {
 		fmt.Fprintf(&b, "- **claude-code MCP missing** — run `semidx mcp install --client claude-code --apply`\n")
 	}
+	if missingActivation {
+		fmt.Fprintf(&b, "- **auto-index skill missing** — agents will not auto-route to semantic search; run `semidx skills install --all`\n")
+	}
+	for id := range configuredMCP {
+		if t, ok := skillsTargetByID(id); ok && t.userLevel {
+			root := t.path(home, cfgDir)
+			if st, err := os.Stat(filepath.Join(root, "auto-index", "SKILL.md")); err != nil || st.IsDir() {
+				fmt.Fprintf(&b, "- **MCP `%s` configured but auto-index skill absent** — run `semidx skills install --target %s`\n", id, id)
+			}
+		}
+	}
 	fmt.Fprintf(&b, "- Search usage history: `semidx usage` (empty until searches are recorded)\n")
 	fmt.Fprintf(&b, "- Test/fixture projects named `semidx-*` may clutter `semantic_projects`; drop unused ones with `semidx drop`\n")
 	fmt.Fprintf(&b, "- GPU for embeddings is owned by Ollama (probe above); Postgres/pgvector search stays on CPU\n")
 	_, err = fmt.Fprint(cmd.OutOrStdout(), b.String())
 	return err
+}
+
+// doctorSkillRoots returns every skills install target path plus legacy
+// `.agents/skills` locations still scanned for completeness.
+func doctorSkillRoots(home, configDir, cwd string) []string {
+	seen := map[string]struct{}{}
+	var roots []string
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(cwd, p)
+		}
+		if _, ok := seen[p]; ok {
+			return
+		}
+		seen[p] = struct{}{}
+		roots = append(roots, p)
+	}
+	for _, t := range skillsTargets {
+		add(t.path(home, configDir))
+	}
+	add(filepath.Join(home, ".agents", "skills"))
+	add(filepath.Join(cwd, ".agents", "skills"))
+	return roots
 }

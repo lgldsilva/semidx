@@ -32,7 +32,7 @@ type diffInput struct {
 // registerCodeIntelTools registers the five code-intelligence MCP tools. They
 // are always registered; remote backends return an in-band "standalone only"
 // error from the Backend methods.
-func registerCodeIntelTools(s *mcp.Server, b Backend, allowed map[string]bool, defaultProject string) {
+func registerCodeIntelTools(s *mcp.Server, b Backend, allowed map[string]bool, defaultProject string, requireProject bool) {
 	if allowed[toolSemanticCallers] {
 		addProjectTool(s, &mcp.Tool{
 			Name: toolSemanticCallers,
@@ -40,7 +40,7 @@ func registerCodeIntelTools(s *mcp.Server, b Backend, allowed map[string]bool, d
 				"Find files that import/depend on the package containing the symbol at file:line (who calls this?). Prefer this over grep when planning a refactor or checking blast radius of a change — it uses the indexed dependency graph, not text search.",
 				defaultProject,
 			),
-		}, defaultProject, callersHandler(b, defaultProject))
+		}, requireProject, callersHandler(b, defaultProject))
 	}
 	if allowed[toolSemanticExplain] {
 		addProjectTool(s, &mcp.Tool{
@@ -49,7 +49,7 @@ func registerCodeIntelTools(s *mcp.Server, b Backend, allowed map[string]bool, d
 				"Explain a symbol at file:line: kind, location, dependencies, importers, and related tests. Use before editing an unfamiliar symbol to gather structural context faster than reading the whole package.",
 				defaultProject,
 			),
-		}, defaultProject, explainHandler(b, defaultProject))
+		}, requireProject, explainHandler(b, defaultProject))
 	}
 	if allowed[toolSemanticImpact] {
 		addProjectTool(s, &mcp.Tool{
@@ -58,7 +58,7 @@ func registerCodeIntelTools(s *mcp.Server, b Backend, allowed map[string]bool, d
 				"Compute the blast radius of changing the symbol at file:line — all files transitively affected via reverse imports, bounded by depth. Use before risky refactors to list every dependent file.",
 				defaultProject,
 			),
-		}, defaultProject, impactHandler(b, defaultProject))
+		}, requireProject, impactHandler(b, defaultProject))
 	}
 	if allowed[toolSemanticDeadCode] {
 		addProjectTool(s, &mcp.Tool{
@@ -67,7 +67,7 @@ func registerCodeIntelTools(s *mcp.Server, b Backend, allowed map[string]bool, d
 				"Find unused symbols in a project (packages with no importers). Use to clean dead code or audit public APIs that nothing references.",
 				defaultProject,
 			),
-		}, defaultProject, deadCodeHandler(b, defaultProject))
+		}, requireProject, deadCodeHandler(b, defaultProject))
 	}
 	if allowed[toolSemanticDiff] {
 		mcp.AddTool(s, &mcp.Tool{
@@ -82,7 +82,11 @@ func callersHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[fileLin
 		if err := requireFileLine(in.File, in.Line); err != nil {
 			return errorResult(err), nil, nil
 		}
-		out, err := b.Callers(ctx, resolveProject(in.Project, defaultProject), in.File, in.Line)
+		project, err := resolveProjectForTool(ctx, b, in.Project, defaultProject)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		out, err := b.Callers(ctx, project, in.File, in.Line)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
@@ -95,7 +99,11 @@ func explainHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[fileLin
 		if err := requireFileLine(in.File, in.Line); err != nil {
 			return errorResult(err), nil, nil
 		}
-		out, err := b.Explain(ctx, resolveProject(in.Project, defaultProject), in.File, in.Line)
+		project, err := resolveProjectForTool(ctx, b, in.Project, defaultProject)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		out, err := b.Explain(ctx, project, in.File, in.Line)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
@@ -108,7 +116,11 @@ func impactHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[fileLine
 		if err := requireFileLine(in.File, in.Line); err != nil {
 			return errorResult(err), nil, nil
 		}
-		out, err := b.Impact(ctx, resolveProject(in.Project, defaultProject), in.File, in.Line, in.Depth)
+		project, err := resolveProjectForTool(ctx, b, in.Project, defaultProject)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		out, err := b.Impact(ctx, project, in.File, in.Line, in.Depth)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
@@ -118,7 +130,11 @@ func impactHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[fileLine
 
 func deadCodeHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[deadCodeInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in deadCodeInput) (*mcp.CallToolResult, any, error) {
-		out, err := b.DeadCode(ctx, resolveProject(in.Project, defaultProject))
+		project, err := resolveProjectForTool(ctx, b, in.Project, defaultProject)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		out, err := b.DeadCode(ctx, project)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}

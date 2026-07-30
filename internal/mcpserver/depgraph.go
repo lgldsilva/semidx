@@ -54,7 +54,7 @@ type depPathInput struct {
 
 // registerDepGraphTools registers semantic_subgraph and semantic_path when the
 // backend (or one it wraps) implements DepGraphBackend.
-func registerDepGraphTools(s *mcp.Server, b Backend, allowed map[string]bool, explicit bool, defaultProject string) {
+func registerDepGraphTools(s *mcp.Server, b Backend, allowed map[string]bool, explicit bool, defaultProject string, requireProject bool) {
 	dg, ok := asDepGraphBackend(b)
 	if !ok {
 		if explicit {
@@ -69,7 +69,7 @@ func registerDepGraphTools(s *mcp.Server, b Backend, allowed map[string]bool, ex
 				"Return the file↔package dependency neighborhood around a file as nodes and edges (imports plus package membership). Use to see what a file structurally connects to; omit \"file\" for a hub sample of the project.",
 				defaultProject,
 			),
-		}, defaultProject, subgraphHandler(dg, defaultProject))
+		}, requireProject, subgraphHandler(dg, b, defaultProject))
 	}
 	if allowed[toolSemanticPath] {
 		addProjectTool(s, &mcp.Tool{
@@ -78,31 +78,31 @@ func registerDepGraphTools(s *mcp.Server, b Backend, allowed map[string]bool, ex
 				"Find how file A communicates with file B via the shortest dependency path (import edges plus package hops). Set undirected=true to allow reverse hops; the result then reports directed=false.",
 				defaultProject,
 			),
-		}, defaultProject, depPathHandler(dg, defaultProject))
+		}, requireProject, depPathHandler(dg, b, defaultProject))
 	}
 }
 
-func subgraphHandler(b DepGraphBackend, defaultProject string) mcp.ToolHandlerFor[subgraphInput, any] {
+func subgraphHandler(dg DepGraphBackend, b Backend, defaultProject string) mcp.ToolHandlerFor[subgraphInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in subgraphInput) (*mcp.CallToolResult, any, error) {
-		project, err := requireResolvedProject(in.Project, defaultProject)
+		project, err := resolveProjectForTool(ctx, b, in.Project, defaultProject)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		res, err := b.GraphSubgraph(ctx, project, in.File, in.Depth, in.Limit)
+		res, err := dg.GraphSubgraph(ctx, project, in.File, in.Depth, in.Limit)
 		return jsonToolResult(res, err)
 	}
 }
 
-func depPathHandler(b DepGraphBackend, defaultProject string) mcp.ToolHandlerFor[depPathInput, any] {
+func depPathHandler(dg DepGraphBackend, b Backend, defaultProject string) mcp.ToolHandlerFor[depPathInput, any] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in depPathInput) (*mcp.CallToolResult, any, error) {
-		project, err := requireResolvedProject(in.Project, defaultProject)
+		project, err := resolveProjectForTool(ctx, b, in.Project, defaultProject)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
 		if in.From == "" || in.To == "" {
 			return errorResult(fmt.Errorf("from and to are required")), nil, nil
 		}
-		res, err := b.GraphPath(ctx, project, in.From, in.To, in.MaxDepth, in.Undirected)
+		res, err := dg.GraphPath(ctx, project, in.From, in.To, in.MaxDepth, in.Undirected)
 		return jsonToolResult(res, err)
 	}
 }

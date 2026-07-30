@@ -9,6 +9,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/chat"
 	"github.com/lgldsilva/semidx/internal/rag"
+	"github.com/lgldsilva/semidx/internal/usage"
 )
 
 type chatMessageIn struct {
@@ -138,7 +139,8 @@ func (a *Admin) handleChatAsk(w http.ResponseWriter, r *http.Request, name strin
 		writeJSONErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ans, err := a.chat.Ask(r.Context(), body.Question, name, historyFrom(body.History), opts)
+	ctx := usage.WithSource(r.Context(), usage.SourceAdmin)
+	ans, err := a.chat.Ask(ctx, body.Question, name, historyFrom(body.History), opts)
 	if err != nil {
 		a.log.Error("chat ask failed", "err", err, "project", name)
 		writeJSONErr(w, http.StatusBadGateway, err.Error())
@@ -187,7 +189,8 @@ func (a *Admin) handleChatStream(w http.ResponseWriter, r *http.Request, name st
 		return
 	}
 
-	ch, sources, model, _, err := a.chat.StreamAsk(r.Context(), body.Question, name, historyFrom(body.History), opts)
+	ctx := usage.WithSource(r.Context(), usage.SourceAdmin)
+	ch, sources, model, _, err := a.chat.StreamAsk(ctx, body.Question, name, historyFrom(body.History), opts)
 	if err != nil {
 		a.log.Error("chat stream failed", "err", err, "project", name)
 		writeJSONErr(w, http.StatusBadGateway, err.Error())

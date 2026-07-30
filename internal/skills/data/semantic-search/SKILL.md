@@ -1,6 +1,11 @@
 ---
 name: semantic-search
-description: Use when searching a codebase by intent or behavior ("where do we validate tokens?", "how is retry handled?") rather than an exact string. Covers the semidx CLI (sgrep/search) and its MCP tools, when semantic search beats grep, and how to read scores and keyword fallback.
+description: >
+  Use for intent/behavior code search ("where do we validate tokens?", "how is
+  retry handled?") via semidx MCP semantic_search or CLI sgrep/search — not for
+  exact-string grep. Prefer this over ripgrep when the identifier is unknown.
+  If unsure the project is indexed, follow the auto-index skill first. Covers
+  scores, stale hits, and keyword fallback.
 ---
 
 # Semantic code search with semidx

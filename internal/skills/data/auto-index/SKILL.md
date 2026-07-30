@@ -1,6 +1,11 @@
 ---
 name: auto-index
-description: Automatically checks whether the current project is indexed by semidx and decides whether to use semantic search or grep fallback. Runs at session start, before major coding tasks, and whenever search results are inconclusive.
+description: >
+  MUST run at session start and before major coding/search tasks when semidx
+  MCP or CLI is available. Checks whether the current project is indexed,
+  triggers index when missing, and routes intent/behavior queries to
+  semantic_search (grep only for exact strings). Also use when search results
+  are inconclusive or the index may be stale.
 ---
 
 # Auto-index — smart search routing for AI agents
@@ -8,6 +13,10 @@ description: Automatically checks whether the current project is indexed by semi
 This skill teaches an AI agent to automatically detect whether the project
 it's working in is indexed by semidx, and to choose the best search strategy
 (semantic, grep, or both) for every query.
+
+**Activation rule:** at the start of a session in a code repo, call
+`semantic_status` (or `semidx status --project .`) before the first search.
+Do not wait for the user to ask for semantic search.
 
 ## New project flow (step by step)
 

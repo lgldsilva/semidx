@@ -77,7 +77,37 @@ func (s *PgStore) UsageAggregate(ctx context.Context, since time.Time, project s
 		return agg, err
 	}
 	agg.ByOutcome = byOutcome
+
+	p50, p95, err := s.usageLatencyPercentiles(ctx, since, project)
+	if err != nil {
+		return agg, err
+	}
+	agg.LatencyP50MS = p50
+	agg.LatencyP95MS = p95
 	return agg, nil
+}
+
+func (s *PgStore) usageLatencyPercentiles(ctx context.Context, since time.Time, project string) (p50, p95 float64, err error) {
+	var q string
+	var args []any
+	if project == "" {
+		q = `SELECT
+			COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms), 0),
+			COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0)
+			FROM usage_events WHERE ts >= $1`
+		args = []any{since}
+	} else {
+		q = `SELECT
+			COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms), 0),
+			COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0)
+			FROM usage_events WHERE ts >= $1 AND project = $2`
+		args = []any{since, project}
+	}
+	err = s.pool.QueryRow(ctx, q, args...).Scan(&p50, &p95)
+	if err != nil {
+		return 0, 0, fmt.Errorf("usage latency percentiles: %w", err)
+	}
+	return p50, p95, nil
 }
 
 func (s *PgStore) usageGroup(ctx context.Context, since time.Time, project, col string, limit int) ([]usage.Count, error) {

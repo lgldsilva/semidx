@@ -507,13 +507,19 @@ func (d *deps) sgrepProjectPath(ctx context.Context, stored string) string {
 	return stored
 }
 
-// warnSgrepDegraded prints one degraded warning to stderr (never stdout — the
-// grep-style stream must stay pipeable) when any searched project degraded to
-// keyword results because the embedding circuit was open.
+// warnSgrepDegraded prints one warning to stderr (never stdout — the
+// grep-style stream must stay pipeable) when any searched project degraded or
+// fell back to keyword results.
 func warnSgrepDegraded(results []projSearch) {
 	for _, ps := range results {
 		if notice := search.DegradedNotice(ps.resp); notice != "" {
 			fmt.Fprintf(os.Stderr, "%s\n", notice)
+			return
+		}
+	}
+	for _, ps := range results {
+		if ps.resp != nil && ps.resp.Fallback {
+			fmt.Fprintln(os.Stderr, "[warn] embedding unavailable — keyword results (not semantic)")
 			return
 		}
 	}

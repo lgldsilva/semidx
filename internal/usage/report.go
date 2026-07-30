@@ -35,10 +35,11 @@ func BuildReport(agg Aggregate, params Params, generatedAt time.Time) Report {
 	summary := fmt.Sprintf("%d search(es) in the last %d day(s).", agg.Total, params.SinceDays)
 	if agg.Total > 0 {
 		summary = fmt.Sprintf(
-			"%d search(es) in the last %d day(s); %.0f%% ok, %.0f%% empty, %.0f%% fallback, %.0f%% error; %.0f%% mcp / %.0f%% cli.",
+			"%d search(es) in the last %d day(s); %.0f%% ok, %.0f%% empty, %.0f%% fallback, %.0f%% error; %.0f%% mcp / %.0f%% cli; p50=%.0fms p95=%.0fms.",
 			agg.Total, params.SinceDays,
 			rates.OK*100, rates.Empty*100, rates.Fallback*100, rates.Error*100,
 			rates.MCP*100, rates.CLI*100,
+			agg.LatencyP50MS, agg.LatencyP95MS,
 		)
 	}
 
@@ -80,20 +81,22 @@ func BuildReport(agg Aggregate, params Params, generatedAt time.Time) Report {
 	}
 
 	return Report{
-		GeneratedAt: generatedAt.UTC().Format(time.RFC3339),
-		SinceDays:   params.SinceDays,
-		Project:     params.Project,
-		Summary:     summary,
-		Total:       agg.Total,
-		ByProject:   byProject,
-		BySource:    bySource,
-		ByOutcome:   byOutcome,
-		Rates:       rates,
-		Findings:    findings,
+		GeneratedAt:  generatedAt.UTC().Format(time.RFC3339),
+		SinceDays:    params.SinceDays,
+		Project:      params.Project,
+		Summary:      summary,
+		Total:        agg.Total,
+		ByProject:    byProject,
+		BySource:     bySource,
+		ByOutcome:    byOutcome,
+		Rates:        rates,
+		LatencyP50MS: agg.LatencyP50MS,
+		LatencyP95MS: agg.LatencyP95MS,
+		Findings:     findings,
 		BlindSpots: []string{
 			"Events recorded before this feature shipped are absent.",
 			"Query text is not stored by default (only optional SEMIDX_USAGE_LOG_QUERIES).",
-			"Remote clients without X-Semidx-Client appear as source=unknown.",
+			"Remote clients without X-Semidx-Client appear as source=unknown (upgrade CLI/MCP clients that set the header).",
 			"Prometheus histograms (semidx_search_duration_seconds) only count successful HTTP searches and predate source/outcome labels.",
 			"Skill and mcp-install adoption is not inferred from search events — use semidx doctor.",
 		},
@@ -109,7 +112,11 @@ func FormatText(r Report) string {
 	if r.Project != "" {
 		fmt.Fprintf(&b, "- Project filter: %s\n", r.Project)
 	}
-	fmt.Fprintf(&b, "- Summary: %s\n\n", r.Summary)
+	fmt.Fprintf(&b, "- Summary: %s\n", r.Summary)
+	if r.Total > 0 && (r.LatencyP50MS > 0 || r.LatencyP95MS > 0) {
+		fmt.Fprintf(&b, "- Latency: p50=%.0fms p95=%.0fms\n", r.LatencyP50MS, r.LatencyP95MS)
+	}
+	b.WriteString("\n")
 
 	b.WriteString("## By project\n\n")
 	writeCounts(&b, r.ByProject)
