@@ -60,7 +60,9 @@ checksum:
   algorithm: sha256
 
 snapshot:
-  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+  # Used by `goreleaser release --snapshot` and the rc.yml workflow when no
+  # explicit -rc version is supplied. Distinct from published vX.Y.Z-rc.N tags.
+  version_template: "{{ incpatch .Version }}-rc.{{ .ShortCommit }}"
 
 changelog:
   sort: asc

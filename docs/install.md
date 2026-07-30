@@ -93,6 +93,29 @@ docker pull ghcr.io/lgldsilva/semidx:v0.44.9
 
 Reference compose files live under `deploy/`.
 
+### Release candidates (`-rc`)
+
+Use RCs to validate a branch/PR without promoting `:latest` or a stable GitHub
+Release.
+
+| Goal | How |
+|---|---|
+| Downloadable CI artifacts only | Actions → **rc** workflow → Run workflow (leave `version` empty, or set `0.48.0-rc.1` with publish off) |
+| Published GitHub **prerelease** + GHCR `vX.Y.Z-rc.N` | Actions → **rc** → `version=0.48.0-rc.1` + `publish_prerelease=true`, **or** push tag `v0.48.0-rc.1` |
+| Stable release | leave to `autotag` / push `vX.Y.Z` (no hyphen) |
+
+```sh
+# After publishing an RC prerelease:
+curl -fsSL https://raw.githubusercontent.com/lgldsilva/semidx/main/install.sh \
+  | sh -s -- --version v0.48.0-rc.1
+
+docker pull ghcr.io/lgldsilva/semidx:v0.48.0-rc.1
+# note: RCs never move :latest
+```
+
+`release.yml` treats any `v*` tag containing `-` as a prerelease (GoReleaser
+`prerelease: auto`). Homebrew/Scoop/AUR/Snap packaging stays on stable tags.
+
 ### Go
 
 ```sh
