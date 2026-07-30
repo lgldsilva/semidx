@@ -100,8 +100,8 @@ Release.
 
 | Goal | How |
 |---|---|
-| Downloadable CI artifacts only | Actions → **rc** workflow → Run workflow (leave `version` empty, or set `0.48.0-rc.1` with publish off) |
-| Published GitHub **prerelease** + GHCR `vX.Y.Z-rc.N` | Actions → **rc** → `version=0.48.0-rc.1` + `publish_prerelease=true`, **or** push tag `v0.48.0-rc.1` |
+| Downloadable CI artifacts only | Actions → **rc** workflow → Run workflow (leave `version` empty, or set `0.48.0-rc.1` with publish off). On a PR, add the `rc` label to build a snapshot artifact. |
+| Published GitHub **prerelease** + GHCR `vX.Y.Z-rc.N` | After `rc.yml` is on `main`: Actions → **rc** → `version=0.48.0-rc.1` + `publish_prerelease=true`, **or** push tag `v0.48.0-rc.1` |
 | Stable release | leave to `autotag` / push `vX.Y.Z` (no hyphen) |
 
 ```sh
