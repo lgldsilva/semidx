@@ -42,3 +42,7 @@ Prometheus also exposes `semidx_search_total{project,source,outcome}`.
 - Local SQLite index may exist as residual test data without useful embeddings.
 - Many `semidx-*` fixture projects can clutter `semantic_projects` — drop unused.
 - Pre-feature Prometheus only had successful-search histograms (no source/outcome).
+
+A fuller adoption audit (local harnesses, 30d usage, agentics/CI gaps, retrieval
+baselines) lives in
+[docs/audits/2026-07-30-adocao-harnesses.md](audits/2026-07-30-adocao-harnesses.md).
