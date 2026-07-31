@@ -36,8 +36,12 @@ func TestResolveProject(t *testing.T) {
 func TestProjectToolDescription(t *testing.T) {
 	t.Parallel()
 	base := "Search a project."
-	if got := projectToolDescription(base, ""); got != base {
-		t.Errorf("no default should keep the base description; got %q", got)
+	gotEmpty := projectToolDescription(base, "")
+	if !strings.HasPrefix(gotEmpty, base) {
+		t.Errorf("no default must keep the base text; got %q", gotEmpty)
+	}
+	if !strings.Contains(gotEmpty, "standalone") {
+		t.Errorf("no default should mention standalone cwd resolve; got %q", gotEmpty)
 	}
 	got := projectToolDescription(base, "myproj")
 	if !strings.HasPrefix(got, base) {

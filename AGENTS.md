@@ -173,16 +173,26 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 - **`ci.yml` = the gates**, on every PR and push to `main`: build, `go test -race`,
   golangci-lint, gitleaks, govulncheck, gosec, Trivy fs scan. **These predict
   what may enter `main`.**
-- **`release.yml` = publish**, on `v*` tags / dispatch: **GoReleaser** artifacts
+- **`release.yml` = publish**, on `v*` tags: **GoReleaser** artifacts
   (linux/darwin/windows × amd64/arm64 tar.gz/zip + SHA-256) to a **GitHub
-  Release**, plus Docker image to **ghcr.io/lgldsilva/semidx**.
+  Release**, plus Docker image to **ghcr.io/lgldsilva/semidx**. Stable tags also
+  update `:latest`; **RC / prerelease tags** (`vX.Y.Z-rc.N`, any semver with
+  `-`) publish a GitHub **prerelease** and push only the versioned GHCR tag —
+  they never overwrite `:latest`. Package-manifest uploads (AUR/Snap) run on
+  stable tags only.
+- **`rc.yml` = release-candidate artifacts**, via `workflow_dispatch`:
+  - empty version → GoReleaser `--snapshot`, upload Actions artifact
+  - `version=X.Y.Z-rc.N` → build that version into Actions artifacts (no publish)
+  - `version=…` + `publish_prerelease=true` → push the RC tag and dispatch
+    `release.yml` (prerelease path above)
 - The final main-only job in **`ci.yml`** dispatches **`autotag.yml`** after all
   gates pass, supplying the tested SHA (`workflow_dispatch` remains the manual
   recovery path). Autotag verifies that SHA is still current, asks
-  [`svu`](https://github.com/caarlos0/svu) for the next semantic version, pushes
-  a tag only when a bump is warranted, then explicitly dispatches `release.yml`
-  on that tag. Explicit dispatches are required because events created with
-  `GITHUB_TOKEN` do not trigger another workflow automatically.
+  [`svu`](https://github.com/caarlos0/svu) for the next **stable** semantic
+  version, pushes a tag only when a bump is warranted, then explicitly
+  dispatches `release.yml` on that tag. Explicit dispatches are required because
+  events created with `GITHUB_TOKEN` do not trigger another workflow
+  automatically. Autotag never creates `-rc` tags.
 - **Code scanning** uses GitHub's default CodeQL setup (not a workflow file) —
   do not re-add `.github/workflows/codeql.yml` while default setup is enabled
   (the two conflict and the advanced workflow fails every run).

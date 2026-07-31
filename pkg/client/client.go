@@ -57,11 +57,15 @@ func WithClientSource(src string) Option {
 const HeaderClientSource = "X-Semidx-Client"
 
 // New returns a client for baseURL authenticating with token.
+// Untagged clients default ClientSource to "sdk" so server analytics do not
+// collapse third-party traffic into source=unknown. CLI/MCP callers override
+// via WithClientSource or by setting ClientSource after New.
 func New(baseURL, token string, opts ...Option) *Client {
 	c := &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		token:   token,
-		http:    &http.Client{Timeout: 60 * time.Second},
+		baseURL:      strings.TrimRight(baseURL, "/"),
+		token:        token,
+		http:         &http.Client{Timeout: 60 * time.Second},
+		ClientSource: "sdk",
 	}
 	for _, o := range opts {
 		o(c)
@@ -418,7 +422,9 @@ type UsageReport struct {
 		MCP      float64 `json:"mcp"`
 		CLI      float64 `json:"cli"`
 	} `json:"rates"`
-	Findings []struct {
+	LatencyP50MS float64 `json:"latency_p50_ms,omitempty"`
+	LatencyP95MS float64 `json:"latency_p95_ms,omitempty"`
+	Findings     []struct {
 		Kind     string `json:"kind"`
 		Severity string `json:"severity"`
 		Message  string `json:"message"`

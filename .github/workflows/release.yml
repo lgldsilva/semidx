@@ -1,4 +1,8 @@
 # Release artifacts to GitHub Releases + GHCR. No Gitea / homelab tokens.
+#
+# Stable tags (vX.Y.Z): full release + GHCR :latest + :vX.Y.Z
+# RC / prerelease tags (vX.Y.Z-rc.N, or any semver with '-'): GitHub prerelease
+# (goreleaser prerelease:auto) + GHCR :vX.Y.Z-rc.N only — never overwrites :latest.
 name: release
 
 on:
@@ -30,6 +34,8 @@ jobs:
     permissions:
       contents: write
       packages: write
+    outputs:
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,6 +71,33 @@ jobs:
         with:
           go-version: "1.26.5"
           cache: false
+      - name: Classify tag (stable vs prerelease)
+        id: meta
+        env:
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF" != refs/tags/v* ]]; then
+            echo "release.yml must run on a v* tag (got $REF)" >&2
+            echo "For branch RC artifacts without a tag, use the rc.yml workflow." >&2
+            exit 1
+          fi
+          # SemVer prerelease identifiers include a hyphen (v1.2.3-rc.1).
+          if [[ "$REF_NAME" == *-* ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "docker_tags=${REGISTRY}/${IMAGE_NAME}:${REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "classified $REF_NAME as prerelease (will not overwrite :latest)"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "docker_tags<<EOF"
+              echo "${REGISTRY}/${IMAGE_NAME}:latest"
+              echo "${REGISTRY}/${IMAGE_NAME}:${REF_NAME}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "classified $REF_NAME as stable"
+          fi
       - name: Login to GHCR
         # Pin third-party actions by full commit SHA (SonarCloud S7637).
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
@@ -80,6 +113,9 @@ jobs:
       - name: GoReleaser
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Homebrew/Scoop taps: skip upload when secret absent (see .goreleaser.yaml).
+          # RC tags are still prereleases (prerelease: auto); do not configure
+          # TAP_GITHUB_TOKEN on RC publishes if you want taps untouched.
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: go run github.com/goreleaser/goreleaser/v2@v2.13.0 release --clean
       - name: Build and push Docker image
@@ -87,9 +123,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          tags: ${{ steps.meta.outputs.docker_tags }}
 
   sbom:
     name: sbom
@@ -118,7 +152,8 @@ jobs:
     name: package manifests
     runs-on: ubuntu-latest
     needs: [goreleaser]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Stable releases only — AUR/Snap consumers should not track RCs.
+    if: startsWith(github.ref, 'refs/tags/v') && needs.goreleaser.outputs.is_prerelease != 'true'
     permissions:
       contents: write
     steps:

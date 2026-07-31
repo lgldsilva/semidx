@@ -43,6 +43,16 @@ func NewLocalBackend(svc *search.Service, idx store.IndexStore, keywordOnly bool
 	return &localBackend{svc: svc, idx: idx, keywordOnly: keywordOnly, caps: caps}
 }
 
+// ResolveCWDProject returns the indexed project enclosing the process cwd
+// (git identity or path enclosure). Used when MCP tools omit "project".
+func (b *localBackend) ResolveCWDProject(ctx context.Context) (string, error) {
+	p, err := codeintel.ResolveProject(ctx, b.idx, "")
+	if err != nil {
+		return "", err
+	}
+	return p.Name, nil
+}
+
 func (b *localBackend) Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchOutput, error) {
 	// A standalone MCP server is not tied to a git worktree, so no worktree filter
 	// is applied — it searches the whole project index.
@@ -52,7 +62,7 @@ func (b *localBackend) Search(ctx context.Context, project, query, model string,
 		Graph: graph, GraphMaxDepth: graphDepth,
 	})
 	if err != nil {
-		return nil, safeSearchErr(err)
+		return nil, safeSearchErrProject(err, project)
 	}
 	out := &SearchOutput{
 		Project: resp.Project.Name, Fallback: resp.Fallback,
@@ -75,8 +85,17 @@ func (b *localBackend) Search(ctx context.Context, project, query, model string,
 // it is logged to stderr and collapsed to a generic message. The remote backend
 // needs no such guard — the server already sanitizes before the wire.
 func safeSearchErr(err error) error {
+	return safeSearchErrProject(err, "")
+}
+
+// safeSearchErrProject is like safeSearchErr but names the project when known
+// so agents can recover via semantic_projects / semidx index.
+func safeSearchErrProject(err error, project string) error {
 	if errors.Is(err, store.ErrNotFound) {
-		return errors.New("project not found")
+		if project != "" {
+			return fmt.Errorf("project %q not found — call semantic_projects or index with `semidx index`", project)
+		}
+		return errors.New("project not found — call semantic_projects or index with `semidx index`")
 	}
 	slog.Error("mcp search failed", "err", err)
 	return errors.New("search failed")
@@ -199,6 +218,7 @@ func (b *localBackend) GitStatus(ctx context.Context, project string) (*repotool
 
 // SearchMulti searches across multiple project identities and fuses results.
 func (b *localBackend) SearchMulti(ctx context.Context, req search.MultiScopeRequest) (*search.MultiResponse, error) {
+	ctx = usage.WithSource(ctx, usage.SourceMCP)
 	if b.keywordOnly {
 		req.KeywordOnly = true
 	}

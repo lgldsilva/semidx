@@ -96,16 +96,19 @@ func (d *deps) hasServerConfig() bool {
 	return d.client != nil && d.client.ServerURL != ""
 }
 
-// apiClient returns an SDK client for the configured server.
+// apiClient returns an SDK client for the configured server, tagged as CLI
+// for usage attribution. MCP wrappers force ClientSource=mcp themselves.
 func (d *deps) apiClient() *client.Client {
-	return client.New(d.client.ServerURL, d.client.Token, client.WithTenant(d.client.Tenant), client.WithWorkspace(d.client.Workspace))
+	return client.New(d.client.ServerURL, d.client.Token,
+		client.WithTenant(d.client.Tenant),
+		client.WithWorkspace(d.client.Workspace),
+		client.WithClientSource("cli"),
+	)
 }
 
-// searchAPI is apiClient tagged as CLI for usage attribution.
+// searchAPI is apiClient for search traffic (same CLI attribution).
 func (d *deps) searchAPI() *client.Client {
-	c := d.apiClient()
-	c.ClientSource = "cli"
-	return c
+	return d.apiClient()
 }
 
 // withRootFlags returns a PersistentPreRunE that resolves the config profile

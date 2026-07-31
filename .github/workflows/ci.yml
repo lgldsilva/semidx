@@ -160,9 +160,29 @@ jobs:
           trivy filesystem --exit-code 1 --severity CRITICAL,HIGH \
             --ignore-unfixed --quiet .
 
+  agentics-keyword:
+    name: agentics keyword harness
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+      - name: Build harness binaries
+        run: |
+          mkdir -p /tmp/semidx-bin
+          go build -o /tmp/semidx-bin/semidx ./cmd/semidx
+          go build -o /tmp/semidx-bin/mcp-probe ./deploy/agentics-test/mcp-probe
+      - name: Run keyword variation
+        run: PATH=/tmp/semidx-bin:$PATH ./deploy/agentics-test/run.sh keyword
+
   dispatch-release:
     name: dispatch release
-    needs: [test, lint, secretscan, vulncheck, gosec, trivy]
+    needs: [test, lint, secretscan, vulncheck, gosec, trivy, agentics-keyword]
     if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

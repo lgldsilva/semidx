@@ -1,0 +1,182 @@
+# Build release-candidate artifacts without promoting a stable release.
+#
+# Modes:
+#   1) version empty  → GoReleaser --snapshot, upload Actions artifacts
+#   2) version set, publish=false → build as vX.Y.Z-rc.N locally, upload artifacts
+#   3) version set, publish=true  → push tag vX.Y.Z-rc.N and dispatch release.yml
+#      (prerelease GitHub Release + GHCR tag; never overwrites :latest)
+name: rc
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "RC semver without leading v (e.g. 0.48.0-rc.1). Empty = snapshot from commit SHA."
+        required: false
+        type: string
+      publish_prerelease:
+        description: "Push vX.Y.Z-rc.N tag and run release.yml (requires version)"
+        required: false
+        type: boolean
+        default: false
+  # PRs can build snapshot artifacts before rc.yml exists on main: add label `rc`.
+  pull_request:
+    types: [labeled, synchronize, reopened]
+
+concurrency:
+  group: rc-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: go1.26.5
+
+jobs:
+  validate:
+    name: validate inputs
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'rc'))
+    runs-on: ubuntu-latest
+    # Job-level permissions (SonarCloud: avoid workflow-level read grants).
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.pick.outputs.mode }}
+      tag: ${{ steps.pick.outputs.tag }}
+    steps:
+      - id: pick
+        env:
+          VERSION: ${{ inputs.version }}
+          PUBLISH: ${{ inputs.publish_prerelease }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # PRs always build a snapshot artifact (no tag publish from forks/PRs).
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "mode=snapshot" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VERSION="$(echo "${VERSION:-}" | tr -d '[:space:]')"
+          VERSION="${VERSION#v}"
+          if [ -z "$VERSION" ]; then
+            if [ "$PUBLISH" = "true" ]; then
+              echo "publish_prerelease requires a version like 0.48.0-rc.1" >&2
+              exit 1
+            fi
+            echo "mode=snapshot" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$'; then
+            echo "version must match N.N.N-rc.N (got: $VERSION)" >&2
+            exit 1
+          fi
+          if [ "$PUBLISH" = "true" ]; then
+            echo "mode=publish" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=build" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build rc artifacts
+    needs: [validate]
+    if: needs.validate.outputs.mode == 'snapshot' || needs.validate.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Free disk space before build
+        run: |
+          set -uo pipefail
+          sudo rm -rf /opt/hostedtoolcache/Node* \
+                       /opt/hostedtoolcache/Python* \
+                       /opt/hostedtoolcache/Ruby* \
+                       /opt/hostedtoolcache/Haskell* \
+                       /opt/hostedtoolcache/PyPy* \
+                       /opt/hostedtoolcache/dotnet \
+                       /opt/hostedtoolcache/php \
+                       /opt/hostedtoolcache/go/1.* 2>/dev/null || true
+          sudo rm -rf /tmp/* 2>/dev/null || true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+      - name: Build web admin assets
+        run: |
+          if [ -f scripts/build-web.sh ]; then
+            bash scripts/build-web.sh
+          fi
+      - name: GoReleaser (snapshot / local RC)
+        env:
+          MODE: ${{ needs.validate.outputs.mode }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Present (even empty) so brew/scoop token templates never see a
+          # missing map key. RC builds also --skip=homebrew,scoop.
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          export TAP_GITHUB_TOKEN="${TAP_GITHUB_TOKEN:-}"
+          # RC only needs archives + checksums; never touch package taps.
+          SKIP_FLAGS="publish,homebrew,scoop"
+          if [ "$MODE" = "build" ]; then
+            # Goreleaser validates against a git tag; create it locally only
+            # (not pushed) so archives get the RC version without publishing.
+            git tag -f "$TAG"
+            export GORELEASER_CURRENT_TAG="$TAG"
+            go run github.com/goreleaser/goreleaser/v2@v2.13.0 release --clean --skip="$SKIP_FLAGS"
+            git tag -d "$TAG"
+          else
+            go run github.com/goreleaser/goreleaser/v2@v2.13.0 release --clean --snapshot --skip="$SKIP_FLAGS"
+          fi
+          ls -la dist
+      - name: Upload RC artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: semidx-rc-${{ github.sha }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: publish prerelease tag
+    needs: [validate]
+    if: needs.validate.outputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create and push RC tag
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "tag ${TAG} already exists on origin" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release candidate ${TAG}"
+          git push origin "$TAG"
+      - name: Dispatch release.yml on RC tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml --ref "$TAG"
+          echo "dispatched release.yml for $TAG (prerelease; will not overwrite :latest)"

@@ -52,11 +52,19 @@ func TestBuildReportFindings(t *testing.T) {
 		BySource: []Count{
 			{Key: string(SourceUnknown), Count: 10},
 		},
-		ByProject: []Count{{Key: "a", Count: 10}},
+		ByProject:    []Count{{Key: "a", Count: 10}},
+		LatencyP50MS: 42,
+		LatencyP95MS: 120,
 	}
 	r := BuildReport(agg, DefaultParams(), time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC))
 	if r.Total != 10 {
 		t.Fatalf("total=%d", r.Total)
+	}
+	if r.LatencyP50MS != 42 || r.LatencyP95MS != 120 {
+		t.Fatalf("latency p50=%v p95=%v", r.LatencyP50MS, r.LatencyP95MS)
+	}
+	if !containsAll(r.Summary, "p50=42ms", "p95=120ms") {
+		t.Fatalf("summary missing latency: %s", r.Summary)
 	}
 	kinds := map[string]bool{}
 	for _, f := range r.Findings {

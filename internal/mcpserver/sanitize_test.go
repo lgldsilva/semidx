@@ -14,8 +14,13 @@ import (
 // carry DSNs, pgx errors or provider response bodies — is collapsed to a
 // generic message so nothing internal reaches the model.
 func TestSafeSearchErr(t *testing.T) {
-	if got := safeSearchErr(fmt.Errorf("resolve project: %w", store.ErrNotFound)); got.Error() != "project not found" {
-		t.Fatalf("not-found mapped to %q, want %q", got.Error(), "project not found")
+	gotNF := safeSearchErr(fmt.Errorf("resolve project: %w", store.ErrNotFound))
+	if !strings.Contains(gotNF.Error(), "project not found") {
+		t.Fatalf("not-found mapped to %q, want it to contain %q", gotNF.Error(), "project not found")
+	}
+	gotNamed := safeSearchErrProject(fmt.Errorf("%w", store.ErrNotFound), "jackui")
+	if !strings.Contains(gotNamed.Error(), `"jackui"`) {
+		t.Fatalf("named not-found = %q, want project name", gotNamed.Error())
 	}
 
 	const leak = "dial tcp 10.0.0.5:5432: connection refused (dsn=postgres://u:pw@db)"

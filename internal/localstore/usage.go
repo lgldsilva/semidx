@@ -74,7 +74,63 @@ func (s *SQLiteStore) UsageAggregate(ctx context.Context, since time.Time, proje
 		return agg, err
 	}
 	agg.ByOutcome = byOutcome
+
+	latencies, err := s.usageLatencies(ctx, sinceStr, project)
+	if err != nil {
+		return agg, err
+	}
+	agg.LatencyP50MS = percentileMS(latencies, 0.50)
+	agg.LatencyP95MS = percentileMS(latencies, 0.95)
 	return agg, nil
+}
+
+func (s *SQLiteStore) usageLatencies(ctx context.Context, since, project string) ([]int64, error) {
+	var q string
+	var args []any
+	if project == "" {
+		q = `SELECT latency_ms FROM usage_events WHERE ts >= ? ORDER BY latency_ms`
+		args = []any{since}
+	} else {
+		q = `SELECT latency_ms FROM usage_events WHERE ts >= ? AND project = ? ORDER BY latency_ms`
+		args = []any{since, project}
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("usage latencies: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []int64
+	for rows.Next() {
+		var ms int64
+		if err := rows.Scan(&ms); err != nil {
+			return nil, err
+		}
+		out = append(out, ms)
+	}
+	return out, rows.Err()
+}
+
+// percentileMS returns the nearest-rank percentile of a sorted sample.
+func percentileMS(sorted []int64, p float64) float64 {
+	n := len(sorted)
+	if n == 0 {
+		return 0
+	}
+	if p <= 0 {
+		return float64(sorted[0])
+	}
+	if p >= 1 {
+		return float64(sorted[n-1])
+	}
+	// Nearest-rank: index = ceil(p*n) - 1
+	idx := int(p*float64(n)+0.999999) - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= n {
+		idx = n - 1
+	}
+	return float64(sorted[idx])
 }
 
 func (s *SQLiteStore) usageGroup(ctx context.Context, since, project, col string, limit int) ([]usage.Count, error) {
