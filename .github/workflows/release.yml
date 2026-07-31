@@ -10,10 +10,6 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
-# Least privilege at workflow level; write scopes live on the jobs that need them.
-permissions:
-  contents: read
-
 env:
   GOTOOLCHAIN: go1.26.5
   REGISTRY: ghcr.io
@@ -30,6 +26,7 @@ jobs:
     # not supported by GitHub Actions (parse error). Gitea releases
     # are out of scope for automated CI; use the Gitea Releases API
     # to create them manually if needed.
+    # Permissions are job-scoped (SonarCloud: avoid workflow-level reads).
     runs-on: ubuntu-latest
     permissions:
       contents: write
