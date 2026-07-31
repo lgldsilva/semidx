@@ -97,13 +97,15 @@ release:
 # Track: https://github.com/lgldsilva/semidx/issues/16
 brews:
   - name: semidx
-    # Skip when TAP_GITHUB_TOKEN is absent (secret not yet configured).
-    skip_upload: '{{ if .Env.TAP_GITHUB_TOKEN }}false{{ else }}true{{ end }}'
+    # Skip when TAP_GITHUB_TOKEN is absent/empty (secret not yet configured).
+    # Always use index — missing map keys make .Env.TAP_GITHUB_TOKEN fail
+    # templating even with --skip=publish (brew pipe still runs).
+    skip_upload: '{{ if eq (printf "%s" (index .Env "TAP_GITHUB_TOKEN")) "" }}true{{ else }}false{{ end }}'
     repository:
       owner: lgldsilva
       name: homebrew-tap
       branch: main
-      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+      token: '{{ index .Env "TAP_GITHUB_TOKEN" }}'
     directory: Formula
     homepage: https://github.com/lgldsilva/semidx
     description: "Self-hosted semantic code search."
@@ -115,13 +117,13 @@ brews:
 
 scoops:
   - name: semidx
-    # Skip when TAP_GITHUB_TOKEN is absent (secret not yet configured).
-    skip_upload: '{{ if .Env.TAP_GITHUB_TOKEN }}false{{ else }}true{{ end }}'
+    # Skip when TAP_GITHUB_TOKEN is absent/empty (secret not yet configured).
+    skip_upload: '{{ if eq (printf "%s" (index .Env "TAP_GITHUB_TOKEN")) "" }}true{{ else }}false{{ end }}'
     repository:
       owner: lgldsilva
       name: scoop-bucket
       branch: main
-      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+      token: '{{ index .Env "TAP_GITHUB_TOKEN" }}'
     homepage: https://github.com/lgldsilva/semidx
     description: "Self-hosted semantic code search."
     license: Apache-2.0

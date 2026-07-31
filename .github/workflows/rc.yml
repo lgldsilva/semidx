@@ -115,17 +115,24 @@ jobs:
         env:
           MODE: ${{ needs.validate.outputs.mode }}
           TAG: ${{ needs.validate.outputs.tag }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Present (even empty) so brew/scoop token templates never see a
+          # missing map key. RC builds also --skip=homebrew,scoop.
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          export TAP_GITHUB_TOKEN="${TAP_GITHUB_TOKEN:-}"
+          # RC only needs archives + checksums; never touch package taps.
+          SKIP_FLAGS="publish,homebrew,scoop"
           if [ "$MODE" = "build" ]; then
             # Goreleaser validates against a git tag; create it locally only
             # (not pushed) so archives get the RC version without publishing.
             git tag -f "$TAG"
             export GORELEASER_CURRENT_TAG="$TAG"
-            go run github.com/goreleaser/goreleaser/v2@v2.13.0 release --clean --skip=publish
+            go run github.com/goreleaser/goreleaser/v2@v2.13.0 release --clean --skip="$SKIP_FLAGS"
             git tag -d "$TAG"
           else
-            go run github.com/goreleaser/goreleaser/v2@v2.13.0 release --clean --snapshot --skip=publish
+            go run github.com/goreleaser/goreleaser/v2@v2.13.0 release --clean --snapshot --skip="$SKIP_FLAGS"
           fi
           ls -la dist
       - name: Upload RC artifacts
