@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/lgldsilva/semidx/internal/gitenv"
 )
 
 // gitExecutable resolves the absolute path of the user's git once. Semantic
@@ -205,6 +207,7 @@ func runGit(dir string, args ...string) ([]byte, error) {
 	gitBin := gitExecutable()
 	cmd := exec.Command(gitBin, args...) // #nosec G204 -- refs/paths validated by callers via safeGitRef/safeGitFilepath; binary resolved via LookPath
 	cmd.Dir = dir
+	cmd.Env = append(gitenv.Clean(os.Environ()), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
 	cmd.Stderr = os.Stderr
 	return cmd.Output()
 }
