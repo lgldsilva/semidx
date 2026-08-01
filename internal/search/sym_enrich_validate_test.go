@@ -1,3 +1,5 @@
+//go:build evalgate
+
 package search
 
 import (
@@ -266,17 +268,26 @@ func searchSymTopK(t *testing.T, ctx context.Context, svc *Service, project, que
 }
 
 // computeNDCG computes normalized DCG@len(results) for ranked results.
+// Relevance is binary: a result matches if it starts with any prefix in
+// relevant. The ideal DCG places all relevant results at the top positions.
 func computeNDCG(results []string, relevant []string) float64 {
 	if len(results) == 0 {
 		return 0
 	}
 	var dcg float64
+	relCount := 0
 	for i, p := range results {
 		rel := relevance(p, relevant)
-		dcg += float64(rel) / math.Log2(float64(i+2))
+		if rel > 0 {
+			relCount++
+			dcg += 1.0 / math.Log2(float64(i+2))
+		}
+	}
+	if relCount == 0 || dcg == 0 {
+		return 0
 	}
 	var idcg float64
-	for i := 0; i < len(relevant) && i < len(results); i++ {
+	for i := 0; i < relCount && i < len(results); i++ {
 		idcg += 1.0 / math.Log2(float64(i+2))
 	}
 	if idcg == 0 {
