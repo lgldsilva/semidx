@@ -15,6 +15,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/analyzer"
 	"github.com/lgldsilva/semidx/internal/codeintel"
 	"github.com/lgldsilva/semidx/internal/deadcode"
+	"github.com/lgldsilva/semidx/internal/gitenv"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/pkg/client"
@@ -541,7 +542,7 @@ func TestLocalBackendDiffHappyPath(t *testing.T) {
 		t.Helper()
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(gitenv.Clean(os.Environ()),
 			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t.com",
 			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t.com",
