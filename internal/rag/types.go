@@ -37,9 +37,9 @@ type PipelineConfig struct {
 	PathPrefix    string  // filter search results to files under this path prefix
 }
 
-// SearchService is the interface for semantic search (implemented by
+// Searcher is the interface for semantic search (implemented by
 // search.Service in cmd/chatrag/ or a test fake).
-type SearchService interface {
+type Searcher interface {
 	Search(ctx context.Context, req SearchRequest) (*SearchResponse, error)
 }
 

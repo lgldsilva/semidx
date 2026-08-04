@@ -364,7 +364,7 @@ func TestProjectsAPIListError(t *testing.T) {
 	}
 }
 
-func TestSearchAPISearchServiceError(t *testing.T) {
+func TestSearchAPISearcherError(t *testing.T) {
 	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
 	fs.addUser("admin", "supersecret", "admin")
 	fs.projects = []store.Project{{ID: 1, Name: "alpha", Model: "bge-m3"}}

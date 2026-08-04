@@ -121,6 +121,6 @@ func newEmbedder(cfg *config.Config) embed.Embedder {
 	})
 }
 
-func newSearchService(s *localstore.SQLiteStore, emb embed.Embedder) *search.Service {
+func newSearcher(s *localstore.SQLiteStore, emb embed.Embedder) *search.Service {
 	return search.NewService(s, emb)
 }

@@ -263,6 +263,7 @@ func TestIndexProjectStopsOnCancel(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	// Cancel as soon as the first file is embedded; the next loop iteration
 	// must see the cancellation and bail out.
 	emb := &fakeEmbedder{}

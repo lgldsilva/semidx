@@ -17,14 +17,14 @@ type Tool interface {
 
 // Agent runs the LLM<->tools loop.
 type Agent struct {
-	chat      chat.Client
+	chat      chat.Sender
 	tools     map[string]Tool
 	resolver  ScopeResolver
 	maxRounds int
 }
 
 // NewAgent creates an agent. resolver is optional (nil disables scope resolution).
-func NewAgent(client chat.Client, tools []Tool, resolver ScopeResolver) *Agent {
+func NewAgent(client chat.Sender, tools []Tool, resolver ScopeResolver) *Agent {
 	tm := make(map[string]Tool, len(tools))
 	for _, t := range tools {
 		tm[t.Def().Name] = t

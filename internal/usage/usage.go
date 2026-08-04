@@ -182,7 +182,9 @@ type Recorder interface {
 type Nop struct{}
 
 // Record implements Recorder.
-func (Nop) Record(context.Context, Event) {}
+func (Nop) Record(context.Context, Event) {
+	// intentionally empty: Nop discards all events
+}
 
 // StoreWriter persists usage events.
 type StoreWriter interface {

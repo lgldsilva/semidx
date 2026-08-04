@@ -34,7 +34,7 @@ func buildPipeline(ctx context.Context, cfg *config.Config, indexPath, project, 
 	}
 
 	emb := newEmbedder(cfg)
-	adapter := &searchAdapter{svc: newSearchService(ls, emb)}
+	adapter := &searchAdapter{svc: newSearcher(ls, emb)}
 	pipelineIdentity, pipelineWorktree := gitScope(ctx)
 
 	ragRunner, err := buildToolLessRunner(ctx, cfg, model)

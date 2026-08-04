@@ -311,7 +311,7 @@ func (s *Server) indexPreEmbedded(ctx context.Context, proj *store.Project, path
 func (s *Server) loadProject(w http.ResponseWriter, r *http.Request) (*store.Project, bool) {
 	proj, err := s.store.GetProject(r.Context(), r.PathValue("project"))
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONError(w, http.StatusNotFound, "project not found")
+		writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 		return nil, false
 	}
 	if err != nil {

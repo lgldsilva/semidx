@@ -19,7 +19,7 @@ func (s *Server) handleListDependencies(w http.ResponseWriter, r *http.Request) 
 	}
 	project, err := s.store.GetProject(r.Context(), r.PathValue("project"))
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONError(w, http.StatusNotFound, "project not found")
+		writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 		return
 	}
 	if err != nil {
@@ -43,7 +43,7 @@ func (s *Server) handleSharedDependencies(w http.ResponseWriter, r *http.Request
 	}
 	project, err := s.store.GetProject(r.Context(), r.PathValue("project"))
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONError(w, http.StatusNotFound, "project not found")
+		writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 		return
 	}
 	if err != nil {
@@ -79,7 +79,7 @@ func (s *Server) handleResolveDependencies(w http.ResponseWriter, r *http.Reques
 	}
 	project, err := s.store.GetProject(r.Context(), r.PathValue("project"))
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONError(w, http.StatusNotFound, "project not found")
+		writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 		return
 	}
 	if err != nil {
@@ -117,7 +117,7 @@ func (s *Server) handleSubmitDependencies(w http.ResponseWriter, r *http.Request
 	}
 	project, err := s.store.GetProject(r.Context(), r.PathValue("project"))
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONError(w, http.StatusNotFound, "project not found")
+		writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 		return
 	}
 	if err != nil {

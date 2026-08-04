@@ -13,7 +13,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/chat"
 )
 
-// recordingSearch implements SearchService, capturing the last request.
+// recordingSearch implements Searcher, capturing the last request.
 type recordingSearch struct {
 	req  SearchRequest
 	resp *SearchResponse

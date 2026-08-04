@@ -31,24 +31,7 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 	bin, _ := os.Executable()
 	fmt.Fprintf(&b, "# semidx doctor\n\n")
 	fmt.Fprintf(&b, "## Binary\n\n- path: `%s`\n\n", bin)
-
-	fmt.Fprintf(&b, "## Backend\n\n")
-	switch {
-	case d.remote():
-		fmt.Fprintf(&b, "- active: **remote** (`%s`)\n", d.client.ServerURL)
-		if host := d.client.ServerURL; strings.Contains(host, "raspberrypi.lan") || strings.Contains(host, ".lan/") {
-			fmt.Fprintf(&b, "- note: prefer a hostname covered by your TLS certificate (e.g. `*.internal…`) — mismatched SAN causes MCP TLS failures\n")
-		}
-	case d.localIndexPath != "":
-		fmt.Fprintf(&b, "- active: **local SQLite** (`%s`)\n", d.localIndexPath)
-	default:
-		fmt.Fprintf(&b, "- active: **Postgres** (SEMIDX_DB_DSN configured or default)\n")
-	}
-	if d.hasServerConfig() && !d.remote() {
-		fmt.Fprintf(&b, "- note: server credentials exist on disk but this invocation is not using remote mode\n")
-	}
-	b.WriteByte('\n')
-
+	reportBackend(&b, d)
 	fmt.Fprintf(&b, "## Ollama / GPU\n\n")
 	printOllamaRuntime(&b, d)
 	b.WriteByte('\n')
@@ -56,9 +39,35 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 	home, _ := os.UserHomeDir()
 	cfgDir, _ := os.UserConfigDir()
 	cwd, _ := os.Getwd()
+	missingClaude, configuredMCP := reportMCPClients(&b, home, cfgDir, cwd, bin)
+	missingActivation := reportSkills(&b, home, cfgDir, cwd)
+	reportFindings(&b, home, cfgDir, missingClaude, missingActivation, configuredMCP)
+	_, err := fmt.Fprint(cmd.OutOrStdout(), b.String())
+	return err
+}
 
-	fmt.Fprintf(&b, "## MCP clients\n\n")
-	var missingClaude bool
+func reportBackend(b *strings.Builder, d *deps) {
+	fmt.Fprintf(b, "## Backend\n\n")
+	switch {
+	case d.remote():
+		fmt.Fprintf(b, "- active: **remote** (`%s`)\n", d.client.ServerURL)
+		if host := d.client.ServerURL; strings.Contains(host, "raspberrypi.lan") || strings.Contains(host, ".lan/") {
+			fmt.Fprintf(b, "- note: prefer a hostname covered by your TLS certificate (e.g. `*.internal…`) — mismatched SAN causes MCP TLS failures\n")
+		}
+	case d.localIndexPath != "":
+		fmt.Fprintf(b, "- active: **local SQLite** (`%s`)\n", d.localIndexPath)
+	default:
+		fmt.Fprintf(b, "- active: **Postgres** (SEMIDX_DB_DSN configured or default)\n")
+	}
+	if d.hasServerConfig() && !d.remote() {
+		fmt.Fprintf(b, "- note: server credentials exist on disk but this invocation is not using remote mode\n")
+	}
+	b.WriteByte('\n')
+}
+
+func reportMCPClients(b *strings.Builder, home, cfgDir, cwd, bin string) (bool, map[string]bool) {
+	fmt.Fprintf(b, "## MCP clients\n\n")
+	missingClaude := false
 	configuredMCP := map[string]bool{}
 	for _, c := range mcpinstall.Clients {
 		opts := mcpinstall.Options{Client: c.ID, Home: home, ConfigDir: cfgDir, Project: cwd, ExePath: bin}
@@ -78,9 +87,9 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 				state = "unreadable"
 			}
 		}
-		fmt.Fprintf(&b, "- `%s`: %s", c.ID, state)
+		fmt.Fprintf(b, "- `%s`: %s", c.ID, state)
 		if path != "" {
-			fmt.Fprintf(&b, " (`%s`)", path)
+			fmt.Fprintf(b, " (`%s`)", path)
 		}
 		b.WriteByte('\n')
 		if c.ID == "claude-code" && state != "configured" {
@@ -88,57 +97,62 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 		}
 	}
 	b.WriteByte('\n')
+	return missingClaude, configuredMCP
+}
 
-	fmt.Fprintf(&b, "## Skills\n\n")
+func reportSkills(b *strings.Builder, home, cfgDir, cwd string) bool {
+	fmt.Fprintf(b, "## Skills\n\n")
 	names, err := skills.Names()
 	missingActivation := false
 	if err != nil {
-		fmt.Fprintf(&b, "- error listing embedded skills: %v\n\n", err)
-	} else {
-		roots := doctorSkillRoots(home, cfgDir, cwd)
-		for _, name := range names {
-			found := []string{}
-			for _, root := range roots {
-				p := filepath.Join(root, name, "SKILL.md")
-				if st, err := os.Stat(p); err == nil && !st.IsDir() {
-					found = append(found, p)
-				}
-			}
-			if len(found) == 0 {
-				fmt.Fprintf(&b, "- `%s`: not installed\n", name)
-				if name == "auto-index" {
-					missingActivation = true
-				}
-			} else {
-				fmt.Fprintf(&b, "- `%s`: installed\n", name)
-				for _, p := range found {
-					fmt.Fprintf(&b, "  - `%s`\n", p)
-				}
-			}
-		}
-		b.WriteByte('\n')
+		fmt.Fprintf(b, "- error listing embedded skills: %v\n\n", err)
+		return missingActivation
 	}
 
-	fmt.Fprintf(&b, "## Findings\n\n")
+	roots := doctorSkillRoots(home, cfgDir, cwd)
+	for _, name := range names {
+		found := []string{}
+		for _, root := range roots {
+			p := filepath.Join(root, name, "SKILL.md")
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				found = append(found, p)
+			}
+		}
+		if len(found) == 0 {
+			fmt.Fprintf(b, "- `%s`: not installed\n", name)
+			if name == "auto-index" {
+				missingActivation = true
+			}
+			continue
+		}
+		fmt.Fprintf(b, "- `%s`: installed\n", name)
+		for _, p := range found {
+			fmt.Fprintf(b, "  - `%s`\n", p)
+		}
+	}
+	b.WriteByte('\n')
+	return missingActivation
+}
+
+func reportFindings(b *strings.Builder, home, cfgDir string, missingClaude, missingActivation bool, configuredMCP map[string]bool) {
+	fmt.Fprintf(b, "## Findings\n\n")
 	if missingClaude {
-		fmt.Fprintf(&b, "- **claude-code MCP missing** — run `semidx mcp install --client claude-code --apply`\n")
+		fmt.Fprintf(b, "- **claude-code MCP missing** — run `semidx mcp install --client claude-code --apply`\n")
 	}
 	if missingActivation {
-		fmt.Fprintf(&b, "- **auto-index skill missing** — agents will not auto-route to semantic search; run `semidx skills install --all`\n")
+		fmt.Fprintf(b, "- **auto-index skill missing** — agents will not auto-route to semantic search; run `semidx skills install --all`\n")
 	}
 	for id := range configuredMCP {
 		if t, ok := skillsTargetByID(id); ok && t.userLevel {
 			root := t.path(home, cfgDir)
 			if st, err := os.Stat(filepath.Join(root, "auto-index", "SKILL.md")); err != nil || st.IsDir() {
-				fmt.Fprintf(&b, "- **MCP `%s` configured but auto-index skill absent** — run `semidx skills install --target %s`\n", id, id)
+				fmt.Fprintf(b, "- **MCP `%s` configured but auto-index skill absent** — run `semidx skills install --target %s`\n", id, id)
 			}
 		}
 	}
-	fmt.Fprintf(&b, "- Search usage history: `semidx usage` (empty until searches are recorded)\n")
-	fmt.Fprintf(&b, "- Test/fixture projects named `semidx-*` may clutter `semantic_projects`; drop unused ones with `semidx drop`\n")
-	fmt.Fprintf(&b, "- GPU for embeddings is owned by Ollama (probe above); Postgres/pgvector search stays on CPU\n")
-	_, err = fmt.Fprint(cmd.OutOrStdout(), b.String())
-	return err
+	fmt.Fprintf(b, "- Search usage history: `semidx usage` (empty until searches are recorded)\n")
+	fmt.Fprintf(b, "- Test/fixture projects named `semidx-*` may clutter `semantic_projects`; drop unused ones with `semidx drop`\n")
+	fmt.Fprintf(b, "- GPU for embeddings is owned by Ollama (probe above); Postgres/pgvector search stays on CPU\n")
 }
 
 // doctorSkillRoots returns every skills install target path plus legacy

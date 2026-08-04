@@ -2,11 +2,11 @@
 # git + openssh-client (HTTPS/SSH tooling for server-side git-sync) and CA
 # certificates (for cloud embedders).
 FROM node:22-alpine AS web
-WORKDIR /src
-COPY web/package.json web/package-lock.json ./web/
-RUN cd web && npm ci
-COPY web/ ./web/
-RUN cd web && npm run build
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
 
 FROM golang:1.26.5 AS build
 WORKDIR /src
@@ -24,7 +24,7 @@ FROM alpine:3.20
 # openssh-client provides the `ssh` binary for SSH clone/pull
 # (GIT_SSH_COMMAND); git covers HTTPS. Vaulted per-project/host SSH creds
 # use this once the job-runner resolution lands.
-RUN apk add --no-cache git openssh-client ca-certificates && adduser -D -u 10001 semidx
+RUN apk add --no-cache ca-certificates git openssh-client && adduser -D -u 10001 semidx
 COPY --from=build /out/semidx /usr/local/bin/semidx
 USER semidx
 EXPOSE 8080

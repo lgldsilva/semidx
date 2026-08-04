@@ -116,6 +116,7 @@ fi
 case "$EXT" in
   tar.gz) tar -xzf "$WORK/$ARCHIVE" -C "$WORK" ;;
   zip)    command -v unzip >/dev/null 2>&1 || die "unzip is required for windows archives"; unzip -q "$WORK/$ARCHIVE" -d "$WORK" ;;
+  *)      die "unsupported archive type: $EXT" ;;
 esac
 BIN="$WORK/semidx"; [ "$OS" = windows ] && BIN="$WORK/semidx.exe"
 [ -f "$BIN" ] || die "binary not found inside $ARCHIVE"

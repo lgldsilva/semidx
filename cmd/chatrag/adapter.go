@@ -10,7 +10,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
-// searchAdapter implements rag.SearchService by delegating to search.Service.
+// searchAdapter implements rag.Searcher by delegating to search.Service.
 type searchAdapter struct {
 	svc     *search.Service
 	project string // default project when the request doesn't specify one

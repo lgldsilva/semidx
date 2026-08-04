@@ -30,55 +30,7 @@ graph (file → package imports).
 Local-only: the server API exposes neighbors and path, not aggregate stats.`,
 		Example: "  semidx graph stats --project .",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			if d.remote() {
-				return fmt.Errorf("graph stats over remote API is not yet exposed; use neighbors/path, or --local")
-			}
-			db, proj, err := resolveGraphProject(ctx, d, projectArg)
-			if err != nil {
-				return err
-			}
-			neighbors, err := db.FetchGraphNeighbors(ctx, proj.ID)
-			if err != nil {
-				return fmt.Errorf("fetch graph: %w", err)
-			}
-			outDeg := map[string]int{}
-			inDeg := map[string]int{}
-			edges := 0
-			for src, targets := range neighbors {
-				outDeg[src] = len(targets)
-				edges += len(targets)
-				for _, t := range targets {
-					inDeg[t]++
-				}
-			}
-			nodes := map[string]struct{}{}
-			for n := range outDeg {
-				nodes[n] = struct{}{}
-			}
-			for n := range inDeg {
-				nodes[n] = struct{}{}
-			}
-			w := cmd.OutOrStdout()
-			if asJSON {
-				return encodeGraphJSON(w, map[string]any{
-					"project":      proj.Name,
-					"nodes":        len(nodes),
-					"edges":        edges,
-					"top_depends":  topDegreeEntries(outDeg, 10),
-					"top_depended": topDegreeEntries(inDeg, 10),
-				})
-			}
-			_, _ = fmt.Fprintf(w, "project %s: %d nodes, %d edges\n", proj.Name, len(nodes), edges)
-			_, _ = fmt.Fprintln(w, "top outbound:")
-			for _, e := range topDegreeEntries(outDeg, 10) {
-				_, _ = fmt.Fprintf(w, "  %s (%d)\n", e["node"], e["degree"])
-			}
-			_, _ = fmt.Fprintln(w, "top inbound:")
-			for _, e := range topDegreeEntries(inDeg, 10) {
-				_, _ = fmt.Fprintf(w, "  %s (%d)\n", e["node"], e["degree"])
-			}
-			return nil
+			return runGraphStats(cmd.Context(), d, projectArg, asJSON, cmd.OutOrStdout())
 		},
 	}
 	c.Flags().StringVar(&projectArg, "project", "", "Project path or name")
@@ -100,40 +52,7 @@ In remote mode this calls the server API; with --local it reads the index
 directly.`,
 		Example: "  semidx graph neighbors --project . --file internal/store/store.go",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			if file == "" {
-				return fmt.Errorf("--file is required")
-			}
-			w := cmd.OutOrStdout()
-			if d.remote() {
-				name, err := remoteGraphProjectName(ctx, d, projectArg)
-				if err != nil {
-					return err
-				}
-				resp, err := d.apiClient().GraphSubgraph(ctx, name, file, depth, limit)
-				if err != nil {
-					return err
-				}
-				if asJSON {
-					return encodeGraphJSON(w, resp)
-				}
-				printSubgraph(w, len(resp.Nodes), resp.Truncated, clientGraphEdgeLines(resp.Edges))
-				return nil
-			}
-			db, proj, err := resolveGraphProject(ctx, d, projectArg)
-			if err != nil {
-				return err
-			}
-			idx, err := loadLocalGraphIndex(ctx, db, proj.ID)
-			if err != nil {
-				return err
-			}
-			sg := idx.Subgraph(file, graph.Budget{MaxDepth: depth, MaxEdgesOut: limit})
-			if asJSON {
-				return encodeGraphJSON(w, sg)
-			}
-			printSubgraph(w, len(sg.Nodes), sg.Truncated, graphEdgeLines(sg.Edges))
-			return nil
+			return runGraphNeighbors(cmd.Context(), d, projectArg, file, depth, limit, asJSON, cmd.OutOrStdout())
 		},
 	}
 	c.Flags().StringVar(&projectArg, "project", "", "Project path or name")
@@ -159,52 +78,7 @@ and edges may include reverse:true.`,
 		Example: `  semidx graph path --from cmd/semidx/main.go --to internal/store/store.go
   semidx graph path --from a.go --to b.go --undirected --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			if from == "" || to == "" {
-				return fmt.Errorf("--from and --to are required")
-			}
-			w := cmd.OutOrStdout()
-			if d.remote() {
-				name, err := remoteGraphProjectName(ctx, d, projectArg)
-				if err != nil {
-					return err
-				}
-				resp, err := d.apiClient().GraphPath(ctx, name, from, to, maxDepth, undirected)
-				if err != nil {
-					return err
-				}
-				if asJSON {
-					if err := encodeGraphJSON(w, resp); err != nil {
-						return err
-					}
-				} else {
-					printPathResult(w, resp.Found, resp.Directed, resp.Truncated, resp.Hops, resp.Length)
-				}
-				if !resp.Found {
-					return fmt.Errorf("no path found from %s to %s", from, to)
-				}
-				return nil
-			}
-			db, proj, err := resolveGraphProject(ctx, d, projectArg)
-			if err != nil {
-				return err
-			}
-			idx, err := loadLocalGraphIndex(ctx, db, proj.ID)
-			if err != nil {
-				return err
-			}
-			pr := idx.ShortestPath(from, to, graph.Budget{MaxDepth: maxDepth}, undirected)
-			if asJSON {
-				if err := encodeGraphJSON(w, pr); err != nil {
-					return err
-				}
-			} else {
-				printPathResult(w, pr.Found, pr.Directed, pr.Truncated, pr.Hops, pr.Length)
-			}
-			if !pr.Found {
-				return fmt.Errorf("no path found from %s to %s", from, to)
-			}
-			return nil
+			return runGraphPath(cmd.Context(), d, projectArg, from, to, maxDepth, undirected, asJSON, cmd.OutOrStdout())
 		},
 	}
 	c.Flags().StringVar(&projectArg, "project", "", "Project path or name")
@@ -214,6 +88,138 @@ and edges may include reverse:true.`,
 	c.Flags().BoolVar(&undirected, "undirected", false, "Allow reverse hops")
 	c.Flags().BoolVar(&asJSON, "json", false, "Emit JSON")
 	return c
+}
+
+func runGraphStats(ctx context.Context, d *deps, projectArg string, asJSON bool, w io.Writer) error {
+	if d.remote() {
+		return fmt.Errorf("graph stats over remote API is not yet exposed; use neighbors/path, or --local")
+	}
+	db, proj, err := resolveGraphProject(ctx, d, projectArg)
+	if err != nil {
+		return err
+	}
+	neighbors, err := db.FetchGraphNeighbors(ctx, proj.ID)
+	if err != nil {
+		return fmt.Errorf("fetch graph: %w", err)
+	}
+	outDeg := map[string]int{}
+	inDeg := map[string]int{}
+	edges := 0
+	for src, targets := range neighbors {
+		outDeg[src] = len(targets)
+		edges += len(targets)
+		for _, target := range targets {
+			inDeg[target]++
+		}
+	}
+	nodes := map[string]struct{}{}
+	for node := range outDeg {
+		nodes[node] = struct{}{}
+	}
+	for node := range inDeg {
+		nodes[node] = struct{}{}
+	}
+	if asJSON {
+		return encodeGraphJSON(w, map[string]any{
+			"project":      proj.Name,
+			"nodes":        len(nodes),
+			"edges":        edges,
+			"top_depends":  topDegreeEntries(outDeg, 10),
+			"top_depended": topDegreeEntries(inDeg, 10),
+		})
+	}
+	_, _ = fmt.Fprintf(w, "project %s: %d nodes, %d edges\n", proj.Name, len(nodes), edges)
+	_, _ = fmt.Fprintln(w, "top outbound:")
+	for _, entry := range topDegreeEntries(outDeg, 10) {
+		_, _ = fmt.Fprintf(w, "  %s (%d)\n", entry["node"], entry["degree"])
+	}
+	_, _ = fmt.Fprintln(w, "top inbound:")
+	for _, entry := range topDegreeEntries(inDeg, 10) {
+		_, _ = fmt.Fprintf(w, "  %s (%d)\n", entry["node"], entry["degree"])
+	}
+	return nil
+}
+
+func runGraphNeighbors(ctx context.Context, d *deps, projectArg, file string, depth, limit int, asJSON bool, w io.Writer) error {
+	if file == "" {
+		return fmt.Errorf("--file is required")
+	}
+	if d.remote() {
+		name, err := remoteGraphProjectName(ctx, d, projectArg)
+		if err != nil {
+			return err
+		}
+		resp, err := d.apiClient().GraphSubgraph(ctx, name, file, depth, limit)
+		if err != nil {
+			return err
+		}
+		if asJSON {
+			return encodeGraphJSON(w, resp)
+		}
+		printSubgraph(w, len(resp.Nodes), resp.Truncated, clientGraphEdgeLines(resp.Edges))
+		return nil
+	}
+	db, proj, err := resolveGraphProject(ctx, d, projectArg)
+	if err != nil {
+		return err
+	}
+	idx, err := loadLocalGraphIndex(ctx, db, proj.ID)
+	if err != nil {
+		return err
+	}
+	sg := idx.Subgraph(file, graph.Budget{MaxDepth: depth, MaxEdgesOut: limit})
+	if asJSON {
+		return encodeGraphJSON(w, sg)
+	}
+	printSubgraph(w, len(sg.Nodes), sg.Truncated, graphEdgeLines(sg.Edges))
+	return nil
+}
+
+func runGraphPath(ctx context.Context, d *deps, projectArg, from, to string, maxDepth int, undirected, asJSON bool, w io.Writer) error {
+	if from == "" || to == "" {
+		return fmt.Errorf("--from and --to are required")
+	}
+	if d.remote() {
+		name, err := remoteGraphProjectName(ctx, d, projectArg)
+		if err != nil {
+			return err
+		}
+		resp, err := d.apiClient().GraphPath(ctx, name, from, to, maxDepth, undirected)
+		if err != nil {
+			return err
+		}
+		if asJSON {
+			if err := encodeGraphJSON(w, resp); err != nil {
+				return err
+			}
+		} else {
+			printPathResult(w, resp.Found, resp.Directed, resp.Truncated, resp.Hops, resp.Length)
+		}
+		if !resp.Found {
+			return fmt.Errorf("no path found from %s to %s", from, to)
+		}
+		return nil
+	}
+	db, proj, err := resolveGraphProject(ctx, d, projectArg)
+	if err != nil {
+		return err
+	}
+	idx, err := loadLocalGraphIndex(ctx, db, proj.ID)
+	if err != nil {
+		return err
+	}
+	result := idx.ShortestPath(from, to, graph.Budget{MaxDepth: maxDepth}, undirected)
+	if asJSON {
+		if err := encodeGraphJSON(w, result); err != nil {
+			return err
+		}
+	} else {
+		printPathResult(w, result.Found, result.Directed, result.Truncated, result.Hops, result.Length)
+	}
+	if !result.Found {
+		return fmt.Errorf("no path found from %s to %s", from, to)
+	}
+	return nil
 }
 
 func printSubgraph(w io.Writer, nodes int, truncated bool, edges []string) {

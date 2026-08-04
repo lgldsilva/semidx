@@ -15,22 +15,21 @@ import (
 // graphFixture holds a real SQLite store with a project seeded with files,
 // chunks and dependency edges. Tests that exercise expandByGraph use this.
 type graphFixture struct {
-	ctx context.Context
 	st  *localstore.SQLiteStore
 	pid int
 	svc *Service
 }
 
 // createFile is a helper that inserts a file row and a single chunk.
-func (g *graphFixture) createFile(t *testing.T, path, content string) {
+func (g *graphFixture) createFile(ctx context.Context, t *testing.T, path, content string) {
 	t.Helper()
 	h := sha256.Sum256([]byte(content))
 	hash := fmt.Sprintf("%x", h[:])
-	fid, err := g.st.UpsertFile(g.ctx, g.pid, path, hash, len(content))
+	fid, err := g.st.UpsertFile(ctx, g.pid, path, hash, len(content))
 	if err != nil {
 		t.Fatalf("UpsertFile(%s): %v", path, err)
 	}
-	if err := g.st.InsertChunksTextOnly(g.ctx, g.pid, fid, []chunker.Chunk{
+	if err := g.st.InsertChunksTextOnly(ctx, g.pid, fid, []chunker.Chunk{
 		{Content: content, StartLine: 1, EndLine: 1},
 	}, 1); err != nil {
 		t.Fatalf("InsertChunksTextOnly(%s): %v", path, err)
@@ -38,9 +37,9 @@ func (g *graphFixture) createFile(t *testing.T, path, content string) {
 }
 
 // addEdge is a helper that inserts a dependency edge.
-func (g *graphFixture) addEdge(t *testing.T, src string, targets ...string) {
+func (g *graphFixture) addEdge(ctx context.Context, t *testing.T, src string, targets ...string) {
 	t.Helper()
-	if err := g.st.InsertFileDependencies(g.ctx, g.pid, src, targets); err != nil {
+	if err := g.st.InsertFileDependencies(ctx, g.pid, src, targets); err != nil {
 		t.Fatalf("InsertFileDependencies(%s): %v", src, err)
 	}
 }
@@ -61,7 +60,7 @@ func newGraphFixture(t *testing.T) *graphFixture {
 	}
 
 	svc := NewService(st, &fakeEmbedder{vec: []float32{1}, dims: 1})
-	return &graphFixture{ctx: ctx, st: st, pid: pid, svc: svc}
+	return &graphFixture{st: st, pid: pid, svc: svc}
 }
 
 // ---------------------------------------------------------------------------
@@ -70,17 +69,18 @@ func newGraphFixture(t *testing.T) *graphFixture {
 
 func TestExpandByGraphBFSDiscoversDepth1And2(t *testing.T) {
 	g := newGraphFixture(t)
+	ctx := context.Background()
 
 	// Graph: a.go → b.go → c.go → d.go
 	for _, p := range []string{"a.go", "b.go", "c.go", "d.go"} {
-		g.createFile(t, p, "package p\nfunc F() {}")
+		g.createFile(ctx, t, p, "package p\nfunc F() {}")
 	}
-	g.addEdge(t, "a.go", "b.go")
-	g.addEdge(t, "b.go", "c.go")
-	g.addEdge(t, "c.go", "d.go")
+	g.addEdge(ctx, t, "a.go", "b.go")
+	g.addEdge(ctx, t, "b.go", "c.go")
+	g.addEdge(ctx, t, "c.go", "d.go")
 
 	seeds := []store.SearchResult{{FilePath: "a.go", Content: "a", Score: 0.9}}
-	results, err := g.svc.expandByGraph(g.ctx, &Request{GraphMaxDepth: 2}, seeds, g.pid, 1)
+	results, err := g.svc.expandByGraph(ctx, &Request{GraphMaxDepth: 2}, seeds, g.pid, 1)
 	if err != nil {
 		t.Fatalf("expandByGraph: %v", err)
 	}
@@ -103,16 +103,17 @@ func TestExpandByGraphBFSDiscoversDepth1And2(t *testing.T) {
 
 func TestExpandByGraphCycleDoesNotLoop(t *testing.T) {
 	g := newGraphFixture(t)
+	ctx := context.Background()
 
 	for _, p := range []string{"a.go", "b.go"} {
-		g.createFile(t, p, "package p\nfunc F() {}")
+		g.createFile(ctx, t, p, "package p\nfunc F() {}")
 	}
 	// Cycle: a.go → b.go → a.go
-	g.addEdge(t, "a.go", "b.go")
-	g.addEdge(t, "b.go", "a.go")
+	g.addEdge(ctx, t, "a.go", "b.go")
+	g.addEdge(ctx, t, "b.go", "a.go")
 
 	seeds := []store.SearchResult{{FilePath: "a.go", Content: "a", Score: 1.0}}
-	results, err := g.svc.expandByGraph(g.ctx, &Request{GraphMaxDepth: 5}, seeds, g.pid, 1)
+	results, err := g.svc.expandByGraph(ctx, &Request{GraphMaxDepth: 5}, seeds, g.pid, 1)
 	if err != nil {
 		t.Fatalf("expandByGraph: %v", err)
 	}
@@ -133,13 +134,14 @@ func TestExpandByGraphCycleDoesNotLoop(t *testing.T) {
 
 func TestExpandByGraphDecayFactor(t *testing.T) {
 	g := newGraphFixture(t)
+	ctx := context.Background()
 
-	g.createFile(t, "seed.go", "package x\nfunc X() {}")
-	g.createFile(t, "neighbor.go", "package y\nfunc Y() {}")
-	g.addEdge(t, "seed.go", "neighbor.go")
+	g.createFile(ctx, t, "seed.go", "package x\nfunc X() {}")
+	g.createFile(ctx, t, "neighbor.go", "package y\nfunc Y() {}")
+	g.addEdge(ctx, t, "seed.go", "neighbor.go")
 
 	seeds := []store.SearchResult{{FilePath: "seed.go", Score: 1.0}}
-	results, err := g.svc.expandByGraph(g.ctx, &Request{GraphMaxDepth: 1}, seeds, g.pid, 1)
+	results, err := g.svc.expandByGraph(ctx, &Request{GraphMaxDepth: 1}, seeds, g.pid, 1)
 	if err != nil {
 		t.Fatalf("expandByGraph: %v", err)
 	}
@@ -162,14 +164,15 @@ func TestExpandByGraphDecayFactor(t *testing.T) {
 
 func TestExpandByGraphFloorThreshold(t *testing.T) {
 	g := newGraphFixture(t)
+	ctx := context.Background()
 
-	g.createFile(t, "low.go", "package x\nfunc X() {}")
-	g.createFile(t, "dropped.go", "package y\nfunc Y() {}")
-	g.addEdge(t, "low.go", "dropped.go")
+	g.createFile(ctx, t, "low.go", "package x\nfunc X() {}")
+	g.createFile(ctx, t, "dropped.go", "package y\nfunc Y() {}")
+	g.addEdge(ctx, t, "low.go", "dropped.go")
 
 	// Seed score that decays below floor (0.3) after one hop.
 	seeds := []store.SearchResult{{FilePath: "low.go", Score: 0.29}}
-	results, err := g.svc.expandByGraph(g.ctx, &Request{GraphMaxDepth: 5}, seeds, g.pid, 1)
+	results, err := g.svc.expandByGraph(ctx, &Request{GraphMaxDepth: 5}, seeds, g.pid, 1)
 	if err != nil {
 		t.Fatalf("expandByGraph: %v", err)
 	}
@@ -185,17 +188,18 @@ func TestExpandByGraphFloorThreshold(t *testing.T) {
 
 func TestExpandByGraphMaxDepthLimit(t *testing.T) {
 	g := newGraphFixture(t)
+	ctx := context.Background()
 
 	for _, p := range []string{"a.go", "b.go", "c.go", "deep.go"} {
-		g.createFile(t, p, "package p\nfunc F() {}")
+		g.createFile(ctx, t, p, "package p\nfunc F() {}")
 	}
-	g.addEdge(t, "a.go", "b.go")
-	g.addEdge(t, "b.go", "c.go")
-	g.addEdge(t, "c.go", "deep.go")
+	g.addEdge(ctx, t, "a.go", "b.go")
+	g.addEdge(ctx, t, "b.go", "c.go")
+	g.addEdge(ctx, t, "c.go", "deep.go")
 
 	seeds := []store.SearchResult{{FilePath: "a.go", Score: 1.0}}
 	// maxDepth=1: only direct neighbors
-	results, err := g.svc.expandByGraph(g.ctx, &Request{GraphMaxDepth: 1}, seeds, g.pid, 1)
+	results, err := g.svc.expandByGraph(ctx, &Request{GraphMaxDepth: 1}, seeds, g.pid, 1)
 	if err != nil {
 		t.Fatalf("expandByGraph: %v", err)
 	}
@@ -214,12 +218,13 @@ func TestExpandByGraphMaxDepthLimit(t *testing.T) {
 
 func TestExpandByGraphEmptyGraph(t *testing.T) {
 	g := newGraphFixture(t)
+	ctx := context.Background()
 
 	// Project with files but NO dependency edges.
-	g.createFile(t, "orphan.go", "package p\nfunc F() {}")
+	g.createFile(ctx, t, "orphan.go", "package p\nfunc F() {}")
 
 	seeds := []store.SearchResult{{FilePath: "orphan.go", Score: 0.9}}
-	results, err := g.svc.expandByGraph(g.ctx, &Request{GraphMaxDepth: 2}, seeds, g.pid, 1)
+	results, err := g.svc.expandByGraph(ctx, &Request{GraphMaxDepth: 2}, seeds, g.pid, 1)
 	if err != nil {
 		t.Fatalf("expandByGraph with empty graph should not error: %v", err)
 	}
@@ -230,21 +235,22 @@ func TestExpandByGraphEmptyGraph(t *testing.T) {
 
 func TestExpandByGraphSeedsDeduplicatedAsNeighbors(t *testing.T) {
 	g := newGraphFixture(t)
+	ctx := context.Background()
 
 	for _, p := range []string{"a.go", "b.go", "c.go"} {
-		g.createFile(t, p, "package p\nfunc F() {}")
+		g.createFile(ctx, t, p, "package p\nfunc F() {}")
 	}
 	// a.go depends on b.go and c.go; c.go also depends on b.go.
-	g.addEdge(t, "a.go", "b.go")
-	g.addEdge(t, "a.go", "c.go")
-	g.addEdge(t, "c.go", "b.go")
+	g.addEdge(ctx, t, "a.go", "b.go")
+	g.addEdge(ctx, t, "a.go", "c.go")
+	g.addEdge(ctx, t, "c.go", "b.go")
 
 	// Both a.go and b.go are seeds — b.go is also a neighbor of a.go.
 	seeds := []store.SearchResult{
 		{FilePath: "a.go", Score: 1.0},
 		{FilePath: "b.go", Score: 0.9},
 	}
-	results, err := g.svc.expandByGraph(g.ctx, &Request{GraphMaxDepth: 2}, seeds, g.pid, 1)
+	results, err := g.svc.expandByGraph(ctx, &Request{GraphMaxDepth: 2}, seeds, g.pid, 1)
 	if err != nil {
 		t.Fatalf("expandByGraph: %v", err)
 	}

@@ -76,11 +76,11 @@ model User {
 
 func TestExtractNames(t *testing.T) {
 	raw := "model Foo {}\nmodel Bar {}\nmodel Foo {}\n"
-	names := extractNames(prismaModelRx, raw, "model")
+	names := extractNames(prismaModelRx, raw)
 	if len(names) != 2 || names[0] != "Foo" || names[1] != "Bar" {
 		t.Fatalf("extractNames = %#v", names)
 	}
-	if got := extractNames(prismaModelRx, "no models here", "model"); len(got) != 0 {
+	if got := extractNames(prismaModelRx, "no models here"); len(got) != 0 {
 		t.Errorf("empty extractNames = %#v", got)
 	}
 }

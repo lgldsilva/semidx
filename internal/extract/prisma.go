@@ -29,7 +29,7 @@ func extractPrisma(data []byte) (string, error) {
 	var b strings.Builder
 	seen := make(map[string]bool)
 
-	for _, name := range extractNames(prismaModelRx, raw, "model") {
+	for _, name := range extractNames(prismaModelRx, raw) {
 		if !seen["model:"+name] {
 			seen["model:"+name] = true
 			b.WriteString("model ")
@@ -37,7 +37,7 @@ func extractPrisma(data []byte) (string, error) {
 			b.WriteByte('\n')
 		}
 	}
-	for _, name := range extractNames(prismaEnumRx, raw, "enum") {
+	for _, name := range extractNames(prismaEnumRx, raw) {
 		if !seen["enum:"+name] {
 			seen["enum:"+name] = true
 			b.WriteString("enum ")
@@ -45,7 +45,7 @@ func extractPrisma(data []byte) (string, error) {
 			b.WriteByte('\n')
 		}
 	}
-	for _, name := range extractNames(prismaDatasourceRx, raw, "datasource") {
+	for _, name := range extractNames(prismaDatasourceRx, raw) {
 		if !seen["datasource:"+name] {
 			seen["datasource:"+name] = true
 			b.WriteString("datasource ")
@@ -53,7 +53,7 @@ func extractPrisma(data []byte) (string, error) {
 			b.WriteByte('\n')
 		}
 	}
-	for _, name := range extractNames(prismaGeneratorRx, raw, "generator") {
+	for _, name := range extractNames(prismaGeneratorRx, raw) {
 		if !seen["generator:"+name] {
 			seen["generator:"+name] = true
 			b.WriteString("generator ")
@@ -71,7 +71,7 @@ func extractPrisma(data []byte) (string, error) {
 
 // extractNames returns unique capture-group values from a regex that matches
 // definition patterns like "model Foo".
-func extractNames(rx *regexp.Regexp, raw string, _ string) []string {
+func extractNames(rx *regexp.Regexp, raw string) []string {
 	seen := make(map[string]bool)
 	var names []string
 	for _, m := range rx.FindAllStringSubmatch(raw, -1) {

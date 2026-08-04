@@ -130,7 +130,7 @@ func (b *serverBackend) Capabilities() agent.Capabilities {
 // and is logged server-side instead of surfaced.
 func (b *serverBackend) safeErr(op, project string, err error) error {
 	if errors.Is(err, store.ErrNotFound) {
-		return errors.New("project not found")
+		return errors.New(msgProjectNotFound)
 	}
 	b.s.log.Error("mcp "+op+" failed", "project", project, "err", err)
 	return errors.New(op + " failed")

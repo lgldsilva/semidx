@@ -52,7 +52,6 @@ func (basisEmbedder) ListModels(_ context.Context) ([]string, error) { return []
 // pid and st let callers add fixtures (e.g. graph edges) after indexing; src is
 // the temp source root in case a test needs to write more files.
 type localFixture struct {
-	ctx  context.Context
 	st   *localstore.SQLiteStore
 	pid  int
 	sess *mcp.ClientSession
@@ -97,7 +96,7 @@ func setupLocalMCP(t *testing.T, files map[string]string) localFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sess.Close() })
-	return localFixture{ctx: ctx, st: st, pid: pid, sess: sess, src: src}
+	return localFixture{st: st, pid: pid, sess: sess, src: src}
 }
 
 // connectLocal is a thin wrapper over setupLocalMCP for the common two-file

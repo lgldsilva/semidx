@@ -30,8 +30,12 @@ import (
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
-// headerContentType is the HTTP Content-Type header name.
-const headerContentType = "Content-Type"
+// HTTP response messages shared by the server handlers.
+const (
+	headerContentType  = "Content-Type"
+	msgSearchFailed    = "search failed"
+	msgProjectNotFound = "project not found"
+)
 
 // Server is the HTTP API. It owns the store, embedder and search service; token
 // auth is enforced per route.
@@ -281,6 +285,10 @@ func (s *Server) metricsHandler() http.Handler {
 
 // Handler returns the fully-wired HTTP handler (routing + metrics instrumentation).
 func (s *Server) Handler() http.Handler {
+	return s.middlewareChain(s.buildMux())
+}
+
+func (s *Server) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
@@ -327,6 +335,10 @@ func (s *Server) Handler() http.Handler {
 	if s.admin != nil {
 		mux.Handle("/admin/", s.admin)
 	}
+	return mux
+}
+
+func (s *Server) middlewareChain(mux *http.ServeMux) http.Handler {
 	return s.rateLimit(s.instrument(mux))
 }
 
@@ -362,17 +374,27 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ready"))
 }
 
+type searchRequest struct {
+	Query      string `json:"query"`
+	TopK       int    `json:"top_k"`
+	Model      string `json:"model"`
+	Keyword    bool   `json:"keyword"`
+	Graph      bool   `json:"graph"`
+	GraphDepth int    `json:"graph_depth"`
+}
+
+func decodeSearchRequest(r *http.Request) (searchRequest, error) {
+	var request searchRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		return searchRequest{}, err
+	}
+	return request, nil
+}
+
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
-	var body struct {
-		Query      string `json:"query"`
-		TopK       int    `json:"top_k"`
-		Model      string `json:"model"`
-		Keyword    bool   `json:"keyword"`
-		Graph      bool   `json:"graph"`
-		GraphDepth int    `json:"graph_depth"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	body, err := decodeSearchRequest(r)
+	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -393,22 +415,29 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		KeywordOnly: body.Keyword, Graph: body.Graph, GraphMaxDepth: body.GraphDepth,
 	})
 	if err != nil {
-		s.log.Warn("search failed", "project", project, "err", err)
+		s.log.Warn(msgSearchFailed, "project", project, "err", err)
 		s.searchTotal.WithLabelValues(project, string(src), string(usage.OutcomeError)).Inc()
 		if errors.Is(err, store.ErrNotFound) {
-			writeJSONError(w, http.StatusNotFound, "project not found")
+			writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 			return
 		}
 		// An open embedding circuit no longer reaches here: the search service
 		// degrades to keyword results (Degraded + RetryAfterMS in the response)
 		// instead of propagating the RetryableError.
-		writeJSONError(w, http.StatusInternalServerError, "search failed")
+		writeJSONError(w, http.StatusInternalServerError, msgSearchFailed)
 		return
 	}
 
 	outcome := usage.Classify(len(resp.Results), resp.Fallback, resp.Keyword)
 	s.searchTotal.WithLabelValues(project, string(src), string(outcome)).Inc()
 
+	out := mapSearchResponse(resp)
+	out.TookMS = time.Since(start).Milliseconds()
+	s.searchDuration.WithLabelValues(project).Observe(time.Since(start).Seconds())
+	writeJSON(w, http.StatusOK, out)
+}
+
+func mapSearchResponse(resp *search.Response) client.SearchResponse {
 	out := client.SearchResponse{
 		Project:      resp.Project.Name,
 		Model:        resp.Model,
@@ -416,7 +445,6 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Keyword:      resp.Keyword,
 		Degraded:     resp.Degraded,
 		RetryAfterMS: resp.RetryAfter.Milliseconds(),
-		TookMS:       time.Since(start).Milliseconds(),
 		Results:      make([]client.SearchHit, 0, len(resp.Results)),
 	}
 	for _, hit := range resp.Results {
@@ -427,8 +455,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			Stale: hit.Stale, IndexedAt: hit.IndexedAt,
 		})
 	}
-	s.searchDuration.WithLabelValues(project).Observe(time.Since(start).Seconds())
-	writeJSON(w, http.StatusOK, out)
+	return out
 }
 
 func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
@@ -491,12 +518,12 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 				project, lookupErr = s.store.GetProjectByIdentity(ctx, ref)
 			}
 			if errors.Is(lookupErr, store.ErrNotFound) {
-				writeJSONError(w, http.StatusNotFound, "project not found")
+				writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 				return
 			}
 			if lookupErr != nil {
 				s.log.Warn("multi-search project lookup failed", "project", ref, "err", lookupErr)
-				writeJSONError(w, http.StatusInternalServerError, "search failed")
+				writeJSONError(w, http.StatusInternalServerError, msgSearchFailed)
 				return
 			}
 			if project.Identity != "" {
@@ -512,11 +539,11 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 			}
 			project, lookupErr := s.store.GetProjectByIdentity(ctx, ref)
 			if errors.Is(lookupErr, store.ErrNotFound) {
-				writeJSONError(w, http.StatusNotFound, "project not found")
+				writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 				return
 			}
 			if lookupErr != nil {
-				writeJSONError(w, http.StatusInternalServerError, "search failed")
+				writeJSONError(w, http.StatusInternalServerError, msgSearchFailed)
 				return
 			}
 			identities = append(identities, project.Identity)
@@ -534,7 +561,7 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		s.log.Warn("multi-project search failed", "err", err)
-		writeJSONError(w, http.StatusInternalServerError, "search failed")
+		writeJSONError(w, http.StatusInternalServerError, msgSearchFailed)
 		return
 	}
 	out := client.MultiSearchResponse{

@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -20,7 +21,7 @@ func TestDepGraphTools(t *testing.T) {
 	})
 	// Insert the import edge after indexing so it is not wiped out. The store
 	// records file → package-dir, which is what the walkable index expects.
-	if err := fix.st.InsertFileDependencies(fix.ctx, fix.pid, "main.go", []string{"pkg/"}); err != nil {
+	if err := fix.st.InsertFileDependencies(context.Background(), fix.pid, "main.go", []string{"pkg/"}); err != nil {
 		t.Fatalf("InsertFileDependencies: %v", err)
 	}
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,72 +53,7 @@ func newRuntimeGraphCmd(d *deps) *cobra.Command {
 		Short: "List or submit observed runtime communication edges",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if input == "" {
-				if d.remote() {
-					edges, err := d.apiClient().ListRuntimeEdges(cmd.Context(), args[0])
-					if err != nil {
-						return err
-					}
-					return printRuntimeEdges(cmd.OutOrStdout(), edges, asJSON)
-				}
-				st, err := d.indexStore(cmd.Context())
-				if err != nil {
-					return err
-				}
-				graph, ok := st.(store.RuntimeGraphStore)
-				if !ok {
-					return fmt.Errorf("runtime graph is unavailable")
-				}
-				p, err := st.GetProject(cmd.Context(), args[0])
-				if err != nil {
-					return err
-				}
-				edges, err := graph.ListRuntimeEdges(cmd.Context(), p.ID)
-				if err != nil {
-					return err
-				}
-				return printRuntimeEdges(cmd.OutOrStdout(), toClientEdges(edges), asJSON)
-			}
-			edges, err := readRuntimeEdges(input)
-			if err != nil {
-				return err
-			}
-			for i := range edges {
-				if target != "" {
-					edges[i].TargetProjectName = target
-				}
-				if protocol != "" {
-					edges[i].Protocol = protocol
-				}
-				if environment != "" {
-					edges[i].Environment = environment
-				}
-			}
-			if d.remote() {
-				accepted, err := d.apiClient().SubmitRuntimeEdges(cmd.Context(), args[0], edges)
-				if err != nil {
-					return err
-				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "accepted\t%d\n", accepted)
-				return nil
-			}
-			st, err := d.indexStore(cmd.Context())
-			if err != nil {
-				return err
-			}
-			p, err := st.GetProject(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			graph, ok := st.(store.RuntimeGraphStore)
-			if !ok {
-				return fmt.Errorf("runtime graph is unavailable")
-			}
-			if err := graph.UpsertRuntimeEdges(cmd.Context(), p.ID, toStoreEdges(edges)); err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "accepted\t%d\n", len(edges))
-			return nil
+			return runRuntimeGraph(cmd.Context(), d, args[0], input, target, protocol, environment, asJSON, cmd.OutOrStdout())
 		},
 	}
 	c.Flags().StringVarP(&input, "input", "i", "", "JSON file with {\"edges\": [...]} or an edge array")
@@ -135,28 +71,101 @@ func newPortfolioGraphCmd(d *deps) *cobra.Command {
 		Short: "List observed communication across the active workspace",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if d.remote() {
-				edges, err := d.apiClient().ListRuntimeGraph(cmd.Context(), 500)
-				if err != nil {
-					return err
-				}
-				return printRuntimeEdges(cmd.OutOrStdout(), edges, asJSON)
-			}
-			st, err := d.indexStore(cmd.Context())
-			if err != nil {
-				return err
-			}
-			graph, ok := st.(store.RuntimeGraphStore)
-			if !ok {
-				return fmt.Errorf("runtime graph is unavailable")
-			}
-			edges, err := graph.ListWorkspaceRuntimeEdges(cmd.Context(), 500)
-			if err != nil {
-				return err
-			}
-			return printRuntimeEdges(cmd.OutOrStdout(), toClientEdges(edges), asJSON)
+			return runPortfolioGraph(cmd.Context(), d, asJSON, cmd.OutOrStdout())
 		},
 	}
+}
+
+func runRuntimeGraph(ctx context.Context, d *deps, project, input, target, protocol, environment string, asJSON bool, w io.Writer) error {
+	if input == "" {
+		if d.remote() {
+			edges, err := d.apiClient().ListRuntimeEdges(ctx, project)
+			if err != nil {
+				return err
+			}
+			return printRuntimeEdges(w, edges, asJSON)
+		}
+		st, err := d.indexStore(ctx)
+		if err != nil {
+			return err
+		}
+		graph, ok := st.(store.RuntimeGraphStore)
+		if !ok {
+			return fmt.Errorf("runtime graph is unavailable")
+		}
+		p, err := st.GetProject(ctx, project)
+		if err != nil {
+			return err
+		}
+		edges, err := graph.ListRuntimeEdges(ctx, p.ID)
+		if err != nil {
+			return err
+		}
+		return printRuntimeEdges(w, toClientEdges(edges), asJSON)
+	}
+	edges, err := readRuntimeEdges(input)
+	if err != nil {
+		return err
+	}
+	for i := range edges {
+		if target != "" {
+			edges[i].TargetProjectName = target
+		}
+		if protocol != "" {
+			edges[i].Protocol = protocol
+		}
+		if environment != "" {
+			edges[i].Environment = environment
+		}
+	}
+	if d.remote() {
+		accepted, err := d.apiClient().SubmitRuntimeEdges(ctx, project, edges)
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(w, "accepted\t%d\n", accepted)
+		return nil
+	}
+	st, err := d.indexStore(ctx)
+	if err != nil {
+		return err
+	}
+	p, err := st.GetProject(ctx, project)
+	if err != nil {
+		return err
+	}
+	graph, ok := st.(store.RuntimeGraphStore)
+	if !ok {
+		return fmt.Errorf("runtime graph is unavailable")
+	}
+	if err := graph.UpsertRuntimeEdges(ctx, p.ID, toStoreEdges(edges)); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(w, "accepted\t%d\n", len(edges))
+	return nil
+}
+
+func runPortfolioGraph(ctx context.Context, d *deps, asJSON bool, w io.Writer) error {
+	if d.remote() {
+		edges, err := d.apiClient().ListRuntimeGraph(ctx, 500)
+		if err != nil {
+			return err
+		}
+		return printRuntimeEdges(w, edges, asJSON)
+	}
+	st, err := d.indexStore(ctx)
+	if err != nil {
+		return err
+	}
+	graph, ok := st.(store.RuntimeGraphStore)
+	if !ok {
+		return fmt.Errorf("runtime graph is unavailable")
+	}
+	edges, err := graph.ListWorkspaceRuntimeEdges(ctx, 500)
+	if err != nil {
+		return err
+	}
+	return printRuntimeEdges(w, toClientEdges(edges), asJSON)
 }
 
 func readRuntimeEdges(path string) ([]client.RuntimeEdge, error) {

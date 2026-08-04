@@ -401,7 +401,7 @@ func (d *deps) mustSearchStore() store.IndexStore {
 	return d.db
 }
 
-// adminSearchAdapter implements rag.SearchService over search.Service.
+// adminSearchAdapter implements rag.Searcher over search.Service.
 type adminSearchAdapter struct {
 	svc *search.Service
 }

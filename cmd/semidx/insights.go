@@ -289,7 +289,7 @@ func groupDatapointsByMonth(dps []Datapoint) (map[monthKey][]Datapoint, []monthK
 	return monthGroups, sortedMonths
 }
 
-func renderBar(avgCount float64, scale float64) string {
+func renderBar(avgCount, scale float64) string {
 	barLen := int(math.Round(avgCount * scale))
 	if barLen < 1 && avgCount > 0 {
 		barLen = 1
