@@ -71,12 +71,12 @@ func TestSymbolEnrichValidation(t *testing.T) {
 
 	// ----- Index baseline (no symbols) -------------------------------------
 	baseStore := newSymStore(t)
-	indexSymFiles(indexSymParams{t: t, ctx: ctx, st: baseStore, emb: emb, model: model, root: root, files: files, enrich: false, label: "sym-base"})
+	indexSymFiles(ctx, indexSymParams{t: t, st: baseStore, emb: emb, model: model, root: root, files: files, enrich: false, label: "sym-base"})
 	baseSvc := NewService(baseStore, emb)
 
 	// ----- Index enriched (with symbols) -----------------------------------
 	enrStore := newSymStore(t)
-	indexSymFiles(indexSymParams{t: t, ctx: ctx, st: enrStore, emb: emb, model: model, root: root, files: files, enrich: true, label: "sym-enrich"})
+	indexSymFiles(ctx, indexSymParams{t: t, st: enrStore, emb: emb, model: model, root: root, files: files, enrich: true, label: "sym-enrich"})
 	enrSvc := NewService(enrStore, emb)
 
 	// ----- Run queries and compare -----------------------------------------
@@ -166,7 +166,6 @@ func newSymStore(t *testing.T) *localstore.SQLiteStore {
 // indexSymParams holds parameters for indexSymFiles.
 type indexSymParams struct {
 	t      *testing.T
-	ctx    context.Context
 	st     *localstore.SQLiteStore
 	emb    embed.Embedder
 	model  string
@@ -177,9 +176,8 @@ type indexSymParams struct {
 }
 
 // indexSymFiles indexes Go files into a store, optionally enriching chunks with symbols.
-func indexSymFiles(p indexSymParams) {
+func indexSymFiles(ctx context.Context, p indexSymParams) {
 	t := p.t
-	ctx := p.ctx
 	st := p.st
 	emb := p.emb
 	model := p.model
@@ -270,7 +268,7 @@ func searchSymTopK(t *testing.T, ctx context.Context, svc *Service, project, que
 // computeNDCG computes normalized DCG@len(results) for ranked results.
 // Relevance is binary: a result matches if it starts with any prefix in
 // relevant. The ideal DCG places all relevant results at the top positions.
-func computeNDCG(results []string, relevant []string) float64 {
+func computeNDCG(results, relevant []string) float64 {
 	if len(results) == 0 {
 		return 0
 	}

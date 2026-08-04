@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -20,7 +21,7 @@ func TestGraphTools(t *testing.T) {
 	})
 
 	// Insert dependencies after indexing so they are not wiped out.
-	if err := fix.st.InsertFileDependencies(fix.ctx, fix.pid, "main.go", []string{"lib.go"}); err != nil {
+	if err := fix.st.InsertFileDependencies(context.Background(), fix.pid, "main.go", []string{"lib.go"}); err != nil {
 		t.Fatalf("InsertFileDependencies: %v", err)
 	}
 

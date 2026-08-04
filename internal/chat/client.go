@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 )
 
-// Client is a chat LLM provider.
-type Client interface {
+// Sender is a chat LLM provider.
+type Sender interface {
 	SendMessage(ctx context.Context, req Request) (*Response, error)
 }
 
@@ -68,7 +68,7 @@ type Source struct {
 
 // StreamClient is a chat provider that supports streaming responses.
 type StreamClient interface {
-	Client
+	Sender
 	// StreamMessage sends a chat request and returns chunks as they arrive.
 	// The returned channel is closed when streaming completes.
 	StreamMessage(ctx context.Context, req Request) (<-chan StreamChunk, error)

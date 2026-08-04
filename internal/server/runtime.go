@@ -35,7 +35,7 @@ func (s *Server) handleListRuntimeEdges(w http.ResponseWriter, r *http.Request) 
 	}
 	project, err := s.store.GetProject(r.Context(), r.PathValue("project"))
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONError(w, http.StatusNotFound, "project not found")
+		writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 		return
 	}
 	if err != nil {
@@ -108,7 +108,7 @@ func (s *Server) handleSubmitRuntimeEdges(w http.ResponseWriter, r *http.Request
 	}
 	project, err := s.store.GetProject(r.Context(), r.PathValue("project"))
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONError(w, http.StatusNotFound, "project not found")
+		writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 		return
 	}
 	if err != nil {

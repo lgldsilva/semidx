@@ -179,7 +179,7 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	p, err := s.store.GetProject(r.Context(), r.PathValue("project"))
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, "project not found")
+		writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 		return
 	case err != nil:
 		s.log.Error("get project", "err", err)
@@ -197,7 +197,7 @@ func (s *Server) handleSetProjectPrivacy(w http.ResponseWriter, r *http.Request)
 	}
 	project, err := s.store.GetProject(r.Context(), r.PathValue("project"))
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSONError(w, http.StatusNotFound, "project not found")
+		writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 		return
 	}
 	if err != nil {
@@ -229,7 +229,7 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	err := s.store.DeleteProject(r.Context(), r.PathValue("project"))
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, "project not found")
+		writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 		return
 	case err != nil:
 		s.log.Error("delete project", "err", err)

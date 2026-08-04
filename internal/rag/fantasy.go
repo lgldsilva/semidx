@@ -32,7 +32,7 @@ const fantasyBackendErrMsg = "chat backend failed — check server logs"
 // chat mode: retrieval is deterministic and server-side, unlike the "agent"
 // mode where the model decides when (and whether) to call semantic_search.
 type FantasyPipeline struct {
-	search SearchService
+	search Searcher
 	runner ChatRunner
 	config PipelineConfig
 }
@@ -40,7 +40,7 @@ type FantasyPipeline struct {
 // NewFantasyPipeline builds the fantasy-backed RAG pipeline. TopK defaults to 5
 // (mirroring NewPipeline). MaxTokens/Temperature/Model in config are unused —
 // they belong to the runner's model, configured by the caller.
-func NewFantasyPipeline(search SearchService, runner ChatRunner, config PipelineConfig) *FantasyPipeline {
+func NewFantasyPipeline(search Searcher, runner ChatRunner, config PipelineConfig) *FantasyPipeline {
 	if config.TopK <= 0 {
 		config.TopK = 5
 	}

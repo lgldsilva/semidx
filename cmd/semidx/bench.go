@@ -20,6 +20,14 @@ import (
 
 type benchQuery = eval.Query
 
+type benchOpts struct {
+	project, model, queriesFile string
+	topK                        int
+	privacy, asJSON             bool
+	strictSemantic              bool
+	baselineKeyword             bool
+}
+
 // benchResults holds per-query and aggregated metrics.
 type benchResults struct {
 	Model      string         `json:"model"`
@@ -49,12 +57,7 @@ type queryMetrics struct {
 }
 
 func newBenchCmd(d *deps) *cobra.Command {
-	var (
-		project, model, queriesFile     string
-		topK                            int
-		privacy, asJSON, strictSemantic bool
-		baselineKeyword                 bool
-	)
+	var opts benchOpts
 	c := &cobra.Command{
 		Use:   "bench",
 		Short: "Run search quality benchmarks against ground-truth queries",
@@ -69,26 +72,26 @@ reports the improvement of semantic search over the keyword baseline.`,
 		Example: `  semidx bench --project . --queries queries.json
   semidx bench --project myapp --queries queries.json --baseline-keyword --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			queries, err := loadBenchQueries(queriesFile)
+			queries, err := loadBenchQueries(opts.queriesFile)
 			if err != nil {
 				return err
 			}
 			if len(queries) == 0 {
-				return fmt.Errorf("no queries found in %s", queriesFile)
+				return fmt.Errorf("no queries found in %s", opts.queriesFile)
 			}
 
-			results := runBenchmarks(cmd, d, project, model, topK, privacy, strictSemantic, queries)
+			results := runBenchmarks(cmd, d, opts, queries)
 
 			// Optional: compute keyword baseline and report improvement.
-			if baselineKeyword {
-				kwResults := runBenchmarksKeyword(cmd, d, project, topK, queries)
+			if opts.baselineKeyword {
+				kwResults := runBenchmarksKeyword(cmd, d, opts.project, opts.topK, queries)
 				results.Baseline = "keyword"
-				if asJSON {
+				if opts.asJSON {
 					results.Baseline = fmt.Sprintf("keyword (ndcg:%.3f mrr:%.3f)", kwResults.NDCG10, kwResults.MRR)
 				}
 			}
 
-			if asJSON {
+			if opts.asJSON {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
 				if err := enc.Encode(results); err != nil {
@@ -97,20 +100,20 @@ reports the improvement of semantic search over the keyword baseline.`,
 			} else {
 				printBenchResults(results)
 			}
-			if strictSemantic && results.Failed > 0 {
+			if opts.strictSemantic && results.Failed > 0 {
 				return fmt.Errorf("strict semantic benchmark failed: %d query(s) used fallback/degraded mode or errored", results.Failed)
 			}
 			return nil
 		},
 	}
-	c.Flags().StringVar(&project, "project", ".", "Project path or name")
-	c.Flags().StringVar(&queriesFile, "queries", "", "Path to JSON queries file (required)")
-	c.Flags().IntVar(&topK, "top-k", 10, "Number of results per query")
-	c.Flags().StringVar(&model, "model", "", "Override embedding model")
-	c.Flags().BoolVar(&privacy, "privacy", false, "Force local-only providers (Ollama)")
-	c.Flags().BoolVar(&strictSemantic, "strict-semantic", false, "Fail benchmark queries that use embedding fallback or degraded mode")
-	c.Flags().BoolVar(&asJSON, "json", false, "Output results as JSON")
-	c.Flags().BoolVar(&baselineKeyword, "baseline-keyword", false, "Also run keyword search to compare")
+	c.Flags().StringVar(&opts.project, "project", ".", "Project path or name")
+	c.Flags().StringVar(&opts.queriesFile, "queries", "", "Path to JSON queries file (required)")
+	c.Flags().IntVar(&opts.topK, "top-k", 10, "Number of results per query")
+	c.Flags().StringVar(&opts.model, "model", "", "Override embedding model")
+	c.Flags().BoolVar(&opts.privacy, "privacy", false, "Force local-only providers (Ollama)")
+	c.Flags().BoolVar(&opts.strictSemantic, "strict-semantic", false, "Fail benchmark queries that use embedding fallback or degraded mode")
+	c.Flags().BoolVar(&opts.asJSON, "json", false, "Output results as JSON")
+	c.Flags().BoolVar(&opts.baselineKeyword, "baseline-keyword", false, "Also run keyword search to compare")
 	_ = c.MarkFlagRequired("queries")
 	c.AddCommand(newBenchRetrievalCmd(d))
 	c.AddCommand(newBenchCompareCmd())
@@ -444,52 +447,35 @@ func loadBenchQueries(path string) ([]benchQuery, error) {
 	return ds.Queries, nil
 }
 
-func runBenchmarks(cmd *cobra.Command, d *deps, project, model string, topK int, privacy, strictSemantic bool, queries []benchQuery) *benchResults {
-	out := &benchResults{Model: model, Total: len(queries)}
+func runBenchmarks(cmd *cobra.Command, d *deps, opts benchOpts, queries []benchQuery) *benchResults {
+	out := &benchResults{Model: opts.model, Total: len(queries)}
 	var sumNDCG, sumMRR, sumP5, sumR10 float64
 	start := time.Now()
 
 	for i, q := range queries {
-		results, err := d.runSearchTargets(cmd, project, q.Query, model, topK, privacy)
-		qm := queryMetrics{Query: q.Query, Description: q.Description, Relevant: len(q.Relevant)}
+		results, err := d.runSearchTargets(cmd, opts.project, q.Query, opts.model, opts.topK, opts.privacy)
 		if err != nil {
-			qm.Error = err.Error()
 			out.Failed++
-			out.Queries = append(out.Queries, qm)
+			out.Queries = append(out.Queries, queryMetrics{
+				Query: q.Query, Description: q.Description, Relevant: len(q.Relevant), Error: err.Error(),
+			})
 			continue
 		}
-		for _, ps := range results {
-			qm.Fallback = qm.Fallback || ps.resp.Fallback
-			qm.Degraded = qm.Degraded || ps.resp.Degraded
-		}
+		qm, failed := scoreQuery(q, results, opts.topK, opts.strictSemantic)
 		if qm.Fallback || qm.Degraded {
 			out.Fallbacks++
-			if strictSemantic {
-				qm.Error = "semantic benchmark received fallback or degraded response"
-				out.Failed++
-				out.Queries = append(out.Queries, qm)
-				continue
-			}
 		}
-		// Flatten result files from all projects searched.
-		var ranked []eval.Ranked
-		for _, ps := range results {
-			for _, r := range ps.resp.Results {
-				ranked = append(ranked, eval.Ranked{File: r.FilePath})
-			}
+		if failed {
+			out.Failed++
 		}
-		metrics := eval.Evaluate(q, ranked, topK)
-		qm.Found = metrics.Found
-		qm.NDCG10 = metrics.NDCG10
-		qm.MRR = metrics.MRR
-		qm.PrecAt5 = metrics.Precision5
-		qm.RecallAt10 = metrics.Recall10
-
+		out.Queries = append(out.Queries, qm)
+		if failed {
+			continue
+		}
 		sumNDCG += qm.NDCG10
 		sumMRR += qm.MRR
 		sumP5 += qm.PrecAt5
 		sumR10 += qm.RecallAt10
-		out.Queries = append(out.Queries, qm)
 
 		// Progress indicator for non-JSON output.
 		fmt.Fprintf(os.Stderr, "\r[%d/%d] %s", i+1, len(queries), q.Query)
@@ -503,8 +489,36 @@ func runBenchmarks(cmd *cobra.Command, d *deps, project, model string, topK int,
 		out.PrecAt5 = sumP5 / n
 		out.RecallAt10 = sumR10 / n
 	}
-	out.Model = fmt.Sprintf("%s (%v)", modelOrDefault(model), time.Since(start).Round(time.Millisecond))
+	out.Model = fmt.Sprintf("%s (%v)", modelOrDefault(opts.model), time.Since(start).Round(time.Millisecond))
 	return out
+}
+
+func scoreQuery(q benchQuery, results []projSearch, topK int, strictSemantic bool) (queryMetrics, bool) {
+	qm := queryMetrics{Query: q.Query, Description: q.Description, Relevant: len(q.Relevant)}
+	for _, ps := range results {
+		qm.Fallback = qm.Fallback || ps.resp.Fallback
+		qm.Degraded = qm.Degraded || ps.resp.Degraded
+	}
+	if qm.Fallback || qm.Degraded {
+		if strictSemantic {
+			qm.Error = "semantic benchmark received fallback or degraded response"
+			return qm, true
+		}
+	}
+
+	var ranked []eval.Ranked
+	for _, ps := range results {
+		for _, result := range ps.resp.Results {
+			ranked = append(ranked, eval.Ranked{File: result.FilePath})
+		}
+	}
+	metrics := eval.Evaluate(q, ranked, topK)
+	qm.Found = metrics.Found
+	qm.NDCG10 = metrics.NDCG10
+	qm.MRR = metrics.MRR
+	qm.PrecAt5 = metrics.Precision5
+	qm.RecallAt10 = metrics.Recall10
+	return qm, false
 }
 
 // runBenchmarksKeyword runs pure keyword searches for baseline comparison.
@@ -583,4 +597,3 @@ func modelOrDefault(model string) string {
 }
 
 // register is internal — bench registers itself via the commands list in main.
-var _ = &cobra.Command{} // unused; kept for package consistency

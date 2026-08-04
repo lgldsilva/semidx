@@ -10,7 +10,7 @@
 #   GEMINI_API_KEY=... ./index-project.sh ~/projects/myapp gemini-embedding-2
 set -euo pipefail
 
-if [ $# -lt 1 ]; then
+if [[ $# -lt 1 ]]; then
   echo "Usage: ./index-project.sh <project_path> [model]" >&2
   exit 1
 fi

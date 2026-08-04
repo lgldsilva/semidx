@@ -49,7 +49,7 @@ func TestAgentAskWithToolCall(t *testing.T) {
 	}
 }
 
-// fakeChatClient implements chat.Client, returning tool calls only once.
+// fakeChatClient implements chat.Sender, returning tool calls only once.
 type fakeChatClient struct {
 	response   string
 	toolCalls  []chat.ToolCall
