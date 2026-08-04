@@ -48,6 +48,12 @@ jobs:
           echo "business-package coverage (internal+pkg): ${total}%"
           awk -v t="$total" 'BEGIN { if (t+0 < 90) { print "business coverage below 90%: " t; exit 1 } }'
 
+      - name: Upload coverage for the SonarCloud job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-out
+          path: coverage.out
+
   lint:
     name: lint
     runs-on: ubuntu-latest
