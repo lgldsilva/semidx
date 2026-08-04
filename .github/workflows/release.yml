@@ -10,9 +10,9 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
-# Least privilege at workflow level; write scopes live on the jobs that need them.
-permissions:
-  contents: read
+# Least privilege: no workflow-level permissions; write scopes live on the jobs that need them.
+# SonarCloud finding "Read permissions should be defined at the job level" is addressed by
+# removing this workflow-level grant (jobs declare contents:read or write as required).
 
 env:
   GOTOOLCHAIN: go1.26.5
