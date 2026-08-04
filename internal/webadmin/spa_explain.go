@@ -230,28 +230,33 @@ func detectModulePath(root string) string {
 }
 
 // confinedPath joins root and rel and returns the absolute path only when the
-// result stays inside root. filepath.IsAbs rejects absolute user input;
-// filepath.Rel + filepath.IsLocal are the sanitizers CodeQL recognizes for
-// go/path-injection (HasPrefix alone is not enough).
+// result stays inside root. It rejects empty/absolute input and applies
+// filepath.IsLocal to the user-supplied relative path — the sanitizer CodeQL's
+// go/path-injection query recognizes. The returned absolute path is built from
+// the validated local segment, so callers can safely pass it to os.ReadFile or
+// os.ReadDir.
 func confinedPath(root, rel string) (string, bool) {
 	if rel == "" || filepath.IsAbs(rel) {
 		return "", false
 	}
-	rootClean := filepath.Clean(root)
-	abs := filepath.Clean(filepath.Join(rootClean, rel))
-	relOut, err := filepath.Rel(rootClean, abs)
-	if err != nil || !filepath.IsLocal(relOut) {
+	rel = filepath.Clean(rel)
+	if !filepath.IsLocal(rel) {
 		return "", false
 	}
-	return abs, true
+	rootClean := filepath.Clean(root)
+	return filepath.Join(rootClean, rel), true
 }
 
 func findTestFiles(root, filePath, symbolName string) []string {
-	absFile, ok := confinedPath(root, filePath)
+	// Re-validate both the file path and its directory through confinedPath
+	// so CodeQL sees the paths as sanitized before os.ReadDir/os.ReadFile.
+	if _, ok := confinedPath(root, filePath); !ok {
+		return nil
+	}
+	dir, ok := confinedPath(root, filepath.Dir(filePath))
 	if !ok {
 		return nil
 	}
-	dir := filepath.Dir(absFile)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -270,7 +275,7 @@ func findTestFiles(root, filePath, symbolName string) []string {
 		if !ok {
 			continue
 		}
-		// #nosec G304 -- testAbs from confinedPath
+		// #nosec G304 -- testAbs built from a local path under root
 		data, err := os.ReadFile(testAbs)
 		if err != nil {
 			continue
