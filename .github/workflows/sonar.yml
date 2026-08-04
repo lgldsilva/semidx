@@ -1,0 +1,50 @@
+# SonarCloud (sonarcloud.io) — cloud analysis that works from GitHub-hosted
+# runners. Consumes sonar-project.properties at the repo root (organization,
+# project key, exclusions and coverage config live there; host and token arrive
+# as -D flags here). Every step skips cleanly until the SONAR_TOKEN secret
+# exists, so forks and early setup stay green.
+#
+# SONAR_TOKEN is scoped to this job only. The scanner package is pinned to an
+# exact version so a newly published npm tag cannot run with the secret.
+name: SonarCloud
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sonar:
+    name: SonarCloud
+    runs-on: ubuntu-latest
+    env:
+      # `secrets` is not available in step `if:` conditions, so the token is
+      # bound at the job level and the steps gate on `env.SONAR_TOKEN` instead.
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ env.SONAR_TOKEN != '' }}
+        with:
+          fetch-depth: 0 # full history for accurate new-code detection
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: ${{ env.SONAR_TOKEN != '' }}
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: Coverage
+        if: ${{ env.SONAR_TOKEN != '' }}
+        run: go test -shuffle=on -count=1 -coverprofile=coverage.out ./...
+      - name: SonarCloud analysis (waits for the quality gate)
+        if: ${{ env.SONAR_TOKEN != '' }}
+        run: |
+          npx -y sonarqube-scanner@5.0.0 \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.token="$SONAR_TOKEN" \
+            -Dsonar.qualitygate.wait=true
+      - name: SonarCloud skipped
+        if: ${{ env.SONAR_TOKEN == '' }}
+        run: echo "SONAR_TOKEN not set — skipping SonarCloud analysis."
