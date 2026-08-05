@@ -78,3 +78,27 @@ func TestExtBreakdown(t *testing.T) {
 		t.Fatalf("breakdown=%v", got)
 	}
 }
+
+func TestExplainPathTraversalRejected(t *testing.T) {
+	root := t.TempDir()
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.projects = []store.Project{{ID: 1, Name: "demo", Model: "bge-m3", Path: root}}
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+
+	code, body := getBody(t, c, srv.URL+"/admin/api/projects/demo/analyze/explain?path=../etc/passwd&line=1")
+	if code != 400 || !strings.Contains(body, "escapes project root") {
+		t.Fatalf("path traversal should be rejected, got code=%d body=%s", code, body)
+	}
+}
+
+func TestFindTestFilesPathTraversal(t *testing.T) {
+	root := t.TempDir()
+	if got := findTestFiles(root, "../etc/passwd", "foo"); got != nil {
+		t.Fatalf("findTestFiles with escaping path should return nil, got %v", got)
+	}
+	if got := findTestFiles(root, "/etc/passwd", "foo"); got != nil {
+		t.Fatalf("findTestFiles with absolute path should return nil, got %v", got)
+	}
+}
