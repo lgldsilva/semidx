@@ -105,7 +105,7 @@ brews:
       owner: lgldsilva
       name: homebrew-tap
       branch: main
-      token: '{{ index .Env "TAP_GITHUB_TOKEN" }}'
+      token: '{{ .Env.TAP_GITHUB_TOKEN }}'
     directory: Formula
     homepage: https://github.com/lgldsilva/semidx
     description: "Self-hosted semantic code search."
@@ -123,7 +123,7 @@ scoops:
       owner: lgldsilva
       name: scoop-bucket
       branch: main
-      token: '{{ index .Env "TAP_GITHUB_TOKEN" }}'
+      token: '{{ .Env.TAP_GITHUB_TOKEN }}'
     homepage: https://github.com/lgldsilva/semidx
     description: "Self-hosted semantic code search."
     license: Apache-2.0
