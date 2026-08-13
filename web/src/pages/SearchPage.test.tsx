@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, type SearchResponse } from '../api'
 import { SearchPage } from './SearchPage'
@@ -12,15 +13,22 @@ function mockSearch(res: Partial<SearchResponse>) {
   })
 }
 
+function renderSearch() {
+  return render(
+    <MemoryRouter>
+      <SearchPage />
+    </MemoryRouter>,
+  )
+}
+
 async function runQuery(query: string) {
-  render(<SearchPage />)
+  renderSearch()
   fireEvent.change(
     screen.getByPlaceholderText('where is authentication handled?'),
     { target: { value: query } },
   )
   fireEvent.click(screen.getByRole('button', { name: 'Search' }))
-  // The submit round-trips through the mocked api.search promise.
-  await screen.findByText('No matches.')
+  await screen.findByText('No matches')
 }
 
 afterEach(() => {
@@ -35,7 +43,6 @@ describe('SearchPage degraded badge', () => {
     expect(alert).toHaveTextContent(
       'Keyword results — embedding temporarily unavailable (try again in ~2s).',
     )
-    // degraded replaces the plain keyword-fallback warning
     expect(
       screen.queryByText(/Keyword fallback — embeddings unavailable/),
     ).not.toBeInTheDocument()
@@ -62,5 +69,33 @@ describe('SearchPage degraded badge', () => {
     mockSearch({})
     await runQuery('anything')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('sends graph expansion when the toggle is on', async () => {
+    const spy = mockSearch({})
+    renderSearch()
+    fireEvent.click(screen.getByLabelText('Expand via graph'))
+    fireEvent.change(
+      screen.getByPlaceholderText('where is authentication handled?'),
+      { target: { value: 'auth' } },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+    await screen.findByText('No matches')
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ query: 'auth', graph: true, all: true }),
+    )
+  })
+
+  it('runs from the URL without a project by searching all projects', async () => {
+    const spy = mockSearch({})
+    render(
+      <MemoryRouter initialEntries={['/search?q=tokens']}>
+        <SearchPage />
+      </MemoryRouter>,
+    )
+    await screen.findByText('No matches')
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ query: 'tokens', all: true }),
+    )
   })
 })

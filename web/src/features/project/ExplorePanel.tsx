@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError, type SearchHit } from '../../api'
 import { Alert } from '../../components/Alert'
-import { Badge } from '../../components/Badge'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
+import { EmptyState } from '../../components/EmptyState'
 import { Checkbox, Input } from '../../components/Input'
-import { Snippet } from '../../components/Snippet'
+import { SearchHits } from '../search/SearchHits'
 import { cx } from '../../lib/cx'
 
 const PILL_BTN = 'cursor-pointer rounded-full border px-2.5 py-1 text-[0.82rem] transition-colors'
@@ -16,8 +16,6 @@ const PILL_OFF =
 export function ExplorePanel({
   project,
   seedQuery,
-  onOpenFile,
-  onAsk,
 }: {
   project: string
   seedQuery: string
@@ -30,6 +28,7 @@ export function ExplorePanel({
   const [graphDepth, setGraphDepth] = useState(2)
   const [results, setResults] = useState<SearchHit[]>([])
   const [fallback, setFallback] = useState(false)
+  const [ran, setRan] = useState(false)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -42,6 +41,7 @@ export function ExplorePanel({
     if (!query.trim()) return
     setBusy(true)
     setErr('')
+    setRan(true)
     try {
       const res = await api.search({
         query,
@@ -123,40 +123,12 @@ export function ExplorePanel({
       {fallback && (
         <Alert kind="error">Keyword fallback — embeddings unavailable.</Alert>
       )}
-      {results.map((hit, i) => (
-        <Card key={`${hit.path}-${i}`} className="my-3.5 border-l-4 border-l-border">
-          <div className="flex justify-between gap-3 max-sm:flex-wrap">
-            <button
-              type="button"
-              className="cursor-pointer border-0 bg-transparent p-0 text-left font-mono text-sm break-all text-accent hover:underline"
-              onClick={() => onOpenFile(hit.path, hit.start_line)}
-            >
-              {hit.path}:{hit.start_line}
-              {hit.end_line !== hit.start_line ? `-${hit.end_line}` : ''}
-            </button>
-            <Badge tone="neutral" className="shrink-0 self-start font-semibold">
-              {Math.round(hit.score * 100)}%
-            </Badge>
-          </div>
-          <Snippet>{hit.content}</Snippet>
-          <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-            <Button variant="link" size="sm" onClick={() => onOpenFile(hit.path, hit.start_line)}>
-              Open file
-            </Button>
-            <Button
-              variant="link"
-              size="sm"
-              onClick={() =>
-                onAsk(
-                  `Explain this code in ${hit.path}:${hit.start_line} and how it fits the project:\n${hit.content.slice(0, 500)}`,
-                )
-              }
-            >
-              Ask about this
-            </Button>
-          </div>
-        </Card>
-      ))}
+      {ran && !err && results.length === 0 && (
+        <EmptyState title="No matches in this project">
+          Turn on Graph-RAG to pull neighboring files through import edges.
+        </EmptyState>
+      )}
+      <SearchHits results={results} fallbackProject={project} />
     </div>
   )
 }

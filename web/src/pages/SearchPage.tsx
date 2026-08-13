@@ -1,44 +1,37 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, ApiError, type Project, type SearchHit } from '../api'
 import { Alert } from '../components/Alert'
-import { Badge, type BadgeTone } from '../components/Badge'
 import { Button } from '../components/Button'
 import { Card } from '../components/Card'
+import { EmptyState } from '../components/EmptyState'
 import { Checkbox, Input, Select } from '../components/Input'
-import { Code, Snippet } from '../components/Snippet'
+import { Code } from '../components/Snippet'
+import { SearchHits } from '../features/search/SearchHits'
 import { cx } from '../lib/cx'
+import { loadRecentSearches, rememberSearch } from '../lib/recentSearches'
 
 const PILL_BTN = 'cursor-pointer rounded-full border px-2.5 py-1 text-[0.82rem] transition-colors'
 const PILL_ON = 'border-accent bg-accent text-accent-fg'
 const PILL_OFF =
   'border-border bg-transparent text-fg hover:border-accent hover:bg-accent hover:text-accent-fg'
 
-type ScoreGrade = 'high' | 'mid' | 'low'
-
-const SCORE_BORDER: Record<ScoreGrade, string> = {
-  high: 'border-l-success',
-  mid: 'border-l-warning',
-  low: 'border-l-muted',
-}
-
-const SCORE_TONE: Record<ScoreGrade, BadgeTone> = {
-  high: 'success',
-  mid: 'warning',
-  low: 'neutral',
-}
-
-function scoreGrade(scorePct: number): ScoreGrade {
-  if (scorePct >= 75) return 'high'
-  if (scorePct >= 45) return 'mid'
-  return 'low'
-}
-
 export function SearchPage() {
+  const [params, setParams] = useSearchParams()
+  const urlQuery = params.get('q') || ''
+  const urlProject = params.get('project') || ''
+  const urlAll = params.get('all') === '1' || (!urlProject && params.has('q'))
+  const urlTop = Number(params.get('top') || 10) || 10
+  const urlGraph = params.get('graph') === '1'
+  const urlDepth = Number(params.get('depth') || 2) || 2
+
   const [projects, setProjects] = useState<Project[]>([])
-  const [project, setProject] = useState('')
-  const [all, setAll] = useState(false)
-  const [query, setQuery] = useState('')
-  const [top, setTop] = useState(10)
+  const [project, setProject] = useState(urlProject)
+  const [all, setAll] = useState(urlAll)
+  const [query, setQuery] = useState(urlQuery)
+  const [top, setTop] = useState(urlTop)
+  const [graph, setGraph] = useState(urlGraph)
+  const [graphDepth, setGraphDepth] = useState(urlDepth)
   const [results, setResults] = useState<SearchHit[]>([])
   const [fallback, setFallback] = useState(false)
   const [degraded, setDegraded] = useState(false)
@@ -47,48 +40,87 @@ export function SearchPage() {
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [meta, setMeta] = useState('')
+  const [recent, setRecent] = useState(loadRecentSearches)
 
   useEffect(() => {
-    void api
-      .projects()
-      .then((list) => {
-        setProjects(list)
-        if (list.length === 1) setProject(list[0].name)
-      })
-      .catch(() => undefined)
+    void api.projects().then(setProjects).catch(() => setProjects([]))
   }, [])
 
-  async function onSubmit(e: FormEvent) {
+  useEffect(() => {
+    setQuery(urlQuery)
+    setProject(urlProject)
+    setAll(urlAll)
+    setTop(urlTop)
+    setGraph(urlGraph)
+    setGraphDepth(urlDepth)
+  }, [urlQuery, urlProject, urlAll, urlTop, urlGraph, urlDepth])
+
+  useEffect(() => {
+    if (!urlQuery.trim()) return
+    const scopeAll = urlAll || !urlProject
+    const ac = new AbortController()
+    void (async () => {
+      setErr('')
+      setBusy(true)
+      setRan(true)
+      try {
+        const res = await api.search({
+          query: urlQuery.trim(),
+          project: scopeAll ? undefined : urlProject,
+          all: scopeAll,
+          top: urlTop,
+          graph: urlGraph,
+          graph_depth: urlDepth,
+        })
+        if (ac.signal.aborted) return
+        setResults(res.results ?? [])
+        setFallback(res.fallback)
+        setDegraded(res.degraded ?? false)
+        setRetryAfterMs(res.retry_after_ms ?? 0)
+        setMeta(
+          res.resolved_project
+            ? `resolved: ${res.resolved_project}`
+            : res.project_count
+              ? `searched ${res.project_count} projects`
+              : '',
+        )
+        setRecent(rememberSearch(urlQuery.trim(), scopeAll ? undefined : urlProject))
+      } catch (ex) {
+        if (ac.signal.aborted) return
+        setResults([])
+        setFallback(false)
+        setDegraded(false)
+        setErr(ex instanceof ApiError ? ex.message : 'search failed')
+      } finally {
+        if (!ac.signal.aborted) setBusy(false)
+      }
+    })()
+    return () => ac.abort()
+  }, [urlQuery, urlProject, urlAll, urlTop, urlGraph, urlDepth])
+
+  function commit(next: {
+    query: string
+    project: string
+    all: boolean
+    top: number
+    graph: boolean
+    graphDepth: number
+  }) {
+    const q = next.query.trim()
+    if (!q) return
+    const p = new URLSearchParams()
+    p.set('q', q)
+    if (next.all || !next.project) p.set('all', '1')
+    else p.set('project', next.project)
+    if (next.top !== 10) p.set('top', String(next.top))
+    if (next.graph) p.set('graph', '1')
+    if (next.graph && next.graphDepth !== 2) p.set('depth', String(next.graphDepth))
+    setParams(p, { replace: true })
+  }
+
+  function onSubmit(e: FormEvent) {
     e.preventDefault()
-    setErr('')
-    setBusy(true)
-    setRan(true)
-    try {
-      const res = await api.search({
-        query,
-        project: all ? undefined : project,
-        all,
-        top,
-      })
-      setResults(res.results ?? [])
-      setFallback(res.fallback)
-      setDegraded(res.degraded ?? false)
-      setRetryAfterMs(res.retry_after_ms ?? 0)
-      setMeta(
-        res.resolved_project
-          ? `resolved: ${res.resolved_project}`
-          : res.project_count
-            ? `searched ${res.project_count} projects`
-            : '',
-      )
-    } catch (ex) {
-      setResults([])
-      setFallback(false)
-      setDegraded(false)
-      setErr(ex instanceof ApiError ? ex.message : 'search failed')
-    } finally {
-      setBusy(false)
-    }
+    commit({ query, project, all, top, graph, graphDepth })
   }
 
   const retrySeconds = Math.round(retryAfterMs / 1000)
@@ -98,13 +130,14 @@ export function SearchPage() {
       <div className="mb-4">
         <h1 className="mb-1 text-[1.45rem] font-bold">Search</h1>
         <p className="m-0 text-muted">
-          Semantic search on the server index — same engine as{' '}
-          <Code>semidx search</Code> after <Code>semidx login</Code>.
+          Semantic hits with optional Graph-RAG expansion. Open a file, inspect its
+          neighborhood, or ask the project agent — <Code>/</Code> or{' '}
+          <Code>Ctrl/⌘K</Code> jumps anywhere.
         </p>
       </div>
 
       <Card className="mb-5">
-        <form onSubmit={(e) => void onSubmit(e)}>
+        <form onSubmit={onSubmit}>
           <div className="flex flex-wrap items-end gap-3.5">
             <label htmlFor="search-query" className="block min-w-[180px] flex-1 text-sm font-medium">
               Query
@@ -123,7 +156,10 @@ export function SearchPage() {
                 id="search-project"
                 className="mt-1"
                 value={project}
-                onChange={(e) => setProject(e.target.value)}
+                onChange={(e) => {
+                  setProject(e.target.value)
+                  if (e.target.value) setAll(false)
+                }}
                 disabled={all}
               >
                 <option value="">— select —</option>
@@ -155,8 +191,52 @@ export function SearchPage() {
                 {n}
               </button>
             ))}
+            <Checkbox
+              label="Expand via graph"
+              className="ml-3"
+              checked={graph}
+              onChange={(e) => setGraph(e.target.checked)}
+            />
+            {graph && (
+              <label htmlFor="search-graph-depth" className="flex items-center gap-1.5 text-xs text-muted">
+                depth
+                <Input
+                  id="search-graph-depth"
+                  type="number"
+                  min={1}
+                  max={5}
+                  className="w-14"
+                  value={graphDepth}
+                  onChange={(e) => setGraphDepth(Number(e.target.value) || 2)}
+                />
+              </label>
+            )}
           </div>
         </form>
+        {recent.length > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-muted">Recent</span>
+            {recent.slice(0, 5).map((item) => (
+              <button
+                key={`${item.query}-${item.project || ''}-${item.at}`}
+                type="button"
+                className={cx(PILL_BTN, PILL_OFF)}
+                onClick={() =>
+                  commit({
+                    query: item.query,
+                    project: item.project || '',
+                    all: !item.project,
+                    top,
+                    graph,
+                    graphDepth,
+                  })
+                }
+              >
+                {item.query}
+              </button>
+            ))}
+          </div>
+        )}
       </Card>
 
       {err && <Alert kind="error">{err}</Alert>}
@@ -175,37 +255,13 @@ export function SearchPage() {
       {meta && <p className="text-muted">{meta}</p>}
 
       {ran && !err && results.length === 0 && (
-        <p className="text-muted">No matches.</p>
+        <EmptyState title="No matches">
+          Try a shorter intent query, switch project, or turn on graph expansion to pull in
+          importers and imported packages.
+        </EmptyState>
       )}
 
-      {results.map((hit, i) => {
-        const scorePct = Math.round(hit.score * 100)
-        const grade = scoreGrade(scorePct)
-        return (
-          <Card
-            key={`${hit.path}-${hit.start_line}-${i}`}
-            className={cx('my-3.5 border-l-4', SCORE_BORDER[grade])}
-          >
-            <div className="flex justify-between gap-3 max-sm:flex-wrap">
-              <div>
-                {hit.project && (
-                  <span className="text-xs font-semibold tracking-[0.03em] text-accent uppercase">
-                    {hit.project}
-                  </span>
-                )}
-                <Code className="block w-fit font-mono text-sm break-all">
-                  {hit.path}:{hit.start_line}
-                  {hit.end_line !== hit.start_line ? `-${hit.end_line}` : ''}
-                </Code>
-              </div>
-              <Badge tone={SCORE_TONE[grade]} className="shrink-0 self-start font-semibold">
-                {scorePct}%
-              </Badge>
-            </div>
-            <Snippet>{hit.content}</Snippet>
-          </Card>
-        )
-      })}
+      <SearchHits results={results} fallbackProject={all || !project ? undefined : project} />
     </div>
   )
 }

@@ -103,6 +103,10 @@ type SearchHit struct {
 	Stale bool `json:"stale,omitempty"`
 	// IndexedAt is when the file version was last indexed (RFC3339; empty if unknown).
 	IndexedAt time.Time `json:"indexed_at,omitempty"`
+	// Source is how the hit was retrieved: vector, keyword, or graph.
+	Source string `json:"source,omitempty"`
+	// GraphDepth is the BFS hop count for graph-expanded hits.
+	GraphDepth int `json:"graph_depth,omitempty"`
 }
 
 type SearchResponse struct {

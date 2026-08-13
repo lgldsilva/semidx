@@ -14,11 +14,13 @@ export function FilesPanel({
   initialPath,
   line,
   onExplorePath,
+  onOpenGraph,
 }: {
   project: string
   initialPath: string
   line?: number
   onExplorePath: (path: string) => void
+  onOpenGraph: (path: string) => void
 }) {
   const [files, setFiles] = useState<FileEntry[]>([])
   const [total, setTotal] = useState(0)
@@ -150,14 +152,14 @@ export function FilesPanel({
           <>
             <div className="flex justify-between gap-3 max-sm:flex-wrap">
               <code className="font-mono text-sm break-all">{selected}</code>
-              <Button
-                variant="link"
-                size="sm"
-                className="shrink-0"
-                onClick={() => onExplorePath(selected)}
-              >
-                Find related
-              </Button>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <Button variant="link" size="sm" onClick={() => onOpenGraph(selected)}>
+                  View in graph
+                </Button>
+                <Button variant="link" size="sm" onClick={() => onExplorePath(selected)}>
+                  Find related
+                </Button>
+              </div>
             </div>
             {truncated && (
               <Alert kind="error">Showing first chunks only (truncated).</Alert>

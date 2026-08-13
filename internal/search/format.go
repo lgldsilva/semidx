@@ -56,7 +56,13 @@ func (f HumanFormatter) formatResult(w io.Writer, i int, r store.SearchResult, k
 // writeResultHeader prints the --- Result N --- block plus File/Stale/Score/Confidence lines.
 func writeResultHeader(w io.Writer, i int, r store.SearchResult, keyword bool) error {
 	label := matchLabel(keyword, r.Score)
-	if r.Content == "" && r.FilePath != "" {
+	if r.Source == "graph" {
+		if r.GraphDepth > 0 {
+			label = fmt.Sprintf("graph d=%d", r.GraphDepth)
+		} else {
+			label = "graph match"
+		}
+	} else if r.Content == "" && r.FilePath != "" {
 		label = "(graph match)"
 	}
 	if _, err := fmt.Fprintf(w, "--- Result %d (%s) ---\n", i+1, label); err != nil {
@@ -168,6 +174,8 @@ func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 		Symbol     string  `json:"symbol,omitempty"`
 		Stale      bool    `json:"stale,omitempty"`
 		IndexedAt  string  `json:"indexed_at,omitempty"`
+		Source     string  `json:"source,omitempty"`
+		GraphDepth int     `json:"graph_depth,omitempty"`
 	}
 	out := struct {
 		Project      string `json:"project"`
@@ -193,6 +201,7 @@ func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 			File: r.FilePath, Score: r.Score, Content: r.Content,
 			Confidence: r.Confidence, Symbol: r.Symbol,
 			Stale: r.Stale, IndexedAt: indexedAt,
+			Source: r.Source, GraphDepth: r.GraphDepth,
 		})
 	}
 	enc := json.NewEncoder(w)

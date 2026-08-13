@@ -49,6 +49,10 @@ type Hit struct {
 	Stale bool
 	// IndexedAt is when the file version was last indexed (zero when unknown).
 	IndexedAt time.Time
+	// Source is how the hit was retrieved: vector, keyword, or graph.
+	Source string
+	// GraphDepth is the BFS hop count for graph-expanded hits.
+	GraphDepth int
 }
 
 // SearchOutput is a backend-neutral search result set.
@@ -857,6 +861,9 @@ func formatSearchText(out *SearchOutput) string {
 		if r.Stale {
 			prefix = "[stale] "
 		}
+		if r.Source == "graph" {
+			prefix += "[graph] "
+		}
 		fmt.Fprintf(&b, "%d. %s%s  (score %.3f)\n", i+1, prefix, loc, r.Score)
 		if r.Stale {
 			b.WriteString("file changed since indexing — re-read before editing\n")
@@ -933,6 +940,8 @@ type structuredHit struct {
 	Symbol     string  `json:"symbol,omitempty"`
 	Stale      bool    `json:"stale,omitempty"`
 	IndexedAt  string  `json:"indexed_at,omitempty"` // RFC3339 when known
+	Source     string  `json:"source,omitempty"`
+	GraphDepth int     `json:"graph_depth,omitempty"`
 }
 
 // structuredOutput is the JSON envelope for structured search results.
@@ -971,6 +980,8 @@ func formatSearchStructured(out *SearchOutput) string {
 			Confidence: r.Confidence,
 			Symbol:     r.Symbol,
 			Stale:      r.Stale,
+			Source:     r.Source,
+			GraphDepth: r.GraphDepth,
 		}
 		if !r.IndexedAt.IsZero() {
 			hits[i].IndexedAt = r.IndexedAt.UTC().Format(time.RFC3339)
@@ -993,6 +1004,8 @@ type minimalHit struct {
 	Cf string  `json:"cf,omitempty"` // confidence tag
 	Sy string  `json:"sy,omitempty"` // symbol name (when classified)
 	St bool    `json:"st,omitempty"` // stale preview
+	So string  `json:"so,omitempty"` // source: vector|keyword|graph
+	Gd int     `json:"gd,omitempty"` // graph depth
 }
 
 // minimalOutput is the compact JSON envelope.
@@ -1024,6 +1037,8 @@ func formatSearchMinimal(out *SearchOutput) string {
 			Cf: r.Confidence,
 			Sy: r.Symbol,
 			St: r.Stale,
+			So: r.Source,
+			Gd: r.GraphDepth,
 		}
 	}
 	outJSON := minimalOutput{R: hits, Fb: out.Fallback, Dg: out.Degraded, Ra: out.RetryAfterMS, T: len(hits), Ms: out.TookMS}

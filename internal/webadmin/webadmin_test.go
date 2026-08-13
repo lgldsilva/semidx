@@ -340,6 +340,10 @@ func (f *fakeStore) FetchChunksByPath(context.Context, int, string, int, int) ([
 	return f.chunks, nil
 }
 
+func (f *fakeStore) FetchChunksByDirPrefix(context.Context, int, string, int, int) ([]store.SearchResult, error) {
+	return f.chunks, nil
+}
+
 func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gitURL, branch string, dims int) (*store.Project, error) {
 	if f.createErr != nil {
 		return nil, f.createErr

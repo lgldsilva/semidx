@@ -172,10 +172,10 @@ which of **CLI · API · Admin UI · MCP** implement it. Gaps are either planned
 | REQ-UI-02 | Project workspace: overview, files, explore, chat | **done** | |
 | REQ-UI-03 | Search playground | **done** | |
 | REQ-UI-04 | Settings and jobs views | **done** / **partial** | |
-| REQ-UI-05 | Browser ingest (upload), explain, graph-oriented explore | **partial** | Recent work; bulk folder still open |
+| REQ-UI-05 | Browser ingest (upload), explain, graph-oriented explore | **done** | Graph tab + inbound neighborhood + command palette |
 | REQ-UI-06 | Table actions stay inside the grid (Open + overflow menu) | **partial** | UX polish in progress |
 | REQ-UI-07 | Bulk folder / archive upload for push projects | **done** | Folder batching + `.zip` ingest in Admin UI/API |
-| REQ-UI-08 | File detail panel: chunks, dependency fan-out, caller fan-in, deep links | **partial** | Chunks + fan-in/fan-out delivered; deeper graph UX pending |
+| REQ-UI-08 | File detail panel: chunks, dependency fan-out, caller fan-in, deep links | **done** | View in graph + search/graph/chat deep links |
 | REQ-UI-09 | Graph visualization (or progressive disclosure of graph stats) | **done** | Stats + ego/subgraph SVG + Trace path A→B; public `/api/v1/.../graph/*`; CLI `graph stats|neighbors|path`; MCP `semantic_subgraph`/`semantic_path` |
 | REQ-UI-10 | Dead-code, SBOM, dependency catalog, secrets, diff, alerts, insights surfaces where CLI has them | **partial** | Admin Analyze: dead-code + SBOM + dependency catalog/shared-project view; CLI guide for diff/alerts/insights |
 | REQ-UI-11 | First-run / empty-state guidance (no projects → how to add) | **done** | Projects empty-state onboarding flow |
@@ -250,7 +250,7 @@ Target state for core capabilities. Update this table when closing gaps.
 | Reindex | yes | yes | yes | server-only |
 | Semantic search | yes | yes | yes | yes |
 | Keyword / fallback | yes | yes | partial | yes |
-| Graph-RAG search | yes | yes | partial | yes |
+| Graph-RAG search | yes | yes | yes | yes |
 | File tree / content view | — | partial | yes | — |
 | Callers / deps / explain | yes | partial | partial | — |
 | Chat RAG | yes (related) | admin BFF | yes | — |
@@ -376,6 +376,7 @@ second checklist.
 
 | Date | Change |
 |------|--------|
+| 2026-08-13 | Graph-first UX: inbound neighborhood, search hit provenance in admin/MCP, Graph tab, command palette, search→file→graph loop |
 | 2026-07-09 | Status refresh after implementation: hybrid default, graph caps, scoped job APIs/progress, SQLite top-K heap, worktree bulk writes, CI SPA build, and UI onboarding/ingest/detail updates |
 | 2026-07-12 | Workspace agent expansion: REQ-IDX-11 (watcher doc fix), REQ-AGENT-* (tool-calling agent, query routing, graph-in-chat, multi-scope fuse), REQ-GIT-* (repo tools, capability gating), REQ-ACT-* (action tools, sync), REQ-MCP-* (extended MCP tools) |
 | 2026-07-13 | Reconciled §6 backlog with delivered work; REQ-SRCH-13 query routing, REQ-OPS-09 done, REQ-SRV-12 global caps, REQ-UI-10 partial (SBOM admin) |

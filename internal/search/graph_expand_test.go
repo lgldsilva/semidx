@@ -99,6 +99,17 @@ func TestExpandByGraphBFSDiscoversDepth1And2(t *testing.T) {
 	if hasPath(got, "d.go") {
 		t.Error("d.go (depth 3) must not be discovered with maxDepth=2")
 	}
+	for _, r := range results {
+		if r.Source != "graph" {
+			t.Errorf("%s source=%q want graph", r.FilePath, r.Source)
+		}
+		if r.FilePath == "b.go" && r.GraphDepth != 1 {
+			t.Errorf("b.go depth=%d want 1", r.GraphDepth)
+		}
+		if r.FilePath == "c.go" && r.GraphDepth != 2 {
+			t.Errorf("c.go depth=%d want 2", r.GraphDepth)
+		}
+	}
 }
 
 func TestExpandByGraphCycleDoesNotLoop(t *testing.T) {

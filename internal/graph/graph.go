@@ -113,10 +113,13 @@ func IsPackageDir(p string) bool {
 
 // Node is one vertex in a subgraph response.
 type Node struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-	Kind  string `json:"kind"` // file | package
-	Seed  bool   `json:"seed,omitempty"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Kind      string `json:"kind"` // file | package
+	Seed      bool   `json:"seed,omitempty"`
+	Depth     int    `json:"depth,omitempty"`
+	DegreeIn  int    `json:"degree_in,omitempty"`
+	DegreeOut int    `json:"degree_out,omitempty"`
 }
 
 // Edge is a directed relation (may have been traversed in reverse when undirected).
@@ -430,21 +433,32 @@ func reconstruct(from, to string, parent map[string]bfsParent) ([]string, []Edge
 	return hops, edges, false, true
 }
 
-// Subgraph returns the neighborhood around seed up to budget.MaxDepth.
+// Subgraph returns the outbound neighborhood around seed up to budget.MaxDepth.
 // If seed is empty, seeds are the highest out-degree files (hub sample).
 func (idx *Index) Subgraph(seed string, budget Budget) SubgraphResult {
+	return idx.neighborhood(seed, budget, false)
+}
+
+// Neighborhood is Subgraph plus optional inbound hops (importers / reverse
+// contains). That is what a "who uses this file?" explorer needs.
+func (idx *Index) Neighborhood(seed string, budget Budget, inbound bool) SubgraphResult {
+	return idx.neighborhood(seed, budget, inbound)
+}
+
+func (idx *Index) neighborhood(seed string, budget Budget, inbound bool) SubgraphResult {
 	budget = budget.withSubgraphDefaults()
 	seeds := idx.resolveSeeds(seed)
 	if len(seeds) == 0 {
 		return SubgraphResult{}
 	}
-	nodeSet, edges, truncated := idx.bfsWalk(seeds, budget)
+	depths, edges, truncated := idx.bfsWalk(seeds, budget, inbound)
 	res := SubgraphResult{Truncated: truncated, Edges: edges}
 	seedSet := make(map[string]struct{}, len(seeds))
 	for _, item := range seeds {
 		seedSet[item] = struct{}{}
 	}
-	for id := range nodeSet {
+	inDeg, outDeg := idx.degreeMaps()
+	for id, depth := range depths {
 		kind := KindFile
 		if IsPackageDir(id) {
 			kind = KindPackage
@@ -452,6 +466,7 @@ func (idx *Index) Subgraph(seed string, budget Budget) SubgraphResult {
 		_, isSeed := seedSet[id]
 		res.Nodes = append(res.Nodes, Node{
 			ID: id, Label: path.Base(strings.TrimSuffix(id, "/")), Kind: kind, Seed: isSeed,
+			Depth: depth, DegreeIn: inDeg[id], DegreeOut: outDeg[id],
 		})
 	}
 	sort.Slice(res.Nodes, func(i, j int) bool { return res.Nodes[i].ID < res.Nodes[j].ID })
@@ -472,14 +487,14 @@ func (idx *Index) resolveSeeds(seed string) []string {
 	return idx.hubSeeds(16)
 }
 
-func (idx *Index) bfsWalk(seeds []string, budget Budget) (map[string]struct{}, []Edge, bool) {
+func (idx *Index) bfsWalk(seeds []string, budget Budget, inbound bool) (map[string]int, []Edge, bool) {
 	q := make([]bfsItem, 0, len(seeds))
 	seen := make(map[string]struct{}, len(seeds))
 	for _, seed := range seeds {
 		seen[seed] = struct{}{}
 		q = append(q, bfsItem{seed, 0})
 	}
-	nodeSet := map[string]struct{}{}
+	depths := map[string]int{}
 	var edges []Edge
 	edgeSeen := map[string]struct{}{}
 	visited := 0
@@ -493,11 +508,13 @@ func (idx *Index) bfsWalk(seeds []string, budget Budget) (map[string]struct{}, [
 			truncated = true
 			break
 		}
-		nodeSet[cur.node] = struct{}{}
+		if _, ok := depths[cur.node]; !ok {
+			depths[cur.node] = cur.depth
+		}
 		if cur.depth >= budget.MaxDepth {
 			continue
 		}
-		nbrs := idx.neighborsDirected(cur.node)
+		nbrs := idx.walkNeighbors(cur.node, inbound)
 		sort.Slice(nbrs, func(i, j int) bool { return nbrs[i].Target < nbrs[j].Target })
 		for _, edge := range nbrs {
 			key := edge.Source + "\x00" + edge.Target + "\x00" + edge.Kind
@@ -507,7 +524,10 @@ func (idx *Index) bfsWalk(seeds []string, budget Budget) (map[string]struct{}, [
 					truncated = true
 				} else {
 					edges = append(edges, edge)
-					nodeSet[edge.Target] = struct{}{}
+					target := Normalize(edge.Target)
+					if _, known := depths[target]; !known {
+						depths[target] = cur.depth + 1
+					}
 				}
 			}
 			target := Normalize(edge.Target)
@@ -521,7 +541,32 @@ func (idx *Index) bfsWalk(seeds []string, budget Budget) (map[string]struct{}, [
 			q = append(q, bfsItem{target, cur.depth + 1})
 		}
 	}
-	return nodeSet, edges, truncated
+	return depths, edges, truncated
+}
+
+func (idx *Index) walkNeighbors(node string, inbound bool) []Edge {
+	if inbound {
+		return idx.neighborsUndirected(node)
+	}
+	return idx.neighborsDirected(node)
+}
+
+func (idx *Index) degreeMaps() (inDeg, outDeg map[string]int) {
+	inDeg = make(map[string]int, len(idx.files))
+	outDeg = make(map[string]int, len(idx.files)+len(idx.filesInPkg))
+	for file, targets := range idx.out {
+		outDeg[file] = len(targets)
+		for _, target := range targets {
+			inDeg[target]++
+		}
+	}
+	for pkg, files := range idx.filesInPkg {
+		outDeg[pkg] += len(files)
+		for _, file := range files {
+			inDeg[file]++
+		}
+	}
+	return inDeg, outDeg
 }
 
 func (idx *Index) hubSeeds(n int) []string {

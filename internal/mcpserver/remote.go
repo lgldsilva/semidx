@@ -44,6 +44,7 @@ func (b *clientBackend) Search(ctx context.Context, project, query, model string
 			Score: r.Score, Content: r.Content,
 			Confidence: r.Confidence, Symbol: r.Symbol,
 			Stale: r.Stale, IndexedAt: r.IndexedAt,
+			Source: r.Source, GraphDepth: r.GraphDepth,
 		})
 	}
 	return out, nil
@@ -66,7 +67,10 @@ func (b *clientBackend) SearchMulti(ctx context.Context, req search.MultiScopeRe
 	for _, hit := range resp.Results {
 		out.Results = append(out.Results, search.MultiResult{
 			SearchResult: store.SearchResult{FilePath: hit.Path, StartLine: hit.StartLine,
-				EndLine: hit.EndLine, Score: hit.Score, Content: hit.Content},
+				EndLine: hit.EndLine, Score: hit.Score, Content: hit.Content,
+				Confidence: hit.Confidence, Symbol: hit.Symbol,
+				Stale: hit.Stale, IndexedAt: hit.IndexedAt,
+				Source: hit.Source, GraphDepth: hit.GraphDepth},
 			Project: hit.Project, SourceRank: hit.SourceRank, FusionScore: hit.FusionScore,
 		})
 	}

@@ -112,6 +112,15 @@ func TestGraphSubgraphAPI(t *testing.T) {
 			t.Errorf("subgraph body missing %q:\n%s", want, body)
 		}
 	}
+
+	// both=1 walks inbound so a leaf file sees its importers.
+	code, body = getBody(t, c, base+"/admin/api/projects/demo/graph/subgraph?seed=pkg/util.go&depth=3&both=1")
+	if code != 200 {
+		t.Fatalf("inbound subgraph = %d body=%s", code, body)
+	}
+	if !strings.Contains(body, `"main.go"`) {
+		t.Errorf("inbound walk should include importer main.go:\n%s", body)
+	}
 }
 
 func TestGraphPathAPI(t *testing.T) {

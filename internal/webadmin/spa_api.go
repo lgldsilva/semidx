@@ -599,7 +599,10 @@ func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	body.GraphDepth = search.ClampGraphDepth(body.GraphDepth)
 
 	if body.All {
-		d := &searchData{Query: body.Query, AllProjects: true, Top: topK, Ran: true}
+		d := &searchData{
+			Query: body.Query, AllProjects: true, Top: topK, Ran: true,
+			Graph: body.Graph, GraphDepth: body.GraphDepth,
+		}
 		if err := a.searchAllProjects(ctx, d, topK); err != nil {
 			// Infra failures are collapsed to a safe sentinel upstream
 			// (REQ-SRCH-08) and reported as 500; the remaining errors are
@@ -657,7 +660,7 @@ func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 func hitsToJSON(hits []adminSearchHit) []map[string]any {
 	out := make([]map[string]any, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, map[string]any{
+		row := map[string]any{
 			"project":      h.Project,
 			"path":         h.FilePath,
 			"start_line":   h.StartLine,
@@ -666,7 +669,26 @@ func hitsToJSON(hits []adminSearchHit) []map[string]any {
 			"fusion_score": h.FusionScore,
 			"source_rank":  h.SourceRank,
 			"content":      h.Content,
-		})
+		}
+		if h.Confidence != "" {
+			row["confidence"] = h.Confidence
+		}
+		if h.Symbol != "" {
+			row["symbol"] = h.Symbol
+		}
+		if h.Stale {
+			row["stale"] = true
+		}
+		if !h.IndexedAt.IsZero() {
+			row["indexed_at"] = h.IndexedAt.UTC().Format(time.RFC3339)
+		}
+		if h.Source != "" {
+			row["source"] = h.Source
+		}
+		if h.GraphDepth > 0 {
+			row["graph_depth"] = h.GraphDepth
+		}
+		out = append(out, row)
 	}
 	return out
 }

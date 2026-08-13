@@ -27,10 +27,12 @@ func (a *Admin) apiProjectGraphSubgraph(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return
 	}
-	sg := idx.Subgraph(r.URL.Query().Get("seed"), graph.Budget{
+	budget := graph.Budget{
 		MaxDepth:    clampAdminQueryInt(r.URL.Query().Get("depth"), maxAdminSubgraphDepth),
 		MaxEdgesOut: clampAdminQueryInt(r.URL.Query().Get("limit"), maxAdminSubgraphEdges),
-	})
+	}
+	both := r.URL.Query().Get("both") == "1" || r.URL.Query().Get("both") == "true"
+	sg := idx.Neighborhood(r.URL.Query().Get("seed"), budget, both)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"nodes": sg.Nodes, "edges": sg.Edges, "truncated": sg.Truncated,
 	})
