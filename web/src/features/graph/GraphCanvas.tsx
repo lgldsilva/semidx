@@ -39,10 +39,6 @@ export function GraphCanvas({
     return s
   }, [highlightPath])
 
-  if (nodes.length === 0) {
-    return <p className="text-sm text-muted">No graph nodes to display.</p>
-  }
-
   useEffect(() => {
     const el = svgRef.current
     if (!el) return
@@ -53,7 +49,11 @@ export function GraphCanvas({
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [])
+  }, [nodes.length])
+
+  if (nodes.length === 0) {
+    return <p className="text-sm text-muted">No graph nodes to display.</p>
+  }
 
   function onPointerDown(e: PointerEvent<SVGSVGElement>) {
     if (e.button !== 0) return

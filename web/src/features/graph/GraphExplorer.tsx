@@ -57,7 +57,7 @@ export function GraphExplorer({
     try {
       const [sg, overview] = await Promise.all([
         api.projectGraphSubgraph(project, seedVal, walkDepth, 800, both),
-        stats ? Promise.resolve(stats) : api.projectGraphStats(project),
+        api.projectGraphStats(project),
       ])
       setSubgraph(sg)
       setStats(overview)
@@ -72,6 +72,8 @@ export function GraphExplorer({
   }
 
   useEffect(() => {
+    setStats(null)
+    setSubgraph(null)
     void load(seedPath)
     // seedPath from the URL; typing in the seed field does not remount.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load reads current depth/both

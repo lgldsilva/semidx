@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, type SearchResponse } from '../api'
 import { SearchPage } from './SearchPage'
@@ -84,6 +84,32 @@ describe('SearchPage degraded badge', () => {
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({ query: 'auth', graph: true, all: true }),
     )
+  })
+
+  it('clears the searching state when the query is removed from the URL', async () => {
+    vi.spyOn(api, 'projects').mockResolvedValue([])
+    vi.spyOn(api, 'search').mockImplementation(() => new Promise(() => {}))
+    function Driver() {
+      const nav = useNavigate()
+      return (
+        <>
+          <SearchPage />
+          <button type="button" onClick={() => nav('/search')}>
+            clear query
+          </button>
+        </>
+      )
+    }
+    render(
+      <MemoryRouter initialEntries={['/search?q=tokens']}>
+        <Routes>
+          <Route path="/search" element={<Driver />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByRole('button', { name: 'Searching…' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'clear query' }))
+    expect(await screen.findByRole('button', { name: 'Search' })).toBeEnabled()
   })
 
   it('runs from the URL without a project by searching all projects', async () => {

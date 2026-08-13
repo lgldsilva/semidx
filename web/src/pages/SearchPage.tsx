@@ -56,8 +56,12 @@ export function SearchPage() {
   }, [urlQuery, urlProject, urlAll, urlTop, urlGraph, urlDepth])
 
   useEffect(() => {
-    if (!urlQuery.trim()) return
+    if (!urlQuery.trim()) {
+      setBusy(false)
+      return
+    }
     const scopeAll = urlAll || !urlProject
+    let cancelled = false
     const ac = new AbortController()
     void (async () => {
       setErr('')
@@ -72,7 +76,7 @@ export function SearchPage() {
           graph: urlGraph,
           graph_depth: urlDepth,
         })
-        if (ac.signal.aborted) return
+        if (cancelled) return
         setResults(res.results ?? [])
         setFallback(res.fallback)
         setDegraded(res.degraded ?? false)
@@ -86,16 +90,20 @@ export function SearchPage() {
         )
         setRecent(rememberSearch(urlQuery.trim(), scopeAll ? undefined : urlProject))
       } catch (ex) {
-        if (ac.signal.aborted) return
+        if (cancelled) return
         setResults([])
         setFallback(false)
         setDegraded(false)
         setErr(ex instanceof ApiError ? ex.message : 'search failed')
       } finally {
-        if (!ac.signal.aborted) setBusy(false)
+        if (!cancelled) setBusy(false)
       }
     })()
-    return () => ac.abort()
+    return () => {
+      cancelled = true
+      ac.abort()
+      setBusy(false)
+    }
   }, [urlQuery, urlProject, urlAll, urlTop, urlGraph, urlDepth])
 
   function commit(next: {
