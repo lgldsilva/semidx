@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -106,9 +107,60 @@ func TestAPISearchAndListProjects(t *testing.T) {
 	}
 }
 
+func TestHitsToJSONIncludesProvenance(t *testing.T) {
+	t.Parallel()
+	indexed := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	hits := []adminSearchHit{{
+		Project: "demo",
+		SearchResult: store.SearchResult{
+			FilePath: "a.go", StartLine: 1, EndLine: 4, Score: 0.8,
+			Content: "func A", Confidence: "EXTRACTED", Symbol: "A",
+			Stale: true, IndexedAt: indexed, Source: "graph", GraphDepth: 2,
+		},
+	}}
+	rows := hitsToJSON(hits)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d", len(rows))
+	}
+	got := rows[0]
+	for key, want := range map[string]any{
+		"confidence": "EXTRACTED", "symbol": "A", "stale": true,
+		"source": "graph", "graph_depth": 2,
+	} {
+		if got[key] != want {
+			t.Errorf("%s=%v want %v", key, got[key], want)
+		}
+	}
+	if got["indexed_at"] != "2026-08-01T12:00:00Z" {
+		t.Errorf("indexed_at=%v", got["indexed_at"])
+	}
+}
+
 // TestAPISearchAllProjectsSanitizesInfraError locks REQ-SRCH-08: an
 // infrastructure failure during an all-projects search must return a generic
 // 500 without leaking the raw error (DSNs, pgx/provider internals) to the client.
+func TestAPISearchAllProjectsForwardsGraph(t *testing.T) {
+	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
+	fs.addUser("admin", "supersecret", "admin")
+	fs.projects = []store.Project{{ID: 1, Name: "demo", Model: "bge-m3", Dims: 3}}
+	fs.searchProject = &store.Project{ID: 1, Name: "demo", Model: "bge-m3", Dims: 3}
+	fs.searchResults = []store.SearchResult{{FilePath: "a.go", StartLine: 1, EndLine: 2, Content: "func main", Score: 0.9}}
+	fs.graph = map[string][]string{"a.go": {"b.go"}}
+	c := newClient(t, srv)
+	login(t, c, srv.URL, "admin", "supersecret")
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+
+	code, body := postAdminJSON(t, c, srv.URL+"/admin/api/search", csrf, map[string]any{
+		"query": "main function", "all": true, "top": 5, "graph": true, "graph_depth": 2,
+	})
+	if code != 200 {
+		t.Fatalf("all+graph search = %d body=%s", code, body)
+	}
+	if !strings.Contains(body, `"a.go"`) {
+		t.Fatalf("all+graph missing seed hit: %s", body)
+	}
+}
+
 func TestAPISearchAllProjectsSanitizesInfraError(t *testing.T) {
 	srv, fs := newAdminWith(t, fakeEmbedder{}, nil)
 	fs.addUser("admin", "supersecret", "admin")

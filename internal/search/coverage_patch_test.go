@@ -136,6 +136,19 @@ func TestFormatResult_graphMatch(t *testing.T) {
 	}
 }
 
+func TestFormatResult_graphSource(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	f := HumanFormatter{}
+	r := store.SearchResult{FilePath: "dep.go", Content: "import x", Score: 0.4, StartLine: 1, EndLine: 2, Source: "graph", GraphDepth: 2}
+	if err := f.formatResult(&buf, 0, r, false, 100, 4); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "graph d=2") {
+		t.Errorf("want graph depth label: %s", buf.String())
+	}
+}
+
 func TestSearchMulti_skipsFailedProjectAndDefaultTopK(t *testing.T) {
 	// One identity resolves, one does not — best-effort skip.
 	st := &fakeStore{
@@ -182,10 +195,13 @@ func TestFetchGraphChunks_errorAndEmpty(t *testing.T) {
 		mode:      "err",
 	}
 	svc := NewService(st, &fakeEmbedder{vec: []float32{1}, dims: 1})
-	expanded := map[string]float64{"dep.go": 0.5}
+	expanded := map[string]graphHop{"dep.go": {Score: 0.5, Depth: 1}}
 	got := fetchGraphChunks(context.Background(), svc, 1, 1, expanded)
 	if len(got) != 1 || got[0].FilePath != "dep.go" || got[0].Content != "" {
 		t.Errorf("error path placeholder: %+v", got)
+	}
+	if got[0].Source != "graph" || got[0].GraphDepth != 1 {
+		t.Errorf("placeholder provenance: %+v", got[0])
 	}
 
 	st.mode = "empty"
@@ -226,7 +242,7 @@ func TestProcessBFSNode_edges(t *testing.T) {
 		maxPaths:  1,
 	}
 	visited := map[string]float64{}
-	expanded := map[string]float64{}
+	expanded := map[string]graphHop{}
 	node := bfsNode{path: "seed.go", depth: 0, score: 0.9}
 
 	if processBFSNode("", node, p, visited, expanded) != nil {
@@ -239,7 +255,7 @@ func TestProcessBFSNode_edges(t *testing.T) {
 	}
 	// First visit expands
 	next := processBFSNode("x.go", node, p, visited, expanded)
-	if next == nil || expanded["x.go"] == 0 {
+	if next == nil || expanded["x.go"].Score == 0 {
 		t.Fatal("expected expand")
 	}
 	// maxPaths reached

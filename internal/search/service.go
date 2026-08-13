@@ -258,7 +258,7 @@ func (s *Service) searchKeywordOnly(ctx context.Context, projectID int, req Requ
 	if err != nil {
 		return nil, err
 	}
-	resp.Results = results
+	resp.Results = tagResultSource(results, "keyword")
 	resp.Keyword = true
 	return resp, nil
 }
@@ -271,7 +271,7 @@ func (s *Service) searchRoutedKeyword(ctx context.Context, projectID int, req Re
 	if err != nil {
 		return nil, err
 	}
-	resp.Results = results
+	resp.Results = tagResultSource(results, "keyword")
 	resp.Keyword = true
 	return resp, nil
 }
@@ -293,7 +293,7 @@ func (s *Service) searchSemantic(ctx context.Context, projectID int, req Request
 		if kerr != nil {
 			return nil, kerr
 		}
-		resp.Results = results
+		resp.Results = tagResultSource(results, "keyword")
 		return resp, nil
 	}
 
@@ -390,6 +390,12 @@ func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults [
 	return results, nil
 }
 
+// graphHop is one BFS-discovered path with its decayed score and hop depth.
+type graphHop struct {
+	Score float64
+	Depth int
+}
+
 // bfsParams bundles the inputs to the BFS-based graph expansion.
 type bfsParams struct {
 	graph, reverse map[string][]string
@@ -402,36 +408,42 @@ type bfsParams struct {
 
 // fetchGraphChunks fetches chunks for each BFS-discovered path and returns
 // search results with decayed scores. Failed fetches are best-effort.
-func fetchGraphChunks(ctx context.Context, s *Service, projectID, dims int, expanded map[string]float64) []store.SearchResult {
+func fetchGraphChunks(ctx context.Context, s *Service, projectID, dims int, expanded map[string]graphHop) []store.SearchResult {
 	const limit = 3 // representative chunks per file
 	var results []store.SearchResult
-	for path, score := range expanded {
+	for path, hop := range expanded {
 		chunks, err := s.store.FetchChunksByDirPrefix(ctx, projectID, path, dims, limit)
 		if err != nil {
 			// Best-effort: skip files we cannot read.
 			slog.Debug("expandByGraph: skip unreadable path", "path", path, "error", err)
 			// Still add a placeholder so the file path appears in results.
-			results = append(results, store.SearchResult{
-				FilePath: path,
-				Score:    score,
-			})
+			results = append(results, graphHit(path, hop, ""))
 			continue
 		}
 		if len(chunks) == 0 {
 			// Placeholder — file known but no chunks indexed.
-			results = append(results, store.SearchResult{
-				FilePath: path,
-				Score:    score,
-			})
+			results = append(results, graphHit(path, hop, ""))
 			continue
 		}
 		for _, chunk := range chunks {
-			chunk.Score = score
+			chunk.Score = hop.Score
+			chunk.Source = "graph"
+			chunk.GraphDepth = hop.Depth
 			results = append(results, chunk)
 		}
 	}
 
 	return results
+}
+
+func graphHit(path string, hop graphHop, content string) store.SearchResult {
+	return store.SearchResult{
+		FilePath:   path,
+		Score:      hop.Score,
+		Content:    content,
+		Source:     "graph",
+		GraphDepth: hop.Depth,
+	}
 }
 
 // bfsNode represents a single node in the BFS traversal of the dependency graph.
@@ -444,7 +456,7 @@ type bfsNode struct {
 // processBFSNode examines one neighbor from a BFS node. It updates the
 // expanded map when the neighbor is newly discovered or reaches a higher
 // score, and returns the next BFS node to enqueue (or nil when skipped).
-func processBFSNode(neighbor string, node bfsNode, p bfsParams, visited map[string]float64, expanded map[string]float64) *bfsNode {
+func processBFSNode(neighbor string, node bfsNode, p bfsParams, visited map[string]float64, expanded map[string]graphHop) *bfsNode {
 	if neighbor == "" {
 		return nil
 	}
@@ -461,8 +473,9 @@ func processBFSNode(neighbor string, node bfsNode, p bfsParams, visited map[stri
 		if len(expanded) >= p.maxPaths {
 			return nil
 		}
-		if curr, ok := expanded[neighbor]; !ok || newScore > curr {
-			expanded[neighbor] = newScore
+		nextDepth := node.depth + 1
+		if curr, ok := expanded[neighbor]; !ok || newScore > curr.Score {
+			expanded[neighbor] = graphHop{Score: newScore, Depth: nextDepth}
 		}
 	}
 
@@ -472,7 +485,7 @@ func processBFSNode(neighbor string, node bfsNode, p bfsParams, visited map[stri
 // runGraphBFS runs the BFS traversal through the dependency graph from seed
 // paths, returning newly discovered paths with decayed scores.  maxPaths caps
 // the total number of expanded paths (DoS guard).
-func runGraphBFS(p bfsParams) map[string]float64 {
+func runGraphBFS(p bfsParams) map[string]graphHop {
 	// Initialise the BFS queue with every seed result at depth 0, each with its
 	// own similarity score so closer seeds influence the graph more strongly.
 	queue := make([]bfsNode, 0, len(p.seeds))
@@ -483,7 +496,7 @@ func runGraphBFS(p bfsParams) map[string]float64 {
 		visited[r.FilePath] = r.Score
 	}
 
-	expanded := make(map[string]float64)
+	expanded := make(map[string]graphHop)
 
 	for len(queue) > 0 {
 		node := queue[0]
@@ -525,6 +538,15 @@ func applyQueryRouting(req *Request, qt QueryType) {
 	case QueryNaturalLanguage:
 		// Default — hybrid (vector + keyword RRF). Already the default.
 	}
+}
+
+func tagResultSource(results []store.SearchResult, source string) []store.SearchResult {
+	for i := range results {
+		if results[i].Source == "" {
+			results[i].Source = source
+		}
+	}
+	return results
 }
 
 // mergeGraphResults merges original search results with graph-expanded results,

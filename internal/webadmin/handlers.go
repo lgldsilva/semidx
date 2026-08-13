@@ -45,6 +45,8 @@ type searchData struct {
 	RetryAfter      time.Duration // recovery hint, set when Degraded
 	Ran             bool
 	ProjectCount    int // set when AllProjects ran
+	Graph           bool
+	GraphDepth      int
 }
 
 // searchFlags aggregates the response-level flags across per-project searches
@@ -93,6 +95,7 @@ func parseSearchData(r *http.Request) (searchData, int) {
 func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) error {
 	resp, err := a.search.SearchAllProjects(ctx, search.MultiScopeRequest{
 		Query: d.Query, TopK: topK, MaxPerFile: 2,
+		Graph: d.Graph, GraphMaxDepth: d.GraphDepth,
 	})
 	if err != nil {
 		a.log.Error("all-project search failed", "err", err)

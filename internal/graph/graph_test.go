@@ -184,6 +184,65 @@ func TestSubgraphEmpty(t *testing.T) {
 	}
 }
 
+func TestNeighborhoodInboundIncludesImporter(t *testing.T) {
+	t.Parallel()
+	idx := sampleIndex()
+	out := idx.Subgraph("internal/worker/helper.go", Budget{MaxDepth: 3, MaxEdgesOut: 100})
+	for _, n := range out.Nodes {
+		if n.ID == "main.go" {
+			t.Fatalf("outbound subgraph should not reach main.go: %+v", out.Nodes)
+		}
+	}
+	sg := idx.Neighborhood("internal/worker/helper.go", Budget{MaxDepth: 3, MaxEdgesOut: 100}, true)
+	var sawMain, sawPkg bool
+	for _, n := range sg.Nodes {
+		if n.ID == "main.go" {
+			sawMain = true
+		}
+		if n.ID == "internal/worker/" {
+			sawPkg = true
+		}
+		if n.ID == "internal/worker/helper.go" && !n.Seed {
+			t.Error("seed not marked")
+		}
+	}
+	if !sawMain || !sawPkg {
+		t.Fatalf("inbound neighborhood missing importer/package: nodes=%+v", sg.Nodes)
+	}
+}
+
+func TestNeighborhoodAttachesDegreeAndDepth(t *testing.T) {
+	t.Parallel()
+	idx := sampleIndex()
+	sg := idx.Neighborhood("main.go", Budget{MaxDepth: 2, MaxEdgesOut: 100}, false)
+	var seed Node
+	found := false
+	for _, n := range sg.Nodes {
+		if n.ID == "main.go" {
+			seed = n
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("seed missing")
+	}
+	if seed.DegreeOut < 1 {
+		t.Fatalf("main.go should have out-degree, got %+v", seed)
+	}
+	if seed.Depth != 0 {
+		t.Fatalf("seed depth=%d", seed.Depth)
+	}
+	var sawDeeper bool
+	for _, n := range sg.Nodes {
+		if !n.Seed && n.Depth > 0 {
+			sawDeeper = true
+		}
+	}
+	if !sawDeeper {
+		t.Fatalf("expected depth>0 on non-seeds: %+v", sg.Nodes)
+	}
+}
+
 func TestBuildDedupAndSort(t *testing.T) {
 	t.Parallel()
 	idx := Build(map[string][]string{

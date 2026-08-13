@@ -78,6 +78,12 @@ export type SearchHit = {
   end_line: number
   score: number
   content: string
+  confidence?: string
+  symbol?: string
+  stale?: boolean
+  indexed_at?: string
+  source?: string
+  graph_depth?: number
 }
 
 export type SearchResponse = {
@@ -123,7 +129,15 @@ export type RuntimeEdge = {
 }
 
 /** A vertex of the file↔package dependency graph. `kind` is file or package. */
-export type GraphNode = { id: string; label: string; kind: string; seed?: boolean }
+export type GraphNode = {
+  id: string
+  label: string
+  kind: string
+  seed?: boolean
+  depth?: number
+  degree_in?: number
+  degree_out?: number
+}
 
 /** A directed dependency edge. `reverse` marks a hop walked against the stored direction. */
 export type GraphEdge = { source: string; target: string; kind: string; reverse?: boolean }
@@ -531,11 +545,18 @@ export const api = {
       top_depends: { node: string; degree: number }[]
       top_depended: { node: string; degree: number }[]
     }>(`/admin/api/projects/${encodeURIComponent(name)}/graph-stats`),
-  projectGraphSubgraph: (name: string, seed = '', depth = 0, limit = 0) => {
+  projectGraphSubgraph: (
+    name: string,
+    seed = '',
+    depth = 0,
+    limit = 0,
+    both = false,
+  ) => {
     const q = new URLSearchParams()
     if (seed) q.set('seed', seed)
     if (depth > 0) q.set('depth', String(depth))
     if (limit > 0) q.set('limit', String(limit))
+    if (both) q.set('both', '1')
     const qs = q.toString()
     return request<GraphSubgraph>(
       `/admin/api/projects/${encodeURIComponent(name)}/graph/subgraph${qs ? `?${qs}` : ''}`,

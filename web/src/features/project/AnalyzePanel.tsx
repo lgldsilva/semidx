@@ -15,7 +15,7 @@ import { Card } from '../../components/Card'
 import { Input } from '../../components/Input'
 import { Code, Snippet } from '../../components/Snippet'
 import { Table } from '../../components/Table'
-import { DependencyGraphView } from './DependencyGraphView'
+import { GraphCanvas } from '../graph/GraphCanvas'
 
 const H2 = 'mb-2 text-[1.1rem] font-bold'
 const LIST = 'my-2 list-disc pl-5'
@@ -24,10 +24,12 @@ export function AnalyzePanel({
   project,
   seedPath,
   onOpenFile,
+  onOpenGraph,
 }: {
   project: string
   seedPath: string
   onOpenFile: (path: string, line?: number) => void
+  onOpenGraph?: (path: string) => void
 }) {
   const [path, setPath] = useState(seedPath)
   const [line, setLine] = useState(1)
@@ -59,6 +61,13 @@ export function AnalyzePanel({
   useEffect(() => {
     setPath(seedPath)
   }, [seedPath])
+
+  useEffect(() => {
+    void api
+      .projectGraphStats(project)
+      .then(setGraphStats)
+      .catch(() => undefined)
+  }, [project])
 
   async function runGraph() {
     if (!path.trim()) return
@@ -201,10 +210,19 @@ export function AnalyzePanel({
   return (
     <div className="grid gap-3.5 md:grid-cols-2">
       <Card className="md:col-span-2">
-        <h2 className={H2}>Dependency graph &amp; explain</h2>
-        <p className="m-0 text-muted">
-          Graph uses <Code>file_dependencies</Code>. Explain uses disk when available, else index chunks.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h2 className={H2}>Explain, callers, and catalogs</h2>
+            <p className="m-0 text-muted">
+              Structural tools. The interactive neighborhood lives on the Graph tab.
+            </p>
+          </div>
+          {onOpenGraph && (
+            <Button variant="secondary" onClick={() => onOpenGraph(path.trim())}>
+              Open graph explorer
+            </Button>
+          )}
+        </div>
         {err && <Alert kind="error">{err}</Alert>}
         <div className="mt-2 flex flex-wrap items-end gap-3.5">
           <label htmlFor="analyze-path" className="block min-w-[180px] flex-1 text-sm font-medium">
@@ -437,13 +455,14 @@ export function AnalyzePanel({
           )}
           {subgraph && (
             <div className="mt-2">
-              <DependencyGraphView
+              <GraphCanvas
                 nodes={subgraph.nodes}
                 edges={subgraph.edges}
                 highlightPath={graphPath?.found ? graphPath.hops || [] : []}
-                onOpenNode={(id, kind) => {
+                onSelect={(id, kind) => {
                   if (kind !== 'package') onOpenFile(id)
                 }}
+                onFocus={(id) => onOpenGraph?.(id)}
               />
             </div>
           )}

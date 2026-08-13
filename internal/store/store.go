@@ -112,6 +112,11 @@ type SearchResult struct {
 	Stale bool
 	// IndexedAt is when the file version was last indexed (zero when unknown).
 	IndexedAt time.Time
+	// Source is how this hit was retrieved: "vector", "keyword", or "graph".
+	// Empty means hybrid/unspecified (typical seed hit).
+	Source string
+	// GraphDepth is the BFS hop count when Source is "graph" (0 for seeds).
+	GraphDepth int
 }
 
 // FileHashInfo is one row from the files table used for freshness checks.

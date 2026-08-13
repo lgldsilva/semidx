@@ -24,12 +24,14 @@ export function OverviewPanel({
   onExplore,
   onChat,
   onFiles,
+  onGraph,
 }: {
   project: Project
   jobs: Job[]
   onExplore: () => void
   onChat: () => void
   onFiles: () => void
+  onGraph: () => void
 }) {
   const exts = useMemo(() => {
     const b = p.ext_breakdown || {}
@@ -79,6 +81,7 @@ export function OverviewPanel({
           </dd>
         </dl>
         <div className="mt-4 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+          <Button onClick={onGraph}>Open graph</Button>
           <Button onClick={onFiles}>Browse files</Button>
           <Button onClick={onExplore}>Explore / search</Button>
           <Button onClick={onChat}>Chat about project</Button>

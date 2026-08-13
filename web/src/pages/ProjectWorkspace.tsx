@@ -14,14 +14,16 @@ import { ExplorePanel } from '../features/project/ExplorePanel'
 import { FilesPanel } from '../features/project/FilesPanel'
 import { IngestPanel } from '../features/project/IngestPanel'
 import { OverviewPanel } from '../features/project/OverviewPanel'
+import { GraphExplorer } from '../features/graph/GraphExplorer'
 
-type Tab = 'overview' | 'files' | 'explore' | 'analyze' | 'chat' | 'ingest'
+type Tab = 'overview' | 'files' | 'explore' | 'graph' | 'analyze' | 'chat' | 'ingest'
 
 const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'files', label: 'Files' },
   { id: 'ingest', label: 'Ingest' },
   { id: 'explore', label: 'Explore' },
+  { id: 'graph', label: 'Graph' },
   { id: 'analyze', label: 'Analyze' },
   { id: 'chat', label: 'Chat' },
 ]
@@ -160,6 +162,7 @@ export function ProjectWorkspace() {
           onExplore={() => setTab('explore')}
           onChat={() => setTab('chat')}
           onFiles={() => setTab('files')}
+          onGraph={() => setTab('graph')}
         />
       )}
       {tab === 'files' && (
@@ -168,6 +171,12 @@ export function ProjectWorkspace() {
           initialPath={filePath}
           line={Number(params.get('line') || 0) || undefined}
           onExplorePath={(path) => goToTabWithQuery('explore', path)}
+          onOpenGraph={(path) => {
+            const next = new URLSearchParams(params)
+            next.set('tab', 'graph')
+            next.set('path', path)
+            setParams(next)
+          }}
         />
       )}
       {tab === 'ingest' && <IngestPanel project={name} onDone={() => void reload()} />}
@@ -179,8 +188,33 @@ export function ProjectWorkspace() {
           onAsk={(q) => goToTabWithQuery('chat', q)}
         />
       )}
+      {tab === 'graph' && (
+        <GraphExplorer
+          project={name}
+          seedPath={filePath}
+          onOpenFile={openFile}
+          onAsk={(q) => goToTabWithQuery('chat', q)}
+          onSeedChange={(path) => {
+            const next = new URLSearchParams(params)
+            next.set('tab', 'graph')
+            if (path) next.set('path', path)
+            else next.delete('path')
+            setParams(next, { replace: true })
+          }}
+        />
+      )}
       {tab === 'analyze' && (
-        <AnalyzePanel project={name} seedPath={filePath} onOpenFile={openFile} />
+        <AnalyzePanel
+          project={name}
+          seedPath={filePath}
+          onOpenFile={openFile}
+          onOpenGraph={(path) => {
+            const next = new URLSearchParams(params)
+            next.set('tab', 'graph')
+            if (path) next.set('path', path)
+            setParams(next)
+          }}
+        />
       )}
       {tab === 'chat' && (
         <ChatPanel project={name} seedQuestion={seedQ} onOpenFile={openFile} />

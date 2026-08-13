@@ -74,6 +74,7 @@ func (b *localBackend) Search(ctx context.Context, project, query, model string,
 			Score: r.Score, Content: r.Content,
 			Confidence: r.Confidence, Symbol: r.Symbol,
 			Stale: r.Stale, IndexedAt: r.IndexedAt,
+			Source: r.Source, GraphDepth: r.GraphDepth,
 		})
 	}
 	return out, nil

@@ -453,6 +453,7 @@ func mapSearchResponse(resp *search.Response) client.SearchResponse {
 			Score: hit.Score, Content: hit.Content,
 			Confidence: hit.Confidence, Symbol: hit.Symbol,
 			Stale: hit.Stale, IndexedAt: hit.IndexedAt,
+			Source: hit.Source, GraphDepth: hit.GraphDepth,
 		})
 	}
 	return out

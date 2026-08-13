@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom'
 import { api, getWorkspaceSelection, setWorkspaceSelection, type SystemInfo, type Workspace } from './api'
 import { Badge } from './components/Badge'
 import { Button } from './components/Button'
+import { CommandPalette } from './components/CommandPalette'
 import { ThemeToggle } from './components/ThemeToggle'
 import { cx } from './lib/cx'
 import { Select } from './components/Input'
@@ -62,6 +63,7 @@ export function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
         <NavLink to="/cli" className={navClass}>
           CLI guide
         </NavLink>
+        <span className="hidden text-xs text-muted sm:inline">Ctrl/⌘K</span>
         <span className="flex-1" />
         {workspaces.length > 0 && (
           <label className="flex items-center gap-1.5 text-muted" htmlFor="workspace-select">
@@ -99,9 +101,10 @@ export function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
         </div>
       )}
 
-      <main className="mx-auto my-[1.4rem] max-w-[1100px] px-[1.2rem] pb-10 max-sm:mt-4 max-sm:px-3 max-sm:pb-8">
+      <main className="mx-auto my-[1.4rem] max-w-[1280px] px-[1.2rem] pb-10 max-sm:mt-4 max-sm:px-3 max-sm:pb-8">
         {children}
       </main>
+      <CommandPalette />
     </div>
   )
 }

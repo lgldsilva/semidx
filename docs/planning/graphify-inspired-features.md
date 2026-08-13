@@ -5,7 +5,7 @@
 > **Verificações feitas no código** antes de codar — algumas afirmações "óbvias"
 > foram checadas e uma foi corrigida.
 
-- **Status:** v1 (graph primitives MCP + --ast-only) implementado e verificado
+- **Status:** v1 feito; v2 tags na API/CLI/MCP/admin; neighborhood inbound + Graph tab (2026-08-13). v3 comunidades ainda não.
 - **Data:** 2026-07-21
 - **Origem:** avaliação do repo [Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify)
   como fonte de ideias para o semidx.
