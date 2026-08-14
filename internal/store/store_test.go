@@ -66,8 +66,13 @@ func newTestStore(t *testing.T) *PgStore {
 			postgres.WithUsername("semantic"),
 			postgres.WithPassword("semantic"),
 			testcontainers.WithWaitStrategy(
+				// Wait for both the readiness log and the exposed port. In CI the
+				// log can appear before postgres actually accepts TCP connections
+				// on the mapped port, so relying on the log alone flakes on
+				// GitHub Actions runners.
 				wait.ForLog("database system is ready to accept connections").
 					WithOccurrence(2).WithStartupTimeout(180*time.Second),
+				wait.ForListeningPort("5432/tcp"),
 			),
 		)
 		if err != nil {
@@ -172,7 +177,16 @@ func TestChunkRoundTripAndSearch(t *testing.T) {
 		t.Fatalf("InsertChunks: %v", err)
 	}
 
-	// Vector search: query closest to the first chunk's embedding.
+	assertVectorSearchResult(t, s, pid)
+	assertKeywordSearchResult(t, s, pid)
+	assertProbedKeywordSearch(t, s, pid)
+	assertChunkUpsertNoDuplicate(t, s, pid, fid, chunks[:1], embeddings[:1])
+	assertDropAllClearsProject(t, s, pid)
+}
+
+func assertVectorSearchResult(t *testing.T, s *PgStore, pid int) {
+	t.Helper()
+	ctx := context.Background()
 	res, err := s.SearchSimilar(ctx, pid, []float32{1, 0, 0}, 3, 5)
 	if err != nil {
 		t.Fatalf("SearchSimilar: %v", err)
@@ -192,8 +206,11 @@ func TestChunkRoundTripAndSearch(t *testing.T) {
 	if res[0].StartLine != 10 || res[0].EndLine != 12 {
 		t.Errorf("top hit line range = [%d,%d], want [10,12]", res[0].StartLine, res[0].EndLine)
 	}
+}
 
-	// Keyword fallback: ILIKE on content.
+func assertKeywordSearchResult(t *testing.T, s *PgStore, pid int) {
+	t.Helper()
+	ctx := context.Background()
 	kw, err := s.SearchSimilarKeywords(ctx, pid, "auth", 3, 5)
 	if err != nil {
 		t.Fatalf("SearchSimilarKeywords: %v", err)
@@ -201,31 +218,40 @@ func TestChunkRoundTripAndSearch(t *testing.T) {
 	if len(kw) != 1 || kw[0].Content != "alpha auth token handler" {
 		t.Errorf("keyword search = %+v, want the alpha chunk", kw)
 	}
+}
 
-	// Keyword search with unknown dims should probe and still find the chunk.
-	kw2, err := s.SearchSimilarKeywords(ctx, pid, "gamma", 0, 5)
+func assertProbedKeywordSearch(t *testing.T, s *PgStore, pid int) {
+	t.Helper()
+	ctx := context.Background()
+	kw, err := s.SearchSimilarKeywords(ctx, pid, "gamma", 0, 5)
 	if err != nil {
 		t.Fatalf("SearchSimilarKeywords(dims=0): %v", err)
 	}
-	if len(kw2) != 1 || kw2[0].Content != "beta gamma delta" {
-		t.Errorf("probed keyword search = %+v, want the beta chunk", kw2)
+	if len(kw) != 1 || kw[0].Content != "beta gamma delta" {
+		t.Errorf("probed keyword search = %+v, want the beta chunk", kw)
 	}
+}
 
-	// Re-inserting the same chunk indexes (upsert) rather than duplicating.
-	if err := s.InsertChunks(ctx, pid, fid, chunks[:1], embeddings[:1], 3); err != nil {
+func assertChunkUpsertNoDuplicate(t *testing.T, s *PgStore, pid, fid int, chunks []chunker.Chunk, embeddings [][]float32) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.InsertChunks(ctx, pid, fid, chunks, embeddings, 3); err != nil {
 		t.Fatalf("re-InsertChunks: %v", err)
 	}
 	again, _ := s.SearchSimilarKeywords(ctx, pid, "auth", 3, 5)
 	if len(again) != 1 {
 		t.Errorf("after re-insert got %d rows, want 1 (upsert, no dup)", len(again))
 	}
+}
 
-	// DropAll clears everything.
+func assertDropAllClearsProject(t *testing.T, s *PgStore, pid int) {
+	t.Helper()
+	ctx := context.Background()
 	if err := s.DropAll(ctx); err != nil {
 		t.Fatalf("DropAll: %v", err)
 	}
-	if _, err := s.GetProject(ctx, "proj"); err == nil {
-		t.Error("GetProject after DropAll should fail (no rows)")
+	if _, err := s.GetProjectByID(ctx, pid); err == nil {
+		t.Error("GetProjectByID after DropAll should fail (no rows)")
 	}
 }
 
@@ -390,25 +416,7 @@ func TestClaimJobConcurrentNoDoubleClaim(t *testing.T) {
 		}
 	}
 
-	var mu sync.Mutex
-	seen := map[int]int{}
-	var wg sync.WaitGroup
-	for w := 0; w < 6; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				job, err := s.ClaimJob(ctx)
-				if err != nil || job == nil {
-					return
-				}
-				mu.Lock()
-				seen[job.ID]++
-				mu.Unlock()
-			}
-		}()
-	}
-	wg.Wait()
+	seen := claimJobsConcurrently(ctx, t, s, 6)
 
 	if len(seen) != n {
 		t.Errorf("claimed %d distinct jobs, want %d", len(seen), n)
@@ -417,6 +425,35 @@ func TestClaimJobConcurrentNoDoubleClaim(t *testing.T) {
 		if count != 1 {
 			t.Errorf("job %d claimed %d times (want exactly 1)", id, count)
 		}
+	}
+}
+
+func claimJobsConcurrently(ctx context.Context, t *testing.T, s *PgStore, workers int) map[int]int {
+	t.Helper()
+	var mu sync.Mutex
+	seen := map[int]int{}
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			claimUntilEmpty(ctx, t, s, seen, &mu)
+		}()
+	}
+	wg.Wait()
+	return seen
+}
+
+func claimUntilEmpty(ctx context.Context, t *testing.T, s *PgStore, seen map[int]int, mu *sync.Mutex) {
+	t.Helper()
+	for {
+		job, err := s.ClaimJob(ctx)
+		if err != nil || job == nil {
+			return
+		}
+		mu.Lock()
+		seen[job.ID]++
+		mu.Unlock()
 	}
 }
 
