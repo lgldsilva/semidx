@@ -1,0 +1,113 @@
+name: semidx-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26.6"
+  IMAGE_NAME: semidx-ci
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test -race -shuffle=on -count=1 ./...
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - working-directory: web
+        run: npm ci
+      - working-directory: web
+        run: npm test -- --run
+      - working-directory: web
+        run: npm run build
+      - name: Reject stale generated UI assets
+        run: git diff --exit-code -- internal/webui/dist
+
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.2 \
+            detect --source=/repo --no-banner --redact --exit-code=1
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Go vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - name: Go security scan
+        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.27.1 -quiet ./...
+      - name: Filesystem scan
+        run: |
+          docker run --rm -v "$PWD:/repo" aquasec/trivy:0.61.0 fs /repo \
+            --scanners vuln,secret,misconfig --ignore-unfixed \
+            --severity HIGH,CRITICAL --exit-code 1
+
+  build:
+    needs: [test, web, scan]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image for validation
+        run: docker build --pull --tag "${IMAGE_NAME}:${GITHUB_SHA}" .
+      - name: Scan production image
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.61.0 image "${IMAGE_NAME}:${GITHUB_SHA}" \
+            --scanners vuln,secret --ignore-unfixed \
+            --severity HIGH,CRITICAL --exit-code 1
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build]
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
+      REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish immutable image and record digest
+        run: |
+          set -eu
+          REGISTRY_HOST="${REGISTRY_HOST:-gitea.internal.lgldsilva.com.br}"
+          IMAGE="${REGISTRY_HOST}/${GITHUB_REPOSITORY}"
+          : "${REGISTRY_USER:?configure the Gitea registry username secret}"
+          : "${REGISTRY_PASSWORD:?configure the Gitea registry password/token secret}"
+          echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" --username "$REGISTRY_USER" --password-stdin
+          docker buildx build --pull --file Dockerfile \
+            --tag "$IMAGE:sha-${GITHUB_SHA}" \
+            --push --provenance=true --sbom=true \
+            --metadata-file /tmp/semidx-image.json .
+          DIGEST=$(jq -r '."containerimage.digest"' /tmp/semidx-image.json)
+          case "$DIGEST" in sha256:[0-9a-fA-F]*) ;; *) echo "invalid image digest: $DIGEST" >&2; exit 1 ;; esac
+          printf 'image=%s\ndigest=%s\n' "$IMAGE" "$DIGEST" | tee publish.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semidx-image-digest-${{ github.sha }}
+          path: publish.txt
