@@ -137,8 +137,8 @@ jobs:
             # GoReleaser v2 ignores --skip for brews/scoops, and skip_upload
             # still evaluates as false when the secret is non-empty but invalid.
             # Generate a config with the brews/scoops sections removed.
-            awk '/^brews:/ {exit} {print}' .goreleaser.yaml > .goreleaser-notaps.yaml
-            CONFIG_FLAGS="--config .goreleaser-notaps.yaml"
+            awk '/^brews:/ {exit} {print}' .goreleaser.yaml > /tmp/.goreleaser-notaps.yaml
+            CONFIG_FLAGS="--config /tmp/.goreleaser-notaps.yaml"
           fi
           go run github.com/goreleaser/goreleaser/v2@v2.13.0 release --clean ${CONFIG_FLAGS}
       - name: Build and push Docker image
