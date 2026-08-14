@@ -121,7 +121,7 @@ jobs:
           set -euo pipefail
           SKIP_FLAGS=""
           if [ -z "${TAP_GITHUB_TOKEN:-}" ]; then
-            SKIP_FLAGS="--skip=homebrew,scoop"
+            SKIP_FLAGS="--skip=brews,scoops"
           fi
           go run github.com/goreleaser/goreleaser/v2@v2.13.0 release --clean ${SKIP_FLAGS}
       - name: Build and push Docker image
