@@ -62,7 +62,7 @@ async function sendQuestion(q = 'how does auth work?') {
 // Suspense fallback (raw text) doesn't linger past the findBy* timeouts.
 beforeAll(async () => {
   await import('../../components/MarkdownContent')
-})
+}, 30000)
 
 afterEach(() => {
   vi.restoreAllMocks()
