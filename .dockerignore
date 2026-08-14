@@ -11,6 +11,10 @@ deploy
 # …but the agentics test image (built from the repo root) needs its harness files.
 # This only widens the build context; the final server image copies just the binary.
 !deploy/agentics-test
+!deploy/
+!deploy/docker/
+!deploy/docker/semidx-entrypoint.sh
+!deploy/docker/semidx-migrate.sh
 
 # Never let local secrets reach the build context (web stage copies web/;
 # build stage copies cmd/internal/pkg only). Keep .env out of context either way.
