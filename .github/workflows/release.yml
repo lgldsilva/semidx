@@ -120,10 +120,23 @@ jobs:
         run: |
           set -euo pipefail
           CONFIG_FLAGS=""
-          if [ -z "${TAP_GITHUB_TOKEN:-}" ]; then
-            # The --skip flag is unreliable in GoReleaser v2 for brews/scoops,
-            # and the existing skip_upload template still evaluates when the
-            # secret is present but invalid. Generate a tap-less config.
+          TAP_TOKEN="${TAP_GITHUB_TOKEN:-}"
+          if [ -n "$TAP_TOKEN" ]; then
+            # Verify the configured token can actually reach the tap repos.
+            # A present-but-invalid/expired secret would otherwise make
+            # GoReleaser attempt the upload and fail with 401.
+            status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              --header "Authorization: Bearer $TAP_TOKEN" \
+              "https://api.github.com/repos/lgldsilva/homebrew-tap")
+            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+              echo "TAP_GITHUB_TOKEN cannot access lgldsilva/homebrew-tap (HTTP $status); disabling tap publish" >&2
+              TAP_TOKEN=""
+            fi
+          fi
+          if [ -z "$TAP_TOKEN" ]; then
+            # GoReleaser v2 ignores --skip for brews/scoops, and skip_upload
+            # still evaluates as false when the secret is non-empty but invalid.
+            # Generate a config with the brews/scoops sections removed.
             awk '/^brews:/ {exit} {print}' .goreleaser.yaml > .goreleaser-notaps.yaml
             CONFIG_FLAGS="--config .goreleaser-notaps.yaml"
           fi
