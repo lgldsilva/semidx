@@ -8,7 +8,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.26.5 AS build
+FROM golang:1.26.6 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -26,7 +26,12 @@ FROM alpine:3.20
 # use this once the job-runner resolution lands.
 RUN apk add --no-cache ca-certificates git openssh-client && adduser -D -u 10001 semidx
 COPY --from=build /out/semidx /usr/local/bin/semidx
+COPY deploy/docker/semidx-entrypoint.sh /usr/local/bin/semidx-entrypoint.sh
+COPY deploy/docker/semidx-migrate.sh /usr/local/bin/semidx-migrate.sh
+RUN chmod 0555 /usr/local/bin/semidx-entrypoint.sh /usr/local/bin/semidx-migrate.sh \
+    && mkdir -p /data /run/secrets \
+    && chown -R semidx:semidx /data /run/secrets
 USER semidx
 EXPOSE 8080
-ENTRYPOINT ["semidx"]
+ENTRYPOINT ["/usr/local/bin/semidx-entrypoint.sh"]
 CMD ["serve"]
