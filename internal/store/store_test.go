@@ -66,8 +66,15 @@ func newTestStore(t *testing.T) *PgStore {
 			postgres.WithUsername("semantic"),
 			postgres.WithPassword("semantic"),
 			testcontainers.WithWaitStrategy(
-				wait.ForLog("database system is ready to accept connections").
-					WithOccurrence(2).WithStartupTimeout(180*time.Second),
+				// Wait for both the readiness log and the exposed port. In CI the
+				// log can appear before postgres actually accepts TCP connections
+				// on the mapped port, so relying on the log alone flakes on
+				// GitHub Actions runners.
+				wait.ForAll(
+					wait.ForLog("database system is ready to accept connections").
+						WithOccurrence(2),
+					wait.ForListeningPort("5432/tcp"),
+				).WithStartupTimeout(180*time.Second),
 			),
 		)
 		if err != nil {
