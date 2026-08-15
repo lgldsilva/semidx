@@ -137,6 +137,28 @@ func TestSemanticSearchStructuredFormat(t *testing.T) {
 	}
 }
 
+func TestSemanticSearchPublishesTypedStructuredContent(t *testing.T) {
+	sess := connect(t)
+	res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "semantic_search", Arguments: map[string]any{"project": "app", "query": "verify token"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError || res.StructuredContent == nil {
+		t.Fatalf("structured MCP result = %#v (isError=%v)", res.StructuredContent, res.IsError)
+	}
+	data, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"project":"app"`, `"model":"bge-m3"`, `"results"`} {
+		if !strings.Contains(string(data), field) {
+			t.Errorf("structured content missing %s: %s", field, data)
+		}
+	}
+}
+
 func TestSemanticSearchMinimalFormat(t *testing.T) {
 	sess := connect(t)
 	text, isErr := callText(t, sess, "semantic_search", map[string]any{

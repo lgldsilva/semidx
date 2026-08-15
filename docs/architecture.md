@@ -224,7 +224,10 @@ against Postgres or SQLite. The server depends on `Store`.
   `vector_cosine_ops`; above it (e.g. 3072-dim models) the index and the query
   both use the `halfvec` cast (`halfvec_cosine_ops`) so the ANN index is still
   used.
-- **Keyword fallback** is `ILIKE` over chunk content, scored a constant `0.5`.
+- **Keyword fallback** uses PostgreSQL `ILIKE` compatibility filtering plus
+  lexical coverage and `ts_rank_cd` ordering. SQLite ranks FTS5 BM25 matches
+  first and keeps a substring `LIKE` compatibility leg for identifiers. These
+  are rank scores, not probabilities or cosine similarity values.
 - The static `projects` and `files` tables plus tokens/users/sessions/jobs are
   created by embedded goose migrations applied on connect.
 
@@ -321,8 +324,9 @@ mode), the MCP server and the admin UI:
 2. Resolve the dimension: a provider that knows the model wins; otherwise it is
    inferred from the model name.
 3. Embed the query and run vector search (`SearchSimilar`).
-4. If embedding fails, fall back to keyword search and set `Fallback = true` so
-   the caller can warn that results are literal, not semantic.
+4. If embedding fails, fall back to lexically ranked keyword search and set
+   `Fallback = true` so the caller can warn that results are literal, not
+   semantic.
 
 In remote mode the CLI skips this and calls the server's search endpoint, then
 renders the response through the *same* formatters, so `file:line:content`

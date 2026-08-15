@@ -55,8 +55,12 @@ type MultiResponse struct {
 	Results      []MultiResult
 	ProjectCount int
 	SkippedCount int // projects that could not be searched; results remain best-effort
-	Fallback     bool
-	Keyword      bool
+	// Route is the aggregate retrieval route. "mixed" means projects used
+	// different routes; Routes preserves the distribution for observability.
+	Route    string         `json:"route,omitempty"`
+	Routes   map[string]int `json:"routes,omitempty"`
+	Fallback bool
+	Keyword  bool
 	// Degraded is true when at least one sub-search degraded to keyword results
 	// because the embedding circuit was open. RetryAfter is the largest recovery
 	// hint across degraded sub-searches.
@@ -70,6 +74,7 @@ type MultiResponse struct {
 type aggFlags struct {
 	fallback, keyword, degraded bool
 	retryAfter                  time.Duration
+	routes                      map[string]int
 }
 
 func (f *aggFlags) absorb(resp *Response) {
@@ -81,6 +86,21 @@ func (f *aggFlags) absorb(resp *Response) {
 			f.retryAfter = resp.RetryAfter
 		}
 	}
+	route := resp.Route
+	if route == "" {
+		switch {
+		case resp.Fallback:
+			route = "fallback"
+		case resp.Keyword:
+			route = "keyword"
+		default:
+			route = "hybrid"
+		}
+	}
+	if f.routes == nil {
+		f.routes = make(map[string]int)
+	}
+	f.routes[route]++
 }
 
 // SearchMulti searches across multiple project identities and fuses results
@@ -231,6 +251,19 @@ func fuseRankedResults(allResults []rankedResult, maxPerFile, maxPerProject, top
 	out := &MultiResponse{
 		Fallback: flags.fallback, Keyword: flags.keyword,
 		Degraded: flags.degraded, RetryAfter: flags.retryAfter,
+	}
+	if len(flags.routes) == 1 {
+		for route := range flags.routes {
+			out.Route = route
+		}
+	} else if len(flags.routes) > 1 {
+		out.Route = "mixed"
+	}
+	if len(flags.routes) > 0 {
+		out.Routes = make(map[string]int, len(flags.routes))
+		for route, count := range flags.routes {
+			out.Routes[route] = count
+		}
 	}
 	if len(allResults) == 0 {
 		return out

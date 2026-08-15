@@ -32,15 +32,15 @@ func TestHumanFormatterGolden(t *testing.T) {
 	if err := (HumanFormatter{}).Format(&buf, sampleResponse()); err != nil {
 		t.Fatal(err)
 	}
-	const want = "--- Result 1 (91%) ---\n" +
+	const want = "--- Result 1 (semantic match) ---\n" +
 		"File: src/auth.go:12-14\n" +
-		"Score: 0.912 (91%)\n" +
+		"Score: 0.912 (rank score)\n" +
 		"  12│ func Login() {\n" +
 		"  13│   // jwt\n" +
 		"  14│ }\n\n" +
-		"--- Result 2 (50%) ---\n" +
+		"--- Result 2 (semantic match) ---\n" +
 		"File: README.md:3-5\n" +
-		"Score: 0.500 (50%)\n" +
+		"Score: 0.500 (rank score)\n" +
 		"   3│ # Title\n" +
 		"   4│ body\n\n"
 	if got := buf.String(); got != want {
@@ -49,8 +49,8 @@ func TestHumanFormatterGolden(t *testing.T) {
 }
 
 func TestHumanFormatterKeywordGolden(t *testing.T) {
-	// A keyword response labels every result "keyword match" (its 0.5 scores are a
-	// placeholder, not a similarity) and still shows file:line. Also covers a
+	// A keyword response labels every result "keyword match" (lexical scores are
+	// ranks, not a similarity) and still shows file:line. Also covers a
 	// single-line chunk and a zero start line clamped to 1.
 	resp := &Response{
 		Model:   "bge-m3",
@@ -139,14 +139,13 @@ func TestHumanFormatterNoLineNumbers(t *testing.T) {
 	if err := fmtr.Format(&buf, sampleResponse()); err != nil {
 		t.Fatal(err)
 	}
-	// Should match old golden output without line numbers.
-	const want = "--- Result 1 (91%) ---\n" +
+	const want = "--- Result 1 (semantic match) ---\n" +
 		"File: src/auth.go:12-14\n" +
-		"Score: 0.912 (91%)\n" +
+		"Score: 0.912 (rank score)\n" +
 		"func Login() {\n  // jwt\n}\n\n" +
-		"--- Result 2 (50%) ---\n" +
+		"--- Result 2 (semantic match) ---\n" +
 		"File: README.md:3-5\n" +
-		"Score: 0.500 (50%)\n" +
+		"Score: 0.500 (rank score)\n" +
 		"# Title\nbody\n\n"
 	if got := buf.String(); got != want {
 		t.Errorf("no-line-numbers output mismatch:\n--- got ---\n%q\n--- want ---\n%q", got, want)
@@ -173,26 +172,33 @@ func TestJSONFormatter(t *testing.T) {
 	var buf bytes.Buffer
 	resp := sampleResponse()
 	resp.Fallback = true
+	resp.Route = "fallback"
+	resp.TookMS = 7
 	if err := (JSONFormatter{}).Format(&buf, resp); err != nil {
 		t.Fatal(err)
 	}
 	var out struct {
 		Project  string `json:"project"`
 		Model    string `json:"model"`
+		Route    string `json:"route"`
+		Keyword  bool   `json:"keyword"`
+		TookMS   int64  `json:"took_ms"`
 		Fallback bool   `json:"fallback"`
 		Results  []struct {
-			File    string  `json:"file"`
-			Score   float64 `json:"score"`
-			Content string  `json:"content"`
+			File      string  `json:"file"`
+			StartLine int     `json:"start_line"`
+			EndLine   int     `json:"end_line"`
+			Score     float64 `json:"score"`
+			Content   string  `json:"content"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
 		t.Fatalf("output is not valid JSON: %v", err)
 	}
-	if out.Project != "demo" || out.Model != "bge-m3" || !out.Fallback {
+	if out.Project != "demo" || out.Model != "bge-m3" || out.Route != "fallback" || out.Keyword || out.TookMS != 7 || !out.Fallback {
 		t.Errorf("json header wrong: %+v", out)
 	}
-	if len(out.Results) != 2 || out.Results[0].File != "src/auth.go" || out.Results[0].Score != 0.9123 {
+	if len(out.Results) != 2 || out.Results[0].File != "src/auth.go" || out.Results[0].StartLine != 12 || out.Results[0].EndLine != 14 || out.Results[0].Score != 0.9123 {
 		t.Errorf("json results wrong: %+v", out.Results)
 	}
 	// JSON keeps content raw (untrimmed), unlike the human preview.

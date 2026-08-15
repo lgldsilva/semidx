@@ -52,15 +52,16 @@ func (b *serverBackend) Search(ctx context.Context, project, query, model string
 		return nil, b.safeErr("search", project, err)
 	}
 	out := &mcpserver.SearchOutput{
-		Project: resp.Project.Name, Fallback: resp.Fallback,
+		Project: resp.Project.Name, Model: resp.Model, Route: resp.Route, Keyword: resp.Keyword, Fallback: resp.Fallback,
 		Degraded: resp.Degraded, RetryAfterMS: resp.RetryAfter.Milliseconds(),
+		TookMS: resp.TookMS,
 	}
 	for _, r := range resp.Results {
 		out.Results = append(out.Results, mcpserver.Hit{
 			Path: r.FilePath, StartLine: r.StartLine, EndLine: r.EndLine,
 			Score: r.Score, Content: r.Content,
 			Confidence: r.Confidence, Symbol: r.Symbol,
-			Stale: r.Stale, IndexedAt: r.IndexedAt,
+			Stale: r.Stale, IndexedAt: r.IndexedAt, Source: r.Source, GraphDepth: r.GraphDepth,
 		})
 	}
 	return out, nil

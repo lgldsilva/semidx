@@ -76,6 +76,9 @@ func TestSearchMulti_aggregatesKeywordFlag(t *testing.T) {
 	if !resp.Keyword {
 		t.Error("MultiResponse.Keyword must aggregate the sub-search keyword flag")
 	}
+	if resp.Route != "keyword" || resp.Routes["keyword"] != 1 {
+		t.Errorf("route=%q routes=%v, want keyword/1", resp.Route, resp.Routes)
+	}
 }
 
 // TestSearchAllProjects_tagsAndFuses verifies the global-chat search lists
@@ -125,6 +128,9 @@ func TestSearchMulti_aggregatesDegraded(t *testing.T) {
 	}
 	if !resp.Fallback || !resp.Keyword {
 		t.Errorf("Degraded must imply Fallback and Keyword, got %v/%v", resp.Fallback, resp.Keyword)
+	}
+	if resp.Route != "fallback" {
+		t.Errorf("degraded route=%q, want fallback", resp.Route)
 	}
 	if len(resp.Results) != 1 {
 		t.Errorf("degraded search should still carry keyword results, got %+v", resp.Results)

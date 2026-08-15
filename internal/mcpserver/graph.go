@@ -38,18 +38,21 @@ func registerGraphTools(s *mcp.Server, b Backend, allowed map[string]bool, expli
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolSemanticNeighbors,
 			Description: projectToolDescription("Get the import/export neighbors of a file in the dependency graph.", defaultProject),
+			Annotations: readOnlyAnnotations("Dependency neighbors"),
 		}, neighborsHandler(graphB, defaultProject))
 	}
 	if allowed[toolSemanticTrace] {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolSemanticTrace,
 			Description: projectToolDescription("Trace dependency paths starting from seed files up to a maximum depth.", defaultProject),
+			Annotations: readOnlyAnnotations("Dependency trace"),
 		}, traceHandler(graphB, defaultProject))
 	}
 	if allowed[toolSemanticSymbols] {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolSemanticSymbols,
 			Description: projectToolDescription("List all symbols defined in a file.", defaultProject),
+			Annotations: readOnlyAnnotations("File symbols"),
 		}, symbolsHandler(graphB, defaultProject))
 	}
 }

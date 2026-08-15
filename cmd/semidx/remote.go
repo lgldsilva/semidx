@@ -21,23 +21,44 @@ import (
 // remoteToResponse adapts an SDK search response into the internal search.Response
 // so the same formatters (Human/Grep/JSON) render remote and embedded results
 // identically — this is what guarantees the sgrep `file:line:content` golden holds
-// in both modes. The project Path is left empty; sgrep fills it with the local cwd.
-func remoteToResponse(cr *client.SearchResponse) *search.Response {
+// in both modes. projectPath is the resolved project root used by sgrep when
+// the server's checkout is different from the caller's current directory.
+func remoteToResponse(cr *client.SearchResponse, projectPath string) *search.Response {
+	route := cr.Route
+	if route == "" {
+		switch {
+		case cr.Fallback:
+			route = "fallback"
+		case cr.Keyword:
+			route = "keyword"
+		default:
+			route = "hybrid"
+		}
+	}
 	results := make([]store.SearchResult, 0, len(cr.Results))
 	for _, h := range cr.Results {
 		results = append(results, store.SearchResult{
-			FilePath:  h.Path,
-			Content:   h.Content,
-			Score:     h.Score,
-			StartLine: h.StartLine,
-			EndLine:   h.EndLine,
+			FilePath:   h.Path,
+			Content:    h.Content,
+			Score:      h.Score,
+			StartLine:  h.StartLine,
+			EndLine:    h.EndLine,
+			Confidence: h.Confidence,
+			Symbol:     h.Symbol,
+			Stale:      h.Stale,
+			IndexedAt:  h.IndexedAt,
+			Source:     h.Source,
+			GraphDepth: h.GraphDepth,
 		})
 	}
 	return &search.Response{
-		Project:    &store.Project{Name: cr.Project},
+		Project:    &store.Project{Name: cr.Project, Path: projectPath},
 		Model:      cr.Model,
+		Route:      route,
+		TookMS:     cr.TookMS,
 		Results:    results,
 		Fallback:   cr.Fallback,
+		Keyword:    cr.Keyword,
 		Degraded:   cr.Degraded,
 		RetryAfter: time.Duration(cr.RetryAfterMS) * time.Millisecond,
 	}

@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, type Project } from '../api'
 import { loadRecentSearches } from '../lib/recentSearches'
 import { cx } from '../lib/cx'
+
+/* oxlint-disable jsx-a11y/no-noninteractive-element-to-interactive-role, jsx-a11y/prefer-tag-over-role -- the command list intentionally implements the WAI-ARIA listbox pattern over styled buttons. */
 
 type Item = {
   id: string
@@ -17,6 +19,8 @@ export function CommandPalette() {
   const [q, setQ] = useState('')
   const [projects, setProjects] = useState<Project[]>([])
   const [active, setActive] = useState(0)
+  const returnFocus = useRef<HTMLElement | null>(null)
+  const dialogRef = useRef<HTMLDialogElement | null>(null)
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -25,11 +29,18 @@ export function CommandPalette() {
         (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable)
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
-        setOpen((v) => !v)
+        setOpen((v) => {
+          if (!v) {
+            returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+          }
+          returnFocus.current = v ? null : returnFocus.current
+          return !v
+        })
         return
       }
       if (e.key === '/' && !inField && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault()
+        returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
         setOpen(true)
         return
       }
@@ -38,6 +49,17 @@ export function CommandPalette() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  useEffect(() => {
+    if (!open) {
+      returnFocus.current?.focus()
+      returnFocus.current = null
+      return
+    }
+    if (!returnFocus.current) {
+      returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -120,15 +142,45 @@ export function CommandPalette() {
       />
       <dialog
         open
+        ref={dialogRef}
+        aria-modal="true"
         aria-label="Command palette"
+        onCancel={(event) => {
+          event.preventDefault()
+          setOpen(false)
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'Tab') return
+          const focusable = Array.from(
+            dialogRef.current?.querySelectorAll<HTMLElement>(
+              'button, input, [href], select, textarea, [tabindex]:not([tabindex="-1"])',
+            ) ?? [],
+          )
+          if (focusable.length === 0) return
+          const first = focusable[0]
+          const last = focusable.at(-1)
+          if (!last) return
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault()
+            last.focus()
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault()
+            first.focus()
+          }
+        }}
         className="relative m-0 w-full max-w-xl overflow-hidden rounded-lg border border-border bg-surface p-0 shadow-lg"
       >
         <input
           autoFocus
           value={q}
+          role="combobox"
+          aria-controls="command-results"
+          aria-expanded="true"
+          aria-autocomplete="list"
+          aria-activedescendant={items[active] ? `command-${items[active].id}` : undefined}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search, open a project, jump to graph…"
-          className="w-full border-0 border-b border-border bg-transparent px-3 py-3 text-sm text-fg outline-none placeholder:text-muted"
+          className="w-full border-0 border-b border-border bg-transparent px-3 py-3 text-sm text-fg outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
           onKeyDown={(e) => {
             if (e.key === 'ArrowDown') {
               e.preventDefault()
@@ -142,14 +194,17 @@ export function CommandPalette() {
             }
           }}
         />
-        <ul className="m-0 max-h-[50vh] list-none overflow-auto p-1">
+        <ul id="command-results" role="listbox" className="m-0 max-h-[50vh] list-none overflow-auto p-1">
           {items.length === 0 && <li className="px-3 py-2 text-sm text-muted">No matches.</li>}
           {items.map((item, i) => (
             <li key={item.id}>
               <button
                 type="button"
+                id={`command-${item.id}`}
+                role="option"
+                aria-selected={i === active}
                 className={cx(
-                  'flex w-full cursor-pointer items-center justify-between gap-3 rounded-md border-0 px-3 py-2 text-left text-sm',
+                  'flex w-full cursor-pointer items-center justify-between gap-3 rounded-md border-0 px-3 py-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset',
                   i === active ? 'bg-accent/15 text-fg' : 'bg-transparent text-fg hover:bg-surface-2',
                 )}
                 onMouseEnter={() => setActive(i)}

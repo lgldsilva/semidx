@@ -112,13 +112,15 @@ adjust rather than retrying blindly.
 
 ## Reading the results
 
-- **Score**: higher is more relevant (cosine similarity, roughly 0–1). Treat the
-  top results as candidates, not certainties — skim the previews before acting.
+- **Score**: higher is more relevant within the returned set. It may be cosine,
+  RRF, lexical, or reranked score; it is not a calibrated probability. Treat
+  the top results as candidates, not certainties — skim the previews before
+  acting.
 - **Keyword fallback**: if the response is flagged as fallback (a `[warning]`
   line in text output, or `"fallback": true` in JSON), the embedding backend was
-  unavailable and the server used plain keyword search instead. Results are then
-  literal matches, not semantic ones — re-run once embeddings are back if ranking
-  matters.
+  unavailable and the server used lexically ranked keyword search instead.
+  Results are literal matches ordered by lexical relevance, not semantic ones —
+  re-run once embeddings are back if semantic recall matters.
 - **A stale index** returns old code. If results look outdated after a big change,
   re-index (`semidx repo add`/reindex, or the `semantic_reindex` MCP tool) and
   search again.

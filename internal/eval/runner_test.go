@@ -13,7 +13,7 @@ func TestRunRepeatsAndAveragesDeterministically(t *testing.T) {
 	results := Run(context.Background(), ds, RunnerConfig{Runs: 3, TopK: 10, Seed: 42}, func(context.Context, Query) (Observation, error) {
 		calls++
 		return Observation{
-			Ranked: []Ranked{{File: "auth.go"}}, Backend: "sqlite", Model: "bge-m3",
+			Ranked: []Ranked{{File: "auth.go"}}, Route: "vector", Backend: "sqlite", Model: "bge-m3",
 			Project: "app", ProjectIdentity: "git:app", Worktree: "/work/app", IndexFingerprint: "idx",
 		}, nil
 	})
@@ -22,6 +22,25 @@ func TestRunRepeatsAndAveragesDeterministically(t *testing.T) {
 	}
 	if results.Metadata.DatasetSHA256 == "" || results.Metadata.ProjectIdentity != "git:app" || results.Metadata.Worktree != "/work/app" {
 		t.Fatalf("missing comparison metadata: %+v", results.Metadata)
+	}
+	if results.Queries[0].Route != "vector" || results.RouteCounts["vector"] != 1 {
+		t.Fatalf("route evidence = query=%q counts=%v, want vector/1", results.Queries[0].Route, results.RouteCounts)
+	}
+}
+
+func TestRunMarksMixedObservedRoutes(t *testing.T) {
+	ds := Dataset{Version: 2, Queries: []Query{{ID: "q", Query: "auth", Relevant: []Relevance{{File: "auth.go", Grade: 3}}}}}
+	call := 0
+	results := Run(context.Background(), ds, RunnerConfig{Runs: 2}, func(context.Context, Query) (Observation, error) {
+		call++
+		route := "hybrid"
+		if call == 2 {
+			route = "vector"
+		}
+		return Observation{Ranked: []Ranked{{File: "auth.go"}}, Route: route}, nil
+	})
+	if results.Queries[0].Route != "mixed" || results.RouteCounts["mixed"] != 1 {
+		t.Fatalf("mixed route evidence = query=%q counts=%v", results.Queries[0].Route, results.RouteCounts)
 	}
 }
 

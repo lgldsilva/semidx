@@ -116,7 +116,9 @@ func humanScore(keyword bool, score float64) string {
 	if keyword {
 		return "keyword match"
 	}
-	return fmt.Sprintf("%.3f (%.0f%%)", score, score*100)
+	// Retrieval scores are ordinal within a result set, not calibrated
+	// probabilities. Do not present normalized scores as confidence percentages.
+	return fmt.Sprintf("%.3f (rank score)", score)
 }
 
 // prefixLineNumbers prepends padded line numbers to each line of content,
@@ -168,6 +170,8 @@ type JSONFormatter struct{}
 func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 	type row struct {
 		File       string  `json:"file"`
+		StartLine  int     `json:"start_line"`
+		EndLine    int     `json:"end_line"`
 		Score      float64 `json:"score"`
 		Content    string  `json:"content"`
 		Confidence string  `json:"confidence,omitempty"`
@@ -180,13 +184,17 @@ func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 	out := struct {
 		Project      string `json:"project"`
 		Model        string `json:"model"`
+		Route        string `json:"route,omitempty"`
 		Fallback     bool   `json:"fallback"`
+		Keyword      bool   `json:"keyword"`
 		Degraded     bool   `json:"degraded"`
 		RetryAfterMS int64  `json:"retry_after_ms"`
+		TookMS       int64  `json:"took_ms"`
 		Results      []row  `json:"results"`
 	}{
-		Model: resp.Model, Fallback: resp.Fallback,
+		Model: resp.Model, Route: resp.Route, Fallback: resp.Fallback, Keyword: resp.Keyword,
 		Degraded: resp.Degraded, RetryAfterMS: resp.RetryAfter.Milliseconds(),
+		TookMS:  resp.TookMS,
 		Results: []row{},
 	}
 	if resp.Project != nil {
@@ -198,7 +206,8 @@ func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 			indexedAt = r.IndexedAt.UTC().Format(time.RFC3339)
 		}
 		out.Results = append(out.Results, row{
-			File: r.FilePath, Score: r.Score, Content: r.Content,
+			File: r.FilePath, StartLine: r.StartLine, EndLine: r.EndLine,
+			Score: r.Score, Content: r.Content,
 			Confidence: r.Confidence, Symbol: r.Symbol,
 			Stale: r.Stale, IndexedAt: indexedAt,
 			Source: r.Source, GraphDepth: r.GraphDepth,
@@ -232,12 +241,12 @@ func RetrySeconds(ms int64) int64 {
 
 // matchLabel renders the per-result relevance label: cosine similarity as a
 // percentage for a vector match, or "keyword match" when the response came from
-// keyword search (its scores are a constant placeholder, not a similarity).
-func matchLabel(keyword bool, score float64) string {
+// keyword search (its scores are lexical rank values, not a similarity).
+func matchLabel(keyword bool, _ float64) string {
 	if keyword {
 		return "keyword match"
 	}
-	return fmt.Sprintf("%.0f%%", score*100)
+	return "semantic match"
 }
 
 // formatLoc renders "path:line" (or "path:start-end" for a multi-line chunk),

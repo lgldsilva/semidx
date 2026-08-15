@@ -41,6 +41,10 @@ type searchData struct {
 	Top             int
 	Results         []adminSearchHit
 	Fallback        bool
+	Keyword         bool
+	Route           string
+	Model           string
+	TookMS          int64
 	Degraded        bool          // embed circuit open — keyword results served
 	RetryAfter      time.Duration // recovery hint, set when Degraded
 	Ran             bool
@@ -93,6 +97,7 @@ func parseSearchData(r *http.Request) (searchData, int) {
 // path on the same RRF implementation as REST/MCP prevents the admin UI from
 // silently producing a different ranking for the same tenant/query.
 func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) error {
+	start := time.Now()
 	resp, err := a.search.SearchAllProjects(ctx, search.MultiScopeRequest{
 		Query: d.Query, TopK: topK, MaxPerFile: 2,
 		Graph: d.Graph, GraphMaxDepth: d.GraphDepth,
@@ -119,6 +124,17 @@ func (a *Admin) searchAllProjects(ctx context.Context, d *searchData, topK int) 
 		})
 	}
 	d.Fallback = resp.Fallback
+	d.Route = resp.Route
+	if d.Route == "" {
+		d.Route = "hybrid"
+		if resp.Fallback {
+			d.Route = "fallback"
+		} else if resp.Keyword {
+			d.Route = "keyword"
+		}
+	}
+	d.Keyword = resp.Keyword
+	d.TookMS = time.Since(start).Milliseconds()
 	d.Degraded = resp.Degraded
 	d.RetryAfter = resp.RetryAfter
 	return nil

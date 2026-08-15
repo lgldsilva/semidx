@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api, ApiError, type Project, type SearchHit } from '../api'
+import { api, ApiError, type Project, type SearchHit, type SearchResponse } from '../api'
 import { Alert } from '../components/Alert'
 import { Button } from '../components/Button'
 import { Card } from '../components/Card'
@@ -15,6 +15,27 @@ const PILL_BTN = 'cursor-pointer rounded-full border px-2.5 py-1 text-[0.82rem] 
 const PILL_ON = 'border-accent bg-accent text-accent-fg'
 const PILL_OFF =
   'border-border bg-transparent text-fg hover:border-accent hover:bg-accent hover:text-accent-fg'
+
+function responseRoute(response: SearchResponse): string {
+  if (response.route) return response.route
+  if (response.fallback) return 'fallback'
+  if (response.keyword) return 'keyword'
+  return 'hybrid'
+}
+
+function responseMeta(response: SearchResponse): string {
+  if (response.resolved_project) return `resolved: ${response.resolved_project}`
+  if (response.project_count) return `searched ${response.project_count} projects`
+  return ''
+}
+
+function searchProject(scopeAll: boolean, project: string): string | undefined {
+  return scopeAll ? undefined : project
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
 
 export function SearchPage() {
   const [params, setParams] = useSearchParams()
@@ -36,6 +57,9 @@ export function SearchPage() {
   const [fallback, setFallback] = useState(false)
   const [degraded, setDegraded] = useState(false)
   const [retryAfterMs, setRetryAfterMs] = useState(0)
+  const [searchRoute, setSearchRoute] = useState('')
+  const [searchModel, setSearchModel] = useState('')
+  const [tookMs, setTookMs] = useState(0)
   const [ran, setRan] = useState(false)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -70,30 +94,32 @@ export function SearchPage() {
       try {
         const res = await api.search({
           query: urlQuery.trim(),
-          project: scopeAll ? undefined : urlProject,
+          project: searchProject(scopeAll, urlProject),
           all: scopeAll,
           top: urlTop,
           graph: urlGraph,
           graph_depth: urlDepth,
+          signal: ac.signal,
         })
         if (cancelled) return
         setResults(res.results ?? [])
         setFallback(res.fallback)
         setDegraded(res.degraded ?? false)
         setRetryAfterMs(res.retry_after_ms ?? 0)
-        setMeta(
-          res.resolved_project
-            ? `resolved: ${res.resolved_project}`
-            : res.project_count
-              ? `searched ${res.project_count} projects`
-              : '',
-        )
+        setSearchRoute(responseRoute(res))
+        setSearchModel(res.model ?? '')
+        setTookMs(res.took_ms ?? 0)
+        setMeta(responseMeta(res))
         setRecent(rememberSearch(urlQuery.trim(), scopeAll ? undefined : urlProject))
       } catch (ex) {
+        if (isAbortError(ex)) return
         if (cancelled) return
         setResults([])
         setFallback(false)
         setDegraded(false)
+        setSearchRoute('')
+        setSearchModel('')
+        setTookMs(0)
         setErr(ex instanceof ApiError ? ex.message : 'search failed')
       } finally {
         if (!cancelled) setBusy(false)
@@ -138,8 +164,8 @@ export function SearchPage() {
       <div className="mb-4">
         <h1 className="mb-1 text-[1.45rem] font-bold">Search</h1>
         <p className="m-0 text-muted">
-          Semantic hits with optional Graph-RAG expansion. Open a file, inspect its
-          neighborhood, or ask the project agent — <Code>/</Code> or{' '}
+          Find code and documentation by intent, then inspect the evidence. Open a file,
+          inspect its neighborhood, or ask the project agent — <Code>/</Code> or{' '}
           <Code>Ctrl/⌘K</Code> jumps anywhere.
         </p>
       </div>
@@ -260,7 +286,15 @@ export function SearchPage() {
           </Alert>
         )
       )}
-      {meta && <p className="text-muted">{meta}</p>}
+      {(meta || tookMs > 0 || searchRoute) && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted" aria-live="polite">
+          {meta && <span>{meta}</span>}
+          {searchRoute && <span className="rounded-full border border-border px-2 py-0.5">route: {searchRoute}</span>}
+          {searchModel && <span className="rounded-full border border-border px-2 py-0.5">model: {searchModel}</span>}
+          {tookMs > 0 && <span className="rounded-full border border-border px-2 py-0.5">{tookMs} ms</span>}
+          {ran && <span>{results.length} result{results.length === 1 ? '' : 's'}</span>}
+        </div>
+      )}
 
       {ran && !err && results.length === 0 && (
         <EmptyState title="No matches">

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -238,6 +239,16 @@ func newBenchCompareCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if len(delta.RouteCounts) > 0 {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "route count delta: %s\n", formatRouteCounts(delta.RouteCounts)); err != nil {
+					return err
+				}
+			}
+			if len(delta.RouteTransitions) > 0 {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "route transitions: %s\n", formatRouteCounts(delta.RouteTransitions)); err != nil {
+					return err
+				}
+			}
 			return thresholdErr
 		},
 	}
@@ -375,7 +386,7 @@ func newBenchmarkSearch(cmd *cobra.Command, d *deps, opts retrievalBenchOptions,
 			ranked[i] = eval.Ranked{File: hit.FilePath}
 		}
 		return eval.Observation{
-			Ranked: ranked, Fallback: result.resp.Fallback, Degraded: result.resp.Degraded,
+			Ranked: ranked, Route: result.resp.Route, Fallback: result.resp.Fallback, Degraded: result.resp.Degraded,
 			Backend: meta.backend, Model: result.resp.Model, Project: result.resp.Project.Name,
 			ProjectIdentity: meta.identity, Worktree: meta.worktree, IndexFingerprint: meta.fingerprint,
 			Dimensions: result.resp.Project.Dims, Duration: time.Since(started),
@@ -434,9 +445,27 @@ func printEvalResults(cmd *cobra.Command, results eval.Results) error {
 		results.LatencyP50MS, results.LatencyP95MS, results.LatencyP99MS); err != nil {
 		return err
 	}
+	if len(results.RouteCounts) > 0 {
+		if _, err := fmt.Fprintf(w, "observed routes: %s\n", formatRouteCounts(results.RouteCounts)); err != nil {
+			return err
+		}
+	}
 	_, err := fmt.Fprintf(w, "project=%s backend=%s mode=%s fingerprint=%s\n",
 		results.Metadata.Project, results.Metadata.Backend, results.Metadata.Mode, results.Metadata.IndexFingerprint)
 	return err
+}
+
+func formatRouteCounts(counts map[string]int) string {
+	keys := make([]string, 0, len(counts))
+	for route := range counts {
+		keys = append(keys, route)
+	}
+	slices.Sort(keys)
+	parts := make([]string, 0, len(keys))
+	for _, route := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", route, counts[route]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func loadBenchQueries(path string) ([]benchQuery, error) {

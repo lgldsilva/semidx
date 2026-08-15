@@ -224,6 +224,8 @@ chunks cascade). `404` if unknown.
 {
   "project": "myapp",
   "model": "bge-m3",
+  "route": "hybrid",
+  "keyword": false,
   "fallback": false,
   "took_ms": 42,
   "results": [
@@ -233,6 +235,10 @@ chunks cascade). `404` if unknown.
       "end_line": 34,
       "score": 0.87,
       "content": "func Verify(...) {",
+      "source": "vector",
+      "confidence": "HIGH",
+      "symbol": "Verify",
+      "graph_depth": 0,
       "stale": false,
       "indexed_at": "2026-07-22T12:00:00Z"
     }
@@ -241,7 +247,17 @@ chunks cascade). `404` if unknown.
 ```
 
 - `fallback` is `true` when embedding was unavailable and the server used keyword
-  search (results are literal, not semantically ranked).
+  search (results are lexically ranked, not semantically ranked).
+- `route` is the retrieval path (`keyword`, `vector`, `hybrid`, `fallback` or
+  `mixed` for a multi-project response); `keyword` is an explicit boolean for
+  clients that need to branch without parsing the route. A multi-project
+  response may also include `routes`, a count by route.
+- `source` identifies the leg that supplied a hit (`vector`, `keyword` or
+  `graph`). `confidence` and `symbol` are optional analyzer metadata and
+  `graph_depth` is the BFS hop count when graph expansion produced the hit.
+- `score` is an ordering score within this result set, not a probability or a
+  calibrated confidence percentage. Compare it only within the same route and
+  model unless an evaluation artifact says otherwise.
 - `took_ms` is the server-side wall-clock time for the search in milliseconds,
   including both the embedding call (when applicable) and the database query.
   Use it for latency monitoring but do not rely on its precision for

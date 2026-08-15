@@ -94,6 +94,9 @@ func TestSemanticAskRegistersWithAskBackend(t *testing.T) {
 	found := false
 	for _, tool := range res.Tools {
 		if tool.Name == "semantic_ask" {
+			if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint || !tool.Annotations.IdempotentHint || tool.Annotations.OpenWorldHint == nil || !*tool.Annotations.OpenWorldHint {
+				t.Fatalf("semantic_ask annotations = %+v, want read-only, idempotent, open-world", tool.Annotations)
+			}
 			found = true
 			break
 		}

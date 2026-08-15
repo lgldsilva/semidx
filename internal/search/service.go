@@ -71,14 +71,21 @@ type Request struct {
 
 // Response is the outcome of a search, independent of output format.
 type Response struct {
-	Project  *store.Project
-	Model    string
-	Results  []store.SearchResult
+	Project *store.Project
+	Model   string
+	Results []store.SearchResult
+	// Route describes the retrieval path that produced the response: keyword,
+	// vector, hybrid, or fallback. It is deliberately explicit so clients do
+	// not infer semantic quality from the model name alone.
+	Route string
+	// TookMS is the end-to-end service duration, including project resolution,
+	// retrieval, reranking, graph expansion, and staleness annotation.
+	TookMS   int64
 	Fallback bool // true when embedding was unavailable and keyword search was used
 	// Keyword is true when the results came from keyword search — either an
-	// explicit keyword-only request or an embedding fallback. Keyword scores are a
-	// constant placeholder, not a similarity, so formatters label such results
-	// "keyword match" instead of a misleading percentage.
+	// explicit keyword-only request or an embedding fallback. Keyword scores are
+	// lexical rank scores, not cosine similarity or probabilities, so formatters
+	// label such results "keyword match" instead of a misleading percentage.
 	Keyword bool
 	// Degraded is true when the embedding circuit breaker was open (provider
 	// temporarily unavailable) and the search served keyword results instead of
@@ -108,6 +115,14 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	// exact string, or natural language, and adjusts search parameters.
 	qt := ClassifyQuery(req.Query)
 	applyQueryRouting(&req, qt)
+	route := "hybrid"
+	if req.KeywordOnly {
+		route = "keyword"
+	} else if req.VectorOnly {
+		route = "vector"
+	} else if RoutesToKeyword(qt) {
+		route = "keyword"
+	}
 
 	project, err := s.resolveProject(ctx, req)
 	if err != nil {
@@ -175,6 +190,13 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		root = project.Path
 	}
 	s.annotateStaleness(ctx, project, root, resp.Results)
+	if resp.Fallback {
+		route = "fallback"
+	} else if resp.Route != "" {
+		route = resp.Route
+	}
+	resp.Route = route
+	resp.TookMS = time.Since(start).Milliseconds()
 
 	outcome := usage.Classify(len(resp.Results), resp.Fallback, resp.Keyword)
 	s.recordUsage(ctx, req, project.Name, outcome, len(resp.Results), start)
@@ -297,11 +319,12 @@ func (s *Service) searchSemantic(ctx context.Context, projectID int, req Request
 		return resp, nil
 	}
 
-	results, herr := s.hybridFuse(ctx, projectID, req.Query, vec, dims, req.TopK, worktree)
+	results, route, herr := s.hybridFuseRoute(ctx, projectID, req.Query, vec, dims, req.TopK, worktree)
 	if herr != nil {
 		return nil, herr
 	}
 	resp.Results = results
+	resp.Route = route
 	return resp, nil
 }
 

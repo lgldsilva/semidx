@@ -35,7 +35,8 @@ type diffInput struct {
 func registerCodeIntelTools(s *mcp.Server, b Backend, allowed map[string]bool, defaultProject string, requireProject bool) {
 	if allowed[toolSemanticCallers] {
 		addProjectTool(s, &mcp.Tool{
-			Name: toolSemanticCallers,
+			Name:        toolSemanticCallers,
+			Annotations: readOnlyAnnotations("Symbol callers"),
 			Description: projectToolDescription(
 				"Find files that import/depend on the package containing the symbol at file:line (who calls this?). Prefer this over grep when planning a refactor or checking blast radius of a change — it uses the indexed dependency graph, not text search.",
 				defaultProject,
@@ -44,7 +45,8 @@ func registerCodeIntelTools(s *mcp.Server, b Backend, allowed map[string]bool, d
 	}
 	if allowed[toolSemanticExplain] {
 		addProjectTool(s, &mcp.Tool{
-			Name: toolSemanticExplain,
+			Name:        toolSemanticExplain,
+			Annotations: readOnlyAnnotations("Explain symbol"),
 			Description: projectToolDescription(
 				"Explain a symbol at file:line: kind, location, dependencies, importers, and related tests. Use before editing an unfamiliar symbol to gather structural context faster than reading the whole package.",
 				defaultProject,
@@ -53,7 +55,8 @@ func registerCodeIntelTools(s *mcp.Server, b Backend, allowed map[string]bool, d
 	}
 	if allowed[toolSemanticImpact] {
 		addProjectTool(s, &mcp.Tool{
-			Name: toolSemanticImpact,
+			Name:        toolSemanticImpact,
+			Annotations: readOnlyAnnotations("Symbol impact"),
 			Description: projectToolDescription(
 				"Compute the blast radius of changing the symbol at file:line — all files transitively affected via reverse imports, bounded by depth. Use before risky refactors to list every dependent file.",
 				defaultProject,
@@ -62,7 +65,8 @@ func registerCodeIntelTools(s *mcp.Server, b Backend, allowed map[string]bool, d
 	}
 	if allowed[toolSemanticDeadCode] {
 		addProjectTool(s, &mcp.Tool{
-			Name: toolSemanticDeadCode,
+			Name:        toolSemanticDeadCode,
+			Annotations: readOnlyAnnotations("Dead code analysis"),
 			Description: projectToolDescription(
 				"Find unused symbols in a project (packages with no importers). Use to clean dead code or audit public APIs that nothing references.",
 				defaultProject,
@@ -73,6 +77,7 @@ func registerCodeIntelTools(s *mcp.Server, b Backend, allowed map[string]bool, d
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolSemanticDiff,
 			Description: "Semantic symbol diff between two git refs (new/removed/changed funcs, types, consts). Prefer over plain git diff when you need symbol-level change summary. Arg ref_range is ref1..ref2 or ref1...ref2.",
+			Annotations: readOnlyAnnotations("Semantic symbol diff"),
 		}, diffHandler(b))
 	}
 }

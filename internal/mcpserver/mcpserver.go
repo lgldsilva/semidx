@@ -30,42 +30,58 @@ import (
 	"github.com/lgldsilva/semidx/internal/search"
 )
 
-const version = "0.1.0"
+// Version is set by the CLI at startup when it knows the release/commit. Keep a
+// useful development value for library users and tests that build the MCP
+// package directly.
+var Version = "dev"
 
 const mimeApplicationJSON = "application/json"
 
 // Hit is one ranked search result, independent of the backend that produced it.
 type Hit struct {
-	Path       string
-	StartLine  int
-	EndLine    int
-	Score      float64
-	Content    string
-	Language   string
-	Confidence string
-	Symbol     string
+	Path       string  `json:"path"`
+	StartLine  int     `json:"start_line"`
+	EndLine    int     `json:"end_line"`
+	Score      float64 `json:"score"`
+	Content    string  `json:"content"`
+	Language   string  `json:"language,omitempty"`
+	Confidence string  `json:"confidence,omitempty"`
+	Symbol     string  `json:"symbol,omitempty"`
 	// Stale is true when the file changed since it was indexed — agents must
 	// re-read the file before editing instead of trusting Content.
-	Stale bool
+	Stale bool `json:"stale,omitempty"`
 	// IndexedAt is when the file version was last indexed (zero when unknown).
-	IndexedAt time.Time
+	IndexedAt time.Time `json:"indexed_at,omitempty"`
 	// Source is how the hit was retrieved: vector, keyword, or graph.
-	Source string
+	Source string `json:"source,omitempty"`
 	// GraphDepth is the BFS hop count for graph-expanded hits.
-	GraphDepth int
+	GraphDepth int `json:"graph_depth,omitempty"`
+}
+
+// ToolError is an actionable, machine-readable error included in structured
+// MCP output. The text content remains for legacy clients.
+type ToolError struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Retryable bool   `json:"retryable"`
+	Action    string `json:"action,omitempty"`
 }
 
 // SearchOutput is a backend-neutral search result set.
 type SearchOutput struct {
-	Project  string
-	Fallback bool
+	Project  string `json:"project"`
+	Model    string `json:"model,omitempty"`
+	Route    string `json:"route,omitempty"`
+	Keyword  bool   `json:"keyword"`
+	Fallback bool   `json:"fallback"`
 	// Degraded is true when the embedding circuit was open and the backend
 	// served keyword results instead of failing; RetryAfterMS hints when the
 	// embedding provider may recover.
-	Degraded     bool
-	RetryAfterMS int64
-	TookMS       int64
-	Results      []Hit
+	Degraded     bool       `json:"degraded"`
+	RetryAfterMS int64      `json:"retry_after_ms,omitempty"`
+	TookMS       int64      `json:"took_ms"`
+	Results      []Hit      `json:"results"`
+	Error        *ToolError `json:"error,omitempty"`
 }
 
 // ProjectInfo is a backend-neutral project summary.
@@ -244,6 +260,27 @@ var toolNames = []string{
 // CLI to document the --tools / SEMIDX_MCP_TOOLS allowlist.
 func ToolNames() []string { return slices.Clone(toolNames) }
 
+// ToolProfileNames returns the supported opinionated MCP tool profiles. A
+// profile is a safe, discoverable starting point for clients that should not
+// load every capability into the model context.
+func ToolProfileNames() []string { return []string{"search", "workspace", "code-intel", "all"} }
+
+var toolProfiles = map[string][]string{
+	"search": {
+		toolSemanticSearch, toolSemanticProjects, toolSemanticStatus,
+	},
+	"workspace": {
+		toolSemanticSearch, toolSemanticProjects, toolSemanticStatus, toolSemanticReindex,
+		toolRepoWorktrees, toolRepoBranches, toolRepoStatus, toolSemanticSearchMulti,
+	},
+	"code-intel": {
+		toolSemanticSearch, toolSemanticProjects, toolSemanticStatus,
+		toolSemanticNeighbors, toolSemanticTrace, toolSemanticSymbols,
+		toolSemanticCallers, toolSemanticExplain, toolSemanticImpact,
+		toolSemanticDeadCode, toolSemanticDiff, toolSemanticSubgraph, toolSemanticPath,
+	},
+}
+
 // Options configures how the MCP server is built.
 type Options struct {
 	// AllowedTools restricts which tools get registered. Empty means all tools
@@ -252,6 +289,9 @@ type Options struct {
 	// skipped with a warning on stderr — an allowlist narrows the tool set, it
 	// cannot grant a capability the backend does not have.
 	AllowedTools []string
+	// Profile selects a curated allowlist (search, workspace, or code-intel).
+	// It is mutually exclusive with AllowedTools; "all" restores the default.
+	Profile string
 	// DefaultProject is used when a tool call omits its "project" argument
 	// (clientconfig.DefaultProject / SEMIDX_DEFAULT_PROJECT). Empty makes
 	// "project" required in each tool's JSON schema and rejects empty
@@ -272,11 +312,34 @@ func New(b Backend) *mcp.Server {
 // on unknown tool names so a typo in --tools/SEMIDX_MCP_TOOLS aborts the
 // command instead of silently exposing the wrong tool set.
 func NewWithOptions(b Backend, o Options) (*mcp.Server, error) {
-	allowed, explicit, err := resolveAllowedTools(o.AllowedTools)
+	requested := o.AllowedTools
+	if strings.TrimSpace(o.Profile) != "" {
+		if len(o.AllowedTools) > 0 {
+			return nil, errors.New("MCP tool profile cannot be combined with an explicit tool allowlist")
+		}
+		var err error
+		requested, err = toolsForProfile(o.Profile)
+		if err != nil {
+			return nil, err
+		}
+	}
+	allowed, explicit, err := resolveAllowedTools(requested)
 	if err != nil {
 		return nil, err
 	}
 	return build(b, allowed, explicit, strings.TrimSpace(o.DefaultProject)), nil
+}
+
+func toolsForProfile(name string) ([]string, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" || name == "all" {
+		return nil, nil
+	}
+	tools, ok := toolProfiles[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown MCP tool profile %q (valid profiles: %s)", name, strings.Join(ToolProfileNames(), ", "))
+	}
+	return slices.Clone(tools), nil
 }
 
 // errProjectRequired is returned when a project-taking tool is called with no
@@ -401,7 +464,7 @@ func resolveAllowedTools(names []string) (allowed map[string]bool, explicit bool
 // omitted "project" argument of every project-taking tool and is advertised in
 // their descriptions.
 func build(b Backend, allowed map[string]bool, explicit bool, defaultProject string) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "semidx", Version: version}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "semidx", Version: Version}, nil)
 	_, canResolveCWD := asCWDProjectResolver(b)
 	requireProject := defaultProject == "" && !canResolveCWD
 
@@ -409,6 +472,7 @@ func build(b Backend, allowed map[string]bool, explicit bool, defaultProject str
 		addProjectTool(s, &mcp.Tool{
 			Name:        toolSemanticSearch,
 			Description: projectToolDescription("Search a registered project's indexed code semantically with a natural-language query. Returns ranked file:line matches with a content preview. Prefer this over plain grep when the query is about intent or behavior rather than an exact string.", defaultProject),
+			Annotations: readOnlyAnnotations("Semantic search"),
 		}, requireProject, searchHandler(b, defaultProject))
 	}
 
@@ -416,6 +480,7 @@ func build(b Backend, allowed map[string]bool, explicit bool, defaultProject str
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolSemanticProjects,
 			Description: "List the projects registered in this semidx index, with their indexing status.",
+			Annotations: readOnlyAnnotations("List semantic projects"),
 		}, projectsHandler(b))
 	}
 
@@ -423,6 +488,7 @@ func build(b Backend, allowed map[string]bool, explicit bool, defaultProject str
 		addProjectTool(s, &mcp.Tool{
 			Name:        toolSemanticReindex,
 			Description: projectToolDescription("Queue a re-index job for a project already registered on the server. Only registered projects can be re-indexed; arbitrary paths are not accepted. In standalone (local) mode, reindex via the `semidx index` CLI instead.", defaultProject),
+			Annotations: &mcp.ToolAnnotations{Title: "Re-index project", IdempotentHint: false, DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)},
 		}, requireProject, reindexHandler(b, defaultProject))
 	}
 
@@ -430,6 +496,7 @@ func build(b Backend, allowed map[string]bool, explicit bool, defaultProject str
 		addProjectTool(s, &mcp.Tool{
 			Name:        toolSemanticStatus,
 			Description: projectToolDescription("Get the indexing status of a registered project. Reports file count, status, and model.", defaultProject),
+			Annotations: readOnlyAnnotations("Semantic index status"),
 		}, requireProject, statusHandler(b, defaultProject))
 	}
 
@@ -442,6 +509,12 @@ func build(b Backend, allowed map[string]bool, explicit bool, defaultProject str
 	registerUsageTool(s, b, allowed, explicit)
 	registerResources(s, b)
 	return s
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+func readOnlyAnnotations(title string) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPtr(false)}
 }
 
 // registerUsageTool registers semantic_usage when the backend (or one it
@@ -458,6 +531,7 @@ func registerUsageTool(s *mcp.Server, b Backend, allowed map[string]bool, explic
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolSemanticUsage,
 			Description: "Read-only search usage analytics: counts by project, source (mcp/cli/admin), and outcome (ok/empty/fallback/error) for a lookback window.",
+			Annotations: readOnlyAnnotations("Search usage analytics"),
 		}, usageHandler(ub))
 	}
 }
@@ -477,18 +551,21 @@ func registerGitTools(s *mcp.Server, b Backend, allowed map[string]bool, explici
 		addProjectTool(s, &mcp.Tool{
 			Name:        toolRepoWorktrees,
 			Description: projectToolDescription("List all worktrees of a repository (requires local git access). On server mode, returns unsupported.", defaultProject),
+			Annotations: readOnlyAnnotations("Repository worktrees"),
 		}, requireProject, gitWorktreesHandler(gitB, b, defaultProject))
 	}
 	if allowed[toolRepoBranches] {
 		addProjectTool(s, &mcp.Tool{
 			Name:        toolRepoBranches,
 			Description: projectToolDescription("List branches of a repository. Includes remote branches when --remote is true.", defaultProject),
+			Annotations: readOnlyAnnotations("Repository branches"),
 		}, requireProject, gitBranchesHandler(gitB, b, defaultProject))
 	}
 	if allowed[toolRepoStatus] {
 		addProjectTool(s, &mcp.Tool{
 			Name:        toolRepoStatus,
 			Description: projectToolDescription("Show the repository working tree status (dirty, current branch, HEAD SHA).", defaultProject),
+			Annotations: readOnlyAnnotations("Repository status"),
 		}, requireProject, gitStatusHandler(gitB, b, defaultProject))
 	}
 }
@@ -507,6 +584,7 @@ func registerMultiSearchTool(s *mcp.Server, b Backend, allowed map[string]bool, 
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        toolSemanticSearchMulti,
 			Description: "Search across multiple projects in one query, with fused results and project labels.",
+			Annotations: readOnlyAnnotations("Multi-project semantic search"),
 		}, multiSearchHandler(msB))
 	}
 }
@@ -525,6 +603,7 @@ func registerAskTool(s *mcp.Server, b Backend, allowed map[string]bool, explicit
 		addProjectTool(s, &mcp.Tool{
 			Name:        toolSemanticAsk,
 			Description: projectToolDescription("Ask a question about a registered project — RAG-augmented chat over indexed code. Returns an answer with cited source chunks.", defaultProject),
+			Annotations: &mcp.ToolAnnotations{Title: "Semantic project question", ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPtr(true)},
 		}, requireProject, askHandler(askBackend, defaultProject))
 	}
 }
@@ -640,14 +719,14 @@ type searchInput struct {
 	TopK       int    `json:"top_k,omitempty" jsonschema:"number of results to return (default 5)"`
 	Graph      bool   `json:"graph,omitempty" jsonschema:"expand results via dependency graph (Graph-RAG)"`
 	GraphDepth int    `json:"graph_depth,omitempty" jsonschema:"max BFS depth for graph expansion (default 2)"`
-	Format     string `json:"format,omitempty" jsonschema:"output format: structured (default, JSON), text (legacy plain text), or minimal (compact JSON with abbreviated keys)"`
+	Format     string `json:"format,omitempty" jsonschema:"legacy text content format: structured (default JSON), text (plain text), or minimal (compact JSON); structuredContent always uses the full SearchOutput schema"`
 }
 
-func searchHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[searchInput, any] {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, any, error) {
+func searchHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[searchInput, SearchOutput] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, SearchOutput, error) {
 		project, err := resolveProjectForTool(ctx, b, in.Project, defaultProject)
 		if err != nil {
-			return errorResult(err), nil, nil
+			return errorResult(err), SearchOutput{Error: &ToolError{Code: "project_required", Message: err.Error(), Action: "call semantic_projects or provide project"}}, nil
 		}
 		topK := in.TopK
 		if topK == 0 {
@@ -657,17 +736,17 @@ func searchHandler(b Backend, defaultProject string) mcp.ToolHandlerFor[searchIn
 		start := time.Now()
 		out, err := b.Search(ctx, project, in.Query, in.Model, topK, in.Graph, graphDepth)
 		if err != nil {
-			return errorResult(err), nil, nil
+			return errorResult(err), SearchOutput{Project: project, Error: &ToolError{Code: "search_failed", Message: err.Error(), Action: "call semantic_projects or semantic_status"}}, nil
 		}
 		out.TookMS = time.Since(start).Milliseconds()
 
 		switch in.Format {
 		case "text":
-			return textResult(formatSearchText(out)), nil, nil
+			return textResult(formatSearchText(out)), *out, nil
 		case "minimal":
-			return textResult(formatSearchMinimal(out)), nil, nil
+			return textResult(formatSearchMinimal(out)), *out, nil
 		default: // "structured" or unspecified
-			return textResult(formatSearchStructured(out)), nil, nil
+			return textResult(formatSearchStructured(out)), *out, nil
 		}
 	}
 }
@@ -946,6 +1025,10 @@ type structuredHit struct {
 
 // structuredOutput is the JSON envelope for structured search results.
 type structuredOutput struct {
+	Project      string          `json:"project"`
+	Model        string          `json:"model,omitempty"`
+	Route        string          `json:"route,omitempty"`
+	Keyword      bool            `json:"keyword"`
 	Results      []structuredHit `json:"results"`
 	Fallback     bool            `json:"fallback"`
 	Degraded     bool            `json:"degraded"`
@@ -956,6 +1039,7 @@ type structuredOutput struct {
 
 func formatSearchStructured(out *SearchOutput) string {
 	envelope := structuredOutput{
+		Project: out.Project, Model: out.Model, Route: out.Route, Keyword: out.Keyword,
 		Fallback: out.Fallback, Degraded: out.Degraded, RetryAfterMS: out.RetryAfterMS,
 		QueryTimeMS: out.TookMS,
 	}

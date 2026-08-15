@@ -40,8 +40,16 @@ export function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
 
   return (
     <div className="min-h-screen">
+      <a
+        href="#main-content"
+        className="absolute left-3 top-2 z-50 -translate-y-20 rounded-md bg-surface px-3 py-2 text-sm text-fg shadow transition-transform focus:translate-y-0"
+      >
+        Skip to content
+      </a>
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-surface px-5 py-3 text-sm max-sm:px-3.5">
-        <span className="font-bold">semidx</span>
+        <NavLink to="/" end className="font-bold text-fg no-underline" aria-label="semidx home">
+          semidx
+        </NavLink>
         <NavLink to="/" end className={navClass}>
           Projects
         </NavLink>
@@ -97,11 +105,11 @@ export function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
           <strong>Server mode</strong>
           <Badge>{sys.mode}</Badge>
           <span className="text-muted">{sys.storage}</span>
-          <span className="ml-auto text-muted max-sm:ml-0">caps: {sys.caps.join(', ')}</span>
+          <span className="ml-auto text-muted max-sm:ml-0">Capabilities: {sys.caps.join(', ')}</span>
         </div>
       )}
 
-      <main className="mx-auto my-[1.4rem] max-w-[1280px] px-[1.2rem] pb-10 max-sm:mt-4 max-sm:px-3 max-sm:pb-8">
+      <main id="main-content" className="mx-auto my-[1.4rem] max-w-[1280px] px-[1.2rem] pb-10 max-sm:mt-4 max-sm:px-3 max-sm:pb-8">
         {children}
       </main>
       <CommandPalette />

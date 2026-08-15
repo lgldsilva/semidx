@@ -53,6 +53,7 @@ type Ranked struct {
 type QueryMetrics struct {
 	ID         string  `json:"id"`
 	Query      string  `json:"query"`
+	Route      string  `json:"route,omitempty"`
 	NDCG10     float64 `json:"ndcg_at_10"`
 	MRR        float64 `json:"mrr"`
 	Precision5 float64 `json:"precision_at_5"`
@@ -96,7 +97,12 @@ type Results struct {
 	LatencyP50MS float64        `json:"latency_p50_ms"`
 	LatencyP95MS float64        `json:"latency_p95_ms"`
 	LatencyP99MS float64        `json:"latency_p99_ms"`
-	Queries      []QueryMetrics `json:"queries"`
+	RouteCounts  map[string]int `json:"route_counts,omitempty"`
+	// RouteTransitions is populated by Compare when both artifacts carry
+	// per-query route evidence. Keys use "before->after" (for example,
+	// "hybrid->vector") and values count affected queries.
+	RouteTransitions map[string]int `json:"route_transitions,omitempty"`
+	Queries          []QueryMetrics `json:"queries"`
 }
 
 // LoadDataset reads either the v2 object form or the legacy array form used by
