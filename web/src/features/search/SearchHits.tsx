@@ -40,7 +40,9 @@ export function SearchHits({
   )
 }
 
-function SearchHitCard({ hit, project, rank }: { hit: SearchHit; project: string; rank: number }) {
+type SearchHitCardProps = Readonly<{ hit: SearchHit; project: string; rank: number }>
+
+function SearchHitCard({ hit, project, rank }: SearchHitCardProps) {
   const [copied, setCopied] = useState('')
   const pathLabel = `${hit.path}:${hit.start_line}`
 
