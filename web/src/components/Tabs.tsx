@@ -61,7 +61,8 @@ export function Tabs<T extends string>({ tabs, active, onSelect, label, classNam
               selectAndFocus(tabs[0].id)
             } else if (event.key === 'End') {
               event.preventDefault()
-              selectAndFocus(tabs[tabs.length - 1].id)
+              const last = tabs.at(-1)
+              if (last) selectAndFocus(last.id)
             }
           }}
         >

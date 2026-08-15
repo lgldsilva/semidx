@@ -226,6 +226,63 @@ func validateCreateProjectCredential(w http.ResponseWriter, ac *authCtx, body *c
 	return true
 }
 
+func (a *Admin) enforceCreateProjectQuota(w http.ResponseWriter, r *http.Request) bool {
+	err := enforceProjectQuota(r.Context(), a.store)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, errTenantQuotaExceeded) {
+		writeJSONErr(w, http.StatusTooManyRequests, err.Error())
+		return false
+	}
+	a.log.Error("project quota lookup failed", "err", err)
+	writeJSONErr(w, http.StatusInternalServerError, "could not evaluate tenant quota")
+	return false
+}
+
+func (a *Admin) createProjectRecord(w http.ResponseWriter, r *http.Request, body *createProjectBody, name string) (*store.Project, bool) {
+	proj, err := a.store.CreateProject(r.Context(), name, body.Model, body.SourceType, body.GitURL, body.Branch, 0)
+	if errors.Is(err, store.ErrProjectExists) {
+		writeJSONErr(w, http.StatusConflict, "project already exists")
+		return nil, false
+	}
+	if err != nil {
+		a.log.Error("create project failed", "err", err)
+		writeJSONErr(w, http.StatusInternalServerError, "could not create project")
+		return nil, false
+	}
+	if policy, ok := a.store.(store.ProjectPolicyStore); ok {
+		mode, _ := privacy.NormalizeMode(body.PrivacyMode)
+		if err := policy.SetProjectPrivacy(r.Context(), proj.ID, string(mode)); err != nil {
+			a.log.Error("set project privacy failed", "err", err)
+			writeJSONErr(w, http.StatusInternalServerError, "could not save project privacy policy")
+			return nil, false
+		}
+		proj.PrivacyMode = string(mode)
+	}
+	if err := a.createInlineProjectCredential(r.Context(), proj.ID, body.Credential); err != nil {
+		writeGitCredErr(w, a.log, "create project credential", err)
+		return nil, false
+	}
+	return proj, true
+}
+
+func (a *Admin) addCreateProjectOutputs(w http.ResponseWriter, r *http.Request, out map[string]any, proj *store.Project, body *createProjectBody, name string) bool {
+	if body.Index && body.SourceType == "git" {
+		jobID, err := a.store.EnqueueJob(r.Context(), proj.ID, "full")
+		if err != nil {
+			a.log.Error("enqueue job failed", "err", err)
+			writeJSONErr(w, http.StatusInternalServerError, "project created but reindex failed to queue")
+			return false
+		}
+		out["job_id"] = jobID
+	}
+	if body.SourceType == "push" {
+		out["push_hint"] = "semidx login <url> --token <key> && semidx push --project . --name " + name
+	}
+	return true
+}
+
 func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	var body createProjectBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -237,58 +294,16 @@ func (a *Admin) apiCreateProject(w http.ResponseWriter, r *http.Request, ac *aut
 		writeJSONErr(w, status, msg)
 		return
 	}
-	if !validateCreateProjectCredential(w, ac, &body) {
+	if !validateCreateProjectCredential(w, ac, &body) || !a.enforceCreateProjectQuota(w, r) {
 		return
 	}
-	if err := enforceProjectQuota(r.Context(), a.store); err != nil {
-		if errors.Is(err, errTenantQuotaExceeded) {
-			writeJSONErr(w, http.StatusTooManyRequests, err.Error())
-			return
-		}
-		a.log.Error("project quota lookup failed", "err", err)
-		writeJSONErr(w, http.StatusInternalServerError, "could not evaluate tenant quota")
+	proj, ok := a.createProjectRecord(w, r, &body, name)
+	if !ok {
 		return
 	}
-
-	proj, err := a.store.CreateProject(r.Context(), name, body.Model, body.SourceType, body.GitURL, body.Branch, 0)
-	if errors.Is(err, store.ErrProjectExists) {
-		writeJSONErr(w, http.StatusConflict, "project already exists")
+	out := map[string]any{"project": projectToItem(*proj)}
+	if !a.addCreateProjectOutputs(w, r, out, proj, &body, name) {
 		return
-	}
-	if err != nil {
-		a.log.Error("create project failed", "err", err)
-		writeJSONErr(w, http.StatusInternalServerError, "could not create project")
-		return
-	}
-	if policy, ok := a.store.(store.ProjectPolicyStore); ok {
-		mode, _ := privacy.NormalizeMode(body.PrivacyMode)
-		if err := policy.SetProjectPrivacy(r.Context(), proj.ID, string(mode)); err != nil {
-			a.log.Error("set project privacy failed", "err", err)
-			writeJSONErr(w, http.StatusInternalServerError, "could not save project privacy policy")
-			return
-		}
-		proj.PrivacyMode = string(mode)
-	}
-
-	if err := a.createInlineProjectCredential(r.Context(), proj.ID, body.Credential); err != nil {
-		writeGitCredErr(w, a.log, "create project credential", err)
-		return
-	}
-
-	out := map[string]any{
-		"project": projectToItem(*proj),
-	}
-	if body.Index && body.SourceType == "git" {
-		jobID, jerr := a.store.EnqueueJob(r.Context(), proj.ID, "full")
-		if jerr != nil {
-			a.log.Error("enqueue job failed", "err", jerr)
-			writeJSONErr(w, http.StatusInternalServerError, "project created but reindex failed to queue")
-			return
-		}
-		out["job_id"] = jobID
-	}
-	if body.SourceType == "push" {
-		out["push_hint"] = "semidx login <url> --token <key> && semidx push --project . --name " + name
 	}
 	writeJSON(w, http.StatusCreated, out)
 }

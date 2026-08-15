@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api, ApiError, type Project, type SearchHit } from '../api'
+import { api, ApiError, type Project, type SearchHit, type SearchResponse } from '../api'
 import { Alert } from '../components/Alert'
 import { Button } from '../components/Button'
 import { Card } from '../components/Card'
@@ -15,6 +15,27 @@ const PILL_BTN = 'cursor-pointer rounded-full border px-2.5 py-1 text-[0.82rem] 
 const PILL_ON = 'border-accent bg-accent text-accent-fg'
 const PILL_OFF =
   'border-border bg-transparent text-fg hover:border-accent hover:bg-accent hover:text-accent-fg'
+
+function responseRoute(response: SearchResponse): string {
+  if (response.route) return response.route
+  if (response.fallback) return 'fallback'
+  if (response.keyword) return 'keyword'
+  return 'hybrid'
+}
+
+function responseMeta(response: SearchResponse): string {
+  if (response.resolved_project) return `resolved: ${response.resolved_project}`
+  if (response.project_count) return `searched ${response.project_count} projects`
+  return ''
+}
+
+function searchProject(scopeAll: boolean, project: string): string | undefined {
+  return scopeAll ? undefined : project
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
 
 export function SearchPage() {
   const [params, setParams] = useSearchParams()
@@ -73,7 +94,7 @@ export function SearchPage() {
       try {
         const res = await api.search({
           query: urlQuery.trim(),
-          project: scopeAll ? undefined : urlProject,
+          project: searchProject(scopeAll, urlProject),
           all: scopeAll,
           top: urlTop,
           graph: urlGraph,
@@ -85,19 +106,13 @@ export function SearchPage() {
         setFallback(res.fallback)
         setDegraded(res.degraded ?? false)
         setRetryAfterMs(res.retry_after_ms ?? 0)
-        setSearchRoute(res.route ?? (res.fallback ? 'fallback' : res.keyword ? 'keyword' : 'hybrid'))
+        setSearchRoute(responseRoute(res))
         setSearchModel(res.model ?? '')
         setTookMs(res.took_ms ?? 0)
-        setMeta(
-          res.resolved_project
-            ? `resolved: ${res.resolved_project}`
-            : res.project_count
-              ? `searched ${res.project_count} projects`
-              : '',
-        )
+        setMeta(responseMeta(res))
         setRecent(rememberSearch(urlQuery.trim(), scopeAll ? undefined : urlProject))
       } catch (ex) {
-        if (ex instanceof DOMException && ex.name === 'AbortError') return
+        if (isAbortError(ex)) return
         if (cancelled) return
         setResults([])
         setFallback(false)

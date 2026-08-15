@@ -89,7 +89,7 @@ export type SearchHit = {
 export type SearchResponse = {
   results: SearchHit[]
   model?: string
-  route?: 'keyword' | 'vector' | 'hybrid' | 'fallback' | string
+  route?: 'keyword' | 'vector' | 'hybrid' | 'fallback' | 'mixed'
   keyword?: boolean
   took_ms?: number
   fallback: boolean
