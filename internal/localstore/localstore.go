@@ -6,7 +6,8 @@
 // Embeddings are stored as little-endian float32 BLOBs and similarity search is
 // a brute-force cosine scan over a project's chunks. That is O(n) per query,
 // which is fine at laptop/single-repo scale (tens of thousands of chunks); the
-// server path (PgStore + pgvector HNSW) remains the choice for large corpora.
+// FTS5/BM25 keyword path stays indexed for fast lexical fallback; the server
+// path (PgStore + pgvector HNSW) remains the choice for large vector corpora.
 package localstore
 
 import (
@@ -941,8 +942,10 @@ func pushSimilarTopK(top []store.SearchResult, r store.SearchResult, topK int) [
 	return top
 }
 
-// SearchSimilarKeywords finds chunks whose content matches every query word via
-// SQL LIKE. Score is a constant 0.5, matching PgStore's keyword fallback.
+// SearchSimilarKeywords finds chunks whose content matches any query word via
+// SQLite FTS5. The score is the monotonic positive form of FTS5's BM25 rank
+// (FTS5 returns lower, usually negative, values for better matches), so callers
+// can rely on keyword results being ordered by lexical relevance.
 func (s *SQLiteStore) SearchSimilarKeywords(ctx context.Context, projectID int, queryText string, _, topK int) ([]store.SearchResult, error) {
 	return s.searchKeywords(ctx, projectID, queryText, topK, "")
 }
@@ -966,37 +969,105 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 	}
 	ftsQuery := strings.Join(quoted, " OR ")
 
-	// Build the worktree join if filtering by worktree.
-	join := "JOIN files f ON f.id = c.file_id"
-	var args []any
-	if worktree != "" {
-		join = "JOIN files f ON f.id = c.file_id JOIN worktree_files w ON w.project_id = c.project_id AND w.path = f.path AND w.hash = f.hash AND w.worktree = ?"
-		args = append(args, worktree)
-	}
-
 	if topK <= 0 {
 		topK = -1 // SQLite treats LIMIT -1 as "no limit"
 	}
 
-	// Note: FTS5 MATCH requires the table name, not an alias.
-	query := fmt.Sprintf(`
-		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol
+	// Note: FTS5 MATCH requires the table name, not an alias. The optional
+	// worktree scope is expressed with EXISTS so the query remains static and
+	// all user-controlled values stay parameters.
+	const ftsSQL = `
+		SELECT f.path, c.content, c.start_line, c.end_line, -bm25(chunks_fts) AS score, c.confidence, c.symbol
 		FROM chunks c
 		JOIN chunks_fts ft ON ft.rowid = c.id
-		%s
+		JOIN files f ON f.id = c.file_id
 		WHERE chunks_fts MATCH ? AND c.project_id = ?
+		  AND (? = '' OR EXISTS (
+			SELECT 1 FROM worktree_files w
+			WHERE w.project_id = c.project_id AND w.path = f.path
+			  AND w.hash = f.hash AND w.worktree = ?
+		  ))
+		ORDER BY bm25(chunks_fts) ASC, c.id ASC
 		LIMIT ?
-	`, join)
+	`
 
-	args = append(args, ftsQuery, projectID, topK)
+	ftsArgs := []any{ftsQuery, projectID, worktree, worktree, topK}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, ftsSQL, ftsArgs...)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	return scanChunkResultRows(rows)
+	ftsResults, err := scanChunkResultRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	if topK > 0 && len(ftsResults) >= topK {
+		return ftsResults, nil
+	}
+
+	// FTS5 cannot combine MATCH with an OR predicate in one WHERE clause. Run
+	// the compatibility substring leg separately and merge it after the ranked
+	// FTS results. This keeps camelCase/path matches available on SQLite while
+	// ensuring token-ranked matches always win ties.
+	const likeQuery = `
+		SELECT f.path, c.content, c.start_line, c.end_line, 0.0 AS score, c.confidence, c.symbol
+		FROM chunks c
+		JOIN files f ON f.id = c.file_id
+		WHERE c.project_id = ?
+		  AND (? = '' OR EXISTS (
+			SELECT 1 FROM worktree_files w
+			WHERE w.project_id = c.project_id AND w.path = f.path
+			  AND w.hash = f.hash AND w.worktree = ?
+		  ))
+		  AND (
+			c.content LIKE ? OR c.content LIKE ? OR c.content LIKE ? OR c.content LIKE ? OR c.content LIKE ?
+			OR c.content LIKE ? OR c.content LIKE ? OR c.content LIKE ? OR c.content LIKE ? OR c.content LIKE ?
+			OR c.content LIKE ? OR c.content LIKE ? OR c.content LIKE ? OR c.content LIKE ? OR c.content LIKE ?
+			OR c.content LIKE ? OR c.content LIKE ? OR c.content LIKE ? OR c.content LIKE ? OR c.content LIKE ?
+		  )
+		ORDER BY c.id ASC
+		LIMIT ?
+	`
+	likeArgs := []any{projectID, worktree, worktree}
+	for i := 0; i < 20; i++ {
+		if i < len(words) {
+			likeArgs = append(likeArgs, "%"+words[i]+"%")
+		} else {
+			likeArgs = append(likeArgs, nil)
+		}
+	}
+	likeArgs = append(likeArgs, topK)
+	likeRows, err := s.db.QueryContext(ctx, likeQuery, likeArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = likeRows.Close() }()
+	likeResults, err := scanChunkResultRows(likeRows)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(ftsResults)+len(likeResults))
+	for _, result := range ftsResults {
+		seen[keywordResultKey(result)] = struct{}{}
+	}
+	merged := append([]store.SearchResult{}, ftsResults...)
+	for _, result := range likeResults {
+		if _, ok := seen[keywordResultKey(result)]; ok {
+			continue
+		}
+		seen[keywordResultKey(result)] = struct{}{}
+		merged = append(merged, result)
+	}
+	if topK > 0 && len(merged) > topK {
+		merged = merged[:topK]
+	}
+	return merged, nil
+}
+
+func keywordResultKey(result store.SearchResult) string {
+	return fmt.Sprintf("%s\x00%d\x00%d\x00%s", result.FilePath, result.StartLine, result.EndLine, result.Content)
 }
 
 // scanChunkResultRows reads the canonical "path, content, start_line, end_line,

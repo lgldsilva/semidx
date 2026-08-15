@@ -61,6 +61,45 @@ func TestAllowlistSubsetExposesOnlyRequested(t *testing.T) {
 	}
 }
 
+func TestSearchProfileIsSmallAndStructured(t *testing.T) {
+	sess := connectWithOptions(t, &stubBackend{}, Options{Profile: "search"})
+	got := listToolSet(t, sess)
+	if len(got) != 3 || !got[toolSemanticSearch] || !got[toolSemanticProjects] || !got[toolSemanticStatus] {
+		t.Fatalf("search profile tools = %v, want search/projects/status", got)
+	}
+	res, err := sess.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range res.Tools {
+		if tool.Name != toolSemanticSearch {
+			continue
+		}
+		if tool.OutputSchema == nil {
+			t.Fatal("semantic_search should advertise an output schema")
+		}
+		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+			t.Fatalf("semantic_search annotations = %+v, want read-only", tool.Annotations)
+		}
+		return
+	}
+	t.Fatal("semantic_search not listed")
+}
+
+func TestProfileAndAllowlistCannotBeCombined(t *testing.T) {
+	_, err := NewWithOptions(&stubBackend{}, Options{Profile: "search", AllowedTools: []string{toolSemanticSearch}})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("combined profile/allowlist error = %v", err)
+	}
+}
+
+func TestUnknownProfileFails(t *testing.T) {
+	_, err := NewWithOptions(&stubBackend{}, Options{Profile: "typo"})
+	if err == nil || !strings.Contains(err.Error(), "unknown MCP tool profile") {
+		t.Fatalf("unknown profile error = %v", err)
+	}
+}
+
 func TestAllowlistUnknownToolFailsListingValidNames(t *testing.T) {
 	_, err := NewWithOptions(&stubBackend{}, Options{AllowedTools: []string{"semantic_serch"}})
 	if err == nil {

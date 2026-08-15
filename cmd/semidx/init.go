@@ -227,7 +227,7 @@ func collectExtraPaths(scanner *bufio.Scanner, projectPath string, nearby []stri
 	return nil
 }
 
-func printInitSummary(projectPath string, keyword bool) {
+func printInitSummary(projectPath, model string, keyword bool) {
 	fmt.Println()
 	fmt.Println("╭──────────────────────────────────────────────╮")
 	fmt.Println("│  semidx is ready!                            │")
@@ -239,9 +239,12 @@ func printInitSummary(projectPath string, keyword bool) {
 	fmt.Println("Or use sgrep for grep-style output:")
 	fmt.Printf("  semidx sgrep --project %s --query \"database pool\"\n", projectPath)
 	fmt.Println()
-	if !keyword {
-		fmt.Println("Configure an embedding provider for better results:")
+	if keyword {
+		fmt.Println("Mode: keyword-only (semantic embeddings are not configured).")
+		fmt.Println("For semantic results, configure a provider and re-index:")
 		fmt.Println("  semidx config set GEMINI_API_KEY <key>")
+	} else {
+		fmt.Printf("Mode: semantic (model %s).\n", model)
 	}
 	fmt.Println("See semidx --help for all commands.")
 }
@@ -267,7 +270,7 @@ func runInit(cmd *cobra.Command, d *deps, opts initOpts) error {
 
 	// Step 2: Ask to index.
 	if !decideShouldIndex(scanner, opts.yes) {
-		fmt.Println("\nProject registered. Index later with:")
+		fmt.Println("\nProject not indexed yet. Index later with:")
 		fmt.Printf("  semidx index --project %s\n", projectPath)
 		return nil
 	}
@@ -297,7 +300,7 @@ func runInit(cmd *cobra.Command, d *deps, opts initOpts) error {
 	}
 
 	// Step 6: Summary.
-	printInitSummary(projectPath, keyword)
+	printInitSummary(projectPath, model, keyword)
 
 	return nil
 }

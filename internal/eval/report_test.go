@@ -9,15 +9,17 @@ import (
 )
 
 func TestReportRoundTripAndCompareGuards(t *testing.T) {
-	base := Results{Version: CurrentDatasetVersion, Metadata: RunMetadata{DatasetSHA256: "ds", IndexFingerprint: "idx"}, NDCG10: 0.4}
+	base := Results{Version: CurrentDatasetVersion, Metadata: RunMetadata{DatasetSHA256: "ds", IndexFingerprint: "idx"}, NDCG10: 0.4, RouteCounts: map[string]int{"keyword": 2, "hybrid": 3}, Queries: []QueryMetrics{{ID: "q1", Route: "hybrid"}, {ID: "q2", Route: "vector"}}}
 	candidate := base
 	candidate.NDCG10 = 0.6
+	candidate.RouteCounts = map[string]int{"keyword": 1, "hybrid": 4}
+	candidate.Queries = []QueryMetrics{{ID: "q1", Route: "vector"}, {ID: "q2", Route: "hybrid"}}
 	b, err := MarshalResults(base)
 	if err != nil || !strings.HasSuffix(string(b), "\n") {
 		t.Fatalf("marshal err=%v output=%q", err, b)
 	}
 	delta, err := Compare(base, candidate)
-	if err != nil || math.Abs(delta.NDCG10-0.2) > 1e-9 {
+	if err != nil || math.Abs(delta.NDCG10-0.2) > 1e-9 || delta.RouteCounts["keyword"] != -1 || delta.RouteCounts["hybrid"] != 1 || delta.RouteTransitions["hybrid->vector"] != 1 || delta.RouteTransitions["vector->hybrid"] != 1 {
 		t.Fatalf("delta=%+v err=%v", delta, err)
 	}
 	candidate.Metadata.DatasetSHA256 = "other"

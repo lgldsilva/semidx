@@ -36,6 +36,9 @@ export function SearchPage() {
   const [fallback, setFallback] = useState(false)
   const [degraded, setDegraded] = useState(false)
   const [retryAfterMs, setRetryAfterMs] = useState(0)
+  const [searchRoute, setSearchRoute] = useState('')
+  const [searchModel, setSearchModel] = useState('')
+  const [tookMs, setTookMs] = useState(0)
   const [ran, setRan] = useState(false)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -75,12 +78,16 @@ export function SearchPage() {
           top: urlTop,
           graph: urlGraph,
           graph_depth: urlDepth,
+          signal: ac.signal,
         })
         if (cancelled) return
         setResults(res.results ?? [])
         setFallback(res.fallback)
         setDegraded(res.degraded ?? false)
         setRetryAfterMs(res.retry_after_ms ?? 0)
+        setSearchRoute(res.route ?? (res.fallback ? 'fallback' : res.keyword ? 'keyword' : 'hybrid'))
+        setSearchModel(res.model ?? '')
+        setTookMs(res.took_ms ?? 0)
         setMeta(
           res.resolved_project
             ? `resolved: ${res.resolved_project}`
@@ -90,10 +97,14 @@ export function SearchPage() {
         )
         setRecent(rememberSearch(urlQuery.trim(), scopeAll ? undefined : urlProject))
       } catch (ex) {
+        if (ex instanceof DOMException && ex.name === 'AbortError') return
         if (cancelled) return
         setResults([])
         setFallback(false)
         setDegraded(false)
+        setSearchRoute('')
+        setSearchModel('')
+        setTookMs(0)
         setErr(ex instanceof ApiError ? ex.message : 'search failed')
       } finally {
         if (!cancelled) setBusy(false)
@@ -138,8 +149,8 @@ export function SearchPage() {
       <div className="mb-4">
         <h1 className="mb-1 text-[1.45rem] font-bold">Search</h1>
         <p className="m-0 text-muted">
-          Semantic hits with optional Graph-RAG expansion. Open a file, inspect its
-          neighborhood, or ask the project agent — <Code>/</Code> or{' '}
+          Find code and documentation by intent, then inspect the evidence. Open a file,
+          inspect its neighborhood, or ask the project agent — <Code>/</Code> or{' '}
           <Code>Ctrl/⌘K</Code> jumps anywhere.
         </p>
       </div>
@@ -260,7 +271,15 @@ export function SearchPage() {
           </Alert>
         )
       )}
-      {meta && <p className="text-muted">{meta}</p>}
+      {(meta || tookMs > 0 || searchRoute) && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted" aria-live="polite">
+          {meta && <span>{meta}</span>}
+          {searchRoute && <span className="rounded-full border border-border px-2 py-0.5">route: {searchRoute}</span>}
+          {searchModel && <span className="rounded-full border border-border px-2 py-0.5">model: {searchModel}</span>}
+          {tookMs > 0 && <span className="rounded-full border border-border px-2 py-0.5">{tookMs} ms</span>}
+          {ran && <span>{results.length} result{results.length === 1 ? '' : 's'}</span>}
+        </div>
+      )}
 
       {ran && !err && results.length === 0 && (
         <EmptyState title="No matches">

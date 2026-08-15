@@ -308,7 +308,7 @@ func searchAlertRemote(ctx context.Context, d *deps, a Alert) (*search.Response,
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
-	resp := remoteToResponse(sr)
+	resp := remoteToResponse(sr, "")
 	return resp, nil
 }
 

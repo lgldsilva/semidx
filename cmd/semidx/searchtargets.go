@@ -17,9 +17,10 @@ import (
 // projSearch is one project's search outcome (used to render single- and
 // multi-project output uniformly).
 type projSearch struct {
-	name string
-	resp *search.Response
-	took time.Duration
+	name        string
+	resp        *search.Response
+	took        time.Duration
+	projectPath string
 }
 
 // searchCall groups parameters for runRemoteSearch / runLocalSearch to keep
@@ -87,7 +88,7 @@ func (d *deps) runRemoteSearch(ctx context.Context, call searchCall) ([]projSear
 	if err != nil {
 		return nil, err
 	}
-	return []projSearch{{p.Name, remoteToResponse(resp), time.Duration(resp.TookMS) * time.Millisecond}}, nil
+	return []projSearch{{name: p.Name, resp: remoteToResponse(resp, p.Path), took: time.Duration(resp.TookMS) * time.Millisecond, projectPath: p.Path}}, nil
 }
 
 func (d *deps) runLocalSearch(ctx context.Context, call searchCall) ([]projSearch, error) {
@@ -114,8 +115,18 @@ func (d *deps) runLocalSearch(ctx context.Context, call searchCall) ([]projSearc
 		return nil, err
 	}
 	out := make([]projSearch, 0, len(results))
-	for _, r := range results {
-		out = append(out, projSearch{name: r.Name, resp: r.Resp})
+	for i, r := range results {
+		projectPath := ""
+		if i < len(targets) && targets[i] != nil {
+			projectPath = targets[i].Path
+			if targets[i].SourceType == "git" && cwdGit.IsGit && cwdGit.Identity == targets[i].Identity {
+				projectPath = cwdGit.Toplevel
+			}
+		}
+		if projectPath == "" && r.Resp != nil && r.Resp.Project != nil {
+			projectPath = r.Resp.Project.Path
+		}
+		out = append(out, projSearch{name: r.Name, resp: r.Resp, took: time.Duration(r.Resp.TookMS) * time.Millisecond, projectPath: projectPath})
 	}
 	return out, nil
 }

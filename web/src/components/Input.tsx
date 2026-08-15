@@ -6,7 +6,7 @@ import type {
 import { cx } from '../lib/cx'
 
 const FIELD =
-  'w-full rounded-md border border-border bg-surface px-2.5 py-2 text-sm text-fg placeholder:text-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30'
+  'w-full rounded-md border border-border bg-surface px-2.5 py-2 text-sm text-fg placeholder:text-muted focus-visible:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30'
 
 export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={cx(FIELD, className)} {...rest} />

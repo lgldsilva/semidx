@@ -26,10 +26,13 @@ frozen corpus + dataset
 ```
 
 The committed PR 00 baseline uses keyword mode because it is hermetic and does
-not require an embedding provider. A separate SQLite integration test uses a
-deterministic test embedder to verify isolated vector retrieval and exact
-repeatability. Real-provider vector runs are operational evidence, not merge
-gates.
+not require an embedding provider. Keyword runs now use lexical ranking (FTS5
+BM25 plus substring compatibility on SQLite and coverage/`ts_rank_cd` on
+PostgreSQL), so ordering quality is measured rather than hidden behind a
+constant score. A separate SQLite
+integration test uses a deterministic test embedder to verify isolated vector
+retrieval and exact repeatability. Real-provider vector runs are operational
+evidence, not merge gates.
 
 ## Versioned inputs
 
@@ -115,6 +118,15 @@ Comparison is rejected before threshold evaluation when artifacts differ in:
 - project identity;
 - retrieval mode;
 - seed or run count.
+
+Each artifact also records the observed retrieval route per query and aggregate
+route counts (`keyword`, `vector`, `hybrid`, `fallback`, or `mixed`). The
+requested `--mode` remains the compatibility contract; route counts expose
+partial failures or unexpected fallback instead of letting a hybrid run appear
+fully semantic merely because it was invoked with `--mode hybrid`. When both
+artifacts contain per-query route evidence, `bench compare` also reports route
+transitions such as `hybrid->vector`; older artifacts without route evidence
+remain explicitly unknown and do not produce fabricated deltas.
 
 The absolute worktree path and environment remain in metadata for diagnostics,
 but do not invalidate an otherwise identical corpus checked out elsewhere.

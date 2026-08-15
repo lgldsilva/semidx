@@ -127,13 +127,73 @@ func TestKeywordSearch(t *testing.T) {
 	if len(results) != 1 || results[0].StartLine != 10 {
 		t.Fatalf("keyword search = %+v, want the handleLogin chunk", results)
 	}
-	if results[0].Score != 0.5 {
-		t.Fatalf("keyword score = %f, want 0.5", results[0].Score)
+	if results[0].Score <= 0 {
+		t.Fatalf("keyword score = %f, want a positive BM25 rank", results[0].Score)
 	}
 
 	// An empty query yields nothing.
 	if empty, err := s.SearchSimilarKeywords(ctx, projectID, "   ", 2, 5); err != nil || empty != nil {
 		t.Fatalf("empty query = %+v err=%v, want nil", empty, err)
+	}
+}
+
+func TestKeywordSearchRanksByBM25(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	projectID, err := s.UpsertProject(ctx, "kw-rank", "/tmp/kw-rank", "keyword", 0)
+	if err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+	fileID, err := s.UpsertFile(ctx, projectID, "rank.go", "h1", 20)
+	if err != nil {
+		t.Fatalf("UpsertFile: %v", err)
+	}
+	chunks := []chunker.Chunk{
+		{Content: "auth token refresh auth token", StartLine: 1, EndLine: 1},
+		{Content: "auth middleware", StartLine: 2, EndLine: 2},
+	}
+	if err := s.InsertChunks(ctx, projectID, fileID, chunks, [][]float32{{1, 0}, {0, 1}}, 2); err != nil {
+		t.Fatalf("InsertChunks: %v", err)
+	}
+	results, err := s.SearchSimilarKeywords(ctx, projectID, "auth token", 2, 5)
+	if err != nil {
+		t.Fatalf("SearchSimilarKeywords: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("keyword search returned %d results, want 2", len(results))
+	}
+	if results[0].StartLine != 1 || results[0].Score <= results[1].Score {
+		t.Fatalf("BM25 order = %+v, want the chunk covering both terms first", results)
+	}
+}
+
+func TestKeywordSearchPreservesIdentifierAndPathMatches(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	projectID, err := s.UpsertProject(ctx, "kw-compat", "/tmp/kw-compat", "keyword", 0)
+	if err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+	fileID, err := s.UpsertFile(ctx, projectID, "refs.go", "h1", 20)
+	if err != nil {
+		t.Fatalf("UpsertFile: %v", err)
+	}
+	chunks := []chunker.Chunk{
+		{Content: "func refresh_token() {}", StartLine: 1, EndLine: 1},
+		{Content: "see src/main.go for the entrypoint", StartLine: 2, EndLine: 2},
+		{Content: "func handleLogin() {}", StartLine: 3, EndLine: 3},
+	}
+	if err := s.InsertChunks(ctx, projectID, fileID, chunks, [][]float32{{1, 0}, {0, 1}, {1, 1}}, 2); err != nil {
+		t.Fatalf("InsertChunks: %v", err)
+	}
+	for query, wantLine := range map[string]int{"refresh_token": 1, "src/main.go": 2, "login": 3} {
+		results, err := s.SearchSimilarKeywords(ctx, projectID, query, 2, 5)
+		if err != nil {
+			t.Fatalf("SearchSimilarKeywords(%q): %v", query, err)
+		}
+		if len(results) != 1 || results[0].StartLine != wantLine {
+			t.Fatalf("SearchSimilarKeywords(%q) = %+v, want line %d", query, results, wantLine)
+		}
 	}
 }
 

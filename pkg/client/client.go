@@ -110,8 +110,11 @@ type SearchHit struct {
 }
 
 type SearchResponse struct {
-	Project  string `json:"project"`
-	Model    string `json:"model"`
+	Project string `json:"project"`
+	Model   string `json:"model"`
+	// Route is the retrieval path used for this response: keyword, vector,
+	// hybrid, or fallback. Older servers omit it.
+	Route    string `json:"route,omitempty"`
 	Fallback bool   `json:"fallback"`
 	Keyword  bool   `json:"keyword"`
 	// Degraded is true when the embedding circuit was open on the server and
@@ -127,14 +130,16 @@ type SearchResponse struct {
 // several projects. Each hit includes project provenance and the RRF score
 // used for cross-project ordering.
 type MultiSearchResponse struct {
-	Fallback     bool        `json:"fallback"`
-	Keyword      bool        `json:"keyword"`
-	Degraded     bool        `json:"degraded"`
-	RetryAfterMS int64       `json:"retry_after_ms"`
-	TookMS       int64       `json:"took_ms"`
-	ProjectCount int         `json:"project_count"`
-	SkippedCount int         `json:"skipped_count"`
-	Results      []SearchHit `json:"results"`
+	Fallback     bool           `json:"fallback"`
+	Keyword      bool           `json:"keyword"`
+	Route        string         `json:"route,omitempty"`
+	Routes       map[string]int `json:"routes,omitempty"`
+	Degraded     bool           `json:"degraded"`
+	RetryAfterMS int64          `json:"retry_after_ms"`
+	TookMS       int64          `json:"took_ms"`
+	ProjectCount int            `json:"project_count"`
+	SkippedCount int            `json:"skipped_count"`
+	Results      []SearchHit    `json:"results"`
 }
 
 type Project struct {

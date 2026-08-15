@@ -1323,7 +1323,8 @@ components:
           type: boolean
           description: >
             `true` when embedding was unavailable and the server used keyword
-            search (results are literal, not semantically ranked).
+            search (results are lexically ranked literal matches, not semantic
+            matches).
         took_ms:
           type: integer
           description: Server-side wall-clock time for the search in milliseconds.

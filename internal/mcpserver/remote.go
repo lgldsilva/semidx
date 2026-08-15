@@ -35,8 +35,9 @@ func (b *clientBackend) Search(ctx context.Context, project, query, model string
 		return nil, err
 	}
 	out := &SearchOutput{
-		Project: resp.Project, Fallback: resp.Fallback,
+		Project: resp.Project, Model: resp.Model, Route: resp.Route, Keyword: resp.Keyword, Fallback: resp.Fallback,
 		Degraded: resp.Degraded, RetryAfterMS: resp.RetryAfterMS,
+		TookMS: resp.TookMS,
 	}
 	for _, r := range resp.Results {
 		out.Results = append(out.Results, Hit{
@@ -61,6 +62,7 @@ func (b *clientBackend) SearchMulti(ctx context.Context, req search.MultiScopeRe
 	}
 	out := &search.MultiResponse{
 		Fallback: resp.Fallback, Keyword: resp.Keyword, Degraded: resp.Degraded,
+		Route: resp.Route, Routes: resp.Routes,
 		RetryAfter:   time.Duration(resp.RetryAfterMS) * time.Millisecond,
 		ProjectCount: resp.ProjectCount, SkippedCount: resp.SkippedCount,
 	}

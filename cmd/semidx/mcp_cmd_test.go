@@ -64,4 +64,7 @@ func TestMCPCmdHelpListsValidToolNames(t *testing.T) {
 	if !strings.Contains(long, "SEMIDX_MCP_TOOLS") {
 		t.Error("mcp help should document the SEMIDX_MCP_TOOLS env var")
 	}
+	if !strings.Contains(long, "SEMIDX_MCP_PROFILE") || !strings.Contains(long, "--tool-profile") || !strings.Contains(long, "code-intel") {
+		t.Error("mcp help should document tool profiles")
+	}
 }

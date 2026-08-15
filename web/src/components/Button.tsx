@@ -33,7 +33,7 @@ export function Button({
     <button
       type={type}
       className={cx(
-        'inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md border font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+        'inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60',
         VARIANT[variant],
         SIZE[size],
         className,

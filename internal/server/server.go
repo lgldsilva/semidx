@@ -441,6 +441,7 @@ func mapSearchResponse(resp *search.Response) client.SearchResponse {
 	out := client.SearchResponse{
 		Project:      resp.Project.Name,
 		Model:        resp.Model,
+		Route:        resp.Route,
 		Fallback:     resp.Fallback,
 		Keyword:      resp.Keyword,
 		Degraded:     resp.Degraded,
@@ -565,8 +566,19 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, msgSearchFailed)
 		return
 	}
+	route := resp.Route
+	if route == "" {
+		route = "hybrid"
+		if resp.Keyword {
+			route = "keyword"
+		}
+		if resp.Fallback {
+			route = "fallback"
+		}
+	}
 	out := client.MultiSearchResponse{
-		Fallback: resp.Fallback, Keyword: resp.Keyword, Degraded: resp.Degraded,
+		Fallback: resp.Fallback, Keyword: resp.Keyword, Route: route, Degraded: resp.Degraded,
+		Routes:       resp.Routes,
 		RetryAfterMS: resp.RetryAfter.Milliseconds(), TookMS: time.Since(start).Milliseconds(),
 		ProjectCount: resp.ProjectCount, SkippedCount: resp.SkippedCount,
 		Results: make([]client.SearchHit, 0, len(resp.Results)),
@@ -576,7 +588,9 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 			Project: hit.Project, Path: hit.FilePath, StartLine: hit.StartLine,
 			EndLine: hit.EndLine, Score: hit.Score, FusionScore: hit.FusionScore,
 			SourceRank: hit.SourceRank, Content: hit.Content,
-			Stale: hit.Stale, IndexedAt: hit.IndexedAt,
+			Confidence: hit.Confidence, Symbol: hit.Symbol, Source: hit.Source,
+			GraphDepth: hit.GraphDepth,
+			Stale:      hit.Stale, IndexedAt: hit.IndexedAt,
 		})
 	}
 	s.searchDuration.WithLabelValues("*").Observe(time.Since(start).Seconds())

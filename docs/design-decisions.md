@@ -52,13 +52,19 @@ This document records the main architectural decisions made during the evolution
 
 ---
 
-## 5. Keyword Fallback (SQL ILIKE) and Auto-Detection of Table
+## 5. Keyword Fallback (Lexically Ranked ILIKE/FTS5) and Auto-Detection of Table
 
 - **Decision**: Implement classic text search with automatic database table scanning support if the embedding API is completely offline.
 - **Why**: 
   - *Incident*: If the local Ollama is shut down and the internet is down, semantic search breaks because it cannot convert the query into a vector.
 - **How**: 
-  - Implemented in `db.go` (`SearchSimilarKeywords`). The method splits the query into words and runs combined searches using `ILIKE` in the database. If we don't know the model or the dimension, the Go POC queries the system table `pg_tables` to find which `chunks_*` table has records written for that project.
+  - Implemented in `store.go` (`SearchSimilarKeywords`). PostgreSQL keeps the
+    `ILIKE` predicates for substring/identifier compatibility, then orders by
+    term coverage plus `ts_rank_cd`; standalone SQLite uses FTS5 BM25 first and
+    a separate `LIKE` compatibility leg for substring identifiers. If we don't
+    know the model or the dimension, the Go POC queries the system table
+    `pg_tables` to find which `chunks_*` table has records written for that
+    project.
 - **Trade-offs**: 
   - Text search does not understand synonyms (e.g., searching for "user" in Portuguese won't find "usuario"), but it keeps search operational and resilient under any infrastructure failure circumstances.
 

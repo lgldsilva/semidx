@@ -617,6 +617,9 @@ func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"results":        hitsToJSON(d.Results),
 			"fallback":       d.Fallback,
+			"keyword":        d.Keyword,
+			"route":          d.Route,
+			"took_ms":        d.TookMS,
 			"degraded":       d.Degraded,
 			"retry_after_ms": d.RetryAfter.Milliseconds(),
 			"project_count":  d.ProjectCount,
@@ -649,6 +652,10 @@ func (a *Admin) apiSearch(w http.ResponseWriter, r *http.Request, ac *authCtx) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"results":          hitsToJSON(hits),
+		"model":            resp.Model,
+		"keyword":          resp.Keyword,
+		"route":            resp.Route,
+		"took_ms":          resp.TookMS,
 		"fallback":         resp.Fallback,
 		"degraded":         resp.Degraded,
 		"retry_after_ms":   resp.RetryAfter.Milliseconds(),

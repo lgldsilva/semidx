@@ -22,7 +22,7 @@ func TestRemoteGrepParity(t *testing.T) {
 		},
 	}
 
-	resp := remoteToResponse(remote)
+	resp := remoteToResponse(remote, "")
 
 	var got bytes.Buffer
 	if err := (search.GrepFormatter{ProjectPath: "/repo"}).Format(&got, resp); err != nil {
@@ -42,8 +42,8 @@ func TestRemoteToResponsePreservesFields(t *testing.T) {
 		Model:    "m",
 		Fallback: true,
 		Results:  []client.SearchHit{{Path: "a", StartLine: 1, EndLine: 2, Score: 0.5, Content: "x"}},
-	})
-	if resp.Project.Name != "p" || resp.Model != "m" || !resp.Fallback {
+	}, "")
+	if resp.Project.Name != "p" || resp.Model != "m" || resp.Route != "fallback" || !resp.Fallback {
 		t.Errorf("metadata lost: %+v", resp)
 	}
 	if len(resp.Results) != 1 || resp.Results[0].FilePath != "a" || resp.Results[0].EndLine != 2 {

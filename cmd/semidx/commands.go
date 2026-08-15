@@ -481,7 +481,7 @@ they stay correct even when searching across multiple projects.`,
 			// golden).
 			if len(results) == 1 {
 				resp := results[0].resp
-				path := d.sgrepProjectPath(cmd.Context(), resp.Project.Path)
+				path := d.sgrepProjectPath(cmd.Context(), results[0].projectPath, resp.Project.Path)
 				return search.GrepFormatter{ProjectPath: path}.Format(os.Stdout, resp)
 			}
 			return renderSgrepMulti(results)
@@ -492,9 +492,12 @@ they stay correct even when searching across multiple projects.`,
 }
 
 // sgrepProjectPath picks the path grep output is anchored at for a single
-// project: remote → the current working directory; a local git project → the
-// current worktree root; otherwise the stored project path.
-func (d *deps) sgrepProjectPath(ctx context.Context, stored string) string {
+// project. A resolved target path wins (including a matching git worktree),
+// followed by the remote cwd fallback and finally the stored project path.
+func (d *deps) sgrepProjectPath(ctx context.Context, resolved, stored string) string {
+	if resolved != "" {
+		return resolved
+	}
 	if d.remote() {
 		if wd, e := os.Getwd(); e == nil {
 			return wd
@@ -530,7 +533,7 @@ func warnSgrepDegraded(results []projSearch) {
 // shows which project it came from.
 func renderSgrepMulti(results []projSearch) error {
 	for _, ps := range results {
-		if err := (search.GrepFormatter{ProjectPath: ps.resp.Project.Path}).Format(os.Stdout, ps.resp); err != nil {
+		if err := (search.GrepFormatter{ProjectPath: ps.projectPath}).Format(os.Stdout, ps.resp); err != nil {
 			return err
 		}
 	}
@@ -729,6 +732,7 @@ without that auth in front.`,
 			})
 
 			if mcpHTTP || envTruthy("SEMIDX_MCP_HTTP") {
+				mcpserver.Version = version
 				srv.EnableMCPHTTP()
 				fmt.Fprintln(os.Stderr, "MCP Streamable HTTP endpoint enabled at /mcp (bearer auth required)")
 			}
@@ -814,6 +818,7 @@ func (d *deps) bootstrapServer(ctx context.Context, srv *server.Server, box *sec
 
 func newMCPCmd(d *deps) *cobra.Command {
 	var tools []string
+	var toolProfile string
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run the MCP server over stdio (proxying to a server, or over the local index)",
@@ -823,8 +828,12 @@ server, or serves the local index directly. Use "semidx mcp install" to wire it
 into an agent client. (stdout carries the protocol — logs go to stderr.)
 
 Restrict the exposed tools with --tools (repeatable or comma-separated) or the
-SEMIDX_MCP_TOOLS env var (comma-separated; the flag wins). Valid tool names:
+SEMIDX_MCP_TOOLS env var (comma-separated; the flag wins), or choose a curated
+--tool-profile (search, workspace, code-intel, all). Valid tool names:
 ` + strings.Join(mcpserver.ToolNames(), ", ") + `.
+Profiles are mutually exclusive with --tools and keep low-value capabilities
+out of the model context by default. SEMIDX_MCP_PROFILE is used when the flag
+is omitted.
 Capability-gated tools (repo_*, semantic_search_multi, semantic_ask) are only
 served when the backend supports them, allowlisted or not.
 
@@ -833,13 +842,19 @@ SEMIDX_DEFAULT_PROJECT), tools may omit their "project" argument and the
 default is used.`,
 		Example: `  semidx mcp                                  # run the stdio server
   semidx mcp --tools semantic_search,semantic_status
+  semidx mcp --tool-profile search
   semidx mcp install --client claude-code --apply`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runMCPServer(cmd.Context(), d, mcpToolAllowlist(cmd.Flags().Changed("tools"), tools, d.cfg))
+			effectiveProfile := toolProfile
+			if !cmd.Flags().Changed("tool-profile") {
+				effectiveProfile = os.Getenv("SEMIDX_MCP_PROFILE")
+			}
+			return runMCPServer(cmd.Context(), d, mcpToolAllowlist(cmd.Flags().Changed("tools"), tools, d.cfg), effectiveProfile)
 		},
 	}
 	cmd.Flags().StringSliceVar(&tools, "tools", nil,
 		"expose only these MCP tools (comma-separated or repeated; default: all)")
+	cmd.Flags().StringVar(&toolProfile, "tool-profile", "", "curated MCP tool profile: search, workspace, code-intel, or all")
 	cmd.AddCommand(newMCPInstallCmd())
 	return cmd
 }
@@ -857,8 +872,11 @@ func mcpToolAllowlist(flagSet bool, flagValues []string, cfg *config.Config) []s
 	return nil
 }
 
-func runMCPServer(ctx context.Context, d *deps, allowedTools []string) error {
-	opts := mcpserver.Options{AllowedTools: allowedTools}
+func runMCPServer(ctx context.Context, d *deps, allowedTools []string, profile string) error {
+	// Keep the MCP implementation identity aligned with the binary version
+	// (release tags and commit metadata are injected into this package at build).
+	mcpserver.Version = version
+	opts := mcpserver.Options{AllowedTools: allowedTools, Profile: profile}
 	// Default project for tool calls that omit "project"
 	// (clientconfig.DefaultProject; SEMIDX_DEFAULT_PROJECT overrides the file).
 	if d.client != nil {

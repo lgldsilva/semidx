@@ -88,6 +88,10 @@ export type SearchHit = {
 
 export type SearchResponse = {
   results: SearchHit[]
+  model?: string
+  route?: 'keyword' | 'vector' | 'hybrid' | 'fallback' | string
+  keyword?: boolean
+  took_ms?: number
   fallback: boolean
   /** True when the embed circuit is open and only keyword results are served. */
   degraded?: boolean
@@ -662,10 +666,19 @@ export const api = {
     top?: number
     graph?: boolean
     graph_depth?: number
+    signal?: AbortSignal
   }) =>
     request<SearchResponse>('/admin/api/search', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        query: body.query,
+        project: body.project,
+        all: body.all,
+        top: body.top,
+        graph: body.graph,
+        graph_depth: body.graph_depth,
+      }),
+      signal: body.signal,
     }),
   projectIngest: (
     name: string,

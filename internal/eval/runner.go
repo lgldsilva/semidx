@@ -12,7 +12,11 @@ import (
 // Keeping this adapter small lets benchmarks use SQLite, PostgreSQL, fakes, or
 // a remote client without coupling the evaluation package to any backend.
 type Observation struct {
-	Ranked           []Ranked
+	Ranked []Ranked
+	// Route is the actual retrieval path reported by the service. It is kept
+	// separate from the requested benchmark mode so partial failures and
+	// fallback paths remain visible in the artifact.
+	Route            string
 	Fallback         bool
 	Degraded         bool
 	Backend          string
@@ -51,7 +55,7 @@ func Run(ctx context.Context, ds Dataset, cfg RunnerConfig, search SearchFunc) R
 	metadata.Runs = cfg.Runs
 	metadata.Seed = cfg.Seed
 	metadata.DatasetSHA256, _ = DatasetSHA256(ds)
-	out := Results{Version: CurrentDatasetVersion, Metadata: metadata, Total: len(ds.Queries)}
+	out := Results{Version: CurrentDatasetVersion, Metadata: metadata, Total: len(ds.Queries), RouteCounts: make(map[string]int)}
 	out.Queries = make([]QueryMetrics, len(ds.Queries))
 	metadataSet := hasRuntimeMetadata(metadata)
 	var latencies []float64
@@ -59,6 +63,7 @@ func Run(ctx context.Context, ds Dataset, cfg RunnerConfig, search SearchFunc) R
 		qm := QueryMetrics{ID: q.ID, Query: q.Query, Relevant: len(q.Relevant)}
 		var ndcg, mrr, precision, recall, found []float64
 		queryFallback := false
+		queryRoute := ""
 		for run := 0; run < cfg.Runs; run++ {
 			obs, err := search(ctx, q)
 			if err != nil {
@@ -69,6 +74,13 @@ func Run(ctx context.Context, ds Dataset, cfg RunnerConfig, search SearchFunc) R
 			qm.Fallback = qm.Fallback || obs.Fallback
 			qm.Degraded = qm.Degraded || obs.Degraded
 			queryFallback = queryFallback || obs.Fallback || obs.Degraded
+			if obs.Route != "" {
+				if queryRoute == "" {
+					queryRoute = obs.Route
+				} else if queryRoute != obs.Route {
+					queryRoute = "mixed"
+				}
+			}
 			if cfg.StrictSemantic && (obs.Fallback || obs.Degraded) {
 				qm.Error = "semantic benchmark received fallback or degraded response"
 				out.Failed++
@@ -97,6 +109,10 @@ func Run(ctx context.Context, ds Dataset, cfg RunnerConfig, search SearchFunc) R
 			qm.NDCG10, qm.MRR = median(ndcg), median(mrr)
 			qm.Precision5, qm.Recall10 = median(precision), median(recall)
 			qm.Found = int(math.Round(median(found)))
+		}
+		qm.Route = queryRoute
+		if queryRoute != "" {
+			out.RouteCounts[queryRoute]++
 		}
 		out.Queries[i] = qm
 		out.NDCG10 += qm.NDCG10

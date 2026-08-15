@@ -1,30 +1,11 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { SearchHit } from '../../api'
-import { Badge, type BadgeTone } from '../../components/Badge'
+import { Badge } from '../../components/Badge'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
 import { Code, Snippet } from '../../components/Snippet'
 import { cx } from '../../lib/cx'
-
-type ScoreGrade = 'high' | 'mid' | 'low'
-
-const SCORE_BORDER: Record<ScoreGrade, string> = {
-  high: 'border-l-success',
-  mid: 'border-l-warning',
-  low: 'border-l-muted',
-}
-
-const SCORE_TONE: Record<ScoreGrade, BadgeTone> = {
-  high: 'success',
-  mid: 'warning',
-  low: 'neutral',
-}
-
-function scoreGrade(scorePct: number): ScoreGrade {
-  if (scorePct >= 75) return 'high'
-  if (scorePct >= 45) return 'mid'
-  return 'low'
-}
 
 function fileHref(project: string, path: string, line?: number) {
   const q = new URLSearchParams({ tab: 'files', path })
@@ -48,17 +29,16 @@ export function SearchHits({
   results: SearchHit[]
   fallbackProject?: string
 }) {
+  const [copied, setCopied] = useState('')
   if (results.length === 0) return null
   return (
     <div>
       {results.map((hit, i) => {
-        const scorePct = Math.round(hit.score * 100)
-        const grade = scoreGrade(scorePct)
         const project = hit.project || fallbackProject || ''
         return (
           <Card
             key={`${hit.project || ''}-${hit.path}-${hit.start_line}-${i}`}
-            className={cx('my-3.5 border-l-4', SCORE_BORDER[grade])}
+            className={cx('my-3.5 border-l-4', hit.source === 'keyword' ? 'border-l-warning' : 'border-l-accent')}
           >
             <div className="flex justify-between gap-3 max-sm:flex-wrap">
               <div>
@@ -87,15 +67,15 @@ export function SearchHits({
                   <Badge tone="accent">graph{hit.graph_depth ? ` d=${hit.graph_depth}` : ''}</Badge>
                 )}
                 {hit.source === 'keyword' && <Badge tone="warning">keyword</Badge>}
-                {hit.stale && <Badge tone="danger">stale</Badge>}
+                {hit.stale && <Badge tone="danger" title="The file changed after indexing; read it again before editing.">stale</Badge>}
                 {hit.confidence && hit.confidence !== 'AMBIGUOUS' && (
                   <Badge tone="neutral">
                     {hit.confidence}
                     {hit.symbol ? ` ${hit.symbol}` : ''}
                   </Badge>
                 )}
-                <Badge tone={SCORE_TONE[grade]} className="font-semibold">
-                  {scorePct}%
+                <Badge tone="neutral" className="font-mono font-semibold" title="Ordinal score; it is not a probability.">
+                  #{i + 1} · {hit.score.toFixed(3)}
                 </Badge>
               </div>
             </div>
@@ -114,9 +94,15 @@ export function SearchHits({
                 <Button
                   variant="link"
                   size="sm"
-                  onClick={() => void navigator.clipboard.writeText(`${hit.path}:${hit.start_line}`)}
+                  onClick={() => {
+                    const value = `${hit.path}:${hit.start_line}`
+                    void navigator.clipboard.writeText(value).then(() => {
+                      setCopied(value)
+                      window.setTimeout(() => setCopied((current) => (current === value ? '' : current)), 1600)
+                    })
+                  }}
                 >
-                  Copy path
+                  {copied === `${hit.path}:${hit.start_line}` ? 'Copied' : 'Copy path'}
                 </Button>
               </div>
             )}

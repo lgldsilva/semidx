@@ -155,6 +155,12 @@ func TestSearchVectorPath(t *testing.T) {
 	if resp.Fallback {
 		t.Error("Fallback should be false on the vector path")
 	}
+	if resp.Route != "hybrid" {
+		t.Errorf("Route = %q, want hybrid", resp.Route)
+	}
+	if resp.TookMS < 0 {
+		t.Errorf("TookMS = %d, want non-negative", resp.TookMS)
+	}
 	if !st.usedKW {
 		t.Error("hybrid search should also run keyword leg when embedding succeeds")
 	}
@@ -191,6 +197,9 @@ func TestSearchVectorOnlySkipsKeywordAndRouting(t *testing.T) {
 	if len(resp.Results) != 1 || resp.Results[0].FilePath != "auth.go" {
 		t.Fatalf("vector-only results = %+v", resp.Results)
 	}
+	if resp.Route != "vector" {
+		t.Errorf("Route = %q, want vector", resp.Route)
+	}
 }
 
 func TestSearchVectorOnlyDoesNotFallback(t *testing.T) {
@@ -223,6 +232,9 @@ func TestSearchKeywordFallback(t *testing.T) {
 	}
 	if !resp.Fallback {
 		t.Error("Fallback should be true when embedding fails")
+	}
+	if resp.Route != "fallback" {
+		t.Errorf("Route = %q, want fallback", resp.Route)
 	}
 	if !st.usedKW {
 		t.Error("keyword search should run on fallback")
@@ -282,6 +294,9 @@ func TestSearchKeywordOnly(t *testing.T) {
 	}
 	if resp.Fallback {
 		t.Error("KeywordOnly should not set Fallback (it's intentional, not a fallback)")
+	}
+	if resp.Route != "keyword" {
+		t.Errorf("Route = %q, want keyword", resp.Route)
 	}
 	if len(resp.Results) != 1 || resp.Results[0].FilePath != "a.go" {
 		t.Errorf("results = %+v", resp.Results)
@@ -398,6 +413,9 @@ func TestSearchKeywordFallbackUsesWorktree(t *testing.T) {
 	if !resp.Fallback || !st.usedWorktree {
 		t.Fatalf("fallback worktree = fallback %v usedWorktree %v", resp.Fallback, st.usedWorktree)
 	}
+	if resp.Route != "fallback" {
+		t.Errorf("Route = %q, want fallback", resp.Route)
+	}
 }
 
 func TestSearchProjectLookupErrorWraps(t *testing.T) {
@@ -441,6 +459,25 @@ func TestSearchKeywordFallbackKeywordError(t *testing.T) {
 	}
 }
 
+func TestSearchHybridKeywordLegFailureDisclosesVectorRoute(t *testing.T) {
+	st := &fakeStore{
+		project:    &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		simResults: []store.SearchResult{{FilePath: "vector.go", Score: 0.9}},
+		kwErr:      errors.New("keyword index unavailable"),
+	}
+	svc := NewService(st, &fakeEmbedder{vec: []float32{1}, dims: 1})
+	resp, err := svc.Search(context.Background(), Request{Project: "p", Query: "natural language query"})
+	if err != nil {
+		t.Fatalf("partial hybrid failure should preserve vector results: %v", err)
+	}
+	if resp.Route != "vector" {
+		t.Errorf("Route = %q, want vector after keyword-leg failure", resp.Route)
+	}
+	if resp.Fallback || resp.Keyword {
+		t.Errorf("partial vector response should not claim keyword fallback: fallback=%v keyword=%v", resp.Fallback, resp.Keyword)
+	}
+}
+
 func TestSearchVectorStoreError(t *testing.T) {
 	st := &fakeStore{
 		project: &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
@@ -476,6 +513,9 @@ func TestSearchRoutesIdentifierSkipsEmbed(t *testing.T) {
 	}
 	if !resp.Keyword {
 		t.Error("routed keyword should set Keyword")
+	}
+	if resp.Route != "keyword" {
+		t.Errorf("Route = %q, want keyword", resp.Route)
 	}
 }
 

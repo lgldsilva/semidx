@@ -42,6 +42,14 @@ func (s *Service) HybridSearch(ctx context.Context, projectID int, query string,
 
 // hybridFuse merges vector and keyword ranked lists (caller supplies the query vector).
 func (s *Service) hybridFuse(ctx context.Context, projectID int, query string, vec []float32, dims, topK int, worktree string) ([]store.SearchResult, error) {
+	results, _, err := s.hybridFuseRoute(ctx, projectID, query, vec, dims, topK, worktree)
+	return results, err
+}
+
+// hybridFuseRoute is the same retrieval operation with an explicit route. A
+// keyword-leg failure is intentionally degraded to the vector leg, but the
+// caller must be able to disclose that the response was not truly hybrid.
+func (s *Service) hybridFuseRoute(ctx context.Context, projectID int, query string, vec []float32, dims, topK int, worktree string) ([]store.SearchResult, string, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -65,14 +73,18 @@ func (s *Service) hybridFuse(ctx context.Context, projectID int, query string, v
 
 	vres := <-vecCh
 	if vres.err != nil {
-		return nil, vres.err
+		return nil, "", vres.err
 	}
+	// Preserve retrieval provenance through RRF. The fused score is an
+	// ordering signal; Source tells clients which leg supplied the preview.
+	vres.results = tagResultSource(vres.results, "vector")
 	kres := <-kwCh
 	if kres.err != nil {
-		return vres.results, nil
+		return vres.results, "vector", nil
 	}
+	kres.results = tagResultSource(kres.results, "keyword")
 
-	return rerankRRF(vres.results, kres.results, topK), nil
+	return rerankRRF(vres.results, kres.results, topK), "hybrid", nil
 }
 
 // rerankRRF merges two ranked result lists using Reciprocal Rank Fusion.

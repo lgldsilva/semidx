@@ -97,7 +97,9 @@ type User struct {
 	Disabled     bool
 }
 
-// SearchResult is one hit from a similarity or keyword search.
+// SearchResult is one hit from a similarity or keyword search. Score is a
+// cosine similarity for vector hits and a backend-specific lexical rank for
+// keyword hits; neither value is a probability.
 type SearchResult struct {
 	FilePath   string
 	Content    string
@@ -1648,6 +1650,20 @@ func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText s
 		clauses = append(clauses, fmt.Sprintf("c.content ILIKE $%d", i+2))
 		args = append(args, "%"+w+"%")
 	}
+	// Rank matches with PostgreSQL's lexical statistics instead of returning a
+	// constant placeholder. The ILIKE predicates remain the compatibility
+	// filter (including substring and identifier matches). The explicit coverage
+	// term keeps substring-only identifiers rankable even when the text search
+	// parser does not tokenise them, while ts_rank_cd breaks ties by term
+	// frequency and proximity.
+	rankIdx := len(args) + 1
+	rankQuery := strings.Join(words, " ")
+	args = append(args, rankQuery)
+	coverage := make([]string, len(words))
+	for i := range words {
+		coverage[i] = fmt.Sprintf("CASE WHEN c.content ILIKE $%d THEN 1 ELSE 0 END", i+2)
+	}
+	scoreExpr := fmt.Sprintf("(%s) + ts_rank_cd(to_tsvector('simple', c.content), plainto_tsquery('simple', $%d))", strings.Join(coverage, " + "), rankIdx)
 
 	join := "JOIN files f ON f.id = c.file_id"
 	topKIdx := len(args) + 1
@@ -1658,12 +1674,15 @@ func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText s
 	}
 
 	sql := fmt.Sprintf(`
-		SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol
+		SELECT f.path, c.content, c.start_line, c.end_line,
+		       %s AS score,
+		       c.confidence, c.symbol
 		FROM %s c
 		%s
 		WHERE c.project_id = $1 AND (%s)
+		ORDER BY score DESC, c.id ASC
 		LIMIT $%d
-	`, table, join, strings.Join(clauses, " OR "), topKIdx)
+	`, scoreExpr, table, join, strings.Join(clauses, " OR "), topKIdx)
 
 	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {

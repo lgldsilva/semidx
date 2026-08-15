@@ -89,19 +89,78 @@ func Compare(baseline, candidate Results) (Results, error) {
 		return Results{}, err
 	}
 	return Results{
-		Version:      CurrentDatasetVersion,
-		Metadata:     candidate.Metadata,
-		Total:        candidate.Total,
-		Failed:       candidate.Failed - baseline.Failed,
-		Fallbacks:    candidate.Fallbacks - baseline.Fallbacks,
-		NDCG10:       candidate.NDCG10 - baseline.NDCG10,
-		MRR:          candidate.MRR - baseline.MRR,
-		Precision5:   candidate.Precision5 - baseline.Precision5,
-		Recall10:     candidate.Recall10 - baseline.Recall10,
-		LatencyP50MS: candidate.LatencyP50MS - baseline.LatencyP50MS,
-		LatencyP95MS: candidate.LatencyP95MS - baseline.LatencyP95MS,
-		LatencyP99MS: candidate.LatencyP99MS - baseline.LatencyP99MS,
+		Version:          CurrentDatasetVersion,
+		Metadata:         candidate.Metadata,
+		Total:            candidate.Total,
+		Failed:           candidate.Failed - baseline.Failed,
+		Fallbacks:        candidate.Fallbacks - baseline.Fallbacks,
+		NDCG10:           candidate.NDCG10 - baseline.NDCG10,
+		MRR:              candidate.MRR - baseline.MRR,
+		Precision5:       candidate.Precision5 - baseline.Precision5,
+		Recall10:         candidate.Recall10 - baseline.Recall10,
+		LatencyP50MS:     candidate.LatencyP50MS - baseline.LatencyP50MS,
+		LatencyP95MS:     candidate.LatencyP95MS - baseline.LatencyP95MS,
+		LatencyP99MS:     candidate.LatencyP99MS - baseline.LatencyP99MS,
+		RouteCounts:      diffRouteCounts(baseline.RouteCounts, candidate.RouteCounts),
+		RouteTransitions: diffRouteTransitions(baseline.Queries, candidate.Queries),
 	}, nil
+}
+
+func diffRouteCounts(baseline, candidate map[string]int) map[string]int {
+	// Older committed artifacts predate route evidence. Do not manufacture a
+	// +N delta by treating their missing map as an observed zero.
+	if len(baseline) == 0 || len(candidate) == 0 {
+		return nil
+	}
+	delta := make(map[string]int, len(baseline)+len(candidate))
+	for route, count := range candidate {
+		delta[route] = count
+	}
+	for route, count := range baseline {
+		delta[route] -= count
+	}
+	for route, count := range delta {
+		if count == 0 {
+			delete(delta, route)
+		}
+	}
+	if len(delta) == 0 {
+		return nil
+	}
+	return delta
+}
+
+func diffRouteTransitions(baseline, candidate []QueryMetrics) map[string]int {
+	if len(baseline) == 0 || len(candidate) == 0 {
+		return nil
+	}
+	before := make(map[string]string, len(baseline))
+	for _, query := range baseline {
+		if key := queryMetricKey(query); key != "" && query.Route != "" {
+			before[key] = query.Route
+		}
+	}
+	transitions := make(map[string]int)
+	for _, query := range candidate {
+		key := queryMetricKey(query)
+		if key == "" || query.Route == "" {
+			continue
+		}
+		if previous := before[key]; previous != "" && previous != query.Route {
+			transitions[previous+"->"+query.Route]++
+		}
+	}
+	if len(transitions) == 0 {
+		return nil
+	}
+	return transitions
+}
+
+func queryMetricKey(query QueryMetrics) string {
+	if query.ID != "" {
+		return query.ID
+	}
+	return query.Query
 }
 
 func compareRuntimeContract(baseline, candidate RunMetadata) error {

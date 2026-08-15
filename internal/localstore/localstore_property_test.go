@@ -141,9 +141,12 @@ func TestKeywordSearchTopKProperty(t *testing.T) {
 		if len(res) > topK {
 			rt.Fatalf("keyword search returned %d, exceeds topK=%d", len(res), topK)
 		}
-		for _, r := range res {
-			if r.Score != 0.5 {
-				rt.Fatalf("keyword score = %v, want constant 0.5", r.Score)
+		for i, r := range res {
+			if r.Score <= 0 {
+				rt.Fatalf("keyword score = %v, want a positive BM25 rank", r.Score)
+			}
+			if i > 0 && res[i-1].Score < r.Score {
+				rt.Fatalf("keyword results not sorted by BM25: %v before %v", res[i-1].Score, r.Score)
 			}
 		}
 	})

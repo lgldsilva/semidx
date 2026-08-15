@@ -294,6 +294,39 @@ func TestTextOnlyChunksKeywordOnly(t *testing.T) {
 	}
 }
 
+func TestSearchSimilarKeywordsRanksLexically(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.EnsureChunksTable(ctx, 3); err != nil {
+		t.Fatalf("EnsureChunksTable: %v", err)
+	}
+	pid, err := s.UpsertProject(ctx, "keyword-rank", "/keyword-rank", "test-3d", 0)
+	if err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+	fid, err := s.UpsertFile(ctx, pid, "rank.go", "h1", 20)
+	if err != nil {
+		t.Fatalf("UpsertFile: %v", err)
+	}
+	chunks := []chunker.Chunk{
+		{Content: "auth token refresh auth token", StartLine: 1, EndLine: 1},
+		{Content: "auth middleware", StartLine: 2, EndLine: 2},
+	}
+	if err := s.InsertChunks(ctx, pid, fid, chunks, [][]float32{{1, 0, 0}, {0, 1, 0}}, 3); err != nil {
+		t.Fatalf("InsertChunks: %v", err)
+	}
+	results, err := s.SearchSimilarKeywords(ctx, pid, "auth token", 3, 5)
+	if err != nil {
+		t.Fatalf("SearchSimilarKeywords: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("keyword search returned %d results, want 2", len(results))
+	}
+	if results[0].StartLine != 1 || results[0].Score <= results[1].Score {
+		t.Fatalf("lexical order = %+v, want the chunk covering both terms first", results)
+	}
+}
+
 func TestFileUpToDate(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
