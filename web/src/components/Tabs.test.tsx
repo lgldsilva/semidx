@@ -23,4 +23,21 @@ describe('Tabs', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Chat' }))
     expect(onSelect).toHaveBeenCalledWith('chat')
   })
+
+  it('moves focus and selection with the tablist keyboard controls', () => {
+    const onSelect = vi.fn()
+    render(<Tabs tabs={tabs} active="overview" onSelect={onSelect} />)
+    const overview = screen.getByRole('tab', { name: 'Overview' })
+    const files = screen.getByRole('tab', { name: 'Files' })
+    const chat = screen.getByRole('tab', { name: 'Chat' })
+
+    overview.focus()
+    fireEvent.keyDown(overview, { key: 'ArrowRight' })
+    expect(onSelect).toHaveBeenCalledWith('files')
+    expect(document.activeElement).toBe(files)
+
+    fireEvent.keyDown(files, { key: 'End' })
+    expect(onSelect).toHaveBeenCalledWith('chat')
+    expect(document.activeElement).toBe(chat)
+  })
 })

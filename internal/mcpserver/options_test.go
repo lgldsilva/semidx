@@ -163,6 +163,15 @@ func TestAllowlistCapabilityGatedSubsetRegisters(t *testing.T) {
 	if len(got) != 2 || !got["repo_worktrees"] || !got["semantic_search_multi"] {
 		t.Errorf("tool set = %v, want exactly {repo_worktrees, semantic_search_multi}", got)
 	}
+	res, err := sess.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range res.Tools {
+		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint || !tool.Annotations.IdempotentHint {
+			t.Fatalf("%s annotations = %+v, want read-only and idempotent", tool.Name, tool.Annotations)
+		}
+	}
 }
 
 func TestAllowlistBlankEntriesMeanAll(t *testing.T) {

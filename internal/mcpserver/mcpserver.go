@@ -551,18 +551,21 @@ func registerGitTools(s *mcp.Server, b Backend, allowed map[string]bool, explici
 		addProjectTool(s, &mcp.Tool{
 			Name:        toolRepoWorktrees,
 			Description: projectToolDescription("List all worktrees of a repository (requires local git access). On server mode, returns unsupported.", defaultProject),
+			Annotations: readOnlyAnnotations("Repository worktrees"),
 		}, requireProject, gitWorktreesHandler(gitB, b, defaultProject))
 	}
 	if allowed[toolRepoBranches] {
 		addProjectTool(s, &mcp.Tool{
 			Name:        toolRepoBranches,
 			Description: projectToolDescription("List branches of a repository. Includes remote branches when --remote is true.", defaultProject),
+			Annotations: readOnlyAnnotations("Repository branches"),
 		}, requireProject, gitBranchesHandler(gitB, b, defaultProject))
 	}
 	if allowed[toolRepoStatus] {
 		addProjectTool(s, &mcp.Tool{
 			Name:        toolRepoStatus,
 			Description: projectToolDescription("Show the repository working tree status (dirty, current branch, HEAD SHA).", defaultProject),
+			Annotations: readOnlyAnnotations("Repository status"),
 		}, requireProject, gitStatusHandler(gitB, b, defaultProject))
 	}
 }
@@ -600,6 +603,7 @@ func registerAskTool(s *mcp.Server, b Backend, allowed map[string]bool, explicit
 		addProjectTool(s, &mcp.Tool{
 			Name:        toolSemanticAsk,
 			Description: projectToolDescription("Ask a question about a registered project — RAG-augmented chat over indexed code. Returns an answer with cited source chunks.", defaultProject),
+			Annotations: &mcp.ToolAnnotations{Title: "Semantic project question", ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPtr(true)},
 		}, requireProject, askHandler(askBackend, defaultProject))
 	}
 }
