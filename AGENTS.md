@@ -151,7 +151,7 @@ docs/              architecture.md, api.md, self-hosting.md, CICD.md, ADRs
 Pin the toolchain — several tools need it and `@latest` may require newer Go:
 
 ```sh
-export GOTOOLCHAIN=go1.26.5
+export GOTOOLCHAIN=go1.26.6
 go build ./...
 go test -race -shuffle=on ./...          # testcontainers tests skip w/o Docker
 gofmt -l .                               # must be empty
@@ -228,8 +228,9 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 ## Gotchas (hard-won)
 
-- `GOTOOLCHAIN=go1.26.5` is deliberate: `charm.land/fantasy` (the chat/agent LLM
-  layer) requires Go ≥1.26.5, and 1.26.5 also carries the stdlib CVE fixes. Bump
+- `GOTOOLCHAIN=go1.26.6` is deliberate: `charm.land/fantasy` (the chat/agent LLM
+  layer) requires Go ≥1.26.5, and the pinned patch release carries the stdlib
+  CVE fixes. Bump
   the `golang:` builder image (Dockerfile + deploy/agentics-test) together with
   the Makefile/go.mod when bumping — the stdlib ships in the binary.
 - SQLite local store: `journal_mode=WAL`, `busy_timeout`, `MaxOpenConns(1)` —
