@@ -2,7 +2,9 @@ package embed
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -630,5 +632,62 @@ func TestNewOllamaClientUsesConfiguredTimeout(t *testing.T) {
 	c := NewOllamaClient("http://x")
 	if c.client.Timeout != 50*time.Second {
 		t.Errorf("client timeout = %v, want 50s", c.client.Timeout)
+	}
+}
+
+func TestKeepAliveResolution(t *testing.T) {
+	// A numeric setting must travel as a JSON number: Ollama rejects "-1" sent
+	// as a string with `missing unit in duration`, which would fail every
+	// embedding call rather than merely ignoring the hint.
+	for _, tc := range []struct {
+		env  string
+		want any
+	}{
+		{"", defaultKeepAlive},
+		{"  ", defaultKeepAlive},
+		{"0", nil},
+		{"-1", -1},
+		{"600", 600},
+		{"10m", "10m"},
+	} {
+		t.Setenv("SEMIDX_OLLAMA_KEEP_ALIVE", tc.env)
+		if got := keepAlive(); got != tc.want {
+			t.Errorf("keepAlive() with %q = %#v, want %#v", tc.env, got, tc.want)
+		}
+	}
+}
+
+func TestKeepAliveNumericMarshalsAsNumber(t *testing.T) {
+	t.Setenv("SEMIDX_OLLAMA_KEEP_ALIVE", "-1")
+	body, err := json.Marshal(embedRequest{Model: "m", Input: []string{"x"}, KeepAlive: keepAlive()})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(body), `"keep_alive":-1`) {
+		t.Errorf("body = %s, want a numeric keep_alive", body)
+	}
+}
+
+// The embedding request must carry keep_alive so Ollama does not evict the
+// model between queries and charge the next search a cold model load.
+func TestEmbedRequestSendsKeepAlive(t *testing.T) {
+	t.Setenv("SEMIDX_OLLAMA_KEEP_ALIVE", "17m")
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"model":"m","embeddings":[[0.1]]}`))
+	}))
+	defer srv.Close()
+
+	c := NewOllamaClient(srv.URL)
+	if _, err := c.Embed(context.Background(), "m", "hello"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	var got embedRequest
+	if err := json.Unmarshal(gotBody, &got); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	if got.KeepAlive != "17m" {
+		t.Errorf("keep_alive = %q, want %q", got.KeepAlive, "17m")
 	}
 }
