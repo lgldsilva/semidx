@@ -14,7 +14,7 @@ universal installers or `go install`.
 | GHCR (`ghcr.io/lgldsilva/semidx`) | **live** | Public Docker image (`latest` + version tags) |
 | `install.sh` (Unix) | live | SHA-256 verified |
 | `install.ps1` (Windows) | live | SHA-256 verified |
-| `go install` | live | needs Go 1.26.5+ |
+| `go install` | live | needs Go 1.26.6+ |
 | Homebrew | seeded | tap [`lgldsilva/homebrew-tap`](https://github.com/lgldsilva/homebrew-tap) has `semidx` 0.44.9; needs clean macOS/Linux smoke before **live** |
 | Scoop | seeded | bucket [`lgldsilva/scoop-bucket`](https://github.com/lgldsilva/scoop-bucket) has `semidx` 0.44.9; needs clean Windows smoke before **live** |
 | winget | pending | PR to `microsoft/winget-pkgs` |
