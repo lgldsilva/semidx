@@ -4,7 +4,7 @@ Self-hosted semantic search for your code and documents.
 
 [![CI](https://github.com/lgldsilva/semidx/actions/workflows/ci.yml/badge.svg)](https://github.com/lgldsilva/semidx/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/lgldsilva/semidx)](https://github.com/lgldsilva/semidx/releases/latest)
-[![go](https://img.shields.io/badge/go-1.26.5%2B-blue.svg)](go.mod)
+[![go](https://img.shields.io/badge/go-1.26.6%2B-blue.svg)](go.mod)
 [![license](https://img.shields.io/badge/license-Apache--2.0-lightgrey.svg)](LICENSE)
 [![install.sh](https://img.shields.io/badge/install.sh-live-brightgreen.svg)](install.sh)
 [![install.ps1](https://img.shields.io/badge/install.ps1-live-brightgreen.svg)](install.ps1)
