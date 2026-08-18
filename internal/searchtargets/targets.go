@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/lgldsilva/semidx/internal/embed"
@@ -93,22 +95,86 @@ func FromClientProjects(projects []client.Project) []store.Project {
 }
 
 // ResolveRemoteProject resolves a user ref against the server's project list.
+// An empty ref resolves the project enclosing the current directory, matching
+// what local mode already does (and what the --project help text promises),
+// so the first call an agent makes does not have to name a project.
 func ResolveRemoteProject(ctx context.Context, lister ProjectLister, ref string) (*store.Project, error) {
-	if ref == "" {
-		return nil, fmt.Errorf("--project is required in remote mode")
-	}
 	projects, err := lister.ListProjects(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
-	p, err := projectref.ResolveInList(ctx, ref, "", FromClientProjects(projects))
+	stored := FromClientProjects(projects)
+	cwd, cwdErr := osGetwd()
+	if cwdErr != nil {
+		cwd = ""
+	}
+	if ref == "" || ref == "." {
+		// "." is the default of --project on some commands and means "here",
+		// so it takes the same cwd resolution as an omitted flag.
+		if p, err := resolveRemoteFromCwd(ctx, cwd, stored); err == nil {
+			return p, nil
+		} else if ref == "" {
+			return nil, err
+		}
+	}
+	p, err := projectref.ResolveInList(ctx, ref, cwd, stored)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, fmt.Errorf("project not found: %s (index it, or pass a path/name that exists)", ref)
+			return nil, fmt.Errorf("project not found: %s (%s)", ref, remoteProjectHint(stored))
 		}
 		return nil, fmt.Errorf("resolve remote project %q: %w", ref, err)
 	}
 	return p, nil
+}
+
+// resolveRemoteFromCwd mirrors the local cwd resolution: prefer the git repo
+// identity, then the project whose indexed path encloses the directory.
+func resolveRemoteFromCwd(ctx context.Context, cwd string, projects []store.Project) (*store.Project, error) {
+	if cwd != "" {
+		root := cwd
+		if gi := gitmeta.Resolve(ctx, cwd); gi.IsGit {
+			if p, err := projectref.ResolveInList(ctx, gi.Identity, "", projects); err == nil && p != nil {
+				return p, nil
+			}
+			if gi.Toplevel != "" {
+				root = gi.Toplevel
+			}
+		}
+		if p := projectref.Enclosing(cwd, projects); p != nil {
+			return p, nil
+		}
+		// Last resort: the checkout's directory name. A repo indexed from a
+		// different remote than the one this clone uses (a mirror, or a host
+		// migration) has an identity that cannot match, yet is plainly the same
+		// project. Only an unambiguous name match counts — ResolveInList
+		// reports an error when several projects share the name.
+		if base := filepath.Base(root); base != "" && base != "." && base != string(filepath.Separator) {
+			if p, err := projectref.ResolveInList(ctx, base, "", projects); err == nil && p != nil {
+				return p, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("could not tell which project this directory belongs to (%s)", remoteProjectHint(projects))
+}
+
+// remoteProjectHint names the indexed projects so a failed resolution tells the
+// caller what it may pass instead of only what went wrong.
+func remoteProjectHint(projects []store.Project) string {
+	unique := projectref.UniqueByIdentity(projects)
+	if len(unique) == 0 {
+		return "no projects are indexed on the server — run 'semidx push --project .'"
+	}
+	names := make([]string, 0, len(unique))
+	for i := range unique {
+		names = append(names, unique[i].Name)
+	}
+	sort.Strings(names)
+	const maxNames = 10
+	if len(names) > maxNames {
+		return fmt.Sprintf("pass --project with one of %s … (%d more)",
+			strings.Join(names[:maxNames], ", "), len(names)-maxNames)
+	}
+	return "pass --project with one of " + strings.Join(names, ", ")
 }
 
 // SearchLocal runs a query against each resolved local target.
