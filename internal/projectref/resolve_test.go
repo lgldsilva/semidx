@@ -343,3 +343,28 @@ func TestResolveInListGitRepoPath(t *testing.T) {
 		t.Fatalf("ResolveInList(git path) = %+v, %v", p, err)
 	}
 }
+
+// A project with no indexed path must never match a reference just because the
+// command happens to run from some directory: filepath.Abs("") returns the
+// current working directory, which used to make every path-less project
+// compare equal to the cwd, so the first one in the list won every lookup.
+func TestResolveInListIgnoresProjectsWithEmptyPath(t *testing.T) {
+	projects := []store.Project{
+		{ID: 1, Name: "ai-launcher", Identity: "ai-launcher"},
+		{ID: 2, Name: "semidx", Identity: "semidx"},
+	}
+	if _, err := ResolveInList(context.Background(), ".", "", projects); err == nil {
+		t.Fatal("ResolveInList(.) resolved a path-less project; want ErrNotFound")
+	}
+}
+
+func TestEquivalentPathFormsRejectsBlank(t *testing.T) {
+	for _, in := range []string{"", "   ", "\t"} {
+		if got := equivalentPathForms(in); got != nil {
+			t.Errorf("equivalentPathForms(%q) = %v, want nil", in, got)
+		}
+		if _, ok := canonicalPath(in); ok {
+			t.Errorf("canonicalPath(%q) reported a usable path", in)
+		}
+	}
+}

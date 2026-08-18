@@ -142,7 +142,10 @@ func TestResolveRemoteProjectBranches(t *testing.T) {
 		{name: "by_name_insensitive", ref: "Docs", want: "docs"},
 		{name: "by_path", ref: dir, want: "docs"},
 		{name: "by_identity", ref: "git:example/svc", want: "svc"},
-		{name: "empty_ref", ref: "", wantErr: "required"},
+		// An empty ref resolves from the working directory; this test runs
+		// outside any indexed project, so it reports that rather than
+		// demanding --project.
+		{name: "empty_ref", ref: "", wantErr: "could not tell which project"},
 		{name: "not_found", ref: "ghost", wantErr: "project not found"},
 	}
 	for _, tc := range tests {
@@ -158,6 +161,44 @@ func TestResolveRemoteProjectBranches(t *testing.T) {
 				t.Fatalf("ResolveRemoteProject = %+v, %v", p, err)
 			}
 		})
+	}
+}
+
+// An omitted --project must resolve to the project whose indexed path encloses
+// the working directory, so an agent's first remote call does not have to name
+// a project it has no way to know yet.
+func TestResolveRemoteProjectResolvesFromCwd(t *testing.T) {
+	dir := t.TempDir()
+	abs, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lister := &fakeLister{projects: []client.Project{
+		{Name: "docs", Identity: "path:" + abs, Path: abs},
+	}}
+	t.Chdir(abs)
+
+	p, err := ResolveRemoteProject(context.Background(), lister, "")
+	if err != nil || p == nil || p.Name != "docs" {
+		t.Fatalf("ResolveRemoteProject(\"\") = %+v, %v; want docs", p, err)
+	}
+}
+
+// A failed resolution must name the projects the caller may pass instead of
+// only reporting that the lookup failed.
+func TestResolveRemoteProjectErrorListsCandidates(t *testing.T) {
+	lister := &fakeLister{projects: []client.Project{
+		{Name: "alpha", Identity: "git:example/alpha"},
+		{Name: "beta", Identity: "git:example/beta"},
+	}}
+	_, err := ResolveRemoteProject(context.Background(), lister, "ghost")
+	if err == nil {
+		t.Fatal("want error for unknown project")
+	}
+	for _, want := range []string{"alpha", "beta"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention candidate %q", err, want)
+		}
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/lgldsilva/semidx/internal/embed"
@@ -93,22 +95,111 @@ func FromClientProjects(projects []client.Project) []store.Project {
 }
 
 // ResolveRemoteProject resolves a user ref against the server's project list.
+// An empty ref resolves the project enclosing the current directory, matching
+// what local mode already does (and what the --project help text promises),
+// so the first call an agent makes does not have to name a project.
 func ResolveRemoteProject(ctx context.Context, lister ProjectLister, ref string) (*store.Project, error) {
-	if ref == "" {
-		return nil, fmt.Errorf("--project is required in remote mode")
-	}
 	projects, err := lister.ListProjects(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
-	p, err := projectref.ResolveInList(ctx, ref, "", FromClientProjects(projects))
+	stored := FromClientProjects(projects)
+	cwd, cwdErr := osGetwd()
+	if cwdErr != nil {
+		cwd = ""
+	}
+	if ref == "" || ref == "." {
+		// "." is the default of --project on some commands and means "here",
+		// so it takes the same cwd resolution as an omitted flag.
+		if p, err := resolveRemoteFromCwd(ctx, cwd, stored); err == nil {
+			return p, nil
+		} else if ref == "" {
+			return nil, err
+		}
+	}
+	p, err := projectref.ResolveInList(ctx, ref, cwd, stored)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, fmt.Errorf("project not found: %s (index it, or pass a path/name that exists)", ref)
+			return nil, fmt.Errorf("project not found: %s (%s)", ref, remoteProjectHint(stored))
 		}
 		return nil, fmt.Errorf("resolve remote project %q: %w", ref, err)
 	}
 	return p, nil
+}
+
+// resolveRemoteFromCwd mirrors the local cwd resolution, trying the strategies
+// in descending order of confidence: the git repo identity, the project whose
+// indexed path encloses the directory, then the checkout's directory name.
+func resolveRemoteFromCwd(ctx context.Context, cwd string, projects []store.Project) (*store.Project, error) {
+	if cwd == "" {
+		return nil, errUnknownCwdProject(projects)
+	}
+	gi := gitmeta.Resolve(ctx, cwd)
+	if p := lookupUnambiguous(ctx, gi.Identity, projects); p != nil {
+		return p, nil
+	}
+	if p := projectref.Enclosing(cwd, projects); p != nil {
+		return p, nil
+	}
+	// Last resort: the checkout's directory name. A repo indexed from a
+	// different remote than the one this clone uses (a mirror, or a host
+	// migration) has an identity that cannot match, yet is plainly the same
+	// project.
+	if p := lookupUnambiguous(ctx, checkoutName(cwd, gi), projects); p != nil {
+		return p, nil
+	}
+	return nil, errUnknownCwdProject(projects)
+}
+
+// lookupUnambiguous resolves a ref, treating "not found" and "ambiguous" alike:
+// neither is good enough to pick a project on the caller's behalf.
+func lookupUnambiguous(ctx context.Context, ref string, projects []store.Project) *store.Project {
+	if ref == "" {
+		return nil
+	}
+	p, err := projectref.ResolveInList(ctx, ref, "", projects)
+	if err != nil {
+		return nil
+	}
+	return p
+}
+
+// checkoutName is the directory name identifying the checkout: the repository
+// root when in git, else the directory itself. Empty when it names no project.
+func checkoutName(cwd string, gi gitmeta.Info) string {
+	root := cwd
+	if gi.Toplevel != "" {
+		root = gi.Toplevel
+	}
+	base := filepath.Base(root)
+	if base == "." || base == string(filepath.Separator) {
+		return ""
+	}
+	return base
+}
+
+func errUnknownCwdProject(projects []store.Project) error {
+	return fmt.Errorf("could not tell which project this directory belongs to (%s)", remoteProjectHint(projects))
+}
+
+// remoteProjectHint names the indexed projects so a failed resolution tells the
+// caller what it may pass instead of only what went wrong.
+func remoteProjectHint(projects []store.Project) string {
+	unique := projectref.UniqueByIdentity(projects)
+	if len(unique) == 0 {
+		return "no projects are indexed on the server — run 'semidx push --project .'"
+	}
+	names := make([]string, 0, len(unique))
+	for i := range unique {
+		names = append(names, unique[i].Name)
+	}
+	sort.Strings(names)
+	const maxNames = 10
+	if len(names) > maxNames {
+		return fmt.Sprintf("pass --project with one of %s … (%d more)",
+			strings.Join(names[:maxNames], ", "), len(names)-maxNames)
+	}
+	return "pass --project with one of " + strings.Join(names, ", ")
 }
 
 // SearchLocal runs a query against each resolved local target.

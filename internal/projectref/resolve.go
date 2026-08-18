@@ -174,6 +174,12 @@ func Enclosing(cwd string, projects []store.Project) *store.Project {
 // preserves identities already stored with aliases such as /tmp while allowing
 // lookups from their canonical form such as /private/tmp.
 func equivalentPathForms(path string) []string {
+	// filepath.Abs("") returns the current working directory, which would make
+	// a project with no indexed path compare equal to whatever directory the
+	// command runs from. Reject blank input so an empty path never matches.
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil

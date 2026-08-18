@@ -93,7 +93,14 @@ func (ce *ChainEmbedder) tryEach(ctx context.Context, onEmpty string, fn func(co
 		}
 		timeout := 30 * time.Second
 		if p.Local {
-			timeout = 5 * time.Second
+			// A local provider is not necessarily a fast one: Ollama pays a
+			// model load on the first call after the model is evicted, which
+			// is far longer than a warm embed. Capping local calls at a few
+			// seconds silently defeated the generous ceiling embedTimeout()
+			// already resolves for the same reason, so every cold query fell
+			// back to keyword. A provider that is actually down refuses the
+			// connection and still fails fast.
+			timeout = embedTimeout()
 		}
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		err := fn(callCtx, p.Embedder)

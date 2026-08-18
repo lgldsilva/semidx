@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,10 +20,14 @@ func init() {
 		for _, ext := range []string{".doc", ".xls", ".ppt"} {
 			_ = Register(ext, extractLegacyOffice)
 		}
-	} else {
-		log.Printf("extract: libreoffice not found in $PATH — .doc/.xls/.ppt support disabled")
 	}
 }
+
+// LegacyOfficeAvailable reports whether libreoffice was found, so a diagnostic
+// command can surface the missing capability. Package init stays silent: it
+// runs for every command, and a line on stderr before any output reads like a
+// failure to an agent parsing the result.
+func LegacyOfficeAvailable() bool { return libreOfficeAvailable }
 
 // extractLegacyOffice converts a legacy Microsoft Office document (.doc/.xls/.ppt)
 // to plain text by spawning libreoffice --headless --convert-to txt. The

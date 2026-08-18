@@ -37,6 +37,33 @@ func embedTimeout() time.Duration {
 	return defaultEmbedTimeout
 }
 
+// defaultKeepAlive asks Ollama to hold the embedding model in memory between
+// queries. Ollama evicts a model after ~5 idle minutes, and reloading it costs
+// far more than the embed itself, so an idle index answered every first query
+// from the keyword fallback. Embedding models are small next to chat models,
+// which makes keeping one resident cheap. Override with
+// SEMIDX_OLLAMA_KEEP_ALIVE ("-1" pins it forever, "0" restores Ollama's default).
+const defaultKeepAlive = "30m"
+
+// keepAlive resolves the keep_alive sent with each embedding request. Ollama
+// accepts either a duration string ("30m") or a number of seconds, where a
+// negative number means "never unload" — it rejects a bare "-1" sent as a
+// string with `missing unit in duration`, so a numeric setting is emitted as a
+// JSON number. A nil result is omitted and leaves Ollama's own default.
+func keepAlive() any {
+	v := strings.TrimSpace(os.Getenv("SEMIDX_OLLAMA_KEEP_ALIVE"))
+	if v == "" {
+		return defaultKeepAlive
+	}
+	if v == "0" {
+		return nil
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return n
+	}
+	return v
+}
+
 // OllamaClient talks to a local Ollama server's native embedding API.
 type OllamaClient struct {
 	baseURL string
@@ -52,8 +79,9 @@ type modelInfoResponse struct {
 }
 
 type embedRequest struct {
-	Model string   `json:"model"`
-	Input []string `json:"input"`
+	Model     string   `json:"model"`
+	Input     []string `json:"input"`
+	KeepAlive any      `json:"keep_alive,omitempty"`
 }
 
 type embedResponse struct {
@@ -142,7 +170,7 @@ func (c *OllamaClient) Embed(ctx context.Context, model string, inputs ...string
 		return nil, fmt.Errorf("no inputs provided")
 	}
 
-	payload := embedRequest{Model: model, Input: inputs}
+	payload := embedRequest{Model: model, Input: inputs, KeepAlive: keepAlive()}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err

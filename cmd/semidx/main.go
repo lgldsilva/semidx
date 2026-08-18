@@ -255,6 +255,7 @@ func registerCommandGroups(root *cobra.Command, d *deps) {
 		newSgrepCmd(d),
 		newUnlockCmd(d),
 		newStatusCmd(d),
+		newProjectsCmd(d),
 		newDependenciesCmd(d),
 		newGraphCmd(d),
 		newPrivacyCmd(d),

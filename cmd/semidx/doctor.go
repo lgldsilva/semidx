@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/lgldsilva/semidx/internal/extract"
 	"github.com/lgldsilva/semidx/internal/mcpinstall"
 	"github.com/lgldsilva/semidx/internal/skills"
 )
@@ -32,6 +33,12 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 	fmt.Fprintf(&b, "# semidx doctor\n\n")
 	fmt.Fprintf(&b, "## Binary\n\n- path: `%s`\n\n", bin)
 	reportBackend(&b, d)
+	fmt.Fprintf(&b, "## Extractors\n\n")
+	if extract.LegacyOfficeAvailable() {
+		fmt.Fprintf(&b, "- legacy Office (.doc/.xls/.ppt): available\n\n")
+	} else {
+		fmt.Fprintf(&b, "- legacy Office (.doc/.xls/.ppt): disabled (libreoffice not in $PATH)\n\n")
+	}
 	fmt.Fprintf(&b, "## Ollama / GPU\n\n")
 	printOllamaRuntime(&b, d)
 	b.WriteByte('\n')
