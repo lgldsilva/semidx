@@ -127,34 +127,59 @@ func ResolveRemoteProject(ctx context.Context, lister ProjectLister, ref string)
 	return p, nil
 }
 
-// resolveRemoteFromCwd mirrors the local cwd resolution: prefer the git repo
-// identity, then the project whose indexed path encloses the directory.
+// resolveRemoteFromCwd mirrors the local cwd resolution, trying the strategies
+// in descending order of confidence: the git repo identity, the project whose
+// indexed path encloses the directory, then the checkout's directory name.
 func resolveRemoteFromCwd(ctx context.Context, cwd string, projects []store.Project) (*store.Project, error) {
-	if cwd != "" {
-		root := cwd
-		if gi := gitmeta.Resolve(ctx, cwd); gi.IsGit {
-			if p, err := projectref.ResolveInList(ctx, gi.Identity, "", projects); err == nil && p != nil {
-				return p, nil
-			}
-			if gi.Toplevel != "" {
-				root = gi.Toplevel
-			}
-		}
-		if p := projectref.Enclosing(cwd, projects); p != nil {
-			return p, nil
-		}
-		// Last resort: the checkout's directory name. A repo indexed from a
-		// different remote than the one this clone uses (a mirror, or a host
-		// migration) has an identity that cannot match, yet is plainly the same
-		// project. Only an unambiguous name match counts — ResolveInList
-		// reports an error when several projects share the name.
-		if base := filepath.Base(root); base != "" && base != "." && base != string(filepath.Separator) {
-			if p, err := projectref.ResolveInList(ctx, base, "", projects); err == nil && p != nil {
-				return p, nil
-			}
-		}
+	if cwd == "" {
+		return nil, errUnknownCwdProject(projects)
 	}
-	return nil, fmt.Errorf("could not tell which project this directory belongs to (%s)", remoteProjectHint(projects))
+	gi := gitmeta.Resolve(ctx, cwd)
+	if p := lookupUnambiguous(ctx, gi.Identity, projects); p != nil {
+		return p, nil
+	}
+	if p := projectref.Enclosing(cwd, projects); p != nil {
+		return p, nil
+	}
+	// Last resort: the checkout's directory name. A repo indexed from a
+	// different remote than the one this clone uses (a mirror, or a host
+	// migration) has an identity that cannot match, yet is plainly the same
+	// project.
+	if p := lookupUnambiguous(ctx, checkoutName(cwd, gi), projects); p != nil {
+		return p, nil
+	}
+	return nil, errUnknownCwdProject(projects)
+}
+
+// lookupUnambiguous resolves a ref, treating "not found" and "ambiguous" alike:
+// neither is good enough to pick a project on the caller's behalf.
+func lookupUnambiguous(ctx context.Context, ref string, projects []store.Project) *store.Project {
+	if ref == "" {
+		return nil
+	}
+	p, err := projectref.ResolveInList(ctx, ref, "", projects)
+	if err != nil {
+		return nil
+	}
+	return p
+}
+
+// checkoutName is the directory name identifying the checkout: the repository
+// root when in git, else the directory itself. Empty when it names no project.
+func checkoutName(cwd string, gi gitmeta.Info) string {
+	root := cwd
+	if gi.Toplevel != "" {
+		root = gi.Toplevel
+	}
+	base := filepath.Base(root)
+	if base == "." || base == string(filepath.Separator) {
+		return ""
+	}
+	return base
+}
+
+func errUnknownCwdProject(projects []store.Project) error {
+	return fmt.Errorf("could not tell which project this directory belongs to (%s)", remoteProjectHint(projects))
 }
 
 // remoteProjectHint names the indexed projects so a failed resolution tells the
