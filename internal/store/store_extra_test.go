@@ -688,6 +688,43 @@ func TestUpdateJobProgressAndComplete(t *testing.T) {
 	}
 }
 
+func TestRequeueStaleJobs(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	p, err := s.CreateProject(ctx, "requeue-stale", "bge-m3", "push", "", "", 0)
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	id, err := s.EnqueueJob(ctx, p.ID, "full")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+	claimed, err := s.ClaimJob(ctx)
+	if err != nil || claimed == nil || claimed.ID != id {
+		t.Fatalf("ClaimJob = %+v, err %v", claimed, err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE index_jobs SET started_at = NOW() - INTERVAL '2 hours' WHERE id = $1`, id); err != nil {
+		t.Fatalf("age running job: %v", err)
+	}
+
+	count, err := s.RequeueStaleJobs(ctx, time.Hour)
+	if err != nil || count != 1 {
+		t.Fatalf("RequeueStaleJobs = %d, err %v; want 1", count, err)
+	}
+	job, err := s.GetJob(ctx, id)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.Status != "queued" {
+		t.Fatalf("requeued job status = %q, want queued", job.Status)
+	}
+
+	if count, err := s.RequeueStaleJobs(ctx, time.Hour); err != nil || count != 0 {
+		t.Fatalf("second RequeueStaleJobs = %d, err %v; want 0", count, err)
+	}
+}
+
 // TestListRecentJobs covers pagination, multi-project listing, and limit
 // clamping in ListRecentJobs.
 func TestListRecentJobs(t *testing.T) {

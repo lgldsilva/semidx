@@ -31,4 +31,10 @@ func TestValidateBatchBody(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("valid: %v", err)
 	}
+	if err := validateBatchBody(&batchRequestBody{
+		Files:  []batchFileInput{{Path: "same.go", Content: "x"}},
+		Delete: []string{"same.go"},
+	}); err == nil || !strings.Contains(err.Error(), "duplicate batch path") {
+		t.Fatalf("duplicate file/delete path: %v", err)
+	}
 }

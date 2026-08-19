@@ -145,7 +145,8 @@ func TestIndexGitHistoryVerbose(t *testing.T) {
 
 // TestIndexProjectGitHistoryErrorNonRepo covers the IndexProject branch where
 // indexGitHistory fails (the path is not a git repository): it must count an
-// error but still finish and mark the project ready.
+// error, finish, and mark the project degraded so callers cannot mistake the
+// partial result for a clean index.
 func TestIndexProjectGitHistoryErrorNonRepo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -163,8 +164,8 @@ func TestIndexProjectGitHistoryErrorNonRepo(t *testing.T) {
 	if stats.Errors == 0 {
 		t.Error("expected a git-history error to be counted")
 	}
-	if fs.status != "ready" {
-		t.Errorf("status = %q, want ready despite git error", fs.status)
+	if fs.status != "degraded" {
+		t.Errorf("status = %q, want degraded after git error", fs.status)
 	}
 }
 

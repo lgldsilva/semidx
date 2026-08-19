@@ -71,6 +71,36 @@ func TestHandleFilesBatchEmptyFile(t *testing.T) {
 	}
 }
 
+func TestHandleFilesBatchExplicitEmptyFileDeletesContent(t *testing.T) {
+	t.Parallel()
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	srv := New(&fakeStore{
+		token:   writeTok,
+		project: &store.Project{ID: 1, Name: "p", Model: "bge-m3", SourceType: "push"},
+	}, fakeEmbedder{}, nil)
+
+	body := `{"files":[{"path":"empty.go","content":""}],"delete":[]}`
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch?sync=true", "tok", body)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"errors":0`) {
+		t.Fatalf("explicit empty file = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleFilesBatchWhitespaceFileDeletesContent(t *testing.T) {
+	t.Parallel()
+	writeTok := &store.Token{Scopes: []string{"write"}}
+	srv := New(&fakeStore{
+		token:   writeTok,
+		project: &store.Project{ID: 1, Name: "p", Model: "bge-m3", SourceType: "push"},
+	}, fakeEmbedder{}, nil)
+
+	body := "{\"files\":[{\"path\":\"blank.go\",\"content\":\" \\n\\t\"}],\"delete\":[]}"
+	rec := do(t, srv, "POST", "/api/v1/projects/p/files/batch?sync=true", "tok", body)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"errors":0`) {
+		t.Fatalf("whitespace file = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleFilesDiff(t *testing.T) {
 	t.Parallel()
 	writeTok := &store.Token{Scopes: []string{"write"}}

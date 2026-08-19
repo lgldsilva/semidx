@@ -3,11 +3,29 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/lgldsilva/semidx/internal/tenant"
 )
+
+// RequeueStaleJobs returns jobs abandoned by a worker process to the queue. It
+// is called on process startup, after workers from the previous process are
+// gone, so a restart does not leave jobs permanently stuck in running state.
+func (s *PgStore) RequeueStaleJobs(ctx context.Context, maxAge time.Duration) (int64, error) {
+	if maxAge <= 0 {
+		maxAge = 30 * time.Minute
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE index_jobs
+		SET status = 'queued', started_at = NULL, finished_at = NULL, error = NULL
+		WHERE status = 'running' AND started_at IS NOT NULL
+		  AND started_at < NOW() - ($1 * INTERVAL '1 second')`, maxAge.Seconds())
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
 
 // Job is a durable indexing job.
 type Job struct {

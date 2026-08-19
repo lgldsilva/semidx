@@ -638,6 +638,15 @@ func TestCreateUserTokenLinksOwner(t *testing.T) {
 	if err != nil || tok == nil || tok.Name != "laptop" {
 		t.Errorf("TokenByHash = %+v, err %v", tok, err)
 	}
+	if err := s.SetUserDisabled(ctx, u.ID, true); err != nil {
+		t.Fatalf("SetUserDisabled: %v", err)
+	}
+	if tok, err := s.TokenByHash(ctx, "tok-hash"); err != nil || tok != nil {
+		t.Errorf("TokenByHash(disabled user) = %+v, err %v; want nil", tok, err)
+	}
+	if err := s.SetUserDisabled(ctx, u.ID, false); err != nil {
+		t.Fatalf("SetUserDisabled(false): %v", err)
+	}
 
 	owned, err := s.ListUserTokens(ctx, u.ID, "opaque")
 	if err != nil || len(owned) != 1 || owned[0].Name != "laptop" || owned[0].CreatedAt.IsZero() {

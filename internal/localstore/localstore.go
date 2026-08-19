@@ -529,6 +529,7 @@ func (s *SQLiteStore) PruneUnreferencedFiles(ctx context.Context, projectID int)
 	res, err := s.db.ExecContext(ctx, `
 		DELETE FROM files
 		WHERE project_id = ?
+		  AND path NOT LIKE 'git:%'
 		  AND NOT EXISTS (
 		    SELECT 1 FROM worktree_files w
 		    WHERE w.project_id = files.project_id AND w.path = files.path AND w.hash = files.hash
@@ -730,7 +731,7 @@ func (s *SQLiteStore) ListFileHashes(ctx context.Context, projectID int) (map[st
 // ListFileHashesWithTime returns path→(hash, indexed_at) for every indexed file
 // of a project (used by search to flag stale previews).
 func (s *SQLiteStore) ListFileHashesWithTime(ctx context.Context, projectID int) (map[string]store.FileHashInfo, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT path, hash, indexed_at FROM files WHERE project_id = ?`, projectID)
+	rows, err := s.db.QueryContext(ctx, `SELECT path, hash, indexed_at FROM files WHERE project_id = ? ORDER BY path, indexed_at DESC, id DESC`, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -742,9 +743,19 @@ func (s *SQLiteStore) ListFileHashesWithTime(ctx context.Context, projectID int)
 		if err := rows.Scan(&path, &hash, &indexedAt); err != nil {
 			return nil, err
 		}
-		out[path] = store.FileHashInfo{Hash: hash, IndexedAt: parseSQLiteTime(indexedAt)}
+		if _, exists := out[path]; !exists {
+			out[path] = store.FileHashInfo{Hash: hash, IndexedAt: parseSQLiteTime(indexedAt)}
+		}
 	}
 	return out, rows.Err()
+}
+
+// PruneFileVersions removes older content-addressed versions of one canonical
+// push path after the new version has been fully indexed.
+func (s *SQLiteStore) PruneFileVersions(ctx context.Context, projectID int, path, keepHash string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM files
+		WHERE project_id = ? AND path = ? AND hash <> ?`, projectID, path, keepHash)
+	return err
 }
 
 // DeleteFileByPath removes a file and its chunks (cascade) by path.

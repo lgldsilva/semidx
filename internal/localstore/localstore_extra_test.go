@@ -36,6 +36,34 @@ func TestCountProjectFiles(t *testing.T) {
 	}
 }
 
+func TestPruneFileVersionsKeepsCurrentHash(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newTestStore(t)
+
+	projectID, _ := s.UpsertProject(ctx, "prune-versions", "/tmp/pv", "bge-m3", 0)
+	if _, err := s.UpsertFile(ctx, projectID, "main.go", "old-hash", 10); err != nil {
+		t.Fatalf("UpsertFile(old): %v", err)
+	}
+	if _, err := s.UpsertFile(ctx, projectID, "main.go", "new-hash", 20); err != nil {
+		t.Fatalf("UpsertFile(new): %v", err)
+	}
+
+	if err := s.PruneFileVersions(ctx, projectID, "main.go", "new-hash"); err != nil {
+		t.Fatalf("PruneFileVersions: %v", err)
+	}
+	hashes, err := s.ListFileHashes(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListFileHashes: %v", err)
+	}
+	if hashes["main.go"] != "new-hash" {
+		t.Fatalf("main.go hash = %q, want new-hash", hashes["main.go"])
+	}
+	if count, err := s.CountProjectFiles(ctx, projectID); err != nil || count != 1 {
+		t.Fatalf("remaining file count = %d, err %v; want 1", count, err)
+	}
+}
+
 // TestInsertFileDependenciesAndFetchGraph covers the dependency graph
 // round-trip: insert deps, fetch them, replace them, clear them.
 func TestInsertFileDependenciesAndFetchGraph(t *testing.T) {
