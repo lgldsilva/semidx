@@ -237,7 +237,7 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		return nil, err
 	}
 	stats.FilesScanned = len(files)
-	idx.recordDependencyCatalog(ctx, projectID, projectPath, files)
+	idx.recordDependencyCatalog(ctx, projectID, projectPath)
 
 	var (
 		mu        sync.Mutex
@@ -291,9 +291,17 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 // best-effort because a malformed optional manifest must not make source code
 // unavailable; the normalized catalog is replaced so deleted manifests do not
 // leave stale cross-project matches behind.
-func (idx *Indexer) recordDependencyCatalog(ctx context.Context, projectID int, projectPath string, files []string) {
+func (idx *Indexer) recordDependencyCatalog(ctx context.Context, projectID int, projectPath string) {
 	depStore, ok := idx.db.(store.DependencyStore)
 	if !ok {
+		return
+	}
+	// The file list is incremental for Git projects, but the catalog is a
+	// project-wide snapshot. Re-scan the tree so changing one source file does
+	// not erase declarations from manifests that were not part of the diff.
+	files, err := ScanFiles(projectPath, 0)
+	if err != nil {
+		idx.log.Warn("dependency manifest scan failed", "err", err)
 		return
 	}
 	var manifests = make(map[string][]byte)
@@ -342,6 +350,12 @@ func (idx *Indexer) resolveIndexFiles(ctx context.Context, projectID int, projec
 		idx.logf("[warn] git diff incremental failed, falling back to full walk: %s", truncateErr(diffErr, 200))
 	}
 	if len(changedFiles) > 0 {
+		// A worktree manifest is a complete snapshot. A diff-only pass would
+		// replace it with just the changed paths and prune every unchanged file.
+		// Scan all paths here; FileUpToDate still makes unchanged files cheap.
+		if idx.worktree != "" {
+			return ScanFiles(projectPath, effectiveMaxFiles(maxFiles, idx.maxFilesPerProject))
+		}
 		files := make([]string, 0, len(changedFiles))
 		for _, rel := range changedFiles {
 			files = append(files, filepath.Join(projectPath, rel))
@@ -407,7 +421,11 @@ func (idx *Indexer) finalizeProject(ctx context.Context, projectID int, projectP
 		}
 	}
 
-	if err := idx.db.UpdateProjectStatus(ctx, projectID, "ready"); err != nil {
+	status := "ready"
+	if stats.Errors > 0 {
+		status = "degraded"
+	}
+	if err := idx.db.UpdateProjectStatus(ctx, projectID, status); err != nil {
 		idx.log.Warn("update project status", "project", projectID, "err", err)
 	}
 }

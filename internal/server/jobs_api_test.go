@@ -44,12 +44,14 @@ func TestWriteJobForProjectFailedJob(t *testing.T) {
 	readTok := &store.Token{Scopes: []string{"read"}}
 	fs := &fakeStore{
 		token:    readTok,
-		job:      &store.Job{ID: 6, ProjectID: 1, Status: "failed", Type: "full", Error: "boom"},
+		job:      &store.Job{ID: 6, ProjectID: 1, Status: "failed", Type: "full", Error: "boom", ProgressDone: 2, ProgressTotal: 5},
 		projByID: &store.Project{ID: 1, Name: "p"},
 	}
 	srv := New(fs, fakeEmbedder{}, nil)
 	rec := do(t, srv, "GET", "/api/v1/jobs/6?project=p", "tok", "")
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"error":"index job failed"`) {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"error":"index job failed"`) ||
+		!strings.Contains(rec.Body.String(), `"progress_done":2`) ||
+		!strings.Contains(rec.Body.String(), `"progress_total":5`) {
 		t.Fatalf("failed job = %d body=%s", rec.Code, rec.Body.String())
 	}
 }

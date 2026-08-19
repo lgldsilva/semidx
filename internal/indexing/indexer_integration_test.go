@@ -181,3 +181,42 @@ func TestPipelineIncrementalIdempotent(t *testing.T) {
 		t.Fatalf("post-idempotency search = %d results, err %v; want 2", len(res), err)
 	}
 }
+
+func TestWorktreeIncrementalPreservesUnchangedFiles(t *testing.T) {
+	ctx := context.Background()
+	src := initRepo(t)
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	st, err := localstore.New(dbPath)
+	if err != nil {
+		t.Fatalf("localstore.New: %v", err)
+	}
+	t.Cleanup(st.Close)
+
+	pid, err := st.UpsertProject(ctx, "proj", src, "m", 0)
+	if err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+	emb := &semanticEmbedder{}
+	idx := NewIndexer(st, emb, 3, IndexerOpts{Workers: 2, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+	idx.SetWorktree(src)
+
+	if _, err := idx.IndexProject(ctx, pid, src, "m", 0); err != nil {
+		t.Fatalf("first IndexProject: %v", err)
+	}
+
+	writeFile(t, src, "main.go", "package main\nfunc main() { println(2) }\n")
+	runGit(t, src, "add", "main.go")
+	runGit(t, src, "commit", "-m", "change main")
+
+	if _, err := idx.IndexProject(ctx, pid, src, "m", 0); err != nil {
+		t.Fatalf("second IndexProject: %v", err)
+	}
+
+	count, err := st.CountProjectFiles(ctx, pid)
+	if err != nil {
+		t.Fatalf("CountProjectFiles: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("project file count = %d, want 2 after incremental worktree indexing", count)
+	}
+}

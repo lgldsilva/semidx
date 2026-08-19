@@ -23,8 +23,12 @@ func (f *fakeStore) CreateToken(_ context.Context, name, hash string, scopes []s
 	f.lastTokScopes = scopes
 	return 1, f.createTokErr
 }
-func (f *fakeStore) UpdateProjectStatus(context.Context, int, string) error            { return nil }
-func (f *fakeStore) DeleteFileByPath(context.Context, int, string) error               { return nil }
+func (f *fakeStore) UpdateProjectStatus(context.Context, int, string) error { return nil }
+func (f *fakeStore) DeleteFileByPath(context.Context, int, string) error    { return nil }
+func (f *fakeStore) SetWorktreeFiles(context.Context, int, string, map[string]string) error {
+	return nil
+}
+func (f *fakeStore) PruneUnreferencedFiles(context.Context, int) (int64, error)        { return 0, nil }
 func (f *fakeStore) UpsertFile(context.Context, int, string, string, int) (int, error) { return 1, nil }
 func (f *fakeStore) FileUpToDate(context.Context, int, string, string, int) (bool, error) {
 	return f.upToDate, nil

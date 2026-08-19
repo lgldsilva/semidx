@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/embed"
@@ -53,9 +54,43 @@ func validatePreEmbeddedChunks(path string, fileChunks []embeddedChunk, dims int
 // batchFileInput is one file in a files/batch push: pre-embedded chunks, raw
 // content, or (invalid) neither.
 type batchFileInput struct {
-	Path    string          `json:"path"`
-	Content string          `json:"content,omitempty"`
-	Chunks  []embeddedChunk `json:"chunks,omitempty"`
+	Path           string          `json:"path"`
+	Content        string          `json:"content,omitempty"`
+	Chunks         []embeddedChunk `json:"chunks,omitempty"`
+	contentPresent bool            `json:"-"`
+}
+
+// UnmarshalJSON preserves whether content was explicitly sent. An omitted
+// content field remains invalid, while an explicit empty string represents a
+// real empty file and must remove any previously indexed content.
+func (f *batchFileInput) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Path    string          `json:"path"`
+		Content *string         `json:"content"`
+		Chunks  []embeddedChunk `json:"chunks"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	f.Path, f.Chunks = wire.Path, wire.Chunks
+	f.Content = ""
+	f.contentPresent = wire.Content != nil
+	if wire.Content != nil {
+		f.Content = *wire.Content
+	}
+	return nil
+}
+
+func (f batchFileInput) MarshalJSON() ([]byte, error) {
+	var content *string
+	if f.contentPresent || f.Content != "" {
+		content = &f.Content
+	}
+	return json.Marshal(struct {
+		Path    string          `json:"path"`
+		Content *string         `json:"content,omitempty"`
+		Chunks  []embeddedChunk `json:"chunks,omitempty"`
+	}{Path: f.Path, Content: content, Chunks: f.Chunks})
 }
 
 // errNoContentOrChunks marks a pushed file that carried neither raw content nor
@@ -183,15 +218,24 @@ func (s *Server) handleFilesBatchSync(w http.ResponseWriter, r *http.Request, pr
 }
 
 func validateBatchBody(body *batchRequestBody) error {
+	seen := make(map[string]string, len(body.Files)+len(body.Delete))
 	for _, f := range body.Files {
 		if err := validateRelativePath(f.Path); err != nil {
 			return fmt.Errorf("invalid path %s: %w", f.Path, err)
 		}
+		if previous, exists := seen[f.Path]; exists {
+			return fmt.Errorf("duplicate batch path %s in %s and files", f.Path, previous)
+		}
+		seen[f.Path] = "files"
 	}
 	for _, p := range body.Delete {
 		if err := validateRelativePath(p); err != nil {
 			return fmt.Errorf("invalid delete path %s: %w", p, err)
 		}
+		if previous, exists := seen[p]; exists {
+			return fmt.Errorf("duplicate batch path %s in %s and delete", p, previous)
+		}
+		seen[p] = "delete"
 	}
 	return nil
 }
@@ -200,17 +244,23 @@ func validateBatchBody(body *batchRequestBody) error {
 // same core logic between the synchronous API path and the background batch
 // worker. Expects the chunks table and model info to already be set up.
 func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, files []batchFileInput, del []string, dims int) (indexed, chunks, deleted, errors int) {
-	deleted = len(del)
 	for _, p := range del {
 		if err := s.store.DeleteFileByPath(ctx, proj.ID, p); err != nil {
 			s.log.Error("delete file", "project", proj.Name, "path", p, "err", err)
+			errors++
+			continue
 		}
+		deleted++
 	}
 
 	opts := s.indexerOpts()
 	privacyMode, err := privacy.NormalizeMode(proj.PrivacyMode)
 	if err != nil {
-		return 0, 0, deleted, 1
+		errors++
+		if statusErr := s.store.UpdateProjectStatus(ctx, proj.ID, "degraded"); statusErr != nil {
+			s.log.Warn("update project status", "project", proj.ID, "err", statusErr)
+		}
+		return 0, 0, deleted, errors
 	}
 	opts.PrivacyMode = privacyMode
 	idx := indexing.NewIndexer(s.store, s.emb, dims, opts)
@@ -224,7 +274,11 @@ func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, fil
 		indexed++
 		chunks += created
 	}
-	if err := s.store.UpdateProjectStatus(ctx, proj.ID, "ready"); err != nil {
+	status := "ready"
+	if errors > 0 {
+		status = "degraded"
+	}
+	if err := s.store.UpdateProjectStatus(ctx, proj.ID, status); err != nil {
 		s.log.Warn("update project status", "project", proj.ID, "err", err)
 	}
 	return
@@ -239,9 +293,27 @@ func (s *Server) indexBatchFile(ctx context.Context, proj *store.Project, idx *i
 	case len(f.Chunks) > 0:
 		// Pre-embedded: the client already chunked and embedded.
 		return s.indexPreEmbedded(ctx, proj, f.Path, f.Content, f.Chunks, dims)
-	case f.Content != "":
+	case f.Content != "" && strings.TrimSpace(f.Content) != "":
 		// Raw content: server handles chunking and embedding.
-		return idx.IndexContent(ctx, proj.ID, f.Path, proj.Model, []byte(f.Content))
+		created, err := idx.IndexContent(ctx, proj.ID, f.Path, proj.Model, []byte(f.Content))
+		if err != nil {
+			return 0, err
+		}
+		if created > 0 && proj.SourceType == "push" {
+			if pruner, ok := s.store.(store.FileVersionPruner); ok {
+				if err := pruner.PruneFileVersions(ctx, proj.ID, f.Path, indexing.ContentHash([]byte(f.Content))); err != nil {
+					return 0, fmt.Errorf("prune old file versions: %w", err)
+				}
+			}
+		}
+		return created, nil
+	case f.contentPresent:
+		// Explicit empty content is a valid update. Empty files are not
+		// searchable, so remove their previous indexed representation.
+		if err := s.store.DeleteFileByPath(ctx, proj.ID, f.Path); err != nil {
+			return 0, fmt.Errorf("remove empty file: %w", err)
+		}
+		return 0, nil
 	default:
 		return 0, errNoContentOrChunks
 	}
@@ -302,6 +374,13 @@ func (s *Server) indexPreEmbedded(ctx context.Context, proj *store.Project, path
 	}
 	if err := s.store.InsertEmbeddingCache(ctx, hashes, proj.Model, embeddings, dims); err != nil {
 		s.log.Warn("cache insert pre-embedded chunks", "project", proj.Name, "path", path, "err", err)
+	}
+	if proj.SourceType == "push" {
+		if pruner, ok := s.store.(store.FileVersionPruner); ok {
+			if err := pruner.PruneFileVersions(ctx, proj.ID, path, contentHash); err != nil {
+				return 0, fmt.Errorf("prune old file versions: %w", err)
+			}
+		}
 	}
 
 	return len(fileChunks), nil

@@ -20,6 +20,8 @@ import (
 
 const errJobNotFound = "job not found"
 
+const staleJobAge = 30 * time.Minute
+
 // StartWorkers launches n background workers that drain queued index jobs until
 // ctx is cancelled. Git projects are cloned/pulled into dataDir first.
 //
@@ -36,6 +38,16 @@ func (s *Server) StartWorkers(ctx context.Context, n int, dataDir string) {
 	// bundles) left behind by syncs that died before their deferred cleanup ran.
 	if err := gitsync.SweepTempKeys(dataDir); err != nil {
 		s.log.Warn("sweep leftover git credential temp files", "err", err)
+	}
+	if r, ok := s.store.(interface {
+		RequeueStaleJobs(context.Context, time.Duration) (int64, error)
+	}); ok {
+		if count, err := r.RequeueStaleJobs(ctx, staleJobAge); err != nil {
+			s.log.Warn("requeue stale jobs failed", "err", err)
+		} else if count > 0 {
+			s.jobsQueued.Add(float64(count))
+			s.log.Warn("requeued stale jobs after worker restart", "count", count)
+		}
 	}
 	notifyCh := s.openJobNotify(ctx)
 	for i := 0; i < n; i++ {
@@ -133,6 +145,9 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 		if err := s.store.FailJob(ctx, job.ID, msg); err != nil {
 			s.log.Error("mark job failed", "job", job.ID, "err", err)
 		}
+		if err := s.store.UpdateProjectStatus(ctx, job.ProjectID, "error"); err != nil {
+			s.log.Warn("mark project error", "job", job.ID, "err", err)
+		}
 	}
 
 	proj, err := s.store.GetProjectByID(ctx, job.ProjectID)
@@ -147,7 +162,7 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 		return
 	}
 	if job.Type == "resolve_dependencies" {
-		s.runDependencyResolveJob(ctx, job, proj, dataDir)
+		s.runDependencyResolveJob(ctx, job, proj, dataDir, fail)
 		return
 	}
 
@@ -187,14 +202,17 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 	})
 	opts.PrivacyMode = privacyMode
 	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, opts)
+	if proj.SourceType == "git" && job.Type != "git_history" {
+		idx.SetWorktree(path)
+	}
 	stats, err := idx.IndexProject(ctx, job.ProjectID, path, proj.Model, s.indexLimits.MaxFilesPerProject)
 	if err != nil {
 		fail("index: " + err.Error())
 		return
 	}
-	if err := s.store.CompleteJob(ctx, job.ID, stats.FilesIndexed, stats.ChunksCreated, 0, 0); err != nil {
+	if err := s.store.CompleteJob(ctx, job.ID, stats.FilesIndexed, stats.ChunksCreated, 0, stats.Errors); err != nil {
 		s.log.Error("mark job complete", "job", job.ID, "err", err)
-		s.jobsTotal.WithLabelValues(job.Type, "failed").Inc()
+		fail("complete index job: " + err.Error())
 		return
 	}
 	s.jobsTotal.WithLabelValues(job.Type, "succeeded").Inc()
@@ -206,24 +224,24 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 // managed worker and refreshes the same catalog used by customer agents. The
 // job is deliberately separate from indexing because resolution may access a
 // package registry or mutate a package-manager workspace.
-func (s *Server) runDependencyResolveJob(ctx context.Context, job *store.Job, proj *store.Project, dataDir string) {
+func (s *Server) runDependencyResolveJob(ctx context.Context, job *store.Job, proj *store.Project, dataDir string, fail func(string)) {
 	depStore, ok := s.store.(store.DependencyStore)
 	if !ok {
-		_ = s.store.FailJob(ctx, job.ID, "dependency catalog unavailable")
+		fail("dependency catalog unavailable")
 		return
 	}
 	path, failMsg := s.resolveJobIndexPath(ctx, proj, dataDir)
 	if failMsg != "" {
-		_ = s.store.FailJob(ctx, job.ID, failMsg)
+		fail(failMsg)
 		return
 	}
 	if path == "" {
-		_ = s.store.FailJob(ctx, job.ID, "project has no local source path; use a customer agent")
+		fail("project has no local source path; use a customer agent")
 		return
 	}
 	resolved, err := depresolve.New().ResolveProject(ctx, path)
 	if err != nil {
-		_ = s.store.FailJob(ctx, job.ID, err.Error())
+		fail(err.Error())
 		return
 	}
 	deps := make([]store.Dependency, 0, len(resolved))
@@ -231,11 +249,12 @@ func (s *Server) runDependencyResolveJob(ctx context.Context, job *store.Job, pr
 		deps = append(deps, dependencyFromCatalog(dep))
 	}
 	if err := depStore.ReplaceProjectDependencies(ctx, proj.ID, deps); err != nil {
-		_ = s.store.FailJob(ctx, job.ID, "store dependencies: "+err.Error())
+		fail("store dependencies: " + err.Error())
 		return
 	}
 	if err := s.store.CompleteJob(ctx, job.ID, 0, 0, 0, 0); err != nil {
 		s.log.Error("mark dependency job complete", "job", job.ID, "err", err)
+		fail("complete dependency job: " + err.Error())
 		return
 	}
 	s.jobsTotal.WithLabelValues(job.Type, "succeeded").Inc()
@@ -273,16 +292,25 @@ func (s *Server) resolveJobIndexPath(ctx context.Context, proj *store.Project, d
 // result counts. On a fatal error (model unavailable, bad payload) it calls
 // FailJob instead.
 func (s *Server) runBatchJob(ctx context.Context, job *store.Job, proj *store.Project) {
+	fail := func(msg string) {
+		if err := s.store.FailJob(ctx, job.ID, msg); err != nil {
+			s.log.Error("mark batch job failed", "job", job.ID, "err", err)
+		}
+		if err := s.store.UpdateProjectStatus(ctx, job.ProjectID, "error"); err != nil {
+			s.log.Warn("mark project error", "job", job.ID, "err", err)
+		}
+		s.jobsTotal.WithLabelValues(job.Type, "failed").Inc()
+	}
 	var body batchRequestBody
 	if err := json.Unmarshal([]byte(job.Payload), &body); err != nil {
-		_ = s.store.FailJob(ctx, job.ID, "invalid batch payload: "+err.Error())
+		fail("invalid batch payload: " + err.Error())
 		return
 	}
 
 	modelCtx := ctx
 	privacyMode, modeErr := privacy.NormalizeMode(proj.PrivacyMode)
 	if modeErr != nil {
-		_ = s.store.FailJob(ctx, job.ID, "invalid project privacy policy")
+		fail("invalid project privacy policy")
 		return
 	}
 	if privacyMode == privacy.Edge {
@@ -290,18 +318,18 @@ func (s *Server) runBatchJob(ctx context.Context, job *store.Job, proj *store.Pr
 	}
 	info, err := s.emb.ModelInfo(modelCtx, proj.Model)
 	if err != nil {
-		_ = s.store.FailJob(ctx, job.ID, "model info: "+err.Error())
+		fail("model info: " + err.Error())
 		return
 	}
 	if err := s.store.EnsureChunksTable(ctx, info.Dims); err != nil {
-		_ = s.store.FailJob(ctx, job.ID, "ensure chunks table: "+err.Error())
+		fail("ensure chunks table: " + err.Error())
 		return
 	}
 
 	indexed, chunks, deleted, errors := s.processBatchFiles(ctx, proj, body.Files, body.Delete, info.Dims)
 	if err := s.store.CompleteJob(ctx, job.ID, indexed, chunks, deleted, errors); err != nil {
 		s.log.Error("mark job complete", "job", job.ID, "err", err)
-		s.jobsTotal.WithLabelValues(job.Type, "failed").Inc()
+		fail("complete batch job: " + err.Error())
 		return
 	}
 	s.jobsTotal.WithLabelValues(job.Type, "succeeded").Inc()
@@ -352,6 +380,8 @@ type jobView struct {
 	ChunksCreated int    `json:"chunks_created"`
 	DeletedFiles  int    `json:"deleted_files"`
 	ErrorCount    int    `json:"error_count"`
+	ProgressDone  int    `json:"progress_done,omitempty"`
+	ProgressTotal int    `json:"progress_total,omitempty"`
 }
 
 func jobViewFromStore(job *store.Job) jobView {
@@ -359,6 +389,7 @@ func jobViewFromStore(job *store.Job) jobView {
 		ID: job.ID, Type: job.Type, Status: job.Status,
 		FilesIndexed: job.FilesIndexed, ChunksCreated: job.ChunksCreated,
 		DeletedFiles: job.DeletedFiles, ErrorCount: job.ErrorCount,
+		ProgressDone: job.ProgressDone, ProgressTotal: job.ProgressTotal,
 	}
 	if job.Status == "failed" && job.Error != "" {
 		v.Error = "index job failed"

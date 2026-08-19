@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -338,13 +339,14 @@ func (p *pusher) pushAsyncSingle(ctx context.Context, batch []client.BatchFile, 
 // pushAsyncBatched splits the batch into multiple async calls. Each batch is a
 // separate job; deletions go in the first batch (so partial failure doesn't
 // re-index deleted files — the diff on next push will pick up remaining stale
-// files). All jobs are queued, then polled with per-job timeouts.
+// files). Each job is polled before the next one is queued.
 func (p *pusher) pushAsyncBatched(ctx context.Context, batch []client.BatchFile, deletions []string, start time.Time) error {
 	batches := splitBatch(batch, p.batchSize)
 	totalBatches := len(batches)
-	jobIDs := make([]int, totalBatches)
+	var totalIndexed, totalChunks, totalDeleted, totalErrors int
 
-	// Enqueue all batches.
+	// Process batches in order. Queuing all of them at once allows concurrent
+	// jobs for the same project to update the same path in nondeterministic order.
 	for i, b := range batches {
 		del := []string(nil)
 		if i == 0 {
@@ -353,26 +355,20 @@ func (p *pusher) pushAsyncBatched(ctx context.Context, batch []client.BatchFile,
 		fmt.Printf("Enqueuing batch %d/%d (%d files) ...\n", i+1, totalBatches, len(b))
 		jobID, err := p.cli.FilesBatchAsync(ctx, p.projectName, b, del)
 		if err != nil {
-			return fmt.Errorf("enqueue batch %d/%d: %w (note: %d earlier batch(es) may already be processing on the server)", i+1, totalBatches, err, i)
+			return fmt.Errorf("enqueue batch %d/%d: %w", i+1, totalBatches, err)
 		}
-		jobIDs[i] = jobID
-	}
-
-	// Poll all jobs with per-job timeouts (consistent with single-batch semantics).
-	fmt.Printf("All %d batch(es) queued — waiting for completion ...\n", totalBatches)
-	var totalIndexed, totalChunks, totalDeleted, totalErrors int
-	for i, jid := range jobIDs {
+		fmt.Printf("Job %d queued — waiting for batch %d/%d ...\n", jobID, i+1, totalBatches)
 		pollCtx, cancel := context.WithTimeout(ctx, asyncPollTimeout)
-		job, err := p.waitForJobWithProgress(pollCtx, jid)
+		job, err := p.waitForJobWithProgress(pollCtx, jobID)
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				return fmt.Errorf("timed out after %v waiting for batch %d/%d (job %d — still running on server; re-run push to check status)", asyncPollTimeout, i+1, totalBatches, jid)
+				return fmt.Errorf("timed out after %v waiting for batch %d/%d (job %d — still running on server; re-run push to check status)", asyncPollTimeout, i+1, totalBatches, jobID)
 			}
-			return fmt.Errorf("wait for batch %d/%d (job %d): %w", i+1, totalBatches, jid, err)
+			return fmt.Errorf("wait for batch %d/%d (job %d): %w", i+1, totalBatches, jobID, err)
 		}
 		if job.Status == client.JobStatusFailed {
-			return fmt.Errorf("batch %d/%d (job %d) failed: %s", i+1, totalBatches, jid, job.Error)
+			return fmt.Errorf("batch %d/%d (job %d) failed: %s", i+1, totalBatches, jobID, job.Error)
 		}
 		totalIndexed += job.FilesIndexed
 		totalChunks += job.ChunksCreated
@@ -569,7 +565,17 @@ func (p *pusher) embedded(ctx context.Context, files []string) error {
 		fmt.Fprintf(os.Stderr, "       falling back to raw push (server will embed).\n")
 		return p.raw(ctx, files)
 	}
-	fmt.Printf("Embedding locally with model %s (workers: %d, skipping diff)\n", p.model, p.workers)
+	// Compute the server diff even for local embedding so removed files are
+	// deleted and empty files are represented as explicit updates.
+	hashes, _, skippedBin := p.hashFiles(files)
+	if skippedBin > 0 {
+		fmt.Printf("Skipped %d binary files (JARs, images, etc.)\n", skippedBin)
+	}
+	diff, err := p.cli.FilesDiff(ctx, p.projectName, hashes)
+	if err != nil {
+		return fmt.Errorf("diff files: %w", err)
+	}
+	fmt.Printf("Embedding locally with model %s (workers: %d; stale: %d, deleted: %d)\n", p.model, p.workers, len(diff.Stale), len(diff.Deleted))
 
 	// 2. Read files, chunk, embed concurrently — same pattern as the indexer.
 	batch, stats := p.embedAll(ctx, files)
@@ -579,16 +585,16 @@ func (p *pusher) embedded(ctx context.Context, files []string) error {
 	if stats.embedFailed > 0 {
 		fmt.Printf("Embedding failed for %d files (%d fell back to raw push)\n", stats.embedFailed, stats.fallback)
 	}
-	if len(batch) == 0 {
+	if len(batch) == 0 && len(diff.Deleted) == 0 {
 		fmt.Println("No text files to push.")
 		return nil
 	}
 
-	// 3. Push all files (no diff — we embed everything to ensure embeddings are present).
+	// 3. Push all locally embedded files, together with server-side deletions.
 	if p.sync {
-		return p.pushSync(ctx, batch, nil, time.Now())
+		return p.pushSync(ctx, batch, diff.Deleted, time.Now())
 	}
-	return p.pushAsync(ctx, batch, nil, time.Now())
+	return p.pushAsync(ctx, batch, diff.Deleted, time.Now())
 }
 
 // embedAll runs the concurrent read/chunk/embed pipeline over files and returns
@@ -632,6 +638,9 @@ func (p *pusher) embedOneFile(ctx context.Context, path string) embedResult {
 			fmt.Fprintf(os.Stderr, "[warn] skipping binary: %s\n", rel)
 		}
 		return embedResult{skippedBin: true}
+	}
+	if strings.TrimSpace(content) == "" {
+		return embedResult{file: client.BatchFile{Path: rel, Content: content}, include: true}
 	}
 
 	chunks := chunker.ChunkFile(path, []byte(content), pushMaxChunkChars)

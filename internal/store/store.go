@@ -219,6 +219,13 @@ type IndexStore interface {
 	DropAll(ctx context.Context) error
 }
 
+// FileVersionPruner bounds a canonical push project's path history after a
+// newly indexed version has been stored. It is intentionally optional so the
+// indexing interfaces remain usable by lightweight test stores.
+type FileVersionPruner interface {
+	PruneFileVersions(ctx context.Context, projectID int, path, keepHash string) error
+}
+
 // ProjectStore groups project lifecycle operations.
 type ProjectStore interface {
 	UpsertProject(ctx context.Context, name, path, model string, dims int) (int, error)
@@ -772,6 +779,7 @@ func (s *PgStore) PruneUnreferencedFiles(ctx context.Context, projectID int) (in
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM files f
 		WHERE f.project_id = $1
+		  AND f.path NOT LIKE 'git:%'
 		  AND NOT EXISTS (
 		    SELECT 1 FROM worktree_files w
 		    WHERE w.project_id = f.project_id AND w.path = f.path AND w.hash = f.hash
@@ -791,6 +799,14 @@ func (s *PgStore) PruneUnreferencedFiles(ctx context.Context, projectID int) (in
 		return 0, err
 	}
 	return tag.RowsAffected(), nil
+}
+
+// PruneFileVersions removes older content-addressed versions of one canonical
+// push path after the new version has been fully indexed.
+func (s *PgStore) PruneFileVersions(ctx context.Context, projectID int, path, keepHash string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM files
+		WHERE project_id = $1 AND path = $2 AND hash <> $3`, projectID, path, keepHash)
+	return err
 }
 
 func (s *PgStore) GetProject(ctx context.Context, name string) (*Project, error) {
@@ -991,7 +1007,7 @@ func (s *PgStore) ListFileHashes(ctx context.Context, projectID int) (map[string
 // ListFileHashesWithTime returns path→(hash, indexed_at) for every indexed file
 // of a project (used by search to flag stale previews).
 func (s *PgStore) ListFileHashesWithTime(ctx context.Context, projectID int) (map[string]FileHashInfo, error) {
-	rows, err := s.pool.Query(ctx, `SELECT path, hash, indexed_at FROM files WHERE project_id = $1`, projectID)
+	rows, err := s.pool.Query(ctx, `SELECT path, hash, indexed_at FROM files WHERE project_id = $1 ORDER BY path, indexed_at DESC, id DESC`, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -1004,7 +1020,9 @@ func (s *PgStore) ListFileHashesWithTime(ctx context.Context, projectID int) (ma
 		if err := rows.Scan(&path, &hash, &indexedAt); err != nil {
 			return nil, err
 		}
-		out[path] = FileHashInfo{Hash: hash, IndexedAt: indexedAt}
+		if _, exists := out[path]; !exists {
+			out[path] = FileHashInfo{Hash: hash, IndexedAt: indexedAt}
+		}
 	}
 	return out, rows.Err()
 }
@@ -1209,6 +1227,9 @@ func (s *PgStore) TokenByHash(ctx context.Context, tokenHash string) (*Token, er
 	err := s.pool.QueryRow(ctx, `
 		UPDATE api_tokens SET last_used_at = NOW()
 		WHERE token_hash = $1 AND revoked_at IS NULL
+		  AND (user_id IS NULL OR NOT EXISTS (
+			SELECT 1 FROM users u WHERE u.id = api_tokens.user_id AND u.disabled_at IS NOT NULL
+		  ))
 		RETURNING id, tenant_id, COALESCE(user_id, 0), name, scopes, kind, created_at, last_used_at, expires_at
 	`, tokenHash).Scan(&t.ID, &t.TenantID, &t.UserID, &t.Name, &t.Scopes, &t.Kind, &t.CreatedAt, &t.LastUsedAt, &t.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -268,8 +268,10 @@ type EmbeddedChunk struct {
 }
 
 type BatchFile struct {
-	Path    string          `json:"path"`
-	Content string          `json:"content,omitempty"`
+	Path string `json:"path"`
+	// Content is deliberately emitted even when empty so an empty local file
+	// can replace/remove an older indexed version on the server.
+	Content string          `json:"content"`
 	Chunks  []EmbeddedChunk `json:"chunks,omitempty"`
 }
 
