@@ -155,6 +155,11 @@ type IndexStore interface {
 	// file of a project. Used by search to mark stale result previews.
 	ListFileHashesWithTime(ctx context.Context, projectID int) (map[string]FileHashInfo, error)
 	DeleteFileByPath(ctx context.Context, projectID int, path string) error
+	// DeleteFileByID removes exactly one file row (by primary key); its chunks
+	// are removed via FK cascade. Unlike DeleteFileByPath it leaves other hash
+	// versions of the same path untouched, so it can roll back a single
+	// incompletely-indexed version while preserving older searchable ones.
+	DeleteFileByID(ctx context.Context, projectID, fileID int) error
 	DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error
 	InsertChunks(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, embeddings [][]float32, dims int) error
 	InsertChunksTextOnly(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, dims int) error
@@ -1053,6 +1058,13 @@ func (s *PgStore) DeleteFileByPath(ctx context.Context, projectID int, path stri
 		return err
 	}
 	_, err := s.pool.Exec(ctx, `DELETE FROM files WHERE project_id = $1 AND path = $2`, projectID, path)
+	return err
+}
+
+// DeleteFileByID removes exactly one file row (by primary key); its chunks are
+// removed via FK cascade. Other hash versions of the same path are untouched.
+func (s *PgStore) DeleteFileByID(ctx context.Context, projectID, fileID int) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM files WHERE project_id = $1 AND id = $2`, projectID, fileID)
 	return err
 }
 

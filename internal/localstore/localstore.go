@@ -770,6 +770,15 @@ func (s *SQLiteStore) DeleteFileByPath(ctx context.Context, projectID int, path 
 	return err
 }
 
+// DeleteFileByID removes exactly one file row (by primary key); its chunks are
+// removed via ON DELETE CASCADE. Other hash versions of the same path are
+// untouched, so a single incompletely-indexed version can be rolled back while
+// preserving older searchable ones.
+func (s *SQLiteStore) DeleteFileByID(ctx context.Context, projectID, fileID int) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE project_id = ? AND id = ?`, projectID, fileID)
+	return err
+}
+
 func (s *SQLiteStore) DeleteChunksForFile(ctx context.Context, projectID, fileID, _ int) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM chunks WHERE project_id = ? AND file_id = ?`, projectID, fileID)
 	return err

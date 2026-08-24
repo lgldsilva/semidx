@@ -97,6 +97,9 @@ func (f *fakeIndexStore) ListFileHashesWithTime(context.Context, int) (map[strin
 func (f *fakeIndexStore) DeleteFileByPath(context.Context, int, string) error {
 	return errors.New("unimplemented")
 }
+func (f *fakeIndexStore) DeleteFileByID(context.Context, int, int) error {
+	return errors.New("unimplemented")
+}
 func (f *fakeIndexStore) DeleteChunksForFile(context.Context, int, int, int) error {
 	return errors.New("unimplemented")
 }
