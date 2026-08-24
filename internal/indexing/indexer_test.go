@@ -30,6 +30,7 @@ type fakeStore struct {
 	status       string
 	upToDate     bool     // FileUpToDate returns this (simulates unchanged files)
 	deletedPaths []string // paths passed to DeleteFileByPath
+	deletedIDs   []int    // file IDs passed to DeleteFileByID (rollback path)
 }
 
 func (f *fakeStore) FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error) {
@@ -68,6 +69,13 @@ func (f *fakeStore) DeleteFileByPath(ctx context.Context, projectID int, path st
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deletedPaths = append(f.deletedPaths, path)
+	return nil
+}
+
+func (f *fakeStore) DeleteFileByID(ctx context.Context, projectID, fileID int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deletedIDs = append(f.deletedIDs, fileID)
 	return nil
 }
 
