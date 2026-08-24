@@ -467,7 +467,12 @@ func NewPgStore(ctx context.Context, connString string) (*PgStore, error) {
 	return s, nil
 }
 
+// Close releases the pool. It tolerates a nil receiver and an unopened pool so
+// a teardown path can call it unconditionally after a failed connection.
 func (s *PgStore) Close() {
+	if s == nil || s.pool == nil {
+		return
+	}
 	s.pool.Close()
 }
 
