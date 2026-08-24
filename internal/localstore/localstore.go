@@ -1191,6 +1191,45 @@ func (s *SQLiteStore) FetchChunksByDirPrefix(ctx context.Context, projectID int,
 	return scanChunkResultRows(rows)
 }
 
+// FetchChunksByPaths implements store.GraphChunkBatchStore: one query for the
+// whole set of graph-discovered files instead of one query per file. The
+// per-file limit is applied by a window function so a single hot file cannot
+// crowd out the rest.
+func (s *SQLiteStore) FetchChunksByPaths(ctx context.Context, projectID int, paths []string, dims, limitPerPath int) (map[string][]store.SearchResult, error) {
+	if len(paths) == 0 || limitPerPath <= 0 {
+		return nil, nil
+	}
+	// The path set travels as a single JSON parameter expanded by json_each, so
+	// the statement is a constant: no placeholder list is built by hand, and
+	// every path stays a bound value.
+	pathsJSON, err := json.Marshal(paths)
+	if err != nil {
+		return nil, err
+	}
+	const query = `SELECT path, content, start_line, end_line, score, confidence, symbol FROM (
+			SELECT f.path AS path, c.content, c.start_line, c.end_line, 0.5 AS score,
+			       c.confidence, c.symbol,
+			       ROW_NUMBER() OVER (PARTITION BY f.path ORDER BY c.chunk_index) AS rn
+			FROM chunks c
+			JOIN files f ON f.id = c.file_id
+			WHERE c.project_id = ? AND f.path IN (SELECT value FROM json_each(?))
+		) WHERE rn <= ? ORDER BY path, start_line`
+	rows, err := s.db.QueryContext(ctx, query, projectID, string(pathsJSON), limitPerPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	flat, err := scanChunkResultRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]store.SearchResult, len(paths))
+	for _, chunk := range flat {
+		out[chunk.FilePath] = append(out[chunk.FilePath], chunk)
+	}
+	return out, nil
+}
+
 // DropAll clears all indexed data and resets the auto-increment counters
 // (mirroring PgStore's TRUNCATE ... RESTART IDENTITY).
 func (s *SQLiteStore) DropAll(ctx context.Context) error {
