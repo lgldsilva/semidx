@@ -39,12 +39,23 @@ import (
 type SQLiteStore struct {
 	db *sql.DB
 
-	fillMu    sync.Mutex
-	fillStmts map[int]*sql.Stmt // cached "content by id IN (…N…)" statements
+	fillMu   sync.Mutex
+	fillStmt *sql.Stmt // cached fixed-arity content lookup for search results
 }
 
 // compile-time assertion that SQLiteStore satisfies the indexing/search subset.
 var _ store.IndexStore = (*SQLiteStore)(nil)
+
+// maxFillBatch bounds the content-lookup IN list. The SQL below is a fully
+// static literal (maxFillBatch placeholders), so no query text is ever built
+// at runtime.
+const maxFillBatch = 64
+
+const fillContentsSQL = `SELECT id, content FROM chunks WHERE id IN (
+?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // projectColumns is the canonical projection order shared by the project
 // getters so scanProject can read any of them.
@@ -977,66 +988,70 @@ type similarHit struct {
 	res store.SearchResult
 }
 
-// fillChunkContents populates Content for each result in one batched query.
-// The IN-list statement is prepared once per arity and reused: re-preparing it
-// on every search showed up as a measurable latency regression.
+// fillChunkContents populates Content for each result in batched point-in
+// queries over a single fixed-arity prepared statement. The statement is fully
+// static (no dynamic SQL): ids beyond the batch size are padded with a
+// sentinel (-1 never matches — chunk ids come from AUTOINCREMENT) and larger
+// result sets simply loop over more batches.
 func (s *SQLiteStore) fillChunkContents(ctx context.Context, hits []similarHit, results []store.SearchResult) error {
 	if len(hits) == 0 {
 		return nil
 	}
-	ids := make([]any, len(hits))
 	byID := make(map[int64]int, len(hits))
 	for i, h := range hits {
-		ids[i] = h.id
 		byID[h.id] = i
 	}
-	stmt, err := s.fillStmt(len(ids))
+	stmt, err := s.fillContentsStmt()
 	if err != nil {
 		return err
 	}
-	rows, err := stmt.QueryContext(ctx, ids...)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var (
-			id      int64
-			content string
-		)
-		if err := rows.Scan(&id, &content); err != nil {
+	for start := 0; start < len(hits); start += maxFillBatch {
+		end := min(start+maxFillBatch, len(hits))
+		ids := make([]any, maxFillBatch)
+		for i := range ids {
+			ids[i] = int64(-1) // sentinel padding: no AUTOINCREMENT id is negative
+		}
+		for i := start; i < end; i++ {
+			ids[i-start] = hits[i].id
+		}
+		rows, err := stmt.QueryContext(ctx, ids...)
+		if err != nil {
 			return err
 		}
-		if idx, ok := byID[id]; ok {
-			results[idx].Content = content
+		for rows.Next() {
+			var (
+				id      int64
+				content string
+			)
+			if err := rows.Scan(&id, &content); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if idx, ok := byID[id]; ok {
+				results[idx].Content = content
+			}
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
-// fillStmt returns a cached prepared statement selecting content for N chunk
-// ids. Callers must not close it; the store owns the lifecycle.
-func (s *SQLiteStore) fillStmt(n int) (*sql.Stmt, error) {
+// fillContentsStmt lazily prepares and caches the fixed-arity content lookup.
+func (s *SQLiteStore) fillContentsStmt() (*sql.Stmt, error) {
 	s.fillMu.Lock()
 	defer s.fillMu.Unlock()
-	if st, ok := s.fillStmts[n]; ok {
-		return st, nil
+	if s.fillStmt != nil {
+		return s.fillStmt, nil
 	}
-	marks := make([]string, n)
-	for i := range marks {
-		marks[i] = "?"
-	}
-	// marks contains only generated "?" placeholders — no user input reaches the
-	// SQL text; the count varies with result size.
-	// #nosec G202 -- placeholders are generated literals, not user input.
-	st, err := s.db.Prepare(`SELECT id, content FROM chunks WHERE id IN (` + strings.Join(marks, ",") + `)`)
+	st, err := s.db.Prepare(fillContentsSQL)
 	if err != nil {
 		return nil, err
 	}
-	if s.fillStmts == nil {
-		s.fillStmts = make(map[int]*sql.Stmt)
-	}
-	s.fillStmts[n] = st
+	s.fillStmt = st
 	return st, nil
 }
 
