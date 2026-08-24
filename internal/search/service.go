@@ -433,6 +433,15 @@ type bfsParams struct {
 // search results with decayed scores. Failed fetches are best-effort.
 func fetchGraphChunks(ctx context.Context, s *Service, projectID, dims int, expanded map[string]graphHop) []store.SearchResult {
 	const limit = 3 // representative chunks per file
+
+	if batch, ok := s.store.(store.GraphChunkBatchStore); ok {
+		if results, ok := fetchGraphChunksBatch(ctx, batch, projectID, dims, limit, expanded); ok {
+			return results
+		}
+		// Fall through to the per-path path on error: expansion is best-effort
+		// and must not fail the search.
+	}
+
 	var results []store.SearchResult
 	for path, hop := range expanded {
 		chunks, err := s.store.FetchChunksByDirPrefix(ctx, projectID, path, dims, limit)
@@ -457,6 +466,40 @@ func fetchGraphChunks(ctx context.Context, s *Service, projectID, dims int, expa
 	}
 
 	return results
+}
+
+// fetchGraphChunksBatch collects every expanded file's chunks in one round trip.
+// Graph expansion can reach up to maxGraphExpandPaths files, and one query per
+// file makes that a hundred sequential round trips on the hot search path.
+// Reports false when the batch query fails, so the caller can fall back.
+func fetchGraphChunksBatch(ctx context.Context, batch store.GraphChunkBatchStore, projectID, dims, limit int, expanded map[string]graphHop) ([]store.SearchResult, bool) {
+	paths := make([]string, 0, len(expanded))
+	for path := range expanded {
+		paths = append(paths, path)
+	}
+	byPath, err := batch.FetchChunksByPaths(ctx, projectID, paths, dims, limit)
+	if err != nil {
+		slog.Debug("expandByGraph: batch chunk fetch failed, using per-path fallback", "error", err)
+		return nil, false
+	}
+
+	results := make([]store.SearchResult, 0, len(expanded))
+	for _, path := range paths {
+		hop := expanded[path]
+		chunks := byPath[path]
+		if len(chunks) == 0 {
+			// Placeholder — file known to the graph but with no indexed chunks.
+			results = append(results, graphHit(path, hop, ""))
+			continue
+		}
+		for _, chunk := range chunks {
+			chunk.Score = hop.Score
+			chunk.Source = "graph"
+			chunk.GraphDepth = hop.Depth
+			results = append(results, chunk)
+		}
+	}
+	return results, true
 }
 
 func graphHit(path string, hop graphHop, content string) store.SearchResult {
