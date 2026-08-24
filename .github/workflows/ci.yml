@@ -30,23 +30,11 @@ jobs:
           go test -race -shuffle=on -count=1 -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | tee coverage.txt
       - name: Coverage gate (≥90% on business packages)
-        # AGENTS.md policy: "Coverage target ≥90% on business packages
-          # (internal/**, pkg/**); cmd/** and deploy/** are excluded from
-          # the Sonar coverage denominator." The gate below mirrors that
-          # exclusion by computing total coverage over only internal/**
-          # and pkg/** Go functions. cmd/chatrag is the only top-level cmd
-          # package and has no tests (intentionally — the FantasyPipeline
-          # refactor collapsed its internals into internal/rag and the
-          # CLI itself is exercised end-to-end via the agentics harness).
-        run: |
-          set -euo pipefail
-          total=$(go tool cover -func=coverage.out \
-            | awk '/^github.com\/lgldsilva\/semidx\/(internal|pkg)\// {
-                gsub("%","",$NF); s+=$NF; n++
-              }
-              END { if (n>0) printf "%.1f", s/n; else print "0" }')
-          echo "business-package coverage (internal+pkg): ${total}%"
-          awk -v t="$total" 'BEGIN { if (t+0 < 90) { print "business coverage below 90%: " t; exit 1 } }'
+        # Statement-weighted coverage over the same denominator Sonar uses:
+        # internal/** and pkg/** minus sonar.coverage.exclusions. The math and
+        # the exclusion list live in scripts/coverage-gate.sh so the gate can be
+        # reproduced locally with the same numbers.
+        run: scripts/coverage-gate.sh coverage.out 90
 
   lint:
     name: lint

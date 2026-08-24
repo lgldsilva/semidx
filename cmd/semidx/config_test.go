@@ -24,10 +24,36 @@ func runCLI(t *testing.T, args ...string) error {
 	return root.ExecuteContext(context.Background())
 }
 
-func TestConfigSetGetUnsetRoundTrip(t *testing.T) {
+// isolateEnv makes a test hermetic against the developer's real environment:
+// internal/config resolves env > cwd .env > ~/.config/semidx/semidx.env, so a
+// real exported key (e.g. GEMINI_API_KEY) would otherwise shadow anything the
+// test persists. It blanks every SEMIDX_* variable plus the non-prefixed
+// provider keys config.Load reads (empty values count as unset at every
+// precedence level), and pins XDG_CONFIG_HOME/XDG_CACHE_HOME/HOME and the cwd
+// to temp dirs so no real user config or stray .env leaks in.
+func isolateEnv(t *testing.T) {
+	t.Helper()
+	for _, kv := range os.Environ() {
+		key, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(key, "SEMIDX_") {
+			t.Setenv(key, "")
+		}
+	}
+	for _, key := range []string{
+		"GEMINI_API_KEY", "GOOGLE_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
+		"OLLAMA_CLOUD_API_KEY", "OLLAMA_URL", "ANTHROPIC_API_KEY",
+		"EMBED_PROVIDER", "EMBED_ENDPOINT", "EMBED_API_KEY", "EMBED_PRIVACY",
+	} {
+		t.Setenv(key, "")
+	}
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	// A clean project dir so a stray ./.env can't shadow the user file.
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	t.Chdir(t.TempDir())
+}
+
+func TestConfigSetGetUnsetRoundTrip(t *testing.T) {
+	isolateEnv(t)
 
 	if err := runCLI(t, "config", "set", "GEMINI_API_KEY", "secret-xyz"); err != nil {
 		t.Fatalf("set: %v", err)
@@ -51,8 +77,7 @@ func TestConfigSetGetUnsetRoundTrip(t *testing.T) {
 }
 
 func TestConfigListKeysPathRun(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Chdir(t.TempDir())
+	isolateEnv(t)
 	// Seed a couple values so list has something to print (secret + non-secret).
 	if err := runCLI(t, "config", "set", "GEMINI_API_KEY", "abcd1234"); err != nil {
 		t.Fatal(err)
@@ -101,8 +126,7 @@ func TestPrintOllamaRuntimeKeywordOnly(t *testing.T) {
 }
 
 func TestConfigSetUnknownKeyStillWorks(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Chdir(t.TempDir())
+	isolateEnv(t)
 	// An unknown key warns but is still persisted (forward-compatible).
 	if err := runCLI(t, "config", "set", "SOME_FUTURE_KEY", "v"); err != nil {
 		t.Fatal(err)
@@ -113,8 +137,7 @@ func TestConfigSetUnknownKeyStillWorks(t *testing.T) {
 }
 
 func TestConfigGetUnsetKeyErrors(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Chdir(t.TempDir())
+	isolateEnv(t)
 	if err := runCLI(t, "config", "get", "NEVER_SET_KEY"); err == nil {
 		t.Error("get on unset key should error")
 	}
@@ -135,8 +158,7 @@ func TestConfigCommandsWiredIntoTree(t *testing.T) {
 }
 
 func TestMCPInstallCommand(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Chdir(t.TempDir())
+	isolateEnv(t)
 
 	// --list and a dry-run print and exit 0 without touching disk.
 	if err := runCLI(t, "mcp", "install", "--list"); err != nil {
@@ -166,8 +188,7 @@ func TestMCPInstallCommand(t *testing.T) {
 }
 
 func TestActiveBackendPrecedence(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Chdir(t.TempDir())
+	isolateEnv(t)
 
 	// Default (nothing set): Postgres with the hint to configure it.
 	if got := activeBackend(&deps{}); !strings.Contains(got, "Postgres") {
@@ -217,8 +238,7 @@ func TestActiveBackendPrecedence(t *testing.T) {
 }
 
 func TestKeywordBackendLabel(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Chdir(t.TempDir())
+	isolateEnv(t)
 	t.Setenv("SEMIDX_EMBED_MODE", "none")
 	if got := activeBackend(&deps{}); !strings.Contains(got, "keyword-only") {
 		t.Errorf("backend = %q, want keyword-only", got)
