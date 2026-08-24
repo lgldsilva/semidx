@@ -73,33 +73,6 @@ func TestListDependencies(t *testing.T) {
 	}
 }
 
-func TestListDependenciesErrors(t *testing.T) {
-	proj := &store.Project{ID: 3, Name: "repo"}
-
-	// A store without the DependencyStore surface answers 501, not 500.
-	plain := &fakeStore{token: &store.Token{Scopes: []string{"read"}}, project: proj}
-	if rec := do(t, depServer(t, plain), "GET", "/api/v1/projects/repo/dependencies", "tok", ""); rec.Code != http.StatusNotImplemented {
-		t.Errorf("no catalog = %d, want 501", rec.Code)
-	}
-
-	missing := newDepStore(nil, "read")
-	if rec := do(t, depServer(t, missing), "GET", "/api/v1/projects/ghost/dependencies", "tok", ""); rec.Code != http.StatusNotFound {
-		t.Errorf("missing project = %d, want 404", rec.Code)
-	}
-
-	broken := newDepStore(proj, "read")
-	broken.getErr = errors.New("db down")
-	if rec := do(t, depServer(t, broken), "GET", "/api/v1/projects/repo/dependencies", "tok", ""); rec.Code != http.StatusInternalServerError {
-		t.Errorf("project lookup failure = %d, want 500", rec.Code)
-	}
-
-	listBroken := newDepStore(proj, "read")
-	listBroken.listErrD = errors.New("boom")
-	if rec := do(t, depServer(t, listBroken), "GET", "/api/v1/projects/repo/dependencies", "tok", ""); rec.Code != http.StatusInternalServerError {
-		t.Errorf("list failure = %d, want 500", rec.Code)
-	}
-}
-
 func TestSharedDependencies(t *testing.T) {
 	proj := &store.Project{ID: 3, Name: "repo"}
 	st := newDepStore(proj, "read")
@@ -114,29 +87,48 @@ func TestSharedDependencies(t *testing.T) {
 	}
 }
 
-func TestSharedDependenciesErrors(t *testing.T) {
+// Both read endpoints share one failure contract: no catalog surface -> 501,
+// unknown project -> 404, project lookup failure -> 500, catalog query failure
+// -> 500. Table-driven so the two stay in lockstep.
+func TestDependencyReadEndpointsFailureContract(t *testing.T) {
 	proj := &store.Project{ID: 3, Name: "repo"}
 
-	plain := &fakeStore{token: &store.Token{Scopes: []string{"read"}}, project: proj}
-	if rec := do(t, depServer(t, plain), "GET", "/api/v1/projects/repo/dependencies/shared", "tok", ""); rec.Code != http.StatusNotImplemented {
-		t.Errorf("no catalog = %d, want 501", rec.Code)
+	endpoints := []struct {
+		name      string
+		path      string
+		ghostPath string
+		breakList func(*depAPIStore)
+	}{
+		{"list", "/api/v1/projects/repo/dependencies", "/api/v1/projects/ghost/dependencies",
+			func(d *depAPIStore) { d.listErrD = errors.New("boom") }},
+		{"shared", "/api/v1/projects/repo/dependencies/shared", "/api/v1/projects/ghost/dependencies/shared",
+			func(d *depAPIStore) { d.sharedErr = errors.New("boom") }},
 	}
+	for _, ep := range endpoints {
+		t.Run(ep.name, func(t *testing.T) {
+			// A store without the DependencyStore surface answers 501, not 500.
+			plain := &fakeStore{token: &store.Token{Scopes: []string{"read"}}, project: proj}
+			if rec := do(t, depServer(t, plain), "GET", ep.path, "tok", ""); rec.Code != http.StatusNotImplemented {
+				t.Errorf("no catalog = %d, want 501", rec.Code)
+			}
 
-	missing := newDepStore(nil, "read")
-	if rec := do(t, depServer(t, missing), "GET", "/api/v1/projects/ghost/dependencies/shared", "tok", ""); rec.Code != http.StatusNotFound {
-		t.Errorf("missing project = %d, want 404", rec.Code)
-	}
+			missing := newDepStore(nil, "read")
+			if rec := do(t, depServer(t, missing), "GET", ep.ghostPath, "tok", ""); rec.Code != http.StatusNotFound {
+				t.Errorf("missing project = %d, want 404", rec.Code)
+			}
 
-	broken := newDepStore(proj, "read")
-	broken.getErr = errors.New("db down")
-	if rec := do(t, depServer(t, broken), "GET", "/api/v1/projects/repo/dependencies/shared", "tok", ""); rec.Code != http.StatusInternalServerError {
-		t.Errorf("project lookup failure = %d, want 500", rec.Code)
-	}
+			broken := newDepStore(proj, "read")
+			broken.getErr = errors.New("db down")
+			if rec := do(t, depServer(t, broken), "GET", ep.path, "tok", ""); rec.Code != http.StatusInternalServerError {
+				t.Errorf("project lookup failure = %d, want 500", rec.Code)
+			}
 
-	sharedBroken := newDepStore(proj, "read")
-	sharedBroken.sharedErr = errors.New("boom")
-	if rec := do(t, depServer(t, sharedBroken), "GET", "/api/v1/projects/repo/dependencies/shared", "tok", ""); rec.Code != http.StatusInternalServerError {
-		t.Errorf("compare failure = %d, want 500", rec.Code)
+			queryBroken := newDepStore(proj, "read")
+			ep.breakList(queryBroken)
+			if rec := do(t, depServer(t, queryBroken), "GET", ep.path, "tok", ""); rec.Code != http.StatusInternalServerError {
+				t.Errorf("catalog query failure = %d, want 500", rec.Code)
+			}
+		})
 	}
 }
 

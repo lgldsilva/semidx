@@ -176,30 +176,6 @@ func TestAdminProjectDependencies(t *testing.T) {
 	}
 }
 
-func TestAdminProjectDependenciesErrors(t *testing.T) {
-	srv, c, _ := plainAdmin(t)
-	if code, _ := getBody(t, c, srv.URL+"/admin/api/projects/repo/dependencies"); code != http.StatusNotImplemented {
-		t.Errorf("store without catalog = %d, want 501", code)
-	}
-	if code, _ := getBody(t, c, srv.URL+"/admin/api/projects/repo/dependencies/shared"); code != http.StatusNotImplemented {
-		t.Errorf("store without catalog (shared) = %d, want 501", code)
-	}
-
-	st := newSaaSAdminStore()
-	st.depsErr = errors.New("db down")
-	st.sharedErr = errors.New("db down")
-	srv2, c2, _ := saasAdmin(t, st)
-	if code, _ := getBody(t, c2, srv2.URL+"/admin/api/projects/repo/dependencies"); code != http.StatusInternalServerError {
-		t.Errorf("list failure = %d, want 500", code)
-	}
-	if code, _ := getBody(t, c2, srv2.URL+"/admin/api/projects/repo/dependencies/shared"); code != http.StatusInternalServerError {
-		t.Errorf("shared failure = %d, want 500", code)
-	}
-	if code, _ := getBody(t, c2, srv2.URL+"/admin/api/projects/ghost/dependencies"); code != http.StatusNotFound {
-		t.Errorf("missing project = %d, want 404", code)
-	}
-}
-
 func TestAdminRuntimeGraphRoutes(t *testing.T) {
 	st := newSaaSAdminStore()
 	st.edges = []store.RuntimeEdge{{TargetProjectName: "other", Protocol: "http"}}
@@ -213,27 +189,45 @@ func TestAdminRuntimeGraphRoutes(t *testing.T) {
 	}
 }
 
-func TestAdminRuntimeGraphErrors(t *testing.T) {
-	srv, c, _ := plainAdmin(t)
-	if code, _ := getBody(t, c, srv.URL+"/admin/api/projects/repo/runtime-edges"); code != http.StatusNotImplemented {
-		t.Errorf("store without runtime graph = %d, want 501", code)
+// The project-scoped SaaS reads share one failure contract: a store without the
+// optional surface answers 501, a store whose query fails answers 500, and an
+// unknown project answers 404. Table-driven so all four routes stay in lockstep.
+func TestAdminSaaSReadFailureContract(t *testing.T) {
+	routes := []struct {
+		name     string
+		path     string
+		breakSt  func(*saasAdminStore)
+		hasGhost bool
+	}{
+		{"dependencies", "/admin/api/projects/repo/dependencies",
+			func(s *saasAdminStore) { s.depsErr = errors.New("db down") }, true},
+		{"shared dependencies", "/admin/api/projects/repo/dependencies/shared",
+			func(s *saasAdminStore) { s.sharedErr = errors.New("db down") }, true},
+		{"project runtime edges", "/admin/api/projects/repo/runtime-edges",
+			func(s *saasAdminStore) { s.edgesErr = errors.New("db down") }, true},
+		{"portfolio runtime graph", "/admin/api/runtime-graph",
+			func(s *saasAdminStore) { s.wsEdgesErr = errors.New("db down") }, false},
 	}
-	if code, _ := getBody(t, c, srv.URL+"/admin/api/runtime-graph"); code != http.StatusNotImplemented {
-		t.Errorf("store without runtime graph (portfolio) = %d, want 501", code)
-	}
+	for _, rt := range routes {
+		t.Run(rt.name, func(t *testing.T) {
+			plain, pc, _ := plainAdmin(t)
+			if code, _ := getBody(t, pc, plain.URL+rt.path); code != http.StatusNotImplemented {
+				t.Errorf("store without the surface = %d, want 501", code)
+			}
 
-	st := newSaaSAdminStore()
-	st.edgesErr = errors.New("db down")
-	st.wsEdgesErr = errors.New("db down")
-	srv2, c2, _ := saasAdmin(t, st)
-	if code, _ := getBody(t, c2, srv2.URL+"/admin/api/projects/repo/runtime-edges"); code != http.StatusInternalServerError {
-		t.Errorf("list failure = %d, want 500", code)
-	}
-	if code, _ := getBody(t, c2, srv2.URL+"/admin/api/runtime-graph"); code != http.StatusInternalServerError {
-		t.Errorf("portfolio failure = %d, want 500", code)
-	}
-	if code, _ := getBody(t, c2, srv2.URL+"/admin/api/projects/ghost/runtime-edges"); code != http.StatusNotFound {
-		t.Errorf("missing project = %d, want 404", code)
+			st := newSaaSAdminStore()
+			rt.breakSt(st)
+			srv, c, _ := saasAdmin(t, st)
+			if code, _ := getBody(t, c, srv.URL+rt.path); code != http.StatusInternalServerError {
+				t.Errorf("query failure = %d, want 500", code)
+			}
+			if rt.hasGhost {
+				ghost := strings.Replace(rt.path, "/repo/", "/ghost/", 1)
+				if code, _ := getBody(t, c, srv.URL+ghost); code != http.StatusNotFound {
+					t.Errorf("missing project = %d, want 404", code)
+				}
+			}
+		})
 	}
 }
 
