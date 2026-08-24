@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	sqlite "modernc.org/sqlite"
 	sqlitelib "modernc.org/sqlite/lib"
@@ -36,6 +38,9 @@ import (
 // SQLiteStore implements store.IndexStore over a local SQLite database.
 type SQLiteStore struct {
 	db *sql.DB
+
+	fillMu    sync.Mutex
+	fillStmts map[int]*sql.Stmt // cached "content by id IN (…N…)" statements
 }
 
 // compile-time assertion that SQLiteStore satisfies the indexing/search subset.
@@ -828,13 +833,14 @@ func (s *SQLiteStore) insertChunks(ctx context.Context, projectID, fileID int, c
 	}
 	defer func() { _ = dictStmt.Close() }()
 
+	var blob []byte // reused across rows to avoid per-chunk allocation
 	for i, chunk := range chunks {
 		var embHash any // NULL when text-only
 		if embeddings != nil {
 			// De-duplicate by the vector's own content hash: identical content
 			// embeds to an identical vector, so it is stored once (ADR-7).
-			blob := encodeEmbedding(embeddings[i])
-			h := fmt.Sprintf("%x", sha256.Sum256(blob))
+			blob = encodeEmbeddingInto(embeddings[i], blob)
+			h := hashEmbedding(blob)
 			if _, err := dictStmt.ExecContext(ctx, h, blob); err != nil {
 				return err
 			}
@@ -886,8 +892,11 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 	// COALESCE resolves the vector from the de-dup dictionary (new rows) or the
 	// legacy inline column (pre-ADR-7 rows); rows with neither are text-only and
 	// excluded so they surface via keyword search instead.
+	// Perf note: chunk content is deliberately NOT selected here — scoring only
+	// needs the embedding blob. Content is fetched for just the top-K rows in a
+	// second query, avoiding a full-table content transfer per search.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT f.path, c.content, c.start_line, c.end_line, COALESCE(ue.embedding, c.embedding), c.confidence, c.symbol
+		SELECT c.id, f.path, c.start_line, c.end_line, COALESCE(ue.embedding, c.embedding), c.confidence, c.symbol
 		FROM chunks c `+join+`
 		LEFT JOIN unique_embeddings ue ON ue.emb_hash = c.emb_hash
 		WHERE c.project_id = ? AND COALESCE(ue.embedding, c.embedding) IS NOT NULL
@@ -899,67 +908,178 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 
 	// Stream rows into a fixed-size min-heap so we never materialise all chunks
 	// in memory (REQ-STOR-04). When topK<=0, accumulate everything.
+	// RawBytes avoids database/sql cloning the driver's buffer per row; the
+	// bytes are consumed before the next rows.Next() call.
 	var (
-		top     []store.SearchResult
-		all     []store.SearchResult
+		top     []similarHit
+		all     []similarHit
 		useHeap = topK > 0
+		blob    sql.RawBytes
+		qNorm   = vectorNorm(embedding)
 	)
 	for rows.Next() {
 		var (
-			r          store.SearchResult
+			hit        similarHit
 			startLine  sql.NullInt64
 			endLine    sql.NullInt64
-			blob       []byte
 			confidence sql.NullString
 			symbol     sql.NullString
 		)
-		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &blob, &confidence, &symbol); err != nil {
+		if err := rows.Scan(&hit.id, &hit.res.FilePath, &startLine, &endLine, &blob, &confidence, &symbol); err != nil {
 			return nil, err
 		}
-		r.StartLine = int(startLine.Int64)
-		r.EndLine = int(endLine.Int64)
-		r.Score = cosineSimilarity(embedding, decodeEmbedding(blob))
-		r.Confidence = confidence.String
-		if r.Confidence == "" {
-			r.Confidence = "AMBIGUOUS"
+		hit.res.StartLine = int(startLine.Int64)
+		hit.res.EndLine = int(endLine.Int64)
+		hit.res.Score = cosineWithQueryNormFromBlob(embedding, qNorm, blob)
+		hit.res.Confidence = confidence.String
+		if hit.res.Confidence == "" {
+			hit.res.Confidence = "AMBIGUOUS"
 		}
-		r.Symbol = symbol.String
+		hit.res.Symbol = symbol.String
 		if !useHeap {
-			all = append(all, r)
+			all = append(all, hit)
 			continue
 		}
-		top = pushSimilarTopK(top, r, topK)
+		top = pushSimilarHitTopK(top, hit, topK)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	if !useHeap {
-		sort.SliceStable(all, func(i, j int) bool { return all[i].Score > all[j].Score })
-		return all, nil
+		results := make([]store.SearchResult, len(all))
+		for i, h := range all {
+			results[i] = h.res
+		}
+		if err := s.fillChunkContents(ctx, all, results); err != nil {
+			return nil, err
+		}
+		sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+		return results, nil
 	}
 	if len(top) == 0 {
 		return nil, nil
 	}
-	sort.SliceStable(top, func(i, j int) bool { return top[i].Score > top[j].Score })
-	return top, nil
+	results := make([]store.SearchResult, len(top))
+	for i, h := range top {
+		results[i] = h.res
+	}
+	if err := s.fillChunkContents(ctx, top, results); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+	return results, nil
 }
 
-// pushSimilarTopK maintains a min-heap of the top-K cosine scores.
-func pushSimilarTopK(top []store.SearchResult, r store.SearchResult, topK int) []store.SearchResult {
+// similarHit is a scored candidate kept during the streaming scan; content is
+// resolved later via fillChunkContents so the hot loop never copies it.
+type similarHit struct {
+	id  int64
+	res store.SearchResult
+}
+
+// fillChunkContents populates Content for each result in one batched query.
+// The IN-list statement is prepared once per arity and reused: re-preparing it
+// on every search showed up as a measurable latency regression.
+func (s *SQLiteStore) fillChunkContents(ctx context.Context, hits []similarHit, results []store.SearchResult) error {
+	if len(hits) == 0 {
+		return nil
+	}
+	ids := make([]any, len(hits))
+	byID := make(map[int64]int, len(hits))
+	for i, h := range hits {
+		ids[i] = h.id
+		byID[h.id] = i
+	}
+	stmt, err := s.fillStmt(len(ids))
+	if err != nil {
+		return err
+	}
+	rows, err := stmt.QueryContext(ctx, ids...)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			id      int64
+			content string
+		)
+		if err := rows.Scan(&id, &content); err != nil {
+			return err
+		}
+		if idx, ok := byID[id]; ok {
+			results[idx].Content = content
+		}
+	}
+	return rows.Err()
+}
+
+// fillStmt returns a cached prepared statement selecting content for N chunk
+// ids. Callers must not close it; the store owns the lifecycle.
+func (s *SQLiteStore) fillStmt(n int) (*sql.Stmt, error) {
+	s.fillMu.Lock()
+	defer s.fillMu.Unlock()
+	if st, ok := s.fillStmts[n]; ok {
+		return st, nil
+	}
+	marks := make([]string, n)
+	for i := range marks {
+		marks[i] = "?"
+	}
+	// marks contains only generated "?" placeholders — no user input reaches the
+	// SQL text; the count varies with result size.
+	// #nosec G202 -- placeholders are generated literals, not user input.
+	st, err := s.db.Prepare(`SELECT id, content FROM chunks WHERE id IN (` + strings.Join(marks, ",") + `)`)
+	if err != nil {
+		return nil, err
+	}
+	if s.fillStmts == nil {
+		s.fillStmts = make(map[int]*sql.Stmt)
+	}
+	s.fillStmts[n] = st
+	return st, nil
+}
+
+// pushSimilarHitTopK maintains a min-heap of the top-K cosine scores over
+// scored candidates that defer content loading.
+func pushSimilarHitTopK(top []similarHit, r similarHit, topK int) []similarHit {
 	if len(top) < topK {
 		top = append(top, r)
 		if len(top) == topK {
-			for j := topK/2 - 1; j >= 0; j-- {
-				siftDown(top, j, topK)
+			// Heapify once when the heap first fills.
+			n := len(top)
+			for i := n/2 - 1; i >= 0; i-- {
+				siftDownHits(top, i, n)
 			}
 		}
 		return top
 	}
-	if r.Score > top[0].Score {
-		top[0] = r
-		siftDown(top, 0, topK)
+	if r.res.Score <= top[0].res.Score {
+		return top
 	}
+	top[0] = r
+	siftDownHits(top, 0, len(top))
 	return top
+}
+
+// siftDownHits is siftDown over similarHit slices.
+func siftDownHits(items []similarHit, i, n int) {
+	for {
+		smallest := i
+		left := 2*i + 1
+		right := 2*i + 2
+		if left < n && items[left].res.Score < items[smallest].res.Score {
+			smallest = left
+		}
+		if right < n && items[right].res.Score < items[smallest].res.Score {
+			smallest = right
+		}
+		if smallest == i {
+			break
+		}
+		items[i], items[smallest] = items[smallest], items[i]
+		i = smallest
+	}
 }
 
 // SearchSimilarKeywords finds chunks whose content matches any query word via
@@ -1311,21 +1431,50 @@ func (s *SQLiteStore) ExportChunks(ctx context.Context, projectID int) ([]Export
 
 // encodeEmbedding serializes a float32 vector as little-endian bytes.
 func encodeEmbedding(vec []float32) []byte {
-	buf := make([]byte, len(vec)*4)
+	return encodeEmbeddingInto(vec, nil)
+}
+
+// encodeEmbeddingInto serializes into buf (grown as needed) so hot loops can
+// reuse a scratch buffer instead of allocating per row.
+func encodeEmbeddingInto(vec []float32, buf []byte) []byte {
+	n := len(vec) * 4
+	if cap(buf) < n {
+		buf = make([]byte, n)
+	}
+	buf = buf[:n]
 	for i, v := range vec {
 		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(v))
 	}
 	return buf
 }
 
+// hashEmbedding returns the hex SHA-256 of an encoded vector without the
+// reflection cost of fmt.Sprintf("%x", …).
+func hashEmbedding(blob []byte) string {
+	sum := sha256.Sum256(blob)
+	return hex.EncodeToString(sum[:])
+}
+
 // decodeEmbedding reverses encodeEmbedding.
 func decodeEmbedding(b []byte) []float32 {
 	n := len(b) / 4
 	out := make([]float32, n)
-	for i := 0; i < n; i++ {
-		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+	return decodeEmbeddingInto(b, out)
+}
+
+// decodeEmbeddingInto decodes an embedding blob into buf (grown as needed) and
+// returns it, so hot loops can reuse one scratch buffer instead of allocating
+// per row.
+func decodeEmbeddingInto(b []byte, buf []float32) []float32 {
+	n := len(b) / 4
+	if cap(buf) < n {
+		buf = make([]float32, n)
 	}
-	return out
+	buf = buf[:n]
+	for i := 0; i < n; i++ {
+		buf[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+	}
+	return buf
 }
 
 // cosineSimilarity returns the cosine similarity of two equal-length vectors, or
@@ -1347,25 +1496,37 @@ func cosineSimilarity(a, b []float32) float64 {
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
-// siftDown is the min-heap sift-down operation used by the top-K selection in
-// searchSimilar. It maintains the heap invariant: parent <= children.
-func siftDown(items []store.SearchResult, i, n int) {
-	for {
-		smallest := i
-		left := 2*i + 1
-		right := 2*i + 2
-		if left < n && items[left].Score < items[smallest].Score {
-			smallest = left
-		}
-		if right < n && items[right].Score < items[smallest].Score {
-			smallest = right
-		}
-		if smallest == i {
-			break
-		}
-		items[i], items[smallest] = items[smallest], items[i]
-		i = smallest
+// vectorNorm returns the L2 norm of v, or 0 for an empty vector.
+func vectorNorm(v []float32) float64 {
+	var sum float64
+	for _, f := range v {
+		fa := float64(f)
+		sum += fa * fa
 	}
+	return math.Sqrt(sum)
+}
+
+// cosineWithQueryNormFromBlob computes cosine(query, candidate) reusing a
+// pre-computed ||query|| so the per-candidate cost drops by a third during
+// brute-force scans, reading the candidate straight off its encoded
+// little-endian float32 blob (no per-row []float32 materialisation). Falls back
+// to 0 on length mismatch or zero vectors, mirroring cosineSimilarity.
+func cosineWithQueryNormFromBlob(a []float32, normA float64, blob []byte) float64 {
+	n := len(blob) / 4
+	if len(a) != n || len(a) == 0 {
+		return 0
+	}
+	var dot, normB float64
+	for i := 0; i < n; i++ {
+		fb := float64(math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:])))
+		fa := float64(a[i])
+		dot += fa * fb
+		normB += fb * fb
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(normB) * normA)
 }
 
 // isUniqueViolation reports whether err is a SQLite UNIQUE/PRIMARY KEY
