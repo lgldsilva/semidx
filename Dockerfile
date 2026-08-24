@@ -9,6 +9,11 @@ COPY web/ ./
 RUN npm run build
 
 FROM golang:1.26.6 AS build
+# Version metadata for `semidx version`. Without these the image reports
+# dev/none/unknown, which makes a deployed container impossible to identify.
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_DATE=unknown
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -18,7 +23,9 @@ COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY pkg/ ./pkg/
 COPY --from=web /src/internal/webui/dist ./internal/webui/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/semidx ./cmd/semidx
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" \
+    -o /out/semidx ./cmd/semidx
 
 FROM alpine:3.20
 # openssh-client provides the `ssh` binary for SSH clone/pull
