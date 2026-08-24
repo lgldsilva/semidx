@@ -84,14 +84,13 @@ func TestValidateIndexToServer(t *testing.T) {
 	}
 }
 
+// isolateCLIConfig isolates client-config tests from the developer's real
+// environment: isolateEnv blanks every SEMIDX_* var (SEMIDX_SERVER_URL,
+// SEMIDX_TOKEN, SEMIDX_DEFAULT_PROJECT, SEMIDX_BACKEND included), pins
+// XDG_CONFIG_HOME/HOME to temp dirs, and chdirs away from any stray .env.
 func isolateCLIConfig(t *testing.T) {
 	t.Helper()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("SEMIDX_SERVER_URL", "")
-	t.Setenv("SEMIDX_TOKEN", "")
-	t.Setenv("SEMIDX_DEFAULT_PROJECT", "")
-	t.Setenv("SEMIDX_BACKEND", "")
-	t.Chdir(t.TempDir())
+	isolateEnv(t)
 }
 
 func TestLogoutRemovesClientConfig(t *testing.T) {
