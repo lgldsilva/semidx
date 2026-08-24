@@ -69,7 +69,12 @@ type fakeStore struct {
 	compDeleted int         // last CompleteJob deletedFiles
 	compErrors  int         // last CompleteJob errorCount
 	compCalled  bool
-	upToDate    bool // FileUpToDate result
+	compErr     error // CompleteJob error
+
+	// usage-report fields
+	usageAgg usage.Aggregate // UsageAggregate result
+	usageErr error           // UsageAggregate error
+	upToDate bool            // FileUpToDate result
 }
 
 func (f *fakeStore) CountUsers(context.Context) (int, error) { return f.userCount, nil }
@@ -89,7 +94,7 @@ func (f *fakeStore) CountProjectFiles(context.Context, int) (int, error) {
 }
 func (f *fakeStore) RecordUsageEvent(context.Context, usage.Event) error { return nil }
 func (f *fakeStore) UsageAggregate(context.Context, time.Time, string, int) (usage.Aggregate, error) {
-	return usage.Aggregate{}, nil
+	return f.usageAgg, f.usageErr
 }
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
 func (f *fakeStore) TokenByHash(context.Context, string) (*store.Token, error) {

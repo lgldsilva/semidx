@@ -73,6 +73,9 @@ func (f *fakeStore) FailJob(_ context.Context, _ int, msg string) error {
 func (f *fakeStore) CompleteJob(_ context.Context, id, files, chunks, deleted, errors int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.compErr != nil {
+		return f.compErr
+	}
 	f.compFiles = files
 	f.compChunks = chunks
 	f.compDeleted = deleted
