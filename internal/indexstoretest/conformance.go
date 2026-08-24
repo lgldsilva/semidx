@@ -68,6 +68,43 @@ func Run(t *testing.T, factory func(t *testing.T) store.IndexStore) {
 	}
 
 	runGraphChunkBatch(ctx, t, s, id, dims)
+
+	// DeleteFileByID removes exactly one content-addressed version: upsert a
+	// second version of the same path, delete it by ID, and verify the
+	// original version survives with its chunks while the deleted one is no
+	// longer up to date.
+	fileID2, err := s.UpsertFile(ctx, id, "main.go", "def456", 34)
+	if err != nil {
+		t.Fatalf("UpsertFile v2: %v", err)
+	}
+	if fileID2 == fileID {
+		t.Fatalf("UpsertFile v2 returned the v1 ID %d, want a distinct row", fileID)
+	}
+	chunks2 := []chunker.Chunk{{Content: "package main v2", StartLine: 1, EndLine: 1}}
+	if err := s.InsertChunks(ctx, id, fileID2, chunks2, emb, dims); err != nil {
+		t.Fatalf("InsertChunks v2: %v", err)
+	}
+	if err := s.DeleteFileByID(ctx, id, fileID2); err != nil {
+		t.Fatalf("DeleteFileByID: %v", err)
+	}
+	if up, err := s.FileUpToDate(ctx, id, "main.go", "def456", dims); err != nil || up {
+		t.Fatalf("FileUpToDate(v2) = %v, %v after DeleteFileByID, want false, nil", up, err)
+	}
+	if up, err := s.FileUpToDate(ctx, id, "main.go", "abc123", dims); err != nil || !up {
+		t.Fatalf("FileUpToDate(v1) = %v, %v after DeleteFileByID of v2, want true, nil", up, err)
+	}
+	results, err = s.SearchSimilarKeywords(ctx, id, "package main func", dims, 5)
+	if err != nil {
+		t.Fatalf("SearchSimilarKeywords after DeleteFileByID: %v", err)
+	}
+	for _, r := range results {
+		if r.FilePath == "main.go" && r.Content == "package main v2" {
+			t.Fatal("deleted version's chunks survived DeleteFileByID")
+		}
+	}
+	if len(results) == 0 {
+		t.Fatal("v1 chunks should remain searchable after deleting v2 by ID")
+	}
 }
 
 // runGraphChunkBatch exercises the optional GraphChunkBatchStore extension that

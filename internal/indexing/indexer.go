@@ -686,7 +686,7 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 	// blockEmbedding is on, the file is stored text-only (no embedding).
 	hasSecrets := idx.detectSecrets(rel, content)
 
-	created, softErrs, err = idx.storeChunks(ctx, chunkStoreParams{
+	created, expected, softErrs, err := idx.storeChunks(ctx, chunkStoreParams{
 		projectID:  projectID,
 		fileID:     fileID,
 		rel:        rel,
@@ -698,7 +698,28 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, "", err
 	}
+	if created < expected {
+		// Incomplete: some embedding/insert batches failed. Roll back the new
+		// file row so this version is not mistaken for fully indexed — any
+		// previous hash version of the same path keeps its chunks, and the
+		// next incremental pass re-indexes the file.
+		idx.logf("[warn] %s: stored %d of %d chunk(s); rolling back file row so it is retried", rel, created, expected)
+		idx.rollbackIncompleteUnit(ctx, projectID, fileID, rel)
+		return created, softErrs, outcomeSkippedEmpty, "", nil
+	}
 	return created, softErrs, outcomeIndexed, hash, nil
+}
+
+// rollbackIncompleteUnit removes the chunks and the file row of an incompletely
+// indexed unit. Best-effort: a rollback failure is logged, never fatal — the
+// worst case is the pre-fix behavior (a partial row considered up to date).
+func (idx *Indexer) rollbackIncompleteUnit(ctx context.Context, projectID, fileID int, rel string) {
+	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
+		idx.log.Warn("rollback incomplete indexing: delete chunks", "file", rel, "error", err)
+	}
+	if err := idx.db.DeleteFileByID(ctx, projectID, fileID); err != nil {
+		idx.log.Warn("rollback incomplete indexing: delete file row", "file", rel, "error", err)
+	}
 }
 
 // chunkStoreParams groups the arguments to storeChunks that describe the file
@@ -734,16 +755,28 @@ func (idx *Indexer) detectSecrets(rel string, content []byte) bool {
 // keyword-only mode, when a sensitive file cannot be embedded by a local provider,
 // or when secrets were detected and SECRET_BLOCK_EMBEDDING is true; otherwise it
 // embeds them (forcing a local provider for sensitive files).
-func (idx *Indexer) storeChunks(ctx context.Context, p chunkStoreParams) (created, softErrs int, hardErr error) {
+// storeChunks turns a unit's chunks into stored rows, honoring keyword-only mode,
+// privacy routing and secret-scan tagging. It stores the chunks text-only in
+// keyword-only mode, when a sensitive file cannot be embedded by a local provider,
+// or when secrets were detected and SECRET_BLOCK_EMBEDDING is true; otherwise it
+// embeds them (forcing a local provider for sensitive files).
+//
+// expected is the number of chunks that should be stored after the project
+// chunk-budget trim (0 when the budget is exhausted); created is how many were
+// actually stored. created < expected means some embedding/insert batches
+// failed (soft errors) and the caller must treat the file as incompletely
+// indexed — intentional budget trims are not failures.
+func (idx *Indexer) storeChunks(ctx context.Context, p chunkStoreParams) (created, expected, softErrs int, hardErr error) {
 	budget := idx.takeChunkBudget(len(p.chunks))
 	if budget == 0 {
 		idx.logf("[warn] project chunk limit reached, skipping chunks for %s", p.rel)
-		return 0, 0, nil
+		return 0, 0, 0, nil
 	}
 	if budget < len(p.chunks) {
 		idx.logf("[warn] project chunk limit: storing %d of %d chunk(s) for %s", budget, len(p.chunks), p.rel)
 		p.chunks = p.chunks[:budget]
 	}
+	expected = len(p.chunks)
 
 	// v2 confidence tags: classify after the budget trim so only stored chunks
 	// are annotated (and the work is bounded to what will actually be written).
@@ -752,7 +785,8 @@ func (idx *Indexer) storeChunks(ctx context.Context, p chunkStoreParams) (create
 	// Keyword-only mode: no embedding provider at all — store the chunks as text
 	// so they stay searchable by keyword (FTS/ILIKE) without any model.
 	if idx.keywordOnly {
-		return idx.storeChunksKeywordOnly(ctx, p)
+		created, softErrs, hardErr = idx.storeChunksKeywordOnly(ctx, p)
+		return created, expected, softErrs, hardErr
 	}
 
 	// Privacy routing + secret scan: a sensitive file or one with detected
@@ -765,26 +799,26 @@ func (idx *Indexer) storeChunks(ctx context.Context, p chunkStoreParams) (create
 	if isSensitive {
 		localCtx, doEmbed, sCreated, sSoft, sErr := idx.storeSensitiveChunks(ctx, p)
 		if sErr != nil {
-			return 0, 0, sErr
+			return 0, expected, 0, sErr
 		}
 		if !doEmbed {
-			return sCreated, sSoft, nil
+			return sCreated, expected, sSoft, nil
 		}
 		embedCtx = localCtx
 	} else if idx.privacyMode == privacy.Edge {
 		localCtx := embed.WithForceLocal(ctx, true)
 		if _, err := idx.embedder.ModelInfo(localCtx, p.model); err != nil {
 			if err := idx.db.InsertChunksTextOnly(ctx, p.projectID, p.fileID, p.chunks, idx.dims); err != nil {
-				return 0, 0, err
+				return 0, expected, 0, err
 			}
 			idx.logf("  [local-text] %s (edge-only; stored text-only, no cloud embedding)", p.rel)
-			return len(p.chunks), 0, nil
+			return len(p.chunks), expected, 0, nil
 		}
 		embedCtx = localCtx
 	}
 
 	created, softErrs = idx.embedAndInsert(embedCtx, p.projectID, p.fileID, p.chunks, p.model, p.rel, p.syms)
-	return created, softErrs, nil
+	return created, expected, softErrs, nil
 }
 
 // storeChunksKeywordOnly writes chunks as text-only (no embedding) in keyword
@@ -1127,10 +1161,17 @@ func (idx *Indexer) indexCommit(ctx context.Context, projectID int, model string
 
 	embedding, ok := idx.embedSingleWithCache(ctx, model, string(commit))
 	if !ok {
+		// Roll back the file row so a failed commit never leaves a chunkless
+		// version behind (its chunks were already deleted above).
+		idx.rollbackIncompleteUnit(ctx, projectID, fileID, filePath)
 		return false
 	}
 	chunk := chunker.Chunk{Content: string(commit), StartLine: 1, EndLine: 1}
-	return idx.db.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{chunk}, [][]float32{embedding}, idx.dims) == nil
+	if err := idx.db.InsertChunks(ctx, projectID, fileID, []chunker.Chunk{chunk}, [][]float32{embedding}, idx.dims); err != nil {
+		idx.rollbackIncompleteUnit(ctx, projectID, fileID, filePath)
+		return false
+	}
+	return true
 }
 
 // embedSingleWithCache returns an embedding for text, using the cache when

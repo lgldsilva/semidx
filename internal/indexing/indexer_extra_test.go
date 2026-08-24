@@ -192,6 +192,7 @@ type errStore struct {
 	deleteErr     error
 	insertErr     error
 	insertTextErr error
+	deletedIDs    []int // file IDs passed to DeleteFileByID (rollback path)
 }
 
 func (e *errStore) FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error) {
@@ -208,6 +209,12 @@ func (e *errStore) UpsertFile(ctx context.Context, projectID int, path, hash str
 }
 func (e *errStore) DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error {
 	return e.deleteErr
+}
+func (e *errStore) DeleteFileByID(ctx context.Context, projectID, fileID int) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.deletedIDs = append(e.deletedIDs, fileID)
+	return nil
 }
 func (e *errStore) InsertChunks(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, embeddings [][]float32, dims int) error {
 	return e.insertErr
@@ -711,6 +718,9 @@ func (c *cachingStore) UpsertFile(ctx context.Context, projectID int, path, hash
 	return c.nextID, nil
 }
 func (c *cachingStore) DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error {
+	return nil
+}
+func (c *cachingStore) DeleteFileByID(ctx context.Context, projectID, fileID int) error {
 	return nil
 }
 func (c *cachingStore) InsertChunks(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, embeddings [][]float32, dims int) error {
