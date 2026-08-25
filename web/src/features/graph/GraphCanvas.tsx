@@ -81,7 +81,8 @@ export function GraphCanvas({
   return (
     <div className="overflow-hidden rounded-md border border-border bg-surface">
       <p className="m-0 min-h-[1.4rem] truncate px-2 py-1 text-xs text-muted">
-        {hover ?? 'Scroll to zoom · drag to pan · click a node · double-click to focus'}
+        {hover ??
+          'Scroll to zoom · drag to pan · click or Enter to select · double-click or Shift+Enter to focus'}
       </p>
       <svg
         ref={svgRef}
@@ -146,6 +147,13 @@ export function GraphCanvas({
                 data-node={n.id}
                 transform={`translate(${p.x},${p.y})`}
                 style={{ cursor: 'pointer', opacity: dim ? 0.3 : 1 }}
+                // Nodes are real controls: reachable by Tab, operable by
+                // Enter/Space (select) and Shift+Enter (focus, the keyboard
+                // equivalent of double-click).
+                tabIndex={0}
+                role="button"
+                aria-label={`${n.kind} ${n.id}${n.seed ? ' (seed)' : ''}`}
+                aria-pressed={isSel}
                 onClick={(ev) => {
                   ev.stopPropagation()
                   onSelect?.(n.id, n.kind)
@@ -154,8 +162,20 @@ export function GraphCanvas({
                   ev.stopPropagation()
                   onFocus?.(n.id, n.kind)
                 }}
+                onKeyDown={(ev) => {
+                  if (ev.key !== 'Enter' && ev.key !== ' ') return
+                  ev.preventDefault()
+                  ev.stopPropagation()
+                  if (ev.key === 'Enter' && ev.shiftKey) {
+                    onFocus?.(n.id, n.kind)
+                    return
+                  }
+                  onSelect?.(n.id, n.kind)
+                }}
                 onMouseEnter={() => setHover(n.id)}
                 onMouseLeave={() => setHover(null)}
+                onFocus={() => setHover(n.id)}
+                onBlur={() => setHover(null)}
               >
                 {isPkg ? (
                   <rect

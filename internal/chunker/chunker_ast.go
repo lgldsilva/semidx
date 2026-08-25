@@ -221,7 +221,7 @@ func chunkLines(lines []string, startLine, endLine int, maxChars int) []Chunk {
 		case len(line) > maxChars:
 			acc.appendOversizedLine(line, lineNum)
 		default:
-			acc.appendLine(line, lineNum)
+			acc.appendLineString(line, lineNum)
 		}
 		lineNum++
 	}

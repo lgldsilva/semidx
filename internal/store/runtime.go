@@ -69,7 +69,9 @@ func (s *PgStore) UpsertRuntimeEdges(ctx context.Context, sourceProjectID int, e
 			 source_component, target_component, protocol, environment, request_count,
 			 error_count, p95_latency_ms, first_seen, last_seen)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-			ON CONFLICT DO UPDATE SET
+			ON CONFLICT (tenant_id, workspace_id, source_project_id,
+			 COALESCE(target_project_id, 0), target_name, source_component,
+			 target_component, protocol, environment) DO UPDATE SET
 			 request_count = runtime_edges.request_count + EXCLUDED.request_count,
 			 error_count = runtime_edges.error_count + EXCLUDED.error_count,
 			 p95_latency_ms = EXCLUDED.p95_latency_ms,
@@ -163,7 +165,7 @@ func (s *PgStore) SetTenantQuota(ctx context.Context, quota TenantQuota) error {
 func (s *PgStore) GetTenantUsage(ctx context.Context) (*TenantUsage, error) {
 	var usage TenantUsage
 	err := s.pool.QueryRow(ctx, `
-		SELECT $1,
+		SELECT $1::int,
 		 (SELECT COUNT(*) FROM projects WHERE tenant_id = $1),
 		 (SELECT COUNT(*) FROM runtime_edges WHERE tenant_id = $1)`, tenant.ID(ctx)).Scan(&usage.TenantID, &usage.Projects, &usage.RuntimeEdges)
 	if err != nil {

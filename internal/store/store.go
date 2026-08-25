@@ -155,6 +155,11 @@ type IndexStore interface {
 	// file of a project. Used by search to mark stale result previews.
 	ListFileHashesWithTime(ctx context.Context, projectID int) (map[string]FileHashInfo, error)
 	DeleteFileByPath(ctx context.Context, projectID int, path string) error
+	// DeleteFileByID removes exactly one file row (by primary key); its chunks
+	// are removed via FK cascade. Unlike DeleteFileByPath it leaves other hash
+	// versions of the same path untouched, so it can roll back a single
+	// incompletely-indexed version while preserving older searchable ones.
+	DeleteFileByID(ctx context.Context, projectID, fileID int) error
 	DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error
 	InsertChunks(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, embeddings [][]float32, dims int) error
 	InsertChunksTextOnly(ctx context.Context, projectID, fileID int, chunks []chunker.Chunk, dims int) error
@@ -217,6 +222,18 @@ type IndexStore interface {
 	PruneEmbeddingCache(ctx context.Context, dims int) (int64, error)
 
 	DropAll(ctx context.Context) error
+}
+
+// GraphChunkBatchStore is an optional Store extension: it fetches the
+// representative chunks of many files in one round trip. Graph expansion can
+// discover up to a hundred files per query, and fetching them one path at a
+// time is a hundred sequential queries. Stores that do not implement it keep
+// working through the per-path fallback.
+type GraphChunkBatchStore interface {
+	// FetchChunksByPaths returns up to limitPerPath chunks (ordered by
+	// chunk_index) for each of the given file paths, keyed by path. Paths
+	// without chunks are absent from the result rather than an error.
+	FetchChunksByPaths(ctx context.Context, projectID int, paths []string, dims, limitPerPath int) (map[string][]SearchResult, error)
 }
 
 // FileVersionPruner bounds a canonical push project's path history after a
@@ -455,7 +472,12 @@ func NewPgStore(ctx context.Context, connString string) (*PgStore, error) {
 	return s, nil
 }
 
+// Close releases the pool. It tolerates a nil receiver and an unopened pool so
+// a teardown path can call it unconditionally after a failed connection.
 func (s *PgStore) Close() {
+	if s == nil || s.pool == nil {
+		return
+	}
 	s.pool.Close()
 }
 
@@ -1039,6 +1061,13 @@ func (s *PgStore) DeleteFileByPath(ctx context.Context, projectID int, path stri
 	return err
 }
 
+// DeleteFileByID removes exactly one file row (by primary key); its chunks are
+// removed via FK cascade. Other hash versions of the same path are untouched.
+func (s *PgStore) DeleteFileByID(ctx context.Context, projectID, fileID int) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM files WHERE project_id = $1 AND id = $2`, projectID, fileID)
+	return err
+}
+
 func (s *PgStore) DeleteChunksForFile(ctx context.Context, projectID, fileID, dims int) error {
 	table, err := chunksTable(dims)
 	if err != nil {
@@ -1605,6 +1634,48 @@ func (s *PgStore) FetchChunksByDirPrefix(ctx context.Context, projectID int, dir
 	}
 	defer rows.Close()
 	return scanSearchRows(rows)
+}
+
+// FetchChunksByPaths implements GraphChunkBatchStore: one query for every
+// discovered file, with the per-file limit applied by a window function so a
+// single hot file cannot crowd out the others.
+func (s *PgStore) FetchChunksByPaths(ctx context.Context, projectID int, paths []string, dims, limitPerPath int) (map[string][]SearchResult, error) {
+	if len(paths) == 0 || limitPerPath <= 0 {
+		return nil, nil
+	}
+	table, err := chunksTable(dims)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf(`
+		SELECT path, content, start_line, end_line, score, confidence, symbol FROM (
+			SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score,
+			       c.confidence, c.symbol,
+			       ROW_NUMBER() OVER (PARTITION BY f.path ORDER BY c.chunk_index) AS rn
+			FROM %s c JOIN files f ON f.id = c.file_id
+			WHERE c.project_id = $1 AND f.path = ANY($2)
+		) ranked
+		WHERE rn <= $3
+		ORDER BY path, start_line`, table)
+	rows, err := s.pool.Query(ctx, query, projectID, paths, limitPerPath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	flat, err := scanSearchRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	return groupChunksByPath(flat), nil
+}
+
+// groupChunksByPath buckets a flat chunk list by file path.
+func groupChunksByPath(flat []SearchResult) map[string][]SearchResult {
+	out := make(map[string][]SearchResult)
+	for _, chunk := range flat {
+		out[chunk.FilePath] = append(out[chunk.FilePath], chunk)
+	}
+	return out
 }
 
 func (s *PgStore) DropAll(ctx context.Context) error {

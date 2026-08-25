@@ -2,7 +2,7 @@ package indexing
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
 )
 
 // ContentHash returns the hex-encoded SHA-256 of content — the same digest the
@@ -14,5 +14,5 @@ import (
 func ContentHash(content []byte) string {
 	// codeql[go/weak-sensitive-data-hashing] : content-addressed digest, not a security control.
 	sum := sha256.Sum256(content)
-	return fmt.Sprintf("%x", sum)
+	return hex.EncodeToString(sum[:])
 }

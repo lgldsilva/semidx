@@ -63,8 +63,12 @@ func (d *deps) database(ctx context.Context) (store.Store, error) {
 		db, err := store.NewPgStore(ctx, d.cfg.DatabaseURL)
 		if err != nil {
 			d.dbErr = fmt.Errorf("connect to database: %w", err)
+		} else {
+			// Only keep a store we actually opened: assigning the typed nil
+			// returned on failure would leave d.db non-nil as an interface, and
+			// teardown would then call Close on it.
+			d.db = db
 		}
-		d.db = db
 	}
 	return d.db, d.dbErr
 }

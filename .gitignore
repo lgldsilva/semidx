@@ -35,15 +35,13 @@ opencode.json.bak-*
 # property-test regression seeds (transient)
 testdata/rapid/
 
-# Deepwork progress files (Orchestrator session state)
-.slim/deepwork/
-.scannerwork/ bin/ semidx.exe
+# Agent scratch state: deepwork progress, worktree bookkeeping, and cloned
+# dependency sources (.slim/clonedeps can reach hundreds of MB of third-party
+# repos). Ignore the whole tree — nothing under it belongs in the repository.
+.slim/
 .scannerwork/
 semidx.exe
 docs/auditoria-2026-07-06.md
-.slim/worktrees/
-.slim/worktrees.json
-.slim/deepwork/
 coverage*.out
 
 # Local build output
