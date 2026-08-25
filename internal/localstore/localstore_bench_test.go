@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/rand"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lgldsilva/semidx/internal/chunker"
@@ -176,6 +177,52 @@ func BenchmarkSearchSimilar_1K(b *testing.B) {
 			Content:   "func benchFunc() string { return \"hello world\" }",
 			StartLine: i*3 + 1,
 			EndLine:   i*3 + 3,
+		}
+		embeddings[i] = makeFloats(768)
+	}
+	if err := s.InsertChunks(ctx, projectID, fileID, chunks, embeddings, 768); err != nil {
+		b.Fatalf("InsertChunks: %v", err)
+	}
+
+	query := makeFloats(768)
+	b.StartTimer()
+
+	for b.Loop() {
+		_, _ = s.SearchSimilar(ctx, projectID, query, 768, 20)
+	}
+}
+
+// BenchmarkSearchSimilar_1K_RealContent mirrors BenchmarkSearchSimilar_1K but
+// gives every chunk ~1.2KB of realistic code-like content, so it reflects the
+// cost of transferring chunk text during a vector search.
+func BenchmarkSearchSimilar_1K_RealContent(b *testing.B) {
+	b.ReportAllocs()
+	ctx := context.Background()
+
+	b.StopTimer()
+	s := benchStore(b)
+	projectID, err := s.UpsertProject(ctx, "bench", "/tmp/bench", "bge-m3", 768)
+	if err != nil {
+		b.Fatalf("UpsertProject: %v", err)
+	}
+	fileID, err := s.UpsertFile(ctx, projectID, "bench.go", "hash1", 50000)
+	if err != nil {
+		b.Fatalf("UpsertFile: %v", err)
+	}
+	const numChunks = 1000
+	line := "func benchExample(w io.Writer, req *http.Request) error { return json.NewEncoder(w).Encode(req.Body) } // padding padding padding padding"
+	chunks := make([]chunker.Chunk, numChunks)
+	embeddings := make([][]float32, numChunks)
+	for i := range chunks {
+		var sb strings.Builder
+		for j := 0; j < 12; j++ { // ~1.2KB per chunk
+			sb.WriteString(line)
+			sb.WriteByte('\n')
+		}
+		chunks[i] = chunker.Chunk{
+			Content:   sb.String(),
+			StartLine: i*13 + 1,
+			EndLine:   i*13 + 12,
 		}
 		embeddings[i] = makeFloats(768)
 	}

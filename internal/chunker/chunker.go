@@ -145,14 +145,18 @@ func chunkCode(content []byte, maxChars int) []Chunk {
 
 	for scanner.Scan() {
 		lineNum++
-		line := scanner.Text()
+		// scanner.Bytes() aliases the scanner's internal buffer; it is safe here
+		// because the accumulator copies bytes into its strings.Builder before
+		// the next Scan call. This avoids the per-line string allocation of
+		// scanner.Text().
+		line := scanner.Bytes()
 
 		switch {
-		case strings.TrimSpace(line) == "" && acc.current.Len() > 0:
+		case len(bytes.TrimSpace(line)) == 0 && acc.current.Len() > 0:
 			// Blank line ends the current run.
 			acc.flush()
 		case len(line) > maxChars:
-			acc.appendOversizedLine(line, lineNum)
+			acc.appendOversizedLine(string(line), lineNum)
 		default:
 			acc.appendLine(line, lineNum)
 		}
@@ -188,8 +192,31 @@ func (a *codeAccumulator) flush() {
 }
 
 // appendLine adds a within-budget line, flushing first if it would overflow the
-// current chunk.
-func (a *codeAccumulator) appendLine(line string, lineNum int) {
+// current chunk. line may alias a reused scanner buffer (see chunkCode); Write
+// copies before the caller advances that buffer.
+func (a *codeAccumulator) appendLine(line []byte, lineNum int) {
+	a.append(line, lineNum)
+}
+
+// appendLineString is the string variant used when the line is already a
+// string (AST chunking), avoiding a per-line []byte conversion allocation.
+func (a *codeAccumulator) appendLineString(line string, lineNum int) {
+	a.appendString(line, lineNum)
+}
+
+func (a *codeAccumulator) append(line []byte, lineNum int) {
+	if a.current.Len()+len(line)+1 > a.maxChars && a.current.Len() > 0 {
+		a.flush()
+	}
+	if a.current.Len() == 0 {
+		a.curStart = lineNum
+	}
+	a.curEnd = lineNum
+	a.current.Write(line)
+	a.current.WriteByte('\n')
+}
+
+func (a *codeAccumulator) appendString(line string, lineNum int) {
 	if a.current.Len()+len(line)+1 > a.maxChars && a.current.Len() > 0 {
 		a.flush()
 	}
@@ -198,7 +225,7 @@ func (a *codeAccumulator) appendLine(line string, lineNum int) {
 	}
 	a.curEnd = lineNum
 	a.current.WriteString(line)
-	a.current.WriteString("\n")
+	a.current.WriteByte('\n')
 }
 
 // appendOversizedLine handles a single line longer than the budget: it flushes
