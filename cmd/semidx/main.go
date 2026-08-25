@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -229,11 +230,24 @@ Run "semidx <command> --help" for details on any command.`,
 }
 
 func projectNameFromPath(path string) string {
-	path = strings.TrimRight(path, "/")
-	if idx := strings.LastIndex(path, "/"); idx >= 0 {
-		return path[idx+1:]
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
 	}
-	return path
+	path = filepath.Clean(path)
+	// filepath.Base(".") is ".", but a default --project of "." means
+	// the current checkout. Resolve it before deriving the display name so
+	// push/index never register a project literally named ".".
+	if path == "." {
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+	}
+	base := filepath.Base(path)
+	if base == "." || base == string(filepath.Separator) {
+		return ""
+	}
+	return base
 }
 
 // registerCommandGroups wires all subcommands into the root cobra command under

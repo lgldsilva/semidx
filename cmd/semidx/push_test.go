@@ -147,9 +147,14 @@ func TestPushMaxConstants(t *testing.T) {
 }
 
 func TestProjectNameFromPath(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct{ path, want string }{
 		{"/foo/bar/baz", "baz"},
 		{"baz", "baz"},
+		{".", filepath.Base(cwd)},
 		{"foo/", "foo"},
 		{"", ""},
 		{"/", ""},

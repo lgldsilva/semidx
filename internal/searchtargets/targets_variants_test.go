@@ -184,6 +184,44 @@ func TestResolveRemoteProjectResolvesFromCwd(t *testing.T) {
 	}
 }
 
+// A remote git project can have a custom display name and a server-side clone
+// path, so neither name nor path is sufficient to resolve --project ".".
+// The normalized origin is the stable locator shared by both checkouts.
+func TestResolveRemoteProjectResolvesDotByGitOrigin(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir, []string{"remote", "add", "origin", "https://gitea.example/acme/sdk.git"})
+	t.Chdir(dir)
+
+	lister := &fakeLister{projects: []client.Project{{
+		Name:       "sdk-published",
+		Identity:   "sdk-published",
+		SourceType: "git",
+		GitURL:     "https://gitea.example/acme/sdk.git",
+		Path:       "/server/clones/sdk",
+	}}}
+	p, err := ResolveRemoteProject(context.Background(), lister, ".")
+	if err != nil || p == nil || p.Name != "sdk-published" {
+		t.Fatalf("ResolveRemoteProject(.) = %+v, %v; want sdk-published", p, err)
+	}
+}
+
+func TestResolveRemoteProjectResolvesDotByRedactedSSHOrigin(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir, []string{"remote", "add", "origin", "git@gitea.example:acme/sdk.git"})
+	t.Chdir(dir)
+
+	// The server redacts the user from scp-like URLs before returning them.
+	lister := &fakeLister{projects: []client.Project{{
+		Name:     "sdk-published",
+		Identity: "sdk-published",
+		GitURL:   "gitea.example:acme/sdk.git",
+	}}}
+	p, err := ResolveRemoteProject(context.Background(), lister, ".")
+	if err != nil || p == nil || p.Name != "sdk-published" {
+		t.Fatalf("ResolveRemoteProject(.) with redacted SSH origin = %+v, %v; want sdk-published", p, err)
+	}
+}
+
 // A failed resolution must name the projects the caller may pass instead of
 // only reporting that the lookup failed.
 func TestResolveRemoteProjectErrorListsCandidates(t *testing.T) {

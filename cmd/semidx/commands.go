@@ -82,7 +82,7 @@ func resolveTarget(ctx context.Context, projectPath string, docs bool) indexTarg
 	if err != nil {
 		abs = projectPath
 	}
-	return indexTarget{projectPath, "", "path:" + abs, "docs", projectNameFromPath(projectPath)}
+	return indexTarget{abs, "", "path:" + abs, "docs", projectNameFromPath(abs)}
 }
 
 // applyBranchSuffix suffixes the identity with #<branch> and the display name

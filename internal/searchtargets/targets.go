@@ -128,14 +128,22 @@ func ResolveRemoteProject(ctx context.Context, lister ProjectLister, ref string)
 }
 
 // resolveRemoteFromCwd mirrors the local cwd resolution, trying the strategies
-// in descending order of confidence: the git repo identity, the project whose
-// indexed path encloses the directory, then the checkout's directory name.
+// in descending order of confidence: the git repo identity, its normalized
+// origin URL, the project whose indexed path encloses the directory, then the
+// checkout's directory name.
 func resolveRemoteFromCwd(ctx context.Context, cwd string, projects []store.Project) (*store.Project, error) {
 	if cwd == "" {
 		return nil, errUnknownCwdProject(projects)
 	}
 	gi := gitmeta.Resolve(ctx, cwd)
 	if p := lookupUnambiguous(ctx, gi.Identity, projects); p != nil {
+		return p, nil
+	}
+	// A server-side git project may have a user-chosen name as its identity.
+	// Its clone path is unrelated to the caller's checkout, so compare the
+	// normalized origin URL as a second stable locator before falling back to
+	// filesystem heuristics.
+	if p := lookupByGitOrigin(gi, projects); p != nil {
 		return p, nil
 	}
 	if p := projectref.Enclosing(cwd, projects); p != nil {
@@ -149,6 +157,39 @@ func resolveRemoteFromCwd(ctx context.Context, cwd string, projects []store.Proj
 		return p, nil
 	}
 	return nil, errUnknownCwdProject(projects)
+}
+
+func lookupByGitOrigin(gi gitmeta.Info, projects []store.Project) *store.Project {
+	if !gi.IsGit || !strings.HasPrefix(gi.Identity, "remote:") {
+		return nil
+	}
+	want := normalizeGitOrigin(strings.TrimPrefix(gi.Identity, "remote:"))
+	var match *store.Project
+	for i := range projects {
+		if projects[i].GitURL == "" || normalizeGitOrigin(projects[i].GitURL) != want {
+			continue
+		}
+		if match != nil {
+			// The same remote can legitimately have multiple registered
+			// branches/projects; never guess between them.
+			return nil
+		}
+		match = &projects[i]
+	}
+	return match
+}
+
+func normalizeGitOrigin(raw string) string {
+	normalized := gitmeta.NormalizeRemote(raw)
+	// Redacted scp-like remotes arrive from the API as host:org/repo,
+	// whereas the local git identity is host/org/repo. Normalize the safe,
+	// credential-free form without changing ordinary URL paths.
+	colon := strings.IndexByte(normalized, ':')
+	slash := strings.IndexByte(normalized, '/')
+	if colon > 0 && (slash < 0 || colon < slash) {
+		normalized = normalized[:colon] + "/" + normalized[colon+1:]
+	}
+	return normalized
 }
 
 // lookupUnambiguous resolves a ref, treating "not found" and "ambiguous" alike:

@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/lgldsilva/semidx/internal/clientconfig"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/searchtargets"
@@ -77,7 +79,8 @@ func (d *deps) runRemoteSearch(ctx context.Context, call searchCall) ([]projSear
 		return nil, fmt.Errorf("vector-only benchmark is available in local or postgres mode; remote API does not expose an isolated vector retriever")
 	}
 	api := d.searchAPI()
-	p, err := searchtargets.ResolveRemoteProject(ctx, api, call.projectArg)
+	projectRef := remoteSearchProjectRef(call.projectArg, d.client)
+	p, err := searchtargets.ResolveRemoteProject(ctx, api, projectRef)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +92,13 @@ func (d *deps) runRemoteSearch(ctx context.Context, call searchCall) ([]projSear
 		return nil, err
 	}
 	return []projSearch{{name: p.Name, resp: remoteToResponse(resp, p.Path), took: time.Duration(resp.TookMS) * time.Millisecond, projectPath: p.Path}}, nil
+}
+
+func remoteSearchProjectRef(projectArg string, cfg *clientconfig.Config) string {
+	if strings.TrimSpace(projectArg) != "" || cfg == nil {
+		return projectArg
+	}
+	return strings.TrimSpace(cfg.DefaultProject)
 }
 
 func (d *deps) runLocalSearch(ctx context.Context, call searchCall) ([]projSearch, error) {
