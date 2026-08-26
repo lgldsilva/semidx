@@ -27,6 +27,15 @@ func TestNormalizeRemote(t *testing.T) {
 	}
 }
 
+func TestCanonicalOriginAlignsRedactedSSH(t *testing.T) {
+	https := CanonicalOrigin("https://gitea.example/acme/sdk.git")
+	ssh := CanonicalOrigin("git@gitea.example:acme/sdk.git")
+	redacted := CanonicalOrigin("gitea.example:acme/sdk.git")
+	if https != "gitea.example/acme/sdk" || ssh != https || redacted != https {
+		t.Fatalf("CanonicalOrigin https=%q ssh=%q redacted=%q", https, ssh, redacted)
+	}
+}
+
 // gitInit makes a real repo in dir with hermetic config.
 func gitInit(t *testing.T, dir string, args ...[]string) {
 	t.Helper()
@@ -59,6 +68,9 @@ func TestResolveWithRemote(t *testing.T) {
 	}
 	if info.Identity != "remote:github.com/acme/app" {
 		t.Errorf("identity = %q, want remote:github.com/acme/app", info.Identity)
+	}
+	if info.Origin != "git@github.com:acme/app.git" {
+		t.Errorf("origin = %q, want git@github.com:acme/app.git", info.Origin)
 	}
 	if info.Toplevel == "" {
 		t.Error("toplevel empty")

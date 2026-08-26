@@ -19,6 +19,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/pkg/client"
@@ -118,7 +119,7 @@ func runPush(cmd *cobra.Command, d *deps, o *pushOptions) error {
 		return nil // scanPushFiles already reported "no files"
 	}
 
-	if err := ensureServerProject(ctx, cli, projectName, o.model, o.verbose); err != nil {
+	if err := ensureServerProject(ctx, cli, projectName, o.model, tgt, o.verbose); err != nil {
 		return err
 	}
 
@@ -169,17 +170,26 @@ func scanPushFiles(tgt indexTarget, maxFiles int, verbose bool) ([]string, error
 }
 
 // ensureServerProject creates the project on the server, tolerating an existing
-// one (create is idempotent — ok if the project already exists).
-func ensureServerProject(ctx context.Context, cli *client.Client, projectName, model string, verbose bool) error {
+// one (create is idempotent — ok if the project already exists). git_url is
+// recorded for git checkouts so remote `--project .` can match by origin; it is
+// only set at create time (existing rows keep whatever URL they already have).
+func ensureServerProject(ctx context.Context, cli *client.Client, projectName, model string, tgt indexTarget, verbose bool) error {
 	if verbose {
 		fmt.Printf("Creating project %q on server ...\n", projectName)
 	}
-	if _, err := cli.CreateProject(ctx, projectName, model, "push", "", ""); err != nil {
+	if _, err := cli.CreateProject(ctx, projectName, model, "push", pushGitURL(ctx, tgt), ""); err != nil {
 		if _, gef := cli.GetProject(ctx, projectName); gef != nil {
 			return fmt.Errorf("create project %q: %w", projectName, err)
 		}
 	}
 	return nil
+}
+
+func pushGitURL(ctx context.Context, tgt indexTarget) string {
+	if tgt.sourceType != "git" {
+		return ""
+	}
+	return gitmeta.Resolve(ctx, tgt.indexPath).Origin
 }
 
 // pusher carries the shared state for a single push run so the raw and embedded

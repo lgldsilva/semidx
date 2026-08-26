@@ -110,12 +110,14 @@ func ResolveRemoteProject(ctx context.Context, lister ProjectLister, ref string)
 	}
 	if ref == "" || ref == "." {
 		// "." is the default of --project on some commands and means "here",
-		// so it takes the same cwd resolution as an omitted flag.
-		if p, err := resolveRemoteFromCwd(ctx, cwd, stored); err == nil {
-			return p, nil
-		} else if ref == "" {
+		// so it takes the same cwd resolution as an omitted flag. Do not fall
+		// through to a literal name lookup for "." — that is never a useful
+		// project name.
+		p, err := resolveRemoteFromCwd(ctx, cwd, stored)
+		if err != nil {
 			return nil, err
 		}
+		return p, nil
 	}
 	p, err := projectref.ResolveInList(ctx, ref, cwd, stored)
 	if err != nil {
@@ -128,14 +130,22 @@ func ResolveRemoteProject(ctx context.Context, lister ProjectLister, ref string)
 }
 
 // resolveRemoteFromCwd mirrors the local cwd resolution, trying the strategies
-// in descending order of confidence: the git repo identity, the project whose
-// indexed path encloses the directory, then the checkout's directory name.
+// in descending order of confidence: the git repo identity, its normalized
+// origin URL, the project whose indexed path encloses the directory, then the
+// checkout's directory name.
 func resolveRemoteFromCwd(ctx context.Context, cwd string, projects []store.Project) (*store.Project, error) {
 	if cwd == "" {
 		return nil, errUnknownCwdProject(projects)
 	}
 	gi := gitmeta.Resolve(ctx, cwd)
 	if p := lookupUnambiguous(ctx, gi.Identity, projects); p != nil {
+		return p, nil
+	}
+	// A server-side git project may have a user-chosen name as its identity.
+	// Its clone path is unrelated to the caller's checkout, so compare the
+	// normalized origin URL as a second stable locator before falling back to
+	// filesystem heuristics.
+	if p := lookupByGitOrigin(gi, projects); p != nil {
 		return p, nil
 	}
 	if p := projectref.Enclosing(cwd, projects); p != nil {
@@ -149,6 +159,40 @@ func resolveRemoteFromCwd(ctx context.Context, cwd string, projects []store.Proj
 		return p, nil
 	}
 	return nil, errUnknownCwdProject(projects)
+}
+
+func lookupByGitOrigin(gi gitmeta.Info, projects []store.Project) *store.Project {
+	if !gi.IsGit || !strings.HasPrefix(gi.Identity, "remote:") {
+		return nil
+	}
+	want := gitmeta.CanonicalOrigin(strings.TrimPrefix(gi.Identity, "remote:"))
+	if want == "" {
+		return nil
+	}
+	var match *store.Project
+	for i := range projects {
+		if !projectOriginMatches(projects[i], want) {
+			continue
+		}
+		if match != nil {
+			// The same remote can legitimately have multiple registered
+			// branches/projects; never guess between them.
+			return nil
+		}
+		match = &projects[i]
+	}
+	return match
+}
+
+func projectOriginMatches(p store.Project, want string) bool {
+	if p.GitURL != "" && gitmeta.CanonicalOrigin(p.GitURL) == want {
+		return true
+	}
+	id := p.Identity
+	if strings.HasPrefix(id, "remote:") {
+		return gitmeta.CanonicalOrigin(strings.TrimPrefix(id, "remote:")) == want
+	}
+	return false
 }
 
 // lookupUnambiguous resolves a ref, treating "not found" and "ambiguous" alike:

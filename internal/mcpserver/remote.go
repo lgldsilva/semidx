@@ -9,6 +9,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/codeintel"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/search"
+	"github.com/lgldsilva/semidx/internal/searchtargets"
 	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/internal/usage"
 	"github.com/lgldsilva/semidx/pkg/client"
@@ -25,6 +26,20 @@ func NewClientBackend(c *client.Client) Backend {
 		c.ClientSource = string(usage.SourceMCP)
 	}
 	return &clientBackend{c: c}
+}
+
+// ResolveCWDProject maps the process working directory onto a server project
+// (git origin, enclosing path, then directory name) so MCP "project": "." and
+// omitted project (when no default is set) match the CLI.
+func (b *clientBackend) ResolveCWDProject(ctx context.Context) (string, error) {
+	if b == nil || b.c == nil {
+		return "", fmt.Errorf("remote MCP has no API client")
+	}
+	p, err := searchtargets.ResolveRemoteProject(ctx, b.c, ".")
+	if err != nil {
+		return "", err
+	}
+	return p.Name, nil
 }
 
 func (b *clientBackend) Search(ctx context.Context, project, query, model string, topK int, graph bool, graphDepth int) (*SearchOutput, error) {

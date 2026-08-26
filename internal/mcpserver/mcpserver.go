@@ -377,12 +377,18 @@ func resolveProject(reqProject, defaultProject string) string {
 	return defaultProject
 }
 
-// resolveProjectForTool prefers explicit/default project, then standalone cwd
-// resolution when the backend supports it.
+// resolveProjectForTool prefers an explicit name, then (when the arg is
+// omitted) the configured default, then cwd resolution. "." always means the
+// current checkout, even if a default is set.
 func resolveProjectForTool(ctx context.Context, b Backend, reqProject, defaultProject string) (string, error) {
-	p := resolveProject(reqProject, defaultProject)
-	if strings.TrimSpace(p) != "" {
-		return p, nil
+	req := strings.TrimSpace(reqProject)
+	if req != "" && req != "." {
+		return req, nil
+	}
+	if req == "" {
+		if def := strings.TrimSpace(defaultProject); def != "" {
+			return def, nil
+		}
 	}
 	if r, ok := asCWDProjectResolver(b); ok {
 		name, err := r.ResolveCWDProject(ctx)
@@ -397,9 +403,9 @@ func resolveProjectForTool(ctx context.Context, b Backend, reqProject, defaultPr
 // project-taking tool's description, so agents know "project" may be omitted.
 func projectToolDescription(base, defaultProject string) string {
 	if defaultProject != "" {
-		return fmt.Sprintf("%s If \"project\" is omitted, the configured default project %q is used.", base, defaultProject)
+		return fmt.Sprintf("%s If \"project\" is omitted, the configured default project %q is used. \".\" still means the current checkout.", base, defaultProject)
 	}
-	return base + ` If "project" is omitted in standalone mode, the indexed project enclosing the current working directory is used when available.`
+	return base + ` If "project" is omitted or set to ".", the indexed project enclosing the current working directory is used when available.`
 }
 
 // mustProjectInputSchema infers the JSON schema for In and, when
