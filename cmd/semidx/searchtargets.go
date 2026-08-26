@@ -13,6 +13,7 @@ import (
 	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/searchtargets"
+	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/pkg/client"
 )
 
@@ -79,8 +80,7 @@ func (d *deps) runRemoteSearch(ctx context.Context, call searchCall) ([]projSear
 		return nil, fmt.Errorf("vector-only benchmark is available in local or postgres mode; remote API does not expose an isolated vector retriever")
 	}
 	api := d.searchAPI()
-	projectRef := remoteSearchProjectRef(call.projectArg, d.client)
-	p, err := searchtargets.ResolveRemoteProject(ctx, api, projectRef)
+	p, err := d.resolveRemoteCLIProject(ctx, api, call.projectArg)
 	if err != nil {
 		return nil, err
 	}
@@ -94,11 +94,24 @@ func (d *deps) runRemoteSearch(ctx context.Context, call searchCall) ([]projSear
 	return []projSearch{{name: p.Name, resp: remoteToResponse(resp, p.Path), took: time.Duration(resp.TookMS) * time.Millisecond, projectPath: p.Path}}, nil
 }
 
-func remoteSearchProjectRef(projectArg string, cfg *clientconfig.Config) string {
+// remoteSearchDefaultFallback is used only after cwd resolution of an omitted
+// --project fails. An explicit "." means "here" and must not be replaced.
+func remoteSearchDefaultFallback(projectArg string, cfg *clientconfig.Config) string {
 	if strings.TrimSpace(projectArg) != "" || cfg == nil {
-		return projectArg
+		return ""
 	}
 	return strings.TrimSpace(cfg.DefaultProject)
+}
+
+func (d *deps) resolveRemoteCLIProject(ctx context.Context, lister searchtargets.ProjectLister, ref string) (*store.Project, error) {
+	p, err := searchtargets.ResolveRemoteProject(ctx, lister, ref)
+	if err == nil {
+		return p, nil
+	}
+	if fallback := remoteSearchDefaultFallback(ref, d.client); fallback != "" {
+		return searchtargets.ResolveRemoteProject(ctx, lister, fallback)
+	}
+	return nil, err
 }
 
 func (d *deps) runLocalSearch(ctx context.Context, call searchCall) ([]projSearch, error) {

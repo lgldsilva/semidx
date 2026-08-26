@@ -17,6 +17,7 @@ type Info struct {
 	IsGit    bool
 	Toplevel string // absolute path of the current worktree root
 	Identity string // stable key shared by all worktrees/clones of the repo
+	Origin   string // raw remote.origin.url when the checkout has one
 }
 
 // Resolve inspects dir and returns its git Info. For a non-git directory it
@@ -31,6 +32,7 @@ func Resolve(ctx context.Context, dir string) Info {
 	info := Info{IsGit: true, Toplevel: top}
 
 	if remote, err := gitexec.Run(ctx, dir, "config", "--get", "remote.origin.url"); err == nil && remote != "" {
+		info.Origin = remote
 		info.Identity = "remote:" + NormalizeRemote(remote)
 		return info
 	}
@@ -69,4 +71,18 @@ func NormalizeRemote(url string) string {
 		s = s[at+1:]
 	}
 	return strings.ToLower(s)
+}
+
+// CanonicalOrigin is NormalizeRemote plus the leftover scp form that RedactURL
+// produces (host:org/repo without user@). Use this when comparing a local git
+// identity to a server GitURL; do not persist it as a project identity, so
+// URLs with ports keep their existing remote:host:port/path keys.
+func CanonicalOrigin(raw string) string {
+	normalized := NormalizeRemote(raw)
+	colon := strings.IndexByte(normalized, ':')
+	slash := strings.IndexByte(normalized, '/')
+	if colon > 0 && (slash < 0 || colon < slash) {
+		normalized = normalized[:colon] + "/" + normalized[colon+1:]
+	}
+	return normalized
 }

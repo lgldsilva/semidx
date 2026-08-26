@@ -23,7 +23,6 @@ import (
 	"github.com/lgldsilva/semidx/internal/mcpserver"
 	"github.com/lgldsilva/semidx/internal/pending"
 	"github.com/lgldsilva/semidx/internal/search"
-	"github.com/lgldsilva/semidx/internal/searchtargets"
 	"github.com/lgldsilva/semidx/internal/secretbox"
 	"github.com/lgldsilva/semidx/internal/server"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -636,7 +635,7 @@ are indexed, and what embedding model is in use. Uses the active backend
 
 func runStatusRemote(ctx context.Context, d *deps, projectPath string) error {
 	api := d.apiClient()
-	p, err := searchtargets.ResolveRemoteProject(ctx, api, projectPath)
+	p, err := d.resolveRemoteCLIProject(ctx, api, projectPath)
 	if err != nil {
 		return err
 	}

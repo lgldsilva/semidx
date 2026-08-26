@@ -343,17 +343,11 @@ func loadLocalGraphIndex(ctx context.Context, db store.IndexStore, projectID int
 
 // remoteGraphProjectName resolves the server-side project NAME for the graph
 // endpoints. The server keys projects by name, so a path ref cannot be resolved
-// remotely; with no --project we only guess when the server has exactly one.
+// remotely; with no --project we resolve the current checkout, then default_project.
 func remoteGraphProjectName(ctx context.Context, d *deps, projectArg string) (string, error) {
-	if projectArg != "" {
-		return projectArg, nil
-	}
-	projects, err := d.apiClient().ListProjects(ctx)
+	p, err := d.resolveRemoteCLIProject(ctx, d.apiClient(), projectArg)
 	if err != nil {
 		return "", err
 	}
-	if len(projects) == 1 {
-		return projects[0].Name, nil
-	}
-	return "", fmt.Errorf("pass --project <name> (remote mode)")
+	return p.Name, nil
 }

@@ -110,12 +110,14 @@ func ResolveRemoteProject(ctx context.Context, lister ProjectLister, ref string)
 	}
 	if ref == "" || ref == "." {
 		// "." is the default of --project on some commands and means "here",
-		// so it takes the same cwd resolution as an omitted flag.
-		if p, err := resolveRemoteFromCwd(ctx, cwd, stored); err == nil {
-			return p, nil
-		} else if ref == "" {
+		// so it takes the same cwd resolution as an omitted flag. Do not fall
+		// through to a literal name lookup for "." — that is never a useful
+		// project name.
+		p, err := resolveRemoteFromCwd(ctx, cwd, stored)
+		if err != nil {
 			return nil, err
 		}
+		return p, nil
 	}
 	p, err := projectref.ResolveInList(ctx, ref, cwd, stored)
 	if err != nil {
@@ -163,10 +165,13 @@ func lookupByGitOrigin(gi gitmeta.Info, projects []store.Project) *store.Project
 	if !gi.IsGit || !strings.HasPrefix(gi.Identity, "remote:") {
 		return nil
 	}
-	want := normalizeGitOrigin(strings.TrimPrefix(gi.Identity, "remote:"))
+	want := gitmeta.CanonicalOrigin(strings.TrimPrefix(gi.Identity, "remote:"))
+	if want == "" {
+		return nil
+	}
 	var match *store.Project
 	for i := range projects {
-		if projects[i].GitURL == "" || normalizeGitOrigin(projects[i].GitURL) != want {
+		if !projectOriginMatches(projects[i], want) {
 			continue
 		}
 		if match != nil {
@@ -179,17 +184,15 @@ func lookupByGitOrigin(gi gitmeta.Info, projects []store.Project) *store.Project
 	return match
 }
 
-func normalizeGitOrigin(raw string) string {
-	normalized := gitmeta.NormalizeRemote(raw)
-	// Redacted scp-like remotes arrive from the API as host:org/repo,
-	// whereas the local git identity is host/org/repo. Normalize the safe,
-	// credential-free form without changing ordinary URL paths.
-	colon := strings.IndexByte(normalized, ':')
-	slash := strings.IndexByte(normalized, '/')
-	if colon > 0 && (slash < 0 || colon < slash) {
-		normalized = normalized[:colon] + "/" + normalized[colon+1:]
+func projectOriginMatches(p store.Project, want string) bool {
+	if p.GitURL != "" && gitmeta.CanonicalOrigin(p.GitURL) == want {
+		return true
 	}
-	return normalized
+	id := p.Identity
+	if strings.HasPrefix(id, "remote:") {
+		return gitmeta.CanonicalOrigin(strings.TrimPrefix(id, "remote:")) == want
+	}
+	return false
 }
 
 // lookupUnambiguous resolves a ref, treating "not found" and "ambiguous" alike:

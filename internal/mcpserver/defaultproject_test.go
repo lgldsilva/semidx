@@ -40,8 +40,8 @@ func TestProjectToolDescription(t *testing.T) {
 	if !strings.HasPrefix(gotEmpty, base) {
 		t.Errorf("no default must keep the base text; got %q", gotEmpty)
 	}
-	if !strings.Contains(gotEmpty, "standalone") {
-		t.Errorf("no default should mention standalone cwd resolve; got %q", gotEmpty)
+	if !strings.Contains(gotEmpty, "working directory") {
+		t.Errorf("no default should mention cwd resolve; got %q", gotEmpty)
 	}
 	got := projectToolDescription(base, "myproj")
 	if !strings.HasPrefix(got, base) {
@@ -114,6 +114,57 @@ func TestSearchUsesDefaultProjectWhenOmitted(t *testing.T) {
 	}
 	if got != "other" {
 		t.Errorf("explicit project must win over the default; backend saw %q", got)
+	}
+}
+
+type cwdStubBackend struct {
+	stubBackend
+	cwdName string
+}
+
+func (b *cwdStubBackend) ResolveCWDProject(context.Context) (string, error) {
+	return b.cwdName, nil
+}
+
+func TestSearchDotResolvesCWDNotDefault(t *testing.T) {
+	t.Parallel()
+	var got string
+	b := &cwdStubBackend{
+		cwdName: "from-cwd",
+		stubBackend: stubBackend{
+			searchFunc: func(_ context.Context, project, _, _ string, _ int, _ bool, _ int) (*SearchOutput, error) {
+				got = project
+				return &SearchOutput{Project: project}, nil
+			},
+		},
+	}
+	sess := connectWithOptions(t, b, Options{DefaultProject: "myproj"})
+	if _, isErr := callText(t, sess, "semantic_search", map[string]any{"project": ".", "query": "q"}); isErr {
+		t.Fatal("unexpected tool error")
+	}
+	if got != "from-cwd" {
+		t.Errorf("project=. should resolve cwd, backend saw %q", got)
+	}
+}
+
+func TestSearchOmitWithoutDefaultUsesCWD(t *testing.T) {
+	t.Parallel()
+	var got string
+	b := &cwdStubBackend{
+		cwdName: "from-cwd",
+		stubBackend: stubBackend{
+			searchFunc: func(_ context.Context, project, _, _ string, _ int, _ bool, _ int) (*SearchOutput, error) {
+				got = project
+				return &SearchOutput{Project: project}, nil
+			},
+		},
+	}
+	sess := connectWithOptions(t, b, Options{})
+	if _, isErr := callText(t, sess, "semantic_search", map[string]any{"query": "q"}); isErr {
+		t.Fatal("unexpected tool error")
+	}
+	if got != "from-cwd" {
+		t.Errorf("omitted project with cwd resolver = %q, want from-cwd", got)
 	}
 }
 

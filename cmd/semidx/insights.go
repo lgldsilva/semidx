@@ -218,7 +218,7 @@ func countMatches(cmd *cobra.Command, d *deps, project, query string) (int, erro
 	var count int
 	if d.remote() {
 		api := d.searchAPI()
-		p, err := searchtargets.ResolveRemoteProject(ctx, api, project)
+		p, err := d.resolveRemoteCLIProject(ctx, api, project)
 		if err != nil {
 			return 0, err
 		}

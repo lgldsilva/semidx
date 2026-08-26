@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lgldsilva/semidx/internal/gitenv"
 )
 
 func TestContainsNull(t *testing.T) {
@@ -165,6 +169,27 @@ func TestProjectNameFromPath(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("projectNameFromPath(%q) = %q, want %q", tt.path, got, tt.want)
 		}
+	}
+}
+
+func TestPushGitURL(t *testing.T) {
+	if got := pushGitURL(context.Background(), indexTarget{sourceType: "docs", indexPath: t.TempDir()}); got != "" {
+		t.Fatalf("docs pushGitURL = %q, want empty", got)
+	}
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"remote", "add", "origin", "https://gitea.example/acme/sdk.git"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(gitenv.Clean(os.Environ()), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	got := pushGitURL(context.Background(), indexTarget{sourceType: "git", indexPath: dir})
+	if got != "https://gitea.example/acme/sdk.git" {
+		t.Fatalf("git pushGitURL = %q, want origin URL", got)
 	}
 }
 

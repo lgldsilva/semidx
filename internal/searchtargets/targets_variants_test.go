@@ -222,6 +222,58 @@ func TestResolveRemoteProjectResolvesDotByRedactedSSHOrigin(t *testing.T) {
 	}
 }
 
+func TestResolveRemoteProjectResolvesDotHTTPSVsSSH(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir, []string{"remote", "add", "origin", "git@gitea.example:acme/sdk.git"})
+	t.Chdir(dir)
+
+	lister := &fakeLister{projects: []client.Project{{
+		Name:     "sdk-published",
+		Identity: "sdk-published",
+		GitURL:   "https://gitea.example/acme/sdk.git",
+	}}}
+	p, err := ResolveRemoteProject(context.Background(), lister, ".")
+	if err != nil || p == nil || p.Name != "sdk-published" {
+		t.Fatalf("ResolveRemoteProject(.) HTTPS vs SSH = %+v, %v; want sdk-published", p, err)
+	}
+}
+
+func TestResolveRemoteProjectResolvesDotByRemoteIdentity(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir, []string{"remote", "add", "origin", "https://gitea.example/acme/sdk.git"})
+	t.Chdir(dir)
+	id := gitmeta.Resolve(context.Background(), dir).Identity
+
+	lister := &fakeLister{projects: []client.Project{{
+		Name:     "sdk-published",
+		Identity: id,
+	}}}
+	p, err := ResolveRemoteProject(context.Background(), lister, ".")
+	if err != nil || p == nil || p.Name != "sdk-published" {
+		t.Fatalf("ResolveRemoteProject(.) by identity = %+v, %v; want sdk-published", p, err)
+	}
+}
+
+func TestResolveRemoteProjectRefusesAmbiguousGitOrigin(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir, []string{"remote", "add", "origin", "https://gitea.example/acme/sdk.git"})
+	t.Chdir(dir)
+
+	lister := &fakeLister{projects: []client.Project{
+		{Name: "sdk", GitURL: "https://gitea.example/acme/sdk.git"},
+		{Name: "sdk-develop", GitURL: "https://gitea.example/acme/sdk.git"},
+	}}
+	_, err := ResolveRemoteProject(context.Background(), lister, ".")
+	if err == nil {
+		t.Fatal("want error when two projects share the same origin")
+	}
+	for _, name := range []string{"sdk", "sdk-develop"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error %q should list candidate %q", err, name)
+		}
+	}
+}
+
 // A failed resolution must name the projects the caller may pass instead of
 // only reporting that the lookup failed.
 func TestResolveRemoteProjectErrorListsCandidates(t *testing.T) {

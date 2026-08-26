@@ -300,7 +300,7 @@ func runAlertSearch(ctx context.Context, d *deps, a Alert) (*search.Response, er
 
 func searchAlertRemote(ctx context.Context, d *deps, a Alert) (*search.Response, error) {
 	api := d.searchAPI()
-	p, err := searchtargets.ResolveRemoteProject(ctx, api, a.Project)
+	p, err := d.resolveRemoteCLIProject(ctx, api, a.Project)
 	if err != nil {
 		return nil, fmt.Errorf("resolve project: %w", err)
 	}
