@@ -152,6 +152,7 @@ type indexCmdOpts struct {
 	toServer     bool
 	embedLocally bool
 	astOnly      bool
+	force        bool
 }
 
 func newIndexCmd(d *deps) *cobra.Command {
@@ -203,6 +204,7 @@ With no embedding provider configured, add --keyword to index text-only.`,
 	c.Flags().BoolVar(&opts.toServer, "to-server", false, "Push files to the logged-in server instead of writing a local index (alias of push)")
 	c.Flags().BoolVar(&opts.embedLocally, "embed-locally", false, "With --to-server: chunk and embed on this machine before upload")
 	c.Flags().BoolVar(&opts.astOnly, "ast-only", false, "AST-only indexing (zero-cost, keyword-only but with symbol enrichment)")
+	c.Flags().BoolVar(&opts.force, "force", false, "Reindex all files and rebuild chunks, symbols, and dependency edges")
 	return c
 }
 
@@ -224,6 +226,9 @@ func runIndex(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 func runIndexWhenRemote(cmd *cobra.Command, d *deps, opts indexCmdOpts) error {
 	if !opts.toServer {
 		return errIndexInRemoteMode(d.client.ServerURL, opts.projectPath)
+	}
+	if opts.force {
+		return fmt.Errorf("index --to-server does not support --force; use `semidx --local index --force` or push a fresh project")
 	}
 	if err := validateIndexToServer(opts.watch, opts.gitMode, opts.branch, d.keywordOnly || opts.astOnly); err != nil {
 		return err
@@ -318,6 +323,7 @@ func newCLIIndexer(db store.IndexStore, d *deps, tgt indexTarget, opts indexCmdO
 		MaxChunksPerFile:    d.cfg.MaxChunksPerFile,
 		MaxChunksPerProject: d.cfg.MaxChunksPerProject,
 		MaxFilesPerProject:  d.cfg.MaxFilesPerProject,
+		Force:               opts.force,
 		Verbose:             opts.verbose,
 		GitMode:             opts.gitMode,
 		GitSince:            opts.gitSince,

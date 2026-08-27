@@ -355,6 +355,7 @@ require github.com/single/line v0.1.0
 	info := readGoMod(dir)
 	if info == nil {
 		t.Fatal("readGoMod returned nil")
+		return
 	}
 	if info.module != "github.com/acme/app" {
 		t.Errorf("module = %q", info.module)

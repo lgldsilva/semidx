@@ -66,6 +66,8 @@ type Indexer struct {
 	privacyMode         privacy.Mode // project-level cloud/hybrid/edge routing policy
 	noSymbols           bool         // when true, skip symbol enrichment (even when embedding)
 	modulePath          string       // Go module path from go.mod (for import-dependency extraction)
+	projectFiles        []string     // project-relative inventory used for dependency resolution
+	force               bool         // when true, bypass hash fast paths and rebuild every file
 	worktree            string       // when set, record this worktree's manifest + prune after indexing
 
 	// Secret scan: when enabled, every file's content is scanned with gitleaks
@@ -138,6 +140,10 @@ type IndexerOpts struct {
 	Logger              *slog.Logger
 	OnProgress          IndexProgressFunc
 	PrivacyMode         privacy.Mode
+	Force               bool // bypass incremental fast paths and rebuild all indexed files
+	// ProjectFiles is an optional project-relative inventory used by callers
+	// that index individual units (for example the remote push API).
+	ProjectFiles []string
 }
 
 // NewIndexer wires an Indexer. dims is the embedding dimension of the model;
@@ -162,7 +168,7 @@ func NewIndexer(db store.IndexStore, emb embed.Embedder, dims int, opts IndexerO
 	if mode == "" {
 		mode = privacy.Hybrid
 	}
-	idx := &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunksPerProject: opts.MaxChunksPerProject, maxFilesPerProject: opts.MaxFilesPerProject, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger, onProgress: opts.OnProgress, privacyMode: mode}
+	idx := &Indexer{db: db, embedder: emb, dims: dims, workers: opts.Workers, embedBatchSize: opts.EmbedBatchSize, maxFileSize: opts.MaxFileSize, maxChunksPerFile: opts.MaxChunksPerFile, maxChunksPerProject: opts.MaxChunksPerProject, maxFilesPerProject: opts.MaxFilesPerProject, maxChunkChars: 4000, verbose: opts.Verbose, gitMode: opts.GitMode, gitSince: opts.GitSince, log: opts.Logger, onProgress: opts.OnProgress, privacyMode: mode, force: opts.Force, projectFiles: append([]string(nil), opts.ProjectFiles...)}
 	if opts.MaxChunksPerProject > 0 {
 		idx.chunksRemaining.Store(int64(opts.MaxChunksPerProject))
 	} else {
@@ -231,6 +237,7 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 	if idx.modulePath == "" {
 		idx.modulePath = ReadModulePath(projectPath)
 	}
+	idx.projectFiles = projectInventory(projectPath)
 
 	files, err := idx.resolveIndexFiles(ctx, projectID, projectPath, maxFiles)
 	if err != nil {
@@ -345,6 +352,9 @@ func (idx *Indexer) recordDependencyCatalog(ctx context.Context, projectID int, 
 // resolveIndexFiles returns the files to index: git-diff incremental when a
 // previous commit is stored, otherwise a full walk of projectPath.
 func (idx *Indexer) resolveIndexFiles(ctx context.Context, projectID int, projectPath string, maxFiles int) ([]string, error) {
+	if idx.force {
+		return ScanFiles(projectPath, effectiveMaxFiles(maxFiles, idx.maxFilesPerProject))
+	}
 	changedFiles, diffErr := idx.gitDiffChanged(ctx, projectID, projectPath)
 	if diffErr != nil {
 		idx.logf("[warn] git diff incremental failed, falling back to full walk: %s", truncateErr(diffErr, 200))
@@ -503,6 +513,26 @@ func ScanFiles(projectPath string, maxFiles int) ([]string, error) {
 	return files, nil
 }
 
+// projectInventory returns every eligible project-relative path, independent
+// of the incremental file set or --max-files limit used for this run. The
+// inventory lets language analyzers resolve source-root imports to their real
+// on-disk directories even when the current run only visits changed files.
+func projectInventory(projectPath string) []string {
+	files, err := ScanFiles(projectPath, 0)
+	if err != nil {
+		return nil
+	}
+	inventory := make([]string, 0, len(files))
+	for _, path := range files {
+		rel, err := filepath.Rel(projectPath, path)
+		if err != nil || rel == "." || !filepath.IsLocal(rel) {
+			continue
+		}
+		inventory = append(inventory, filepath.ToSlash(rel))
+	}
+	return inventory
+}
+
 // indexFile reads a file from disk and indexes its content. The outcome
 // distinguishes an indexed file from one skipped because it's empty/chunk-less
 // or unchanged; hardErr signals a read/upsert/delete failure; softErrs counts
@@ -575,6 +605,9 @@ func (idx *Indexer) IndexEncryptedFile(ctx context.Context, projectID int, path,
 // (class API surface + source/text resources). Shared by the disk and push paths.
 func (idx *Indexer) indexContent(ctx context.Context, projectID int, rel, model string, content []byte) (created, softErrs int, outcome fileOutcome, units []indexedUnit, hardErr error) {
 	if len(strings.TrimSpace(string(content))) == 0 {
+		if err := idx.removeFile(ctx, projectID, rel); err != nil {
+			return 0, 0, outcomeSkippedEmpty, nil, fmt.Errorf("remove empty file %s: %w", rel, err)
+		}
 		return 0, 0, outcomeSkippedEmpty, nil, nil
 	}
 	if len(content) > idx.maxFileSize {
@@ -590,6 +623,29 @@ func (idx *Indexer) indexContent(ctx context.Context, projectID int, rel, model 
 		units = []indexedUnit{{rel, h}}
 	}
 	return c, s, o, units, e
+}
+
+// removeFile removes a path from the current index. Git worktrees share one
+// project and may retain different content-addressed versions of the same
+// path, so an empty or removed file must first remove only this worktree's
+// manifest reference and then prune versions no worktree references. Push and
+// document projects have no worktree and retain the broad path deletion.
+func (idx *Indexer) removeFile(ctx context.Context, projectID int, rel string) error {
+	if idx.worktree == "" {
+		return idx.db.DeleteFileByPath(ctx, projectID, rel)
+	}
+
+	remover, ok := idx.db.(store.WorktreeFileRemover)
+	if !ok {
+		return fmt.Errorf("store does not support worktree file removal")
+	}
+	if err := remover.RemoveWorktreeFile(ctx, projectID, idx.worktree, rel); err != nil {
+		return err
+	}
+	if _, err := idx.db.PruneUnreferencedFiles(ctx, projectID); err != nil {
+		return err
+	}
+	return nil
 }
 
 // indexExtracted extracts a document/archive into its searchable units and
@@ -643,14 +699,23 @@ func mergeOutcome(current, o fileOutcome) fileOutcome {
 // indexUnit chunks, embeds and stores one already-textual unit (a file's content
 // or an archive entry's text), returning its content hash for the manifest.
 func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model string, content []byte) (created, softErrs int, outcome fileOutcome, hash string, hardErr error) {
+	// Replace dependency edges before the content fast path. Imports are a
+	// separate derived artifact and must be repairable for files whose chunks
+	// are already current, including after analyzer/path-resolution upgrades.
+	deps := si.AnalyzeWithFiles(rel, content, idx.modulePath, idx.projectFiles)
+	if err := idx.db.InsertFileDependencies(ctx, projectID, rel, deps); err != nil {
+		return 0, 0, outcomeSkippedEmpty, "", fmt.Errorf("record dependencies for %s: %w", rel, err)
+	}
 	if len(strings.TrimSpace(string(content))) == 0 {
 		return 0, 0, outcomeSkippedEmpty, "", nil
 	}
 	hash = ContentHash(content)
 
 	// Incremental: skip a unit already indexed with this exact content.
-	if upToDate, err := idx.db.FileUpToDate(ctx, projectID, rel, hash, idx.dims); err == nil && upToDate {
-		return 0, 0, outcomeSkippedUnchanged, hash, nil
+	if !idx.force {
+		if upToDate, err := idx.db.FileUpToDate(ctx, projectID, rel, hash, idx.dims); err == nil && upToDate {
+			return 0, 0, outcomeSkippedUnchanged, hash, nil
+		}
 	}
 
 	fileID, err := idx.db.UpsertFile(ctx, projectID, rel, hash, len(content))
@@ -664,13 +729,6 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 	}
 	if len(chunks) > idx.maxChunksPerFile {
 		chunks = chunks[:idx.maxChunksPerFile]
-	}
-
-	// Extract import dependencies for graph edges (all supported languages).
-	deps := si.Analyze(rel, content, idx.modulePath)
-	// Replace edges every index pass so stale imports are removed.
-	if err := idx.db.InsertFileDependencies(ctx, projectID, rel, deps); err != nil {
-		idx.log.Warn("failed to record dependencies", "file", rel, "error", err)
 	}
 
 	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {

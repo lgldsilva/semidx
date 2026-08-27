@@ -1,6 +1,6 @@
 // Package imports extracts local dependency paths from source code across
 // multiple languages. It dispatches by file extension to language-specific
-// regex-based extractors.
+// extractors and uses tree-sitter for Python import declarations.
 //
 // The Go extractor logic is copied from internal/chunker/ast_analyzer.go
 // (AnalyzeGoImports) to avoid a circular dependency. Original author's
@@ -10,10 +10,17 @@ package imports
 import (
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/odvcencio/gotreesitter"
+	"github.com/odvcencio/gotreesitter/grammars"
+
+	"github.com/lgldsilva/semidx/internal/chunker"
 )
 
 // ---------------------------------------------------------------------------
@@ -31,10 +38,6 @@ var (
 	tsImportFromRe = regexp.MustCompile(`(?:import|export)\s+(?:.*?\s+from\s+)?['"]([^'"]+)['"]`)
 	tsRequireRe    = regexp.MustCompile(`require\s*\(\s*['"]([^'"]+)['"]`)
 	tsImportExprRe = regexp.MustCompile(`import\s*\(\s*['"]([^'"]+)['"]`)
-
-	// Python
-	pyFromImportRe = regexp.MustCompile(`from\s+([\w.]+)\s+import`)
-	pyImportRe     = regexp.MustCompile(`^\s*import\s+([\w.]+)`)
 
 	// Rust
 	rustUseRe         = regexp.MustCompile(`use\s+([\w:]+)(?:::|;)`)
@@ -76,7 +79,8 @@ var pythonStdlib = map[string]bool{
 	"base64": true, "builtins": true,
 	"collections": true, "concurrent": true, "contextlib": true, "copy": true,
 	"csv": true, "ctypes": true,
-	"datetime": true, "decimal": true, "difflib": true,
+	"dataclasses": true,
+	"datetime":    true, "decimal": true, "difflib": true,
 	"email": true, "enum": true,
 	"fileinput": true, "fnmatch": true, "fractions": true, "functools": true,
 	"getopt": true, "getpass": true, "glob": true, "gzip": true,
@@ -99,6 +103,15 @@ var pythonStdlib = map[string]bool{
 	"warnings": true, "wave": true, "weakref": true,
 	"xml":     true,
 	"zipfile": true, "zipimport": true,
+	"__future__": true,
+}
+
+// pythonSourceRoots are conventional source roots whose path is not part of
+// the importable Python module name (for example src/acme/api.py imports as
+// acme.api). The complete project inventory still retains the full path so
+// the graph can point at the actual indexed directory.
+var pythonSourceRoots = map[string]bool{
+	"lib": true, "python": true, "source": true, "src": true,
 }
 
 // rustStdlibPrefixes are Rust's standard / core crates.
@@ -179,6 +192,14 @@ var goStdlibPrefixes = map[string]bool{
 // Returns nil for unsupported extensions or parse failures.
 // modulePath is only needed for Go (to strip the module prefix); other languages ignore it.
 func Analyze(path string, content []byte, modulePath string) []string {
+	return AnalyzeWithFiles(path, content, modulePath, nil)
+}
+
+// AnalyzeWithFiles extracts dependencies using projectFiles to resolve
+// Python module names to real project-relative paths. projectFiles must use
+// paths relative to the project root. A nil/empty inventory preserves the
+// historical language-level behavior for callers that analyze one file.
+func AnalyzeWithFiles(path string, content []byte, modulePath string, projectFiles []string) []string {
 	if len(content) == 0 {
 		return nil
 	}
@@ -193,7 +214,7 @@ func Analyze(path string, content []byte, modulePath string) []string {
 	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs":
 		return analyzeTS(path, content)
 	case ".py":
-		return analyzePython(content)
+		return analyzePython(path, content, projectFiles)
 	case ".rs":
 		return analyzeRust(content)
 	case ".c", ".cpp", ".h", ".hpp", ".cc", ".cxx":
@@ -207,6 +228,56 @@ func Analyze(path string, content []byte, modulePath string) []string {
 	default:
 		return nil
 	}
+}
+
+// AnalyzeProject is the project-aware convenience form used by code-intel
+// callers that have a project root but do not already have the indexer's file
+// inventory.
+func AnalyzeProject(root, path string, content []byte, modulePath string) []string {
+	if strings.ToLower(filepath.Ext(path)) != ".py" {
+		return AnalyzeWithFiles(path, content, modulePath, nil)
+	}
+	return AnalyzeWithFiles(path, content, modulePath, PythonProjectFiles(root))
+}
+
+// PythonProjectFiles returns project-relative Python source files for module
+// resolution. It deliberately ignores virtual environments and generated
+// caches, which are not part of the project's import graph.
+func PythonProjectFiles(root string) []string {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return nil
+	}
+	var files []string
+	err = filepath.WalkDir(rootAbs, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if ignoredPythonDir(entry.Name()) && path != rootAbs {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if strings.ToLower(filepath.Ext(entry.Name())) != ".py" {
+			return nil
+		}
+		rel, err := filepath.Rel(rootAbs, path)
+		if err != nil || rel == "." || !filepath.IsLocal(rel) {
+			return nil
+		}
+		files = append(files, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return nil
+	}
+	sort.Strings(files)
+	return files
+}
+
+func ignoredPythonDir(name string) bool {
+	return chunker.IsIgnoredDir(name) || name == ".mypy_cache" || name == ".pytest_cache" || name == ".tox"
 }
 
 // ---------------------------------------------------------------------------
@@ -411,16 +482,60 @@ func analyzeTS(path string, content []byte) []string {
 // Python extractor
 // ---------------------------------------------------------------------------
 
-// analyzePython extracts module paths from Python `from X import Y` and
-// `import X` statements, converts dots to slashes, and filters stdlib modules.
-func analyzePython(content []byte) []string {
+// analyzePython extracts Python import declarations with tree-sitter. When a
+// project inventory is available, only modules that resolve to an indexed
+// project file are retained and their real directory paths are returned.
+func analyzePython(path string, content []byte, projectFiles []string) []string {
+	refs := extractPythonImports(content)
+	if len(projectFiles) == 0 {
+		return legacyPythonDependencies(refs)
+	}
+
+	index := newPythonModuleIndex(projectFiles)
+	current := canonicalPythonModule(path)
 	seen := make(map[string]bool)
-	result := make([]string, 0)
+	var result []string
+	for _, ref := range refs {
+		for _, candidate := range pythonImportCandidates(ref, current) {
+			if isPythonStdlib(candidate) {
+				continue
+			}
+			dir, ok := index.resolve(candidate)
+			if !ok || seen[dir] {
+				continue
+			}
+			seen[dir] = true
+			result = append(result, dir)
+			break
+		}
+	}
+	sort.Strings(result)
+	return result
+}
 
-	// Match "from X import Y"
-	for _, m := range pyFromImportRe.FindAllSubmatch(content, -1) {
-		pkg := string(m[1])
-		if isPythonStdlib(pkg) {
+func extractPythonImports(content []byte) []gotreesitter.ImportRef {
+	lang := grammars.PythonLanguage()
+	tree, err := gotreesitter.NewParser(lang).Parse(content)
+	if tree != nil {
+		refs := gotreesitter.ExtractImports(tree)
+		tree.Release()
+		if err == nil || len(refs) > 0 {
+			return refs
+		}
+	}
+	return gotreesitter.ExtractImportsFromSource(lang, content)
+}
+
+func legacyPythonDependencies(refs []gotreesitter.ImportRef) []string {
+	seen := make(map[string]bool)
+	var result []string
+	for _, ref := range refs {
+		pkg := ref.Path
+		if ref.Kind == "from_import" {
+			pkg = ref.From
+		}
+		pkg = strings.Trim(pkg, ".")
+		if pkg == "" || isPythonStdlib(pkg) {
 			continue
 		}
 		dir := strings.ReplaceAll(pkg, ".", "/") + "/"
@@ -428,25 +543,129 @@ func analyzePython(content []byte) []string {
 			seen[dir] = true
 			result = append(result, dir)
 		}
-	}
-
-	// Match "import X"
-	for _, m := range pyImportRe.FindAllSubmatch(content, -1) {
-		pkg := string(m[1])
-		if isPythonStdlib(pkg) {
-			continue
-		}
-		dir := strings.ReplaceAll(pkg, ".", "/") + "/"
-		if !seen[dir] {
-			seen[dir] = true
-			result = append(result, dir)
-		}
-	}
-
-	if len(result) == 0 {
-		return nil
 	}
 	return result
+}
+
+type pythonModuleIndex struct {
+	modules map[string]map[string]struct{}
+}
+
+func newPythonModuleIndex(files []string) *pythonModuleIndex {
+	idx := &pythonModuleIndex{modules: make(map[string]map[string]struct{})}
+	for _, file := range files {
+		clean := filepath.ToSlash(filepath.Clean(file))
+		if clean == "." || !filepath.IsLocal(clean) || strings.ToLower(filepath.Ext(clean)) != ".py" {
+			continue
+		}
+		parts := pythonModuleParts(clean)
+		if len(parts) == 0 {
+			continue
+		}
+		dir := pythonDirectory(clean)
+		for _, alias := range pythonModuleAliases(parts) {
+			if idx.modules[alias] == nil {
+				idx.modules[alias] = make(map[string]struct{})
+			}
+			idx.modules[alias][dir] = struct{}{}
+		}
+	}
+	return idx
+}
+
+func (idx *pythonModuleIndex) resolve(module string) (string, bool) {
+	dirs := idx.modules[strings.Trim(module, ".")]
+	if len(dirs) != 1 {
+		return "", false
+	}
+	for dir := range dirs {
+		return dir, true
+	}
+	return "", false
+}
+
+func pythonModuleParts(path string) []string {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	clean = strings.TrimSuffix(clean, filepath.Ext(clean))
+	parts := strings.Split(clean, "/")
+	if len(parts) > 0 && parts[len(parts)-1] == "__init__" {
+		parts = parts[:len(parts)-1]
+	}
+	return parts
+}
+
+func pythonModuleAliases(parts []string) []string {
+	aliases := []string{strings.Join(parts, ".")}
+	for i, part := range parts {
+		if !pythonSourceRoots[part] || i+1 >= len(parts) {
+			continue
+		}
+		aliases = append(aliases, strings.Join(parts[i+1:], "."))
+	}
+	return aliases
+}
+
+func pythonDirectory(path string) string {
+	dir := filepath.ToSlash(filepath.Dir(filepath.Clean(path)))
+	if dir == "." {
+		return "./"
+	}
+	return strings.TrimSuffix(dir, "/") + "/"
+}
+
+func canonicalPythonModule(path string) string {
+	isPackageInit := strings.HasSuffix(filepath.ToSlash(filepath.Clean(path)), "/__init__.py")
+	parts := pythonModuleParts(path)
+	for i, part := range parts {
+		if pythonSourceRoots[part] && i+1 < len(parts) {
+			parts = parts[i+1:]
+			break
+		}
+	}
+	module := strings.Join(parts, ".")
+	if isPackageInit && module != "" {
+		return module + ".__init__"
+	}
+	return module
+}
+
+func pythonImportCandidates(ref gotreesitter.ImportRef, current string) []string {
+	var candidates []string
+	if ref.Relative > 0 {
+		base := strings.Split(current, ".")
+		if len(base) > 0 {
+			base = base[:len(base)-1]
+		}
+		remove := ref.Relative - 1
+		if remove >= len(base) {
+			base = nil
+		} else if remove > 0 {
+			base = base[:len(base)-remove]
+		}
+		if ref.From != "" {
+			base = append(base, strings.Split(ref.From, ".")...)
+		}
+		if ref.Name != "" && ref.Name != "*" {
+			candidate := append([]string{}, base...)
+			candidate = append(candidate, ref.Name)
+			candidates = append(candidates, strings.Join(candidate, "."))
+		}
+		if len(base) > 0 {
+			candidates = append(candidates, strings.Join(base, "."))
+		}
+		return candidates
+	}
+	if ref.From != "" {
+		if ref.Name != "" && ref.Name != "*" {
+			candidates = append(candidates, ref.From+"."+ref.Name)
+		}
+		candidates = append(candidates, ref.From)
+		return candidates
+	}
+	if ref.Path != "" {
+		return []string{ref.Path}
+	}
+	return nil
 }
 
 // isPythonStdlib reports whether pkg is in Python's standard library by

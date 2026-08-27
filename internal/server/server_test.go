@@ -31,6 +31,7 @@ type fakeStore struct {
 	enqueuedID   int                  // EnqueueJob result
 	job          *store.Job           // GetJob result (nil → ErrNotFound)
 	fileHashes   map[string]string    // ListFileHashes result
+	dependencies map[string][]string  // InsertFileDependencies result
 	graph        map[string][]string  // FetchGraphNeighbors result
 	fileCount    int                  // CountProjectFiles result
 	fileCountErr error                // CountProjectFiles error
@@ -149,7 +150,14 @@ func (f *fakeStore) ListRecentJobs(context.Context, int, int) ([]store.Job, erro
 func (f *fakeStore) SearchSimilar(context.Context, int, []float32, int, int) ([]store.SearchResult, error) {
 	return f.results, nil
 }
-func (f *fakeStore) InsertFileDependencies(context.Context, int, string, []string) error {
+
+func (f *fakeStore) InsertFileDependencies(_ context.Context, _ int, source string, targets []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.dependencies == nil {
+		f.dependencies = make(map[string][]string)
+	}
+	f.dependencies[source] = append([]string(nil), targets...)
 	return nil
 }
 func (f *fakeStore) SearchSimilarKeywords(context.Context, int, string, int, int) ([]store.SearchResult, error) {

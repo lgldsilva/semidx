@@ -170,6 +170,7 @@ func TestNewParallelEmbedder(t *testing.T) {
 	pool := NewParallelEmbedder([]Embedder{e1})
 	if pool == nil {
 		t.Fatal("NewParallelEmbedder returned nil")
+		return
 	}
 	if len(pool.entries) != 1 {
 		t.Errorf("entries = %d, want 1", len(pool.entries))

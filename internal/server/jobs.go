@@ -326,7 +326,7 @@ func (s *Server) runBatchJob(ctx context.Context, job *store.Job, proj *store.Pr
 		return
 	}
 
-	indexed, chunks, deleted, errors := s.processBatchFiles(ctx, proj, body.Files, body.Delete, info.Dims)
+	indexed, chunks, deleted, errors := s.processBatchFiles(ctx, proj, body.Files, body.Delete, body.ProjectFiles, info.Dims)
 	if err := s.store.CompleteJob(ctx, job.ID, indexed, chunks, deleted, errors); err != nil {
 		s.log.Error("mark job complete", "job", job.ID, "err", err)
 		fail("complete batch job: " + err.Error())

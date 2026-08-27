@@ -243,6 +243,13 @@ type FileVersionPruner interface {
 	PruneFileVersions(ctx context.Context, projectID int, path, keepHash string) error
 }
 
+// WorktreeFileRemover removes one path from one worktree's manifest without
+// touching other content-addressed versions of that path. It is intentionally
+// optional so lightweight indexing test stores remain source-compatible.
+type WorktreeFileRemover interface {
+	RemoveWorktreeFile(ctx context.Context, projectID int, worktree, path string) error
+}
+
 // ProjectStore groups project lifecycle operations.
 type ProjectStore interface {
 	UpsertProject(ctx context.Context, name, path, model string, dims int) (int, error)
@@ -792,6 +799,15 @@ func (s *PgStore) SetWorktreeFiles(ctx context.Context, projectID int, worktree 
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// RemoveWorktreeFile removes a single path from one worktree's manifest. The
+// file version itself is reclaimed separately by PruneUnreferencedFiles once no
+// worktree references it.
+func (s *PgStore) RemoveWorktreeFile(ctx context.Context, projectID int, worktree, path string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM worktree_files
+		WHERE project_id = $1 AND worktree = $2 AND path = $3`, projectID, worktree, path)
+	return err
 }
 
 // PruneUnreferencedFiles deletes files (and, via ON DELETE CASCADE, their chunks)

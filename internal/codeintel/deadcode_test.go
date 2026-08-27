@@ -99,6 +99,7 @@ func NewClient() {
 
 	if result == nil {
 		t.Fatal("DeadCode() returned nil result")
+		return
 	}
 
 	if len(result.Findings) == 0 {

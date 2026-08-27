@@ -31,6 +31,7 @@ type fakeStore struct {
 	upToDate     bool     // FileUpToDate returns this (simulates unchanged files)
 	deletedPaths []string // paths passed to DeleteFileByPath
 	deletedIDs   []int    // file IDs passed to DeleteFileByID (rollback path)
+	dependencies map[string][]string
 }
 
 func (f *fakeStore) FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error) {
@@ -86,8 +87,76 @@ func (f *fakeStore) UpdateProjectStatus(ctx context.Context, id int, status stri
 	return nil
 }
 
-func (f *fakeStore) InsertFileDependencies(context.Context, int, string, []string) error {
+func (f *fakeStore) InsertFileDependencies(_ context.Context, _ int, source string, targets []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.dependencies == nil {
+		f.dependencies = make(map[string][]string)
+	}
+	f.dependencies[source] = append([]string(nil), targets...)
 	return nil
+}
+
+func TestIncrementalRefreshesDependenciesBeforeSkip(t *testing.T) {
+	fs := &fakeStore{upToDate: true}
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+
+	created, err := idx.IndexContent(context.Background(), 1, "pkg/main.go", "m", []byte("package main\n\nimport \"mylib/util\"\n"))
+	if err != nil {
+		t.Fatalf("IndexContent() = %v", err)
+	}
+	if created != 0 {
+		t.Fatalf("created = %d, want unchanged content to skip", created)
+	}
+	if got := fs.dependencies["pkg/main.go"]; len(got) != 1 || got[0] != "mylib/util/" {
+		t.Fatalf("dependencies = %v, want repaired edge [mylib/util/]", got)
+	}
+}
+
+func TestEmptyWorktreeFileFailsClosedWithoutScopedRemoval(t *testing.T) {
+	fs := &fakeStore{}
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{})
+	idx.SetWorktree("/wt/A")
+
+	if _, err := idx.IndexContent(context.Background(), 1, "shared.go", "m", []byte(" \n")); err == nil {
+		t.Fatal("empty worktree file should fail when scoped removal is unavailable")
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if len(fs.deletedPaths) != 0 {
+		t.Fatalf("broad DeleteFileByPath was called for a worktree: %v", fs.deletedPaths)
+	}
+}
+
+func TestForceReindexesUpToDateContent(t *testing.T) {
+	fs := &fakeStore{upToDate: true}
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{
+		Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, Force: true,
+	})
+
+	created, err := idx.IndexContent(context.Background(), 1, "main.go", "m", []byte("package main\n\nfunc main() {}\n"))
+	if err != nil {
+		t.Fatalf("IndexContent() = %v", err)
+	}
+	if created == 0 {
+		t.Fatal("--force path skipped content reported as up to date")
+	}
+}
+
+func TestEmptyContentRemovesPreviousIndex(t *testing.T) {
+	fs := &fakeStore{}
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+
+	created, err := idx.IndexContent(context.Background(), 1, "main.go", "m", []byte(" \n\t"))
+	if err != nil {
+		t.Fatalf("IndexContent() = %v", err)
+	}
+	if created != 0 {
+		t.Fatalf("created = %d, want empty content to create no chunks", created)
+	}
+	if len(fs.deletedPaths) != 1 || fs.deletedPaths[0] != "main.go" {
+		t.Fatalf("deleted paths = %v, want [main.go]", fs.deletedPaths)
+	}
 }
 
 func (f *fakeStore) GetProjectCommit(ctx context.Context, projectID int) (string, error) {

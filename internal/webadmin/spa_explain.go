@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/lgldsilva/semidx/internal/analyzer"
+	"github.com/lgldsilva/semidx/internal/codeintel"
 	"github.com/lgldsilva/semidx/internal/imports"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -66,7 +67,7 @@ func (a *Admin) apiProjectExplain(w http.ResponseWriter, r *http.Request, ac *au
 	}
 
 	modulePath := detectModulePath(root)
-	fileImports := imports.Analyze(filePath, content, modulePath)
+	fileImports := imports.AnalyzeProject(root, filePath, content, modulePath)
 	sort.Strings(fileImports)
 
 	importers := importersOfFile(r.Context(), a.store, proj.ID, filePath)
@@ -178,16 +179,16 @@ func importersOfFile(ctx context.Context, st store.Store, projectID int, filePat
 	if err != nil {
 		return nil
 	}
-	fileDir := filepath.ToSlash(filepath.Dir(filePath))
-	if fileDir != "." && !strings.HasSuffix(fileDir, "/") {
-		fileDir += "/"
+	wanted := make(map[string]bool)
+	for _, dir := range codeintel.DependencyDirsForFile(filePath) {
+		wanted[dir] = true
 	}
 	var importers []string
 	seen := map[string]bool{}
 	for src, targets := range graph {
 		for _, tgt := range targets {
-			t := filepath.ToSlash(tgt)
-			if t == fileDir || strings.TrimSuffix(t, "/") == strings.TrimSuffix(fileDir, "/") {
+			t := filepath.ToSlash(filepath.Clean(tgt))
+			if wanted[t+"/"] || wanted[t] {
 				if !seen[src] {
 					seen[src] = true
 					importers = append(importers, src)
@@ -248,42 +249,5 @@ func confinedPath(root, rel string) (string, bool) {
 }
 
 func findTestFiles(root, filePath, symbolName string) []string {
-	// Re-validate both the file path and its directory through confinedPath
-	// so CodeQL sees the paths as sanitized before os.ReadDir/os.ReadFile.
-	if _, ok := confinedPath(root, filePath); !ok {
-		return nil
-	}
-	dir, ok := confinedPath(root, filepath.Dir(filePath))
-	if !ok {
-		return nil
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var result []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(name, "_test.go") && !strings.HasSuffix(name, "_test.py") && !strings.HasSuffix(name, ".test.js") {
-			continue
-		}
-		relPath := filepath.ToSlash(filepath.Join(filepath.Dir(filePath), name))
-		testAbs, ok := confinedPath(root, relPath)
-		if !ok {
-			continue
-		}
-		// #nosec G304 -- testAbs built from a local path under root
-		data, err := os.ReadFile(testAbs)
-		if err != nil {
-			continue
-		}
-		if strings.Contains(string(data), symbolName) {
-			result = append(result, relPath)
-		}
-	}
-	sort.Strings(result)
-	return result
+	return codeintel.FindTestFiles(root, filePath, symbolName)
 }

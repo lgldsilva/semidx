@@ -3,7 +3,6 @@ package codeintel
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sort"
 
 	"github.com/lgldsilva/semidx/internal/analyzer"
@@ -44,8 +43,7 @@ func Impact(ctx context.Context, db store.IndexStore, proj *store.Project, fl Fi
 	}
 
 	maxDepth = clampImpactDepth(maxDepth)
-	fileDir := filepath.Dir(fl.File) + "/"
-	affected := reverseDependencyClosure(graph, fileDir, fl.File, maxDepth)
+	affected := reverseDependencyClosureForDirs(graph, DependencyDirsForFile(fl.File), fl.File, maxDepth)
 
 	return &ImpactResult{
 		Symbol:     targetSym,
@@ -70,8 +68,12 @@ func clampImpactDepth(d int) int {
 // BFS expansion and sort are extracted so cognitive complexity stays under the
 // SonarQube gate.
 func reverseDependencyClosure(graph map[string][]string, seedDir, seedFile string, maxDepth int) []ImpactNode {
+	return reverseDependencyClosureForDirs(graph, []string{seedDir}, seedFile, maxDepth)
+}
+
+func reverseDependencyClosureForDirs(graph map[string][]string, seedDirs []string, seedFile string, maxDepth int) []ImpactNode {
 	visited := make(map[string]int) // file -> first-seen depth
-	currentDirs := []string{seedDir}
+	currentDirs := seedDirs
 
 	for depth := 1; depth <= maxDepth; depth++ {
 		nextDirs := expandImpactLevel(graph, currentDirs, seedFile, depth, visited)
@@ -88,16 +90,15 @@ func reverseDependencyClosure(graph map[string][]string, seedDir, seedFile strin
 func expandImpactLevel(graph map[string][]string, currentDirs []string, seedFile string, depth int, visited map[string]int) []string {
 	nextDirSet := make(map[string]bool)
 	var nextDirs []string
-	for _, dir := range currentDirs {
-		for _, caller := range findDirectCallers(graph, dir) {
-			if caller == seedFile {
-				continue
-			}
-			if _, seen := visited[caller]; seen {
-				continue
-			}
-			visited[caller] = depth
-			cDir := filepath.Dir(caller) + "/"
+	for _, caller := range findDirectCallersForDirs(graph, currentDirs) {
+		if caller == seedFile {
+			continue
+		}
+		if _, seen := visited[caller]; seen {
+			continue
+		}
+		visited[caller] = depth
+		for _, cDir := range DependencyDirsForFile(caller) {
 			if nextDirSet[cDir] {
 				continue
 			}

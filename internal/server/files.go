@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/embed"
+	si "github.com/lgldsilva/semidx/internal/imports"
 	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/store"
@@ -139,8 +141,9 @@ func (s *Server) handleFilesDiff(w http.ResponseWriter, r *http.Request) {
 
 // batchRequestBody is the JSON shape accepted by the files/batch endpoint.
 type batchRequestBody struct {
-	Files  []batchFileInput `json:"files"`
-	Delete []string         `json:"delete"`
+	Files        []batchFileInput `json:"files"`
+	Delete       []string         `json:"delete"`
+	ProjectFiles []string         `json:"project_files,omitempty"`
 }
 
 // handleFilesBatch indexes uploaded file contents and removes any files in the
@@ -211,7 +214,7 @@ func (s *Server) handleFilesBatchSync(w http.ResponseWriter, r *http.Request, pr
 		writeJSONError(w, http.StatusInternalServerError, "could not prepare storage")
 		return
 	}
-	indexed, chunks, deleted, errors := s.processBatchFiles(ctx, proj, body.Files, body.Delete, info.Dims)
+	indexed, chunks, deleted, errors := s.processBatchFiles(ctx, proj, body.Files, body.Delete, body.ProjectFiles, info.Dims)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"indexed": indexed, "chunks": chunks, "deleted": deleted, "errors": errors,
 	})
@@ -237,13 +240,23 @@ func validateBatchBody(body *batchRequestBody) error {
 		}
 		seen[p] = "delete"
 	}
+	seenInventory := make(map[string]struct{}, len(body.ProjectFiles))
+	for _, p := range body.ProjectFiles {
+		if err := validateRelativePath(p); err != nil {
+			return fmt.Errorf("invalid project inventory path %s: %w", p, err)
+		}
+		if _, exists := seenInventory[p]; exists {
+			return fmt.Errorf("duplicate project inventory path %s", p)
+		}
+		seenInventory[p] = struct{}{}
+	}
 	return nil
 }
 
 // processBatchFiles indexes pushed files and removes deleted ones, sharing the
 // same core logic between the synchronous API path and the background batch
 // worker. Expects the chunks table and model info to already be set up.
-func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, files []batchFileInput, del []string, dims int) (indexed, chunks, deleted, errors int) {
+func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, files []batchFileInput, del, providedProjectFiles []string, dims int) (indexed, chunks, deleted, errors int) {
 	for _, p := range del {
 		if err := s.store.DeleteFileByPath(ctx, proj.ID, p); err != nil {
 			s.log.Error("delete file", "project", proj.Name, "path", p, "err", err)
@@ -251,6 +264,16 @@ func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, fil
 			continue
 		}
 		deleted++
+	}
+
+	projectFiles, err := s.pushProjectFiles(ctx, proj.ID, files, del, providedProjectFiles)
+	if err != nil {
+		s.log.Error("read project file inventory", "project", proj.Name, "err", err)
+		errors++
+		if statusErr := s.store.UpdateProjectStatus(ctx, proj.ID, "degraded"); statusErr != nil {
+			s.log.Warn("update project status", "project", proj.ID, "err", statusErr)
+		}
+		return 0, 0, deleted, errors
 	}
 
 	opts := s.indexerOpts()
@@ -263,9 +286,10 @@ func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, fil
 		return 0, 0, deleted, errors
 	}
 	opts.PrivacyMode = privacyMode
+	opts.ProjectFiles = projectFiles
 	idx := indexing.NewIndexer(s.store, s.emb, dims, opts)
 	for _, f := range files {
-		created, hErr := s.indexBatchFile(ctx, proj, idx, f, dims)
+		created, hErr := s.indexBatchFile(ctx, proj, idx, f, dims, projectFiles)
 		if hErr != nil {
 			errors++
 			s.log.Error("index pushed file", "project", proj.Name, "path", f.Path, "err", hErr)
@@ -284,15 +308,46 @@ func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, fil
 	return
 }
 
+// pushProjectFiles builds the complete path inventory visible to one push
+// batch. Existing database paths cover unchanged files; batch paths cover new
+// files, and the delete list removes paths that no longer exist. The inventory
+// is sufficient for source-aware import resolution without storing source
+// contents in the server-side analyzer.
+func (s *Server) pushProjectFiles(ctx context.Context, projectID int, files []batchFileInput, del, provided []string) ([]string, error) {
+	existing, err := s.store.ListFileHashes(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	paths := make(map[string]struct{}, len(existing)+len(files))
+	for path := range existing {
+		paths[path] = struct{}{}
+	}
+	for _, path := range provided {
+		paths[path] = struct{}{}
+	}
+	for _, path := range del {
+		delete(paths, path)
+	}
+	for _, file := range files {
+		paths[file.Path] = struct{}{}
+	}
+	inventory := make([]string, 0, len(paths))
+	for path := range paths {
+		inventory = append(inventory, path)
+	}
+	sort.Strings(inventory)
+	return inventory, nil
+}
+
 // indexBatchFile stores one pushed file, dispatching on its shape: pre-embedded
 // chunks are validated and stored directly; raw content goes through the
 // server-side chunk+embed pipeline; a file with neither is an error. It returns
 // the number of chunks created.
-func (s *Server) indexBatchFile(ctx context.Context, proj *store.Project, idx *indexing.Indexer, f batchFileInput, dims int) (int, error) {
+func (s *Server) indexBatchFile(ctx context.Context, proj *store.Project, idx *indexing.Indexer, f batchFileInput, dims int, projectFiles []string) (int, error) {
 	switch {
 	case len(f.Chunks) > 0:
 		// Pre-embedded: the client already chunked and embedded.
-		return s.indexPreEmbedded(ctx, proj, f.Path, f.Content, f.Chunks, dims)
+		return s.indexPreEmbedded(ctx, proj, f.Path, f.Content, f.Chunks, dims, projectFiles)
 	case f.Content != "" && strings.TrimSpace(f.Content) != "":
 		// Raw content: server handles chunking and embedding.
 		created, err := idx.IndexContent(ctx, proj.ID, f.Path, proj.Model, []byte(f.Content))
@@ -322,7 +377,7 @@ func (s *Server) indexBatchFile(ctx context.Context, proj *store.Project, idx *i
 // indexPreEmbedded validates pre-computed chunk embeddings and stores them
 // directly. The raw content is still hashed and recorded for file dedup; only
 // chunking and embedding are skipped.
-func (s *Server) indexPreEmbedded(ctx context.Context, proj *store.Project, path, rawContent string, fileChunks []embeddedChunk, dims int) (int, error) {
+func (s *Server) indexPreEmbedded(ctx context.Context, proj *store.Project, path, rawContent string, fileChunks []embeddedChunk, dims int, projectFiles []string) (int, error) {
 	if err := validatePreEmbeddedChunks(path, fileChunks, dims, proj.Model); err != nil {
 		return 0, err
 	}
@@ -330,6 +385,10 @@ func (s *Server) indexPreEmbedded(ctx context.Context, proj *store.Project, path
 	// Content-addressed dedup: same hash → file is unchanged, skip.
 	contentBytes := []byte(rawContent)
 	contentHash := fmt.Sprintf("%x", sha256.Sum256(contentBytes))
+	deps := si.AnalyzeWithFiles(path, contentBytes, "", projectFiles)
+	if err := s.store.InsertFileDependencies(ctx, proj.ID, path, deps); err != nil {
+		return 0, fmt.Errorf("record dependencies for %s: %w", path, err)
+	}
 
 	upToDate, err := s.store.FileUpToDate(ctx, proj.ID, path, contentHash, dims)
 	if err != nil {

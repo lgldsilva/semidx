@@ -232,6 +232,7 @@ func TestSearchSchemaRequiresProjectWithoutDefault(t *testing.T) {
 	}
 	if searchTool == nil {
 		t.Fatal("semantic_search not listed")
+		return
 	}
 	required := schemaRequired(t, searchTool.InputSchema)
 	if !slices.Contains(required, "project") {

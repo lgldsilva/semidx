@@ -101,6 +101,30 @@ func TestHandleFilesBatchWhitespaceFileDeletesContent(t *testing.T) {
 	}
 }
 
+func TestProcessBatchFilesResolvesPythonSourceRootImports(t *testing.T) {
+	t.Parallel()
+	fs := &fakeStore{
+		fileHashes: map[string]string{
+			"src/outlook_organizer/message_applier.py": "existing",
+		},
+	}
+	srv := New(fs, fakeEmbedder{}, nil)
+	proj := &store.Project{ID: 1, Name: "p", Model: "bge-m3", SourceType: "push"}
+
+	indexed, chunks, deleted, errors := srv.processBatchFiles(context.Background(), proj, []batchFileInput{{
+		Path:    "src/outlook_organizer/triage.py",
+		Content: "from outlook_organizer.message_applier import MessageApplier\n",
+	}}, nil, []string{"src/outlook_organizer/message_applier.py", "src/outlook_organizer/triage.py"}, 3)
+	if errors != 0 || deleted != 0 || indexed != 1 || chunks == 0 {
+		t.Fatalf("processBatchFiles() = indexed=%d chunks=%d deleted=%d errors=%d", indexed, chunks, deleted, errors)
+	}
+	want := []string{"src/outlook_organizer/"}
+	got := fs.dependencies["src/outlook_organizer/triage.py"]
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("dependencies = %v, want %v", got, want)
+	}
+}
+
 func TestHandleFilesDiff(t *testing.T) {
 	t.Parallel()
 	writeTok := &store.Token{Scopes: []string{"write"}}
