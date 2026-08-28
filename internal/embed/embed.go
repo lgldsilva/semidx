@@ -181,8 +181,14 @@ func InferDims(model string) int {
 	switch {
 	case strings.Contains(model, "nomic"):
 		return 768
-	case strings.Contains(model, "bge-m3"), strings.Contains(model, "mxbai"), strings.Contains(model, "qwen3"):
+	case strings.Contains(model, "bge-m3"), strings.Contains(model, "bge-large"), strings.Contains(model, "mxbai"), strings.Contains(model, "qwen3"):
 		return 1024
+	case strings.Contains(model, "e5-large"), strings.Contains(model, "gte-large"), strings.Contains(model, "arctic-large"):
+		return 1024
+	case strings.Contains(model, "e5-base"), strings.Contains(model, "gte-base"):
+		return 768
+	case strings.Contains(model, "e5-small"), strings.Contains(model, "gte-small"), strings.Contains(model, "all-minilm"):
+		return 384
 	case strings.Contains(model, "gemini-embedding-2"), strings.Contains(model, "text-embedding-3-large"):
 		return 3072
 	case strings.Contains(model, "text-embedding-3-small"), strings.Contains(model, "text-embedding-ada-002"), strings.Contains(model, "gemini-embedding-001"):

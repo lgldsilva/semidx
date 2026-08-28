@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"time"
 
@@ -360,12 +361,63 @@ func (s *Service) keywordSearch(ctx context.Context, projectID int, query string
 // expandByGraph runs BFS through the project's dependency graph from the seed
 // result file paths, collecting chunks from newly discovered files with a
 // decayed score. Returns nil (no error) when the graph is empty.
+//
+// For scale, it prefers the SQL recursive CTE (FetchGraphPathsBFS) which
+// avoids loading the full graph into Go. It computes decayed scores from
+// depth and the best seed score, then falls back to the in-memory BFS when
+// the CTE is unavailable or yields no results.
 func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults []store.SearchResult, projectID, dims int) ([]store.SearchResult, error) {
 	if len(seedResults) == 0 {
 		return nil, nil
 	}
 
-	// Fetch the full dependency graph for the project.
+	maxDepth := req.GraphMaxDepth // already clamped in Search
+
+	const decay = 0.85
+	const floor = 0.3
+	const maxGraphExpandPaths = 100 // cap chunk fetches per query (DoS guard)
+
+	seedPaths := make(map[string]bool, len(seedResults))
+	seedList := make([]string, 0, len(seedResults))
+	seenSeed := make(map[string]bool, len(seedResults))
+	maxSeedScore := 0.0
+	for _, r := range seedResults {
+		if !seenSeed[r.FilePath] {
+			seedList = append(seedList, r.FilePath)
+			seenSeed[r.FilePath] = true
+		}
+		seedPaths[r.FilePath] = true
+		if r.Score > maxSeedScore {
+			maxSeedScore = r.Score
+		}
+	}
+	if maxSeedScore == 0 {
+		maxSeedScore = 1.0
+	}
+
+	// Prefer SQL CTE path for scale (single round trip, no full graph load).
+	if paths, err := s.store.FetchGraphPathsBFS(ctx, projectID, seedList, maxDepth); err == nil && len(paths) > 0 {
+		expanded := make(map[string]graphHop, len(paths))
+		for path, depth := range paths {
+			if len(expanded) >= maxGraphExpandPaths {
+				break
+			}
+			score := maxSeedScore * math.Pow(decay, float64(depth))
+			if score < floor {
+				continue
+			}
+			expanded[path] = graphHop{Score: score, Depth: depth}
+		}
+		if len(expanded) > 0 {
+			results := fetchGraphChunks(ctx, s, projectID, dims, expanded)
+			if len(results) > 0 {
+				return results, nil
+			}
+		}
+		// Fall through to Go BFS if CTE gave no usable expansion.
+	}
+
+	// Fallback: load full graph and BFS in Go (covers SQLite without CTE or empty CTE result).
 	graph, err := s.store.FetchGraphNeighbors(ctx, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("fetch graph neighbors: %w", err)
@@ -381,17 +433,6 @@ func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults [
 		for _, tgt := range targets {
 			reverse[tgt] = append(reverse[tgt], src)
 		}
-	}
-
-	maxDepth := req.GraphMaxDepth // already clamped in Search
-
-	const decay = 0.85
-	const floor = 0.3
-	const maxGraphExpandPaths = 100 // cap chunk fetches per query (DoS guard)
-
-	seedPaths := make(map[string]bool, len(seedResults))
-	for _, r := range seedResults {
-		seedPaths[r.FilePath] = true
 	}
 
 	expanded := runGraphBFS(bfsParams{
