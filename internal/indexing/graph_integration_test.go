@@ -174,6 +174,48 @@ func main() { util.Help() }
 	}
 }
 
+func TestGraphIntegrationPythonSourceRootDependencies(t *testing.T) {
+	ctx := context.Background()
+	st, err := localstore.New(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatalf("localstore.New: %v", err)
+	}
+	t.Cleanup(st.Close)
+
+	src := t.TempDir()
+	writeFile(t, src, "src/outlook_organizer/__init__.py", "")
+	writeFile(t, src, "src/outlook_organizer/message_applier.py", "class MessageApplier:\n    pass\n")
+	writeFile(t, src, "src/outlook_organizer/triage.py", "from outlook_organizer.message_applier import MessageApplier\nfrom .message_applier import MessageApplier\n")
+	writeFile(t, src, "tests/test_message_applier.py", "from outlook_organizer.message_applier import MessageApplier\n")
+	writeFile(t, src, ".venv/lib/site.py", "from outlook_organizer.message_applier import MessageApplier\n")
+
+	pid, err := st.UpsertProject(ctx, "python", src, "m", 3)
+	if err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+	idx := NewIndexer(st, &semanticEmbedder{}, 3, IndexerOpts{
+		Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32,
+	})
+	if _, err := idx.IndexProject(ctx, pid, src, "m", 0); err != nil {
+		t.Fatalf("IndexProject: %v", err)
+	}
+
+	graph, err := st.FetchGraphNeighbors(ctx, pid)
+	if err != nil {
+		t.Fatalf("FetchGraphNeighbors: %v", err)
+	}
+	want := []string{"src/outlook_organizer/"}
+	for _, source := range []string{"src/outlook_organizer/triage.py", "tests/test_message_applier.py"} {
+		got := graph[source]
+		if len(got) != 1 || got[0] != want[0] {
+			t.Errorf("%s dependencies = %v, want %v", source, got, want)
+		}
+	}
+	if _, ok := graph[".venv/lib/site.py"]; ok {
+		t.Error("virtual-environment file was indexed into the dependency graph")
+	}
+}
+
 // TestGraphIntegrationNoGoMod verifies that indexing a Go file without a go.mod
 // still records dependencies (AnalyzeGoImports treats all non-stdlib imports as
 // local when modulePath is empty).

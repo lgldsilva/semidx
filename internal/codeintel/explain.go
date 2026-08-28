@@ -3,12 +3,15 @@ package codeintel
 import (
 	"context"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/lgldsilva/semidx/internal/analyzer"
+	"github.com/lgldsilva/semidx/internal/chunker"
 	"github.com/lgldsilva/semidx/internal/imports"
 	"github.com/lgldsilva/semidx/internal/store"
 )
@@ -32,7 +35,7 @@ func Explain(ctx context.Context, db store.IndexStore, proj *store.Project, fl F
 	root := proj.Path
 
 	modulePath := detectModulePath(root)
-	fileImports := imports.Analyze(fl.File, content, modulePath)
+	fileImports := imports.AnalyzeProject(root, fl.File, content, modulePath)
 	sort.Strings(fileImports)
 
 	graph, err := db.FetchGraphNeighbors(ctx, proj.ID)
@@ -62,8 +65,7 @@ func Explain(ctx context.Context, db store.IndexStore, proj *store.Project, fl F
 
 // findImportersInGraph finds all files that import the given file.
 func findImportersInGraph(graph map[string][]string, file string) []string {
-	fileDir := filepath.Dir(file) + "/"
-	return findDirectCallers(graph, fileDir)
+	return findDirectCallersForDirs(graph, DependencyDirsForFile(file))
 }
 
 // goPackageName extracts the package name from a Go source file.
@@ -94,38 +96,107 @@ func detectModulePath(root string) string {
 	return ""
 }
 
-// findTestFiles looks for test files in the same directory as the given file
-// that reference the given symbol name.
-func findTestFiles(root, filePath, symbolName string) []string {
-	dir := filepath.Dir(filepath.Join(root, filePath))
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+// FindTestFiles scans the project for supported test files that reference the
+// symbol. Tests commonly live in a top-level tests/ tree rather than beside
+// the source file, so a same-directory heuristic misses the most useful
+// relationships.
+func FindTestFiles(root, filePath, symbolName string) []string {
+	rootAbs, targetRel, ok := testFileTarget(root, filePath)
+	if !ok {
 		return nil
 	}
 
 	var result []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(name, "_test.go") && !strings.HasSuffix(name, "_test.py") && !strings.HasSuffix(name, ".test.js") {
-			continue
-		}
-		relPath := filepath.Join(filepath.Dir(filePath), name)
-		testAbsPath := filepath.Clean(filepath.Join(root, relPath))
-		if !strings.HasPrefix(testAbsPath, filepath.Clean(root)+string(filepath.Separator)) && testAbsPath != filepath.Clean(root) && root != "." {
-			continue
-		}
-		// #nosec G304 -- reading related test files inside the user's project is safe
-		testContent, err := os.ReadFile(testAbsPath)
-		if err != nil {
-			continue
-		}
-		if strings.Contains(string(testContent), symbolName) {
-			result = append(result, relPath)
-		}
+	err := filepath.WalkDir(rootAbs, testFileWalker(rootAbs, targetRel, symbolName, &result))
+	if err != nil {
+		return nil
 	}
 	sort.Strings(result)
 	return result
+}
+
+func testFileTarget(root, filePath string) (rootAbs, targetRel string, ok bool) {
+	if filePath == "" || filepath.IsAbs(filePath) || !filepath.IsLocal(filepath.Clean(filePath)) {
+		return "", "", false
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", false
+	}
+	targetAbs := filepath.Join(rootAbs, filepath.Clean(filePath))
+	targetRel, err = filepath.Rel(rootAbs, targetAbs)
+	if err != nil || !filepath.IsLocal(targetRel) {
+		return "", "", false
+	}
+	return rootAbs, filepath.ToSlash(filepath.Clean(targetRel)), true
+}
+
+func testFileWalker(rootAbs, targetRel, symbolName string, result *[]string) fs.WalkDirFunc {
+	return func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if ignoredTestDir(entry.Name()) && path != rootAbs {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		rel, ok := testFilePath(rootAbs, path)
+		if !ok || rel == targetRel || !isTestFile(rel) {
+			return nil
+		}
+		if testFileContains(rootAbs, rel, symbolName) {
+			*result = append(*result, rel)
+		}
+		return nil
+	}
+}
+
+func testFilePath(rootAbs, path string) (string, bool) {
+	rel, err := filepath.Rel(rootAbs, path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+func testFileContains(rootAbs, rel, symbolName string) bool {
+	// Open through the root-scoped API so a concurrent symlink change cannot
+	// redirect the read outside the project.
+	file, err := os.OpenInRoot(rootAbs, filepath.FromSlash(rel))
+	if err != nil {
+		return false
+	}
+	data, err := io.ReadAll(file)
+	_ = file.Close()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), symbolName)
+}
+
+func findTestFiles(root, filePath, symbolName string) []string {
+	return FindTestFiles(root, filePath, symbolName)
+}
+
+func ignoredTestDir(name string) bool {
+	return chunker.IsIgnoredDir(name) || name == ".mypy_cache" || name == ".pytest_cache" || name == ".tox"
+}
+
+func isTestFile(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	switch strings.ToLower(filepath.Ext(base)) {
+	case ".go":
+		return strings.HasSuffix(base, "_test.go")
+	case ".py":
+		return strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_test.py")
+	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx":
+		if strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") {
+			return true
+		}
+		return filepath.Base(filepath.Dir(path)) == "__tests__"
+	default:
+		return false
+	}
 }

@@ -57,6 +57,7 @@ func TestNewServer_TemplatesLoaded(t *testing.T) {
 	}
 	if srv == nil {
 		t.Fatal("New returned nil server")
+		return
 	}
 	if srv.tmpl == nil {
 		t.Fatal("expected templates to be loaded")

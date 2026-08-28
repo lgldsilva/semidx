@@ -492,6 +492,7 @@ func TestSessionCookieAttributes(t *testing.T) {
 		ck := loginCookie(t, srv, "admin", "supersecret")
 		if ck == nil {
 			t.Fatal("no session cookie set on login")
+			return
 		}
 		if !ck.HttpOnly {
 			t.Error("session cookie must be HttpOnly")

@@ -204,7 +204,7 @@ func (w *Watcher) handleRemove(ctx context.Context, path string) {
 		rel = path
 	}
 
-	if err := w.idx.db.DeleteFileByPath(ctx, w.projectID, rel); err != nil {
+	if err := w.idx.removeFile(ctx, w.projectID, rel); err != nil {
 		w.log.Warn("watcher remove", "path", rel, "error", err)
 		return
 	}

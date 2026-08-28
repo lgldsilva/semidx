@@ -44,8 +44,9 @@ func loadSymbol(proj *store.Project, fl FileLine) ([]byte, *analyzer.Symbol, err
 	return content, lookupSymbolAtLine(syms, fl.Line), nil
 }
 
-// Callers finds all files that import the file containing the symbol at the
-// given file:line reference.
+// Callers finds all files that import the package directory containing the
+// symbol at the given file:line reference. It is intentionally package-level:
+// the dependency graph does not claim to resolve symbol-level call sites.
 func Callers(ctx context.Context, db store.IndexStore, proj *store.Project, fl FileLine) (*CallersResult, error) {
 	_, targetSym, err := loadSymbol(proj, fl)
 	if err != nil {
@@ -57,8 +58,7 @@ func Callers(ctx context.Context, db store.IndexStore, proj *store.Project, fl F
 		return nil, fmt.Errorf("fetch dependency graph: %w", err)
 	}
 
-	fileDir := filepath.Dir(fl.File) + "/"
-	directCallers := findDirectCallers(graph, fileDir)
+	directCallers := findDirectCallersForDirs(graph, DependencyDirsForFile(fl.File))
 	sort.Strings(directCallers)
 
 	transitive := collectTransitiveCallers(graph, directCallers, fl.File)
@@ -93,12 +93,75 @@ func lookupSymbolAtLine(syms []analyzer.Symbol, line int) *analyzer.Symbol {
 	return nearest
 }
 
-// findDirectCallers returns all files that import the given directory.
+// DependencyDirsForFile returns the graph directory keys that can identify the
+// package containing file. Python projects commonly store importable modules
+// below src/ or lib/, while Go and other languages retain the full directory.
+func DependencyDirsForFile(file string) []string {
+	clean := filepath.ToSlash(filepath.Clean(file))
+	dir := filepath.ToSlash(filepath.Dir(clean))
+	if strings.ToLower(filepath.Ext(clean)) != ".py" {
+		return []string{normalizeDependencyDir(dir)}
+	}
+	return dependencyDirs(dir)
+}
+
+func dependencyDirs(dir string) []string {
+	dir = filepath.ToSlash(filepath.Clean(dir))
+	if dir == "." {
+		dir = ""
+	}
+	var result []string
+	seen := make(map[string]bool)
+	add := func(value string) {
+		value = normalizeDependencyDir(value)
+		if !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	add(dir)
+	parts := strings.Split(strings.Trim(dir, "/"), "/")
+	for i, part := range parts {
+		if !isPythonSourceRoot(part) || i+1 >= len(parts) {
+			continue
+		}
+		add(strings.Join(parts[i+1:], "/"))
+	}
+	return result
+}
+
+func isPythonSourceRoot(name string) bool {
+	switch name {
+	case "lib", "python", "source", "src":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeDependencyDir(dir string) string {
+	dir = filepath.ToSlash(filepath.Clean(dir))
+	if dir == "." {
+		return "./"
+	}
+	return strings.TrimSuffix(dir, "/") + "/"
+}
+
+// findDirectCallers returns all files that import the given directory. It is
+// kept as a narrow helper for the existing package-level code-intel tests.
 func findDirectCallers(graph map[string][]string, fileDir string) []string {
+	return findDirectCallersForDirs(graph, []string{fileDir})
+}
+
+func findDirectCallersForDirs(graph map[string][]string, fileDirs []string) []string {
+	wanted := make(map[string]bool, len(fileDirs))
+	for _, dir := range fileDirs {
+		wanted[normalizeDependencyDir(dir)] = true
+	}
 	var callers []string
 	for src, targets := range graph {
 		for _, tgt := range targets {
-			if tgt == fileDir {
+			if wanted[normalizeDependencyDir(tgt)] {
 				callers = append(callers, src)
 				break
 			}
@@ -111,16 +174,9 @@ func findDirectCallers(graph map[string][]string, fileDir string) []string {
 func collectTransitiveCallers(graph map[string][]string, directCallers []string, excludeFile string) []string {
 	transitive := make(map[string]bool)
 	for _, dc := range directCallers {
-		want := filepath.Dir(dc) + "/"
-		for src, targets := range graph {
-			if src == excludeFile {
-				continue
-			}
-			for _, tgt := range targets {
-				if tgt == want {
-					transitive[src] = true
-					break
-				}
+		for _, src := range findDirectCallersForDirs(graph, DependencyDirsForFile(dc)) {
+			if src != excludeFile {
+				transitive[src] = true
 			}
 		}
 	}

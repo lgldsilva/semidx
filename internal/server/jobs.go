@@ -139,7 +139,22 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 	s.jobsRunning.Inc()
 	defer s.jobsRunning.Dec()
 
-	fail := func(msg string) {
+	fail := s.jobFailure(ctx, job)
+
+	proj, err := s.store.GetProjectByID(ctx, job.ProjectID)
+	if err != nil {
+		fail("project not found: " + err.Error())
+		return
+	}
+
+	if s.runSpecialJob(ctx, job, proj, dataDir, fail) {
+		return
+	}
+	s.runIndexJob(ctx, job, proj, dataDir, fail)
+}
+
+func (s *Server) jobFailure(ctx context.Context, job *store.Job) func(string) {
+	return func(msg string) {
 		s.log.Error("index job failed", "job", job.ID, "err", msg)
 		s.jobsTotal.WithLabelValues(job.Type, "failed").Inc()
 		if err := s.store.FailJob(ctx, job.ID, msg); err != nil {
@@ -149,22 +164,23 @@ func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 			s.log.Warn("mark project error", "job", job.ID, "err", err)
 		}
 	}
+}
 
-	proj, err := s.store.GetProjectByID(ctx, job.ProjectID)
-	if err != nil {
-		fail("project not found: " + err.Error())
-		return
-	}
-
+func (s *Server) runSpecialJob(ctx context.Context, job *store.Job, proj *store.Project, dataDir string, fail func(string)) bool {
 	// Batch jobs carry their payload inline; skip git sync / project path.
-	if job.Type == "batch" {
+	switch job.Type {
+	case "batch":
 		s.runBatchJob(ctx, job, proj)
-		return
-	}
-	if job.Type == "resolve_dependencies" {
+		return true
+	case "resolve_dependencies":
 		s.runDependencyResolveJob(ctx, job, proj, dataDir, fail)
-		return
+		return true
+	default:
+		return false
 	}
+}
+
+func (s *Server) runIndexJob(ctx context.Context, job *store.Job, proj *store.Project, dataDir string, fail func(string)) {
 
 	path, failMsg := s.resolveJobIndexPath(ctx, proj, dataDir)
 	if failMsg != "" {
@@ -326,7 +342,7 @@ func (s *Server) runBatchJob(ctx context.Context, job *store.Job, proj *store.Pr
 		return
 	}
 
-	indexed, chunks, deleted, errors := s.processBatchFiles(ctx, proj, body.Files, body.Delete, info.Dims)
+	indexed, chunks, deleted, errors := s.processBatchFiles(ctx, proj, body.Files, body.Delete, body.ProjectFiles, info.Dims)
 	if err := s.store.CompleteJob(ctx, job.ID, indexed, chunks, deleted, errors); err != nil {
 		s.log.Error("mark job complete", "job", job.ID, "err", err)
 		fail("complete batch job: " + err.Error())

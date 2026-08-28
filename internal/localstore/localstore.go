@@ -45,6 +45,7 @@ type SQLiteStore struct {
 
 // compile-time assertion that SQLiteStore satisfies the indexing/search subset.
 var _ store.IndexStore = (*SQLiteStore)(nil)
+var _ store.WorktreeFileRemover = (*SQLiteStore)(nil)
 
 // maxFillBatch bounds the content-lookup IN list. The SQL below is a fully
 // static literal (maxFillBatch placeholders), so no query text is ever built
@@ -536,6 +537,15 @@ func (s *SQLiteStore) SetWorktreeFiles(ctx context.Context, projectID int, workt
 		}
 	}
 	return tx.Commit()
+}
+
+// RemoveWorktreeFile removes a single path from one worktree's manifest. The
+// file version itself is reclaimed separately by PruneUnreferencedFiles once no
+// worktree references it.
+func (s *SQLiteStore) RemoveWorktreeFile(ctx context.Context, projectID int, worktree, path string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM worktree_files
+		WHERE project_id = ? AND worktree = ? AND path = ?`, projectID, worktree, path)
+	return err
 }
 
 // PruneUnreferencedFiles deletes files (and, via ON DELETE CASCADE, chunks) that

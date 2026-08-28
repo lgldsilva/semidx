@@ -353,3 +353,38 @@ func TestFindTestFiles_ReadError(t *testing.T) {
 	// May or may not include the file depending on OS, just ensure no panic
 	_ = result
 }
+
+func TestFindTestFiles_ProjectWidePythonAndTypeScript(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"src/pkg/service.py":       "def Service(): pass\n",
+		"tests/test_service.py":    "from pkg.service import Service\nService()\n",
+		"tests/service.spec.ts":    "describe('Service', () => Service())\n",
+		"src/pkg/other.ts":         "export const Other = 1\n",
+		"src/pkg/__tests__/svc.ts": "test('Service', () => Service())\n",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := FindTestFiles(root, "src/pkg/service.py", "Service")
+	want := map[string]bool{
+		"tests/test_service.py":    true,
+		"tests/service.spec.ts":    true,
+		"src/pkg/__tests__/svc.ts": true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("FindTestFiles() = %v, want %d project-wide tests", got, len(want))
+	}
+	for _, path := range got {
+		delete(want, path)
+	}
+	if len(want) != 0 {
+		t.Errorf("FindTestFiles() missing %v; got %v", want, got)
+	}
+}

@@ -206,6 +206,7 @@ func TestPushFlagDefaults(t *testing.T) {
 	cmd := newPushCmd(&deps{})
 	if cmd == nil {
 		t.Fatal("newPushCmd returned nil")
+		return
 	}
 	if cmd.Use != "push" {
 		t.Errorf("Use = %q, want %q", cmd.Use, "push")

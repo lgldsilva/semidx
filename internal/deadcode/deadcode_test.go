@@ -100,6 +100,7 @@ func TestClassify(t *testing.T) {
 			}
 			if got == nil {
 				t.Fatalf("classify(%q, hasImporters=%v) = nil, want non-nil", tt.symName, tt.hasImporters)
+				return
 			}
 			if got.Symbol != tt.symName {
 				t.Errorf("Symbol = %q, want %q", got.Symbol, tt.symName)

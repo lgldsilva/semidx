@@ -210,6 +210,27 @@ func TestFilesBatchAsync(t *testing.T) {
 	}
 }
 
+func TestFilesBatchWithInventory(t *testing.T) {
+	c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			ProjectFiles []string `json:"project_files"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(body.ProjectFiles) != 2 || body.ProjectFiles[0] != "src/app.py" || body.ProjectFiles[1] != "tests/test_app.py" {
+			t.Fatalf("project_files = %v", body.ProjectFiles)
+		}
+		_ = json.NewEncoder(w).Encode(BatchResponse{})
+	})
+	defer done()
+
+	if _, err := c.FilesBatchWithInventory(context.Background(), "p", nil, nil,
+		[]string{"src/app.py", "tests/test_app.py"}); err != nil {
+		t.Fatalf("FilesBatchWithInventory: %v", err)
+	}
+}
+
 func TestFilesBatchAsyncError(t *testing.T) {
 	c, done := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

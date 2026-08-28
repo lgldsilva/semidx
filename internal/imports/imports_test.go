@@ -1,6 +1,8 @@
 package imports
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -289,6 +291,49 @@ from foo.bar import Baz
 		want := []string{"foo/bar/"}
 		assertSlice(t, got, want)
 	})
+}
+
+func TestAnalyzePythonProjectResolvesSourceRoot(t *testing.T) {
+	files := []string{
+		"src/outlook_organizer/__init__.py",
+		"src/outlook_organizer/graph_client.py",
+		"src/outlook_organizer/message_applier.py",
+		"src/outlook_organizer/triage.py",
+		"tests/test_triage.py",
+	}
+
+	got := AnalyzeWithFiles("src/outlook_organizer/triage.py", []byte(`
+from outlook_organizer.message_applier import MessageApplier
+from .graph_client import GraphClient
+import dataclasses
+import httpx
+`), "", files)
+	want := []string{"src/outlook_organizer/"}
+	assertSlice(t, got, want)
+}
+
+func TestPythonProjectFilesSkipsGeneratedAndVirtualEnvDirs(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{
+		"src/app.py",
+		"tests/test_app.py",
+		".venv/lib/site.py",
+		"__pycache__/cached.py",
+		"vendor/third_party.py",
+		"dist/generated.py",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := PythonProjectFiles(root)
+	want := []string{"src/app.py", "tests/test_app.py"}
+	assertSlice(t, got, want)
 }
 
 func TestAnalyze_Rust(t *testing.T) {

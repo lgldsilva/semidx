@@ -573,7 +573,7 @@ func TestIndexProjectMaxChunksPerProject(t *testing.T) {
 	}
 }
 
-// --- InsertFileDependencies error path (best-effort, not fatal) ---------------
+// --- InsertFileDependencies error path ---------------------------------------
 
 type depErrStore struct {
 	*fakeStore
@@ -584,9 +584,9 @@ func (d *depErrStore) InsertFileDependencies(ctx context.Context, projectID int,
 	return d.depErr
 }
 
-func TestIndexContentDependencyInsertErrorIsNonFatal(t *testing.T) {
-	// When InsertFileDependencies fails, indexUnit logs a warning but the file
-	// is still indexed. This test proves the non-fatal path.
+func TestIndexContentDependencyInsertErrorIsFatal(t *testing.T) {
+	// A failed graph write must be visible to the caller; otherwise a degraded
+	// index can be reported as ready while its derived dependency data is stale.
 	es := &depErrStore{
 		fakeStore: &fakeStore{},
 		depErr:    errors.New("dep table unavailable"),
@@ -596,11 +596,11 @@ func TestIndexContentDependencyInsertErrorIsNonFatal(t *testing.T) {
 	// A Go file with a local (non-stdlib) import triggers InsertFileDependencies.
 	// With empty modulePath, "mylib/util" is treated as a local import.
 	created, err := idx.IndexContent(context.Background(), 1, "pkg/main.go", "m", []byte("package main\n\nimport \"mylib/util\"\n\nfunc main() { util.Run() }\n"))
-	if err != nil {
-		t.Fatalf("IndexContent should succeed despite dep insertion error: %v", err)
+	if err == nil {
+		t.Fatal("IndexContent should fail when dependency insertion fails")
 	}
-	if created == 0 {
-		t.Error("expected chunks to be created despite dep insertion error")
+	if created != 0 {
+		t.Errorf("created = %d, want 0 when dependency insertion fails", created)
 	}
 }
 

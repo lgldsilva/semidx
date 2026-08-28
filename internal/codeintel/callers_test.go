@@ -258,6 +258,41 @@ func TestFindDirectCallers_EmptyGraph(t *testing.T) {
 	}
 }
 
+func TestDependencyDirsForFileIncludesPythonSourceRootAlias(t *testing.T) {
+	got := DependencyDirsForFile("src/outlook_organizer/message_applier.py")
+	want := map[string]bool{
+		"src/outlook_organizer/": true,
+		"outlook_organizer/":     true,
+	}
+	for _, dir := range got {
+		delete(want, dir)
+	}
+	if len(want) != 0 {
+		t.Errorf("DependencyDirsForFile() missing aliases: %v; got %v", want, got)
+	}
+}
+
+func TestDependencyDirsForFileDoesNotAliasNonPythonPaths(t *testing.T) {
+	for _, file := range []string{"src/auth/token.go", "src/ui/app.ts"} {
+		got := DependencyDirsForFile(file)
+		want := []string{filepath.Dir(file) + "/"}
+		if len(got) != len(want) || got[0] != want[0] {
+			t.Errorf("DependencyDirsForFile(%q) = %v, want %v", file, got, want)
+		}
+	}
+}
+
+func TestFindDirectCallers_SourceRootAlias(t *testing.T) {
+	graph := map[string][]string{
+		"src/outlook_organizer/triage.py": {"outlook_organizer/"},
+		"tests/test_message_applier.py":   {"src/outlook_organizer/"},
+	}
+	got := findDirectCallersForDirs(graph, DependencyDirsForFile("src/outlook_organizer/message_applier.py"))
+	if len(got) != 2 {
+		t.Fatalf("findDirectCallersForDirs() = %v, want both source-root aliases", got)
+	}
+}
+
 func TestCollectTransitiveCallers(t *testing.T) {
 	graph := map[string][]string{
 		"cmd/main.go":         {"internal/auth/"},

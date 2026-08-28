@@ -126,6 +126,7 @@ func TestSaveRoundTripJSON(t *testing.T) {
 	}
 	if loaded == nil {
 		t.Fatal("Load returned nil")
+		return
 	}
 	if loaded.Project != "json-test" || loaded.Model != "bge-m3" || len(loaded.Files) != 2 {
 		t.Errorf("loaded = %+v, want project=json-test model=bge-m3 files=2", loaded)

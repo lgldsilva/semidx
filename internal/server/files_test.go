@@ -37,4 +37,14 @@ func TestValidateBatchBody(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "duplicate batch path") {
 		t.Fatalf("duplicate file/delete path: %v", err)
 	}
+	if err := validateBatchBody(&batchRequestBody{
+		ProjectFiles: []string{"../outside.py"},
+	}); err == nil || !strings.Contains(err.Error(), "invalid project inventory path") {
+		t.Fatalf("inventory traversal: %v", err)
+	}
+	if err := validateBatchBody(&batchRequestBody{
+		ProjectFiles: []string{"src/app.py", "src/app.py"},
+	}); err == nil || !strings.Contains(err.Error(), "duplicate project inventory path") {
+		t.Fatalf("inventory duplicate: %v", err)
+	}
 }

@@ -59,6 +59,7 @@ func TestLoginRememberMe(t *testing.T) {
 			}
 			if ck == nil {
 				t.Fatal("no session cookie set on login")
+				return
 			}
 			if ck.Expires.Before(before.Add(tc.wantTTL-slack)) || ck.Expires.After(after.Add(tc.wantTTL+slack)) {
 				t.Errorf("cookie Expires = %v; want ~now+%v", ck.Expires, tc.wantTTL)

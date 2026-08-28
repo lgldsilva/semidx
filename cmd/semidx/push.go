@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -195,15 +196,16 @@ func pushGitURL(ctx context.Context, tgt indexTarget) string {
 // pusher carries the shared state for a single push run so the raw and embedded
 // paths need not thread the same arguments through every call.
 type pusher struct {
-	d           *deps
-	cli         *client.Client
-	tgt         indexTarget
-	projectName string
-	model       string
-	verbose     bool
-	workers     int
-	batchSize   int
-	sync        bool
+	d            *deps
+	cli          *client.Client
+	tgt          indexTarget
+	projectName  string
+	model        string
+	verbose      bool
+	workers      int
+	batchSize    int
+	sync         bool
+	projectFiles []string
 }
 
 // rel returns path relative to the push target, falling back to the absolute
@@ -223,6 +225,7 @@ func (p *pusher) rel(path string) string {
 func (p *pusher) raw(ctx context.Context, files []string) error {
 	// 1. Hash all files, collect text content.
 	hashes, contents, skippedBin := p.hashFiles(files)
+	p.projectFiles = sortedPaths(hashes)
 	if skippedBin > 0 {
 		fmt.Printf("Skipped %d binary files (JARs, images, etc.)\n", skippedBin)
 	}
@@ -269,7 +272,7 @@ func (p *pusher) pushSync(ctx context.Context, batch []client.BatchFile, deletio
 // pushSyncSingle sends one synchronous batch.
 func (p *pusher) pushSyncSingle(ctx context.Context, batch []client.BatchFile, deletions []string, start time.Time) error {
 	fmt.Printf("Pushing %d files (sync), deleting %d ...\n", len(batch), len(deletions))
-	resp, err := p.cli.FilesBatch(ctx, p.projectName, batch, deletions)
+	resp, err := p.cli.FilesBatchWithInventory(ctx, p.projectName, batch, deletions, p.projectFiles)
 	if err != nil {
 		return fmt.Errorf("push files: %w", err)
 	}
@@ -292,7 +295,7 @@ func (p *pusher) pushSyncBatched(ctx context.Context, batch []client.BatchFile, 
 			del = deletions
 		}
 		fmt.Printf("Pushing batch %d/%d (%d files, sync) ...\n", i+1, totalBatches, len(b))
-		resp, err := p.cli.FilesBatch(ctx, p.projectName, b, del)
+		resp, err := p.cli.FilesBatchWithInventory(ctx, p.projectName, b, del, p.projectFiles)
 		if err != nil {
 			return fmt.Errorf("push batch %d/%d: %w", i+1, totalBatches, err)
 		}
@@ -321,7 +324,7 @@ func (p *pusher) pushAsync(ctx context.Context, batch []client.BatchFile, deleti
 // pushAsyncSingle enqueues one async batch job and polls for completion.
 func (p *pusher) pushAsyncSingle(ctx context.Context, batch []client.BatchFile, deletions []string, start time.Time) error {
 	fmt.Printf("Enqueuing %d files (async), deleting %d ...\n", len(batch), len(deletions))
-	jobID, err := p.cli.FilesBatchAsync(ctx, p.projectName, batch, deletions)
+	jobID, err := p.cli.FilesBatchAsyncWithInventory(ctx, p.projectName, batch, deletions, p.projectFiles)
 	if err != nil {
 		return fmt.Errorf("enqueue batch: %w", err)
 	}
@@ -363,7 +366,7 @@ func (p *pusher) pushAsyncBatched(ctx context.Context, batch []client.BatchFile,
 			del = deletions
 		}
 		fmt.Printf("Enqueuing batch %d/%d (%d files) ...\n", i+1, totalBatches, len(b))
-		jobID, err := p.cli.FilesBatchAsync(ctx, p.projectName, b, del)
+		jobID, err := p.cli.FilesBatchAsyncWithInventory(ctx, p.projectName, b, del, p.projectFiles)
 		if err != nil {
 			return fmt.Errorf("enqueue batch %d/%d: %w", i+1, totalBatches, err)
 		}
@@ -480,6 +483,15 @@ func splitBatch(batch []client.BatchFile, chunkSize int) [][]client.BatchFile {
 	return chunks
 }
 
+func sortedPaths(paths map[string]string) []string {
+	out := make([]string, 0, len(paths))
+	for path := range paths {
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // hashFiles hashes every file and, for text files, collects their content.
 // It returns the path→hash and path→content maps plus the count of skipped
 // binary files. Both maps are keyed by the path relative to the push target.
@@ -578,6 +590,7 @@ func (p *pusher) embedded(ctx context.Context, files []string) error {
 	// Compute the server diff even for local embedding so removed files are
 	// deleted and empty files are represented as explicit updates.
 	hashes, _, skippedBin := p.hashFiles(files)
+	p.projectFiles = sortedPaths(hashes)
 	if skippedBin > 0 {
 		fmt.Printf("Skipped %d binary files (JARs, images, etc.)\n", skippedBin)
 	}

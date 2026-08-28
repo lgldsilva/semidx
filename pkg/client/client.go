@@ -809,12 +809,19 @@ func (c *Client) FilesDiff(ctx context.Context, project string, hashes map[strin
 // using the synchronous mode (?sync=true) so the response includes the
 // indexing counts directly.
 func (c *Client) FilesBatch(ctx context.Context, project string, files []BatchFile, del []string) (*BatchResponse, error) {
+	return c.FilesBatchWithInventory(ctx, project, files, del, nil)
+}
+
+// FilesBatchWithInventory uploads a batch together with the complete
+// project-relative path inventory. The inventory lets the server resolve
+// imports for unchanged files when a push is split into multiple batches.
+func (c *Client) FilesBatchWithInventory(ctx context.Context, project string, files []BatchFile, del, projectFiles []string) (*BatchResponse, error) {
 	if err := requireProject(project); err != nil {
 		return nil, err
 	}
 	var out BatchResponse
 	if err := c.do(ctx, http.MethodPost, projectsPath+esc(project)+"/files/batch?sync=true",
-		map[string]any{"files": files, "delete": del}, &out); err != nil {
+		batchRequest(files, del, projectFiles), &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -824,10 +831,16 @@ func (c *Client) FilesBatch(ctx context.Context, project string, files []BatchFi
 // job is processed by a background worker; call WaitForJob to poll for completion.
 // Requires server support for async batches (status 202 Accepted).
 func (c *Client) FilesBatchAsync(ctx context.Context, project string, files []BatchFile, del []string) (int, error) {
+	return c.FilesBatchAsyncWithInventory(ctx, project, files, del, nil)
+}
+
+// FilesBatchAsyncWithInventory enqueues a batch with the complete project
+// path inventory. See FilesBatchWithInventory for why it is included.
+func (c *Client) FilesBatchAsyncWithInventory(ctx context.Context, project string, files []BatchFile, del, projectFiles []string) (int, error) {
 	if err := requireProject(project); err != nil {
 		return 0, err
 	}
-	body := map[string]any{"files": files, "delete": del}
+	body := batchRequest(files, del, projectFiles)
 	resp, err := c.doResponse(ctx, http.MethodPost, projectsPath+esc(project)+"/files/batch", body)
 	if err != nil {
 		return 0, err
@@ -852,6 +865,14 @@ func (c *Client) FilesBatchAsync(ctx context.Context, project string, files []Ba
 		return 0, fmt.Errorf("server returned empty job_id")
 	}
 	return out.JobID, nil
+}
+
+func batchRequest(files []BatchFile, del, projectFiles []string) map[string]any {
+	body := map[string]any{"files": files, "delete": del}
+	if len(projectFiles) > 0 {
+		body["project_files"] = projectFiles
+	}
+	return body
 }
 
 // WaitForJob polls a job until it completes, fails, or ctx is cancelled.
