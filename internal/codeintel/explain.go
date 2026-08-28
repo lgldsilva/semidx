@@ -101,22 +101,38 @@ func detectModulePath(root string) string {
 // the source file, so a same-directory heuristic misses the most useful
 // relationships.
 func FindTestFiles(root, filePath, symbolName string) []string {
-	if filePath == "" || filepath.IsAbs(filePath) || !filepath.IsLocal(filepath.Clean(filePath)) {
+	rootAbs, targetRel, ok := testFileTarget(root, filePath)
+	if !ok {
 		return nil
 	}
-	rootAbs, err := filepath.Abs(root)
+
+	var result []string
+	err := filepath.WalkDir(rootAbs, testFileWalker(rootAbs, targetRel, symbolName, &result))
 	if err != nil {
 		return nil
 	}
-	targetAbs := filepath.Join(rootAbs, filepath.Clean(filePath))
-	targetRel, err := filepath.Rel(rootAbs, targetAbs)
-	if err != nil || !filepath.IsLocal(targetRel) {
-		return nil
-	}
-	targetRel = filepath.ToSlash(filepath.Clean(targetRel))
+	sort.Strings(result)
+	return result
+}
 
-	var result []string
-	err = filepath.WalkDir(rootAbs, func(path string, entry fs.DirEntry, walkErr error) error {
+func testFileTarget(root, filePath string) (rootAbs, targetRel string, ok bool) {
+	if filePath == "" || filepath.IsAbs(filePath) || !filepath.IsLocal(filepath.Clean(filePath)) {
+		return "", "", false
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", false
+	}
+	targetAbs := filepath.Join(rootAbs, filepath.Clean(filePath))
+	targetRel, err = filepath.Rel(rootAbs, targetAbs)
+	if err != nil || !filepath.IsLocal(targetRel) {
+		return "", "", false
+	}
+	return rootAbs, filepath.ToSlash(filepath.Clean(targetRel)), true
+}
+
+func testFileWalker(rootAbs, targetRel, symbolName string, result *[]string) fs.WalkDirFunc {
+	return func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
 		}
@@ -126,35 +142,38 @@ func FindTestFiles(root, filePath, symbolName string) []string {
 			}
 			return nil
 		}
-		rel, err := filepath.Rel(rootAbs, path)
-		if err != nil || !filepath.IsLocal(rel) {
+		rel, ok := testFilePath(rootAbs, path)
+		if !ok || rel == targetRel || !isTestFile(rel) {
 			return nil
 		}
-		rel = filepath.ToSlash(rel)
-		if rel == targetRel || !isTestFile(rel) {
-			return nil
+		if testFileContains(rootAbs, rel, symbolName) {
+			*result = append(*result, rel)
 		}
-		// Open through the root-scoped API so a concurrent symlink change cannot
-		// redirect the read outside the project.
-		file, err := os.OpenInRoot(rootAbs, filepath.FromSlash(rel))
-		if err != nil {
-			return nil
-		}
-		data, err := io.ReadAll(file)
-		_ = file.Close()
-		if err != nil {
-			return nil
-		}
-		if strings.Contains(string(data), symbolName) {
-			result = append(result, rel)
-		}
-		return nil
-	})
-	if err != nil {
 		return nil
 	}
-	sort.Strings(result)
-	return result
+}
+
+func testFilePath(rootAbs, path string) (string, bool) {
+	rel, err := filepath.Rel(rootAbs, path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+func testFileContains(rootAbs, rel, symbolName string) bool {
+	// Open through the root-scoped API so a concurrent symlink change cannot
+	// redirect the read outside the project.
+	file, err := os.OpenInRoot(rootAbs, filepath.FromSlash(rel))
+	if err != nil {
+		return false
+	}
+	data, err := io.ReadAll(file)
+	_ = file.Close()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), symbolName)
 }
 
 func findTestFiles(root, filePath, symbolName string) []string {

@@ -20,8 +20,9 @@ import (
 
 // Limits enforced on pre-embedded chunks pushed by clients.
 const (
-	maxPreChunksPerFile = 32
-	maxPreChunkChars    = 4000
+	maxPreChunksPerFile    = 32
+	maxPreChunkChars       = 4000
+	logUpdateProjectStatus = "update project status"
 )
 
 // embeddedChunk is a pre-computed chunk sent by a client via files/batch.
@@ -271,7 +272,7 @@ func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, fil
 		s.log.Error("read project file inventory", "project", proj.Name, "err", err)
 		errors++
 		if statusErr := s.store.UpdateProjectStatus(ctx, proj.ID, "degraded"); statusErr != nil {
-			s.log.Warn("update project status", "project", proj.ID, "err", statusErr)
+			s.log.Warn(logUpdateProjectStatus, "project", proj.ID, "err", statusErr)
 		}
 		return 0, 0, deleted, errors
 	}
@@ -281,7 +282,7 @@ func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, fil
 	if err != nil {
 		errors++
 		if statusErr := s.store.UpdateProjectStatus(ctx, proj.ID, "degraded"); statusErr != nil {
-			s.log.Warn("update project status", "project", proj.ID, "err", statusErr)
+			s.log.Warn(logUpdateProjectStatus, "project", proj.ID, "err", statusErr)
 		}
 		return 0, 0, deleted, errors
 	}
@@ -303,7 +304,7 @@ func (s *Server) processBatchFiles(ctx context.Context, proj *store.Project, fil
 		status = "degraded"
 	}
 	if err := s.store.UpdateProjectStatus(ctx, proj.ID, status); err != nil {
-		s.log.Warn("update project status", "project", proj.ID, "err", err)
+		s.log.Warn(logUpdateProjectStatus, "project", proj.ID, "err", err)
 	}
 	return
 }

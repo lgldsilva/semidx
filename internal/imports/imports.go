@@ -630,42 +630,55 @@ func canonicalPythonModule(path string) string {
 }
 
 func pythonImportCandidates(ref gotreesitter.ImportRef, current string) []string {
-	var candidates []string
 	if ref.Relative > 0 {
-		base := strings.Split(current, ".")
-		if len(base) > 0 {
-			base = base[:len(base)-1]
-		}
-		remove := ref.Relative - 1
-		if remove >= len(base) {
-			base = nil
-		} else if remove > 0 {
-			base = base[:len(base)-remove]
-		}
-		if ref.From != "" {
-			base = append(base, strings.Split(ref.From, ".")...)
-		}
-		if ref.Name != "" && ref.Name != "*" {
-			candidate := append([]string{}, base...)
-			candidate = append(candidate, ref.Name)
-			candidates = append(candidates, strings.Join(candidate, "."))
-		}
-		if len(base) > 0 {
-			candidates = append(candidates, strings.Join(base, "."))
-		}
-		return candidates
+		return pythonRelativeImportCandidates(ref, current)
 	}
 	if ref.From != "" {
-		if ref.Name != "" && ref.Name != "*" {
-			candidates = append(candidates, ref.From+"."+ref.Name)
-		}
-		candidates = append(candidates, ref.From)
-		return candidates
+		return pythonFromImportCandidates(ref)
 	}
 	if ref.Path != "" {
 		return []string{ref.Path}
 	}
 	return nil
+}
+
+func pythonRelativeImportCandidates(ref gotreesitter.ImportRef, current string) []string {
+	base := pythonRelativeBase(current, ref.Relative)
+	if ref.From != "" {
+		base = append(base, strings.Split(ref.From, ".")...)
+	}
+	candidates := make([]string, 0, 2)
+	if ref.Name != "" && ref.Name != "*" {
+		candidate := append([]string{}, base...)
+		candidate = append(candidate, ref.Name)
+		candidates = append(candidates, strings.Join(candidate, "."))
+	}
+	if len(base) > 0 {
+		candidates = append(candidates, strings.Join(base, "."))
+	}
+	return candidates
+}
+
+func pythonRelativeBase(current string, levels int) []string {
+	base := strings.Split(current, ".")
+	if len(base) > 0 {
+		base = base[:len(base)-1]
+	}
+	remove := levels - 1
+	if remove >= len(base) {
+		return nil
+	}
+	if remove > 0 {
+		base = base[:len(base)-remove]
+	}
+	return base
+}
+
+func pythonFromImportCandidates(ref gotreesitter.ImportRef) []string {
+	if ref.Name == "" || ref.Name == "*" {
+		return []string{ref.From}
+	}
+	return []string{ref.From + "." + ref.Name, ref.From}
 }
 
 // isPythonStdlib reports whether pkg is in Python's standard library by
