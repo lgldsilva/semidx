@@ -95,6 +95,10 @@ type Response struct {
 	// RetryAfter hints when the embedding provider may recover (only set when
 	// Degraded is true).
 	RetryAfter time.Duration
+	// FallbackReason summarizes why the embedding failed and the search fell
+	// back to keyword ("provider: class", e.g. "ollama: timeout"); only set
+	// when Fallback is true — never for an explicit keyword-only request.
+	FallbackReason string `json:"fallback_reason,omitempty"`
 }
 
 // Search resolves the model, embeds the query and runs a vector search,
@@ -127,7 +131,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 
 	project, err := s.resolveProject(ctx, req)
 	if err != nil {
-		s.recordUsage(ctx, req, "", usage.OutcomeError, 0, start)
+		s.recordUsage(ctx, req, "", usage.OutcomeError, 0, "", start)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, err
 		}
@@ -178,7 +182,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		resp, err = s.searchSemantic(ctx, project.ID, req, model, dims, worktree, resp)
 	}
 	if err != nil {
-		s.recordUsage(ctx, req, project.Name, usage.OutcomeError, 0, start)
+		s.recordUsage(ctx, req, project.Name, usage.OutcomeError, 0, "", start)
 		return nil, err
 	}
 
@@ -200,7 +204,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	resp.TookMS = time.Since(start).Milliseconds()
 
 	outcome := usage.Classify(len(resp.Results), resp.Fallback, resp.Keyword)
-	s.recordUsage(ctx, req, project.Name, outcome, len(resp.Results), start)
+	s.recordUsage(ctx, req, project.Name, outcome, len(resp.Results), resp.FallbackReason, start)
 	return resp, nil
 }
 
@@ -220,8 +224,9 @@ func (s *Service) searchVectorOnly(ctx context.Context, projectID int, req Reque
 // recordUsage emits a usage.Event for this search attempt. Failures inside the
 // recorder are swallowed (analytics must never fail a search). project may be
 // "" when project resolution itself failed, in which case req.Project (the raw
-// ref the caller passed) is used instead.
-func (s *Service) recordUsage(ctx context.Context, req Request, project string, outcome usage.Outcome, hits int, start time.Time) {
+// ref the caller passed) is used instead. fallbackReason is only non-empty on a
+// real embedding-degradation fallback (resp.Fallback), never for keyword-only.
+func (s *Service) recordUsage(ctx context.Context, req Request, project string, outcome usage.Outcome, hits int, fallbackReason string, start time.Time) {
 	if s.usage == nil {
 		return
 	}
@@ -229,15 +234,16 @@ func (s *Service) recordUsage(ctx context.Context, req Request, project string, 
 		project = req.Project
 	}
 	s.usage.Record(ctx, usage.Event{
-		Project:   project,
-		Source:    usage.SourceFrom(ctx),
-		Outcome:   outcome,
-		HitCount:  hits,
-		LatencyMS: time.Since(start).Milliseconds(),
-		Keyword:   req.KeywordOnly,
-		Graph:     req.Graph,
-		QueryHash: usage.HashQuery(req.Query),
-		QueryText: req.Query,
+		Project:        project,
+		Source:         usage.SourceFrom(ctx),
+		Outcome:        outcome,
+		HitCount:       hits,
+		LatencyMS:      time.Since(start).Milliseconds(),
+		Keyword:        req.KeywordOnly,
+		Graph:          req.Graph,
+		FallbackReason: fallbackReason,
+		QueryHash:      usage.HashQuery(req.Query),
+		QueryText:      req.Query,
 	})
 }
 
@@ -312,6 +318,7 @@ func (s *Service) searchSemantic(ctx context.Context, projectID int, req Request
 		}
 		resp.Fallback = true
 		resp.Keyword = true
+		resp.FallbackReason = embed.SummarizeFailure(err)
 		results, kerr := s.keywordSearch(ctx, projectID, req.Query, dims, req.TopK, worktree)
 		if kerr != nil {
 			return nil, kerr

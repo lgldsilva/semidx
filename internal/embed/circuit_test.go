@@ -313,3 +313,104 @@ func TestCircuitEmbedderModelInfoUnknownModelIsNeutral(t *testing.T) {
 		t.Fatalf("EmbedSingle after unknown-model lookups: %v (breaker opened?)", err)
 	}
 }
+
+// transientRetryEmbedder fails with a transient error N times before succeeding.
+type transientRetryEmbedder struct {
+	failuresRemaining int
+	calls             int
+}
+
+func (tr *transientRetryEmbedder) Embed(_ context.Context, _ string, _ ...string) ([][]float32, error) {
+	tr.calls++
+	if tr.failuresRemaining > 0 {
+		tr.failuresRemaining--
+		return nil, errors.New("HTTP 429: Too Many Requests (rate limited)")
+	}
+	return [][]float32{{0.1, 0.2}}, nil
+}
+
+func (tr *transientRetryEmbedder) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
+	vecs, err := tr.Embed(ctx, model, text)
+	if err != nil {
+		return nil, err
+	}
+	return vecs[0], nil
+}
+
+func (tr *transientRetryEmbedder) ModelInfo(_ context.Context, _ string) (*ModelInfo, error) {
+	return &ModelInfo{Dims: 2}, nil
+}
+
+func (tr *transientRetryEmbedder) ListModels(_ context.Context) ([]string, error) {
+	return []string{"m"}, nil
+}
+
+func TestCircuitEmbedderQuickRetryOnTransientSuccess(t *testing.T) {
+	inner := &transientRetryEmbedder{failuresRemaining: 1}
+	ce := wrapWithCircuit("transient-test", inner, 2, time.Minute)
+
+	// EmbedSingle should retry internally on transient 429 and succeed on attempt 2.
+	vec, err := ce.EmbedSingle(context.Background(), "m", "hello")
+	if err != nil {
+		t.Fatalf("expected retry success, got %v", err)
+	}
+	if len(vec) != 2 {
+		t.Fatalf("expected 2 dims vector, got %v", vec)
+	}
+	if inner.calls != 2 {
+		t.Errorf("expected 2 calls, got %d", inner.calls)
+	}
+
+	// Circuit should still be closed.
+	ceImpl := ce.(*circuitEmbedder)
+	if ceImpl.cb.failures != 0 {
+		t.Errorf("expected 0 failures on circuit, got %d", ceImpl.cb.failures)
+	}
+}
+
+func TestCircuitEmbedderContextCancelDoesNotTripBreaker(t *testing.T) {
+	ce := wrapWithCircuit("cancel-test", &errEmbedder{}, 2, time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	for i := 0; i < 5; i++ {
+		_, err := ce.EmbedSingle(ctx, "m", "hello")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	}
+
+	// Breaker should not have counted context cancellations as provider failures.
+	ceImpl := ce.(*circuitEmbedder)
+	if ceImpl.cb.failures != 0 {
+		t.Errorf("expected 0 failures from context cancellations, got %d", ceImpl.cb.failures)
+	}
+}
+
+func TestIsTransient(t *testing.T) {
+	tests := []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{context.Canceled, false},
+		{errors.New("i/o timeout"), true},
+		{errors.New("connection refused"), true},
+		{errors.New("HTTP 429 Too Many Requests"), true},
+		{errors.New("503 Service Unavailable"), true},
+		{errors.New("502 Bad Gateway"), true},
+		{errors.New("504 Gateway Timeout"), true},
+		{errors.New("temporarily unavailable"), true},
+		{errors.New("401 Unauthorized"), false},
+		{errors.New("400 Bad Request"), false},
+		{errors.New("model not found"), false},
+	}
+
+	for _, tt := range tests {
+		got := isTransient(tt.err)
+		if got != tt.want {
+			t.Errorf("isTransient(%v) = %v, want %v", tt.err, got, tt.want)
+		}
+	}
+}

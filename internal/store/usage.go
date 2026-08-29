@@ -26,9 +26,9 @@ func (s *PgStore) RecordUsageEvent(ctx context.Context, e usage.Event) error {
 		outcome = string(usage.OutcomeOK)
 	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO usage_events (ts, project, source, outcome, hit_count, latency_ms, keyword, graph, query_hash, query_text)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		e.TS, e.Project, src, outcome, e.HitCount, e.LatencyMS, e.Keyword, e.Graph, e.QueryHash, e.QueryText,
+		INSERT INTO usage_events (ts, project, source, outcome, hit_count, latency_ms, keyword, graph, query_hash, query_text, fallback_reason)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		e.TS, e.Project, src, outcome, e.HitCount, e.LatencyMS, e.Keyword, e.Graph, e.QueryHash, e.QueryText, e.FallbackReason,
 	)
 	if err != nil {
 		return fmt.Errorf("record usage event: %w", err)
@@ -78,6 +78,12 @@ func (s *PgStore) UsageAggregate(ctx context.Context, since time.Time, project s
 	}
 	agg.ByOutcome = byOutcome
 
+	byFallbackReason, err := s.usageGroup(ctx, since, project, "fallback_reason", topLimit)
+	if err != nil {
+		return agg, err
+	}
+	agg.ByFallbackReason = byFallbackReason
+
 	p50, p95, err := s.usageLatencyPercentiles(ctx, since, project)
 	if err != nil {
 		return agg, err
@@ -115,7 +121,7 @@ func (s *PgStore) usageGroup(ctx context.Context, since time.Time, project, col 
 	var q string
 	var args []any
 	switch col {
-	case "project", "source", "outcome":
+	case "project", "source", "outcome", "fallback_reason":
 	default:
 		return nil, fmt.Errorf("invalid usage group column %q", col)
 	}

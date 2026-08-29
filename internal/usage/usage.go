@@ -47,6 +47,10 @@ type Event struct {
 	Graph     bool
 	QueryHash string
 	QueryText string // opt-in only
+	// FallbackReason is the low-cardinality "provider: class" reason the search
+	// fell back to keyword (e.g. "ollama: timeout"); "" unless the event is a
+	// real embedding-degradation fallback (never set for keyword-only searches).
+	FallbackReason string
 }
 
 // Aggregate is the raw store rollup used to build a Report.
@@ -55,6 +59,7 @@ type Aggregate struct {
 	ByProject          []Count
 	BySource           []Count
 	ByOutcome          []Count
+	ByFallbackReason   []Count
 	ProjectsWithEvents map[string]struct{}
 	// Latency percentiles over recorded latency_ms (0 when Total is 0).
 	LatencyP50MS float64
@@ -82,19 +87,22 @@ func DefaultParams() Params {
 // Report mirrors ai-memory's telemetry report shape: summary, aggregates,
 // findings, and known blind spots.
 type Report struct {
-	GeneratedAt  string    `json:"generated_at"`
-	SinceDays    int       `json:"since_days"`
-	Project      string    `json:"project,omitempty"`
-	Summary      string    `json:"summary"`
-	Total        int       `json:"total"`
-	ByProject    []Count   `json:"by_project"`
-	BySource     []Count   `json:"by_source"`
-	ByOutcome    []Count   `json:"by_outcome"`
-	Rates        Rates     `json:"rates"`
-	LatencyP50MS float64   `json:"latency_p50_ms,omitempty"`
-	LatencyP95MS float64   `json:"latency_p95_ms,omitempty"`
-	Findings     []Finding `json:"findings"`
-	BlindSpots   []string  `json:"blind_spots"`
+	GeneratedAt string  `json:"generated_at"`
+	SinceDays   int     `json:"since_days"`
+	Project     string  `json:"project,omitempty"`
+	Summary     string  `json:"summary"`
+	Total       int     `json:"total"`
+	ByProject   []Count `json:"by_project"`
+	BySource    []Count `json:"by_source"`
+	ByOutcome   []Count `json:"by_outcome"`
+	// ByFallbackReason breaks fallback outcomes down by "provider: class"
+	// (e.g. "ollama: timeout"); empty when no degraded fallback was recorded.
+	ByFallbackReason []Count   `json:"by_fallback_reason,omitempty"`
+	Rates            Rates     `json:"rates"`
+	LatencyP50MS     float64   `json:"latency_p50_ms,omitempty"`
+	LatencyP95MS     float64   `json:"latency_p95_ms,omitempty"`
+	Findings         []Finding `json:"findings"`
+	BlindSpots       []string  `json:"blind_spots"`
 }
 
 // Rates are outcome fractions over Total (0 when Total is 0).
@@ -116,14 +124,15 @@ type Finding struct {
 
 // ParseSource validates a client-origin string into a Source enum.
 func ParseSource(s string) Source {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case string(SourceCLI):
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch {
+	case s == string(SourceCLI) || strings.HasPrefix(s, "cli"):
 		return SourceCLI
-	case string(SourceMCP):
+	case s == string(SourceMCP) || strings.HasPrefix(s, "mcp") || strings.HasPrefix(s, "agent"):
 		return SourceMCP
-	case string(SourceAdmin):
+	case s == string(SourceAdmin) || strings.HasPrefix(s, "admin") || strings.HasPrefix(s, "web"):
 		return SourceAdmin
-	case string(SourceSDK):
+	case s == string(SourceSDK) || strings.HasPrefix(s, "sdk"):
 		return SourceSDK
 	default:
 		return SourceUnknown

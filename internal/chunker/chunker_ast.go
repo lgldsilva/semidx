@@ -49,14 +49,37 @@ func astChunkFromSyms(content []byte, maxChars int, syms []analyzer.Symbol) []Ch
 
 	for _, sym := range sorted {
 		zeroBasedStart := sym.StartLine - 1
-		chunks = appendNonSymbolChunks(chunks, lines, lastLine, zeroBasedStart, maxChars)
+		docStart := findDocCommentStart(lines, lastLine, zeroBasedStart)
+		chunks = appendNonSymbolChunks(chunks, lines, lastLine, docStart, maxChars)
 
 		symEnd := clipSymbolEnd(sym.EndLine, len(lines))
-		chunks = appendSymbolChunks(chunks, lines, sym, symEnd, maxChars)
+		effectiveSym := sym
+		effectiveSym.StartLine = docStart + 1
+		chunks = appendSymbolChunks(chunks, lines, effectiveSym, symEnd, maxChars)
 		lastLine = symEnd
 	}
 
 	return appendTrailingChunks(chunks, lines, lastLine, maxChars)
+}
+
+// findDocCommentStart scans backwards from zeroBasedStart to find contiguous
+// comment lines directly above the symbol declaration (doc comments).
+func findDocCommentStart(lines []string, lastLine, zeroBasedStart int) int {
+	docStart := zeroBasedStart
+	for i := zeroBasedStart - 1; i >= lastLine; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			break
+		}
+		if strings.HasPrefix(line, "//") || strings.HasPrefix(line, "#") ||
+			strings.HasPrefix(line, "/*") || strings.HasPrefix(line, "*") ||
+			strings.HasPrefix(line, "'''") || strings.HasPrefix(line, `"""`) {
+			docStart = i
+		} else {
+			break
+		}
+	}
+	return docStart
 }
 
 // appendNonSymbolChunks emits blank-line-split chunks for content between

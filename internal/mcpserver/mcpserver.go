@@ -77,11 +77,14 @@ type SearchOutput struct {
 	// Degraded is true when the embedding circuit was open and the backend
 	// served keyword results instead of failing; RetryAfterMS hints when the
 	// embedding provider may recover.
-	Degraded     bool       `json:"degraded"`
-	RetryAfterMS int64      `json:"retry_after_ms,omitempty"`
-	TookMS       int64      `json:"took_ms"`
-	Results      []Hit      `json:"results"`
-	Error        *ToolError `json:"error,omitempty"`
+	Degraded     bool  `json:"degraded"`
+	RetryAfterMS int64 `json:"retry_after_ms,omitempty"`
+	// FallbackReason explains why semantic search degraded ("<provider>:
+	// <class>", e.g. "gemini: 5xx"); empty when keyword was requested.
+	FallbackReason string     `json:"fallback_reason,omitempty"`
+	TookMS         int64      `json:"took_ms"`
+	Results        []Hit      `json:"results"`
+	Error          *ToolError `json:"error,omitempty"`
 }
 
 // ProjectInfo is a backend-neutral project summary.
@@ -1039,15 +1042,18 @@ type structuredOutput struct {
 	Fallback     bool            `json:"fallback"`
 	Degraded     bool            `json:"degraded"`
 	RetryAfterMS int64           `json:"retry_after_ms"`
-	Total        int             `json:"total_results"`
-	QueryTimeMS  int64           `json:"query_time_ms"`
+	// FallbackReason explains a degraded search ("<provider>: <class>").
+	FallbackReason string `json:"fallback_reason,omitempty"`
+	Total          int    `json:"total_results"`
+	QueryTimeMS    int64  `json:"query_time_ms"`
 }
 
 func formatSearchStructured(out *SearchOutput) string {
 	envelope := structuredOutput{
 		Project: out.Project, Model: out.Model, Route: out.Route, Keyword: out.Keyword,
 		Fallback: out.Fallback, Degraded: out.Degraded, RetryAfterMS: out.RetryAfterMS,
-		QueryTimeMS: out.TookMS,
+		FallbackReason: out.FallbackReason,
+		QueryTimeMS:    out.TookMS,
 	}
 	if len(out.Results) == 0 {
 		data, _ := json.Marshal(envelope)

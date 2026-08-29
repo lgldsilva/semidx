@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,6 +25,31 @@ type RetryableError struct {
 func (e *RetryableError) Error() string             { return e.Err.Error() }
 func (e *RetryableError) Unwrap() error             { return e.Err }
 func (e *RetryableError) RetryAfter() time.Duration { return e.After }
+
+// isTransient returns true for errors that may resolve with a quick retry:
+// network timeouts, connection resets, HTTP 429 (rate limit), HTTP 502/503/504.
+// Context cancellation is not considered a provider transient failure.
+func isTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "429") ||
+		strings.Contains(msg, "502") ||
+		strings.Contains(msg, "503") ||
+		strings.Contains(msg, "504") ||
+		strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "service unavailable") ||
+		strings.Contains(msg, "bad gateway") ||
+		strings.Contains(msg, "gateway timeout") ||
+		strings.Contains(msg, "temporarily unavailable")
+}
 
 // circuitBreaker tracks a single provider's failure state.
 type circuitBreaker struct {
@@ -103,13 +129,33 @@ func (ce *circuitEmbedder) Embed(ctx context.Context, model string, inputs ...st
 			After: remaining,
 		}
 	}
-	result, err := ce.inner.Embed(ctx, model, inputs...)
-	if err != nil {
-		ce.cb.recordFailure()
-		return nil, err
+	var lastErr error
+	backoffs := []time.Duration{50 * time.Millisecond, 150 * time.Millisecond}
+	for attempt := 0; attempt <= len(backoffs); attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoffs[attempt-1]):
+			}
+		}
+		result, err := ce.inner.Embed(ctx, model, inputs...)
+		if err == nil {
+			ce.cb.recordSuccess()
+			return result, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !isTransient(err) {
+			break
+		}
 	}
-	ce.cb.recordSuccess()
-	return result, nil
+	if ctx.Err() == nil {
+		ce.cb.recordFailure()
+	}
+	return nil, lastErr
 }
 
 func (ce *circuitEmbedder) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
@@ -119,13 +165,33 @@ func (ce *circuitEmbedder) EmbedSingle(ctx context.Context, model, text string) 
 			After: remaining,
 		}
 	}
-	result, err := ce.inner.EmbedSingle(ctx, model, text)
-	if err != nil {
-		ce.cb.recordFailure()
-		return nil, err
+	var lastErr error
+	backoffs := []time.Duration{50 * time.Millisecond, 150 * time.Millisecond}
+	for attempt := 0; attempt <= len(backoffs); attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoffs[attempt-1]):
+			}
+		}
+		result, err := ce.inner.EmbedSingle(ctx, model, text)
+		if err == nil {
+			ce.cb.recordSuccess()
+			return result, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !isTransient(err) {
+			break
+		}
 	}
-	ce.cb.recordSuccess()
-	return result, nil
+	if ctx.Err() == nil {
+		ce.cb.recordFailure()
+	}
+	return nil, lastErr
 }
 
 func (ce *circuitEmbedder) ModelInfo(ctx context.Context, model string) (*ModelInfo, error) {
@@ -142,7 +208,7 @@ func (ce *circuitEmbedder) ModelInfo(ctx context.Context, model string) (*ModelI
 		// breaker for every other model/project whenever an unknown model is
 		// looked up repeatedly. Only real provider failures feed the breaker.
 		var ume *UnknownModelError
-		if !errors.As(err, &ume) {
+		if !errors.As(err, &ume) && ctx.Err() == nil {
 			ce.cb.recordFailure()
 		}
 		return nil, err
@@ -160,7 +226,9 @@ func (ce *circuitEmbedder) ListModels(ctx context.Context) ([]string, error) {
 	}
 	result, err := ce.inner.ListModels(ctx)
 	if err != nil {
-		ce.cb.recordFailure()
+		if ctx.Err() == nil {
+			ce.cb.recordFailure()
+		}
 		return nil, err
 	}
 	ce.cb.recordSuccess()
