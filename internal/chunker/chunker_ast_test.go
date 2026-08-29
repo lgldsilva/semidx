@@ -268,3 +268,33 @@ func TestChunkLinesEdgeCases(t *testing.T) {
 		t.Fatal("expected chunks when endLine clamped")
 	}
 }
+
+func TestAstChunkAttachesPrecedingDocComments(t *testing.T) {
+	t.Parallel()
+	content := `package main
+
+// CalculateTax computes total tax including state and municipal rates.
+// It applies exemptions for essential items.
+func CalculateTax(amount float64) float64 {
+	return amount * 0.15
+}
+`
+	chunks := ChunkFileAST("tax.go", []byte(content), 1000)
+	if len(chunks) == 0 {
+		t.Fatal("expected at least 1 chunk")
+	}
+
+	// The function chunk must include both the doc comments and the declaration.
+	foundFuncWithDoc := false
+	for _, c := range chunks {
+		if strings.Contains(c.Content, "[func] CalculateTax") {
+			if strings.Contains(c.Content, "CalculateTax computes total tax") &&
+				strings.Contains(c.Content, "return amount * 0.15") {
+				foundFuncWithDoc = true
+			}
+		}
+	}
+	if !foundFuncWithDoc {
+		t.Fatalf("expected doc comments bound to function chunk, got: %+v", chunks)
+	}
+}

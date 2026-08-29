@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -275,6 +276,152 @@ func TestExpandByGraphSeedsDeduplicatedAsNeighbors(t *testing.T) {
 	}
 	if !hasPath(got, "c.go") {
 		t.Error("c.go (neighbor of a.go, not a seed) should appear in expanded results")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CTE vs in-memory BFS fallback
+// ---------------------------------------------------------------------------
+
+// graphStoreWrap overrides CTE/neighbor calls on a real SQLite store so tests
+// can force the SQL path or the in-memory BFS fallback independently.
+type graphStoreWrap struct {
+	*localstore.SQLiteStore
+	bfs         func(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error)
+	onNeighbors func()
+}
+
+func (w *graphStoreWrap) FetchGraphPathsBFS(ctx context.Context, projectID int, seedPaths []string, maxDepth int) (map[string]int, error) {
+	if w.bfs != nil {
+		return w.bfs(ctx, projectID, seedPaths, maxDepth)
+	}
+	return w.SQLiteStore.FetchGraphPathsBFS(ctx, projectID, seedPaths, maxDepth)
+}
+
+func (w *graphStoreWrap) FetchGraphNeighbors(ctx context.Context, projectID int) (map[string][]string, error) {
+	if w.onNeighbors != nil {
+		w.onNeighbors()
+	}
+	return w.SQLiteStore.FetchGraphNeighbors(ctx, projectID)
+}
+
+func seedLinearGraph(t *testing.T, g *graphFixture) {
+	t.Helper()
+	ctx := context.Background()
+	for _, p := range []string{"a.go", "b.go", "c.go", "d.go"} {
+		g.createFile(ctx, t, p, "package p\nfunc F() {}")
+	}
+	g.addEdge(ctx, t, "a.go", "b.go")
+	g.addEdge(ctx, t, "b.go", "c.go")
+	g.addEdge(ctx, t, "c.go", "d.go")
+}
+
+func TestExpandByGraphPrefersCTEOverGoBFS(t *testing.T) {
+	g := newGraphFixture(t)
+	seedLinearGraph(t, g)
+	neighbors := 0
+	wrap := &graphStoreWrap{SQLiteStore: g.st, onNeighbors: func() { neighbors++ }}
+	svc := NewService(wrap, &fakeEmbedder{vec: []float32{1}, dims: 1})
+
+	results, err := svc.expandByGraph(context.Background(), &Request{GraphMaxDepth: 2},
+		[]store.SearchResult{{FilePath: "a.go", Score: 0.9}}, g.pid, 1)
+	if err != nil {
+		t.Fatalf("expandByGraph: %v", err)
+	}
+	if neighbors != 0 {
+		t.Fatalf("successful CTE path loaded the full graph %d times", neighbors)
+	}
+	got := collectPaths(results)
+	if !hasPath(got, "b.go") || !hasPath(got, "c.go") {
+		t.Errorf("CTE expansion missing depth-1/2 hits: %v", got)
+	}
+	if hasPath(got, "a.go") || hasPath(got, "d.go") {
+		t.Errorf("CTE expansion included seed or depth-3 path: %v", got)
+	}
+}
+
+func TestExpandByGraphFallsBackToGoBFSWhenCTEEmpty(t *testing.T) {
+	g := newGraphFixture(t)
+	seedLinearGraph(t, g)
+	wrap := &graphStoreWrap{
+		SQLiteStore: g.st,
+		bfs: func(context.Context, int, []string, int) (map[string]int, error) {
+			return nil, nil
+		},
+	}
+	svc := NewService(wrap, &fakeEmbedder{vec: []float32{1}, dims: 1})
+	results, err := svc.expandByGraph(context.Background(), &Request{GraphMaxDepth: 2},
+		[]store.SearchResult{{FilePath: "a.go", Score: 0.9}}, g.pid, 1)
+	if err != nil {
+		t.Fatalf("expandByGraph: %v", err)
+	}
+	got := collectPaths(results)
+	if !hasPath(got, "b.go") || !hasPath(got, "c.go") {
+		t.Errorf("Go BFS fallback missing hits after empty CTE: %v", got)
+	}
+}
+
+func TestExpandByGraphFallsBackToGoBFSWhenCTEErrors(t *testing.T) {
+	g := newGraphFixture(t)
+	seedLinearGraph(t, g)
+	wrap := &graphStoreWrap{
+		SQLiteStore: g.st,
+		bfs: func(context.Context, int, []string, int) (map[string]int, error) {
+			return nil, errors.New("cte unavailable")
+		},
+	}
+	svc := NewService(wrap, &fakeEmbedder{vec: []float32{1}, dims: 1})
+	results, err := svc.expandByGraph(context.Background(), &Request{GraphMaxDepth: 1},
+		[]store.SearchResult{{FilePath: "a.go", Score: 0.9}}, g.pid, 1)
+	if err != nil {
+		t.Fatalf("expandByGraph: %v", err)
+	}
+	got := collectPaths(results)
+	if !hasPath(got, "b.go") {
+		t.Errorf("Go BFS fallback missing depth-1 hit after CTE error: %v", got)
+	}
+	if hasPath(got, "c.go") {
+		t.Errorf("maxDepth=1 should not include c.go: %v", got)
+	}
+}
+
+func TestHopsFromCTEPathsAppliesDecayAndFloor(t *testing.T) {
+	hops := hopsFromCTEPaths(map[string]int{"near.go": 1, "far.go": 40}, 1.0)
+	if _, ok := hops["far.go"]; ok {
+		t.Error("depth-40 hop should be below the decay floor")
+	}
+	hop, ok := hops["near.go"]
+	if !ok {
+		t.Fatal("near.go missing")
+	}
+	want := 1.0 * graphExpandDecay
+	if hop.Score != want || hop.Depth != 1 {
+		t.Errorf("near.go hop = %+v, want score=%v depth=1", hop, want)
+	}
+}
+
+func TestHopsFromCTEPathsCapsExpansion(t *testing.T) {
+	paths := make(map[string]int, maxGraphExpandPaths+5)
+	for i := 0; i < maxGraphExpandPaths+5; i++ {
+		paths[fmt.Sprintf("p%d.go", i)] = 1
+	}
+	hops := hopsFromCTEPaths(paths, 1.0)
+	if len(hops) != maxGraphExpandPaths {
+		t.Fatalf("cap ignored: got %d hops, want %d", len(hops), maxGraphExpandPaths)
+	}
+}
+
+func TestCollectGraphSeedsDedupesAndDefaultsScore(t *testing.T) {
+	got := collectGraphSeeds([]store.SearchResult{
+		{FilePath: "a.go", Score: 0},
+		{FilePath: "a.go", Score: 0},
+		{FilePath: "b.go", Score: 0},
+	})
+	if len(got.list) != 2 || !got.paths["a.go"] || !got.paths["b.go"] {
+		t.Errorf("dedupe failed: %+v", got)
+	}
+	if got.maxScore != 1.0 {
+		t.Errorf("zero scores should default maxScore to 1.0, got %v", got.maxScore)
 	}
 }
 

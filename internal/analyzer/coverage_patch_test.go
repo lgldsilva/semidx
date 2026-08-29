@@ -7,16 +7,26 @@ func TestKindFromNodeType(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
 		"function_declaration":  "func",
+		"function_item":         "func",
 		"method_declaration":    "method",
 		"method_definition":     "method",
+		"method":                "method",
 		"type_spec":             "type",
 		"class_declaration":     "class",
+		"class":                 "class",
+		"class_specifier":       "class",
+		"class_definition":      "class",
 		"interface_declaration": "interface",
 		"enum_declaration":      "enum",
+		"enum_item":             "enum",
 		"record_declaration":    "record",
 		"function_definition":   "func",
-		"class_definition":      "class",
 		"block":                 "block",
+		"struct_item":           "struct",
+		"struct_specifier":      "struct",
+		"impl_item":             "impl",
+		"module":                "module",
+		"protocol_declaration":  "protocol",
 		"unknown_node_xyz":      "unknown_node_xyz",
 	}
 	for nt, want := range cases {

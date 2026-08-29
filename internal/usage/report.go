@@ -22,6 +22,9 @@ func BuildReport(agg Aggregate, params Params, generatedAt time.Time) Report {
 	byProject := truncateCounts(agg.ByProject, params.TopLimit)
 	bySource := agg.BySource
 	byOutcome := agg.ByOutcome
+	// Most events carry no fallback reason (the column defaults to ''), so the
+	// empty bucket is dropped; the rest is truncated like by_project.
+	byFallbackReason := truncateCounts(dropEmptyKeys(agg.ByFallbackReason), params.TopLimit)
 
 	rates := Rates{
 		OK:       rate(countKey(byOutcome, string(OutcomeOK)), agg.Total),
@@ -81,18 +84,19 @@ func BuildReport(agg Aggregate, params Params, generatedAt time.Time) Report {
 	}
 
 	return Report{
-		GeneratedAt:  generatedAt.UTC().Format(time.RFC3339),
-		SinceDays:    params.SinceDays,
-		Project:      params.Project,
-		Summary:      summary,
-		Total:        agg.Total,
-		ByProject:    byProject,
-		BySource:     bySource,
-		ByOutcome:    byOutcome,
-		Rates:        rates,
-		LatencyP50MS: agg.LatencyP50MS,
-		LatencyP95MS: agg.LatencyP95MS,
-		Findings:     findings,
+		GeneratedAt:      generatedAt.UTC().Format(time.RFC3339),
+		SinceDays:        params.SinceDays,
+		Project:          params.Project,
+		Summary:          summary,
+		Total:            agg.Total,
+		ByProject:        byProject,
+		BySource:         bySource,
+		ByOutcome:        byOutcome,
+		ByFallbackReason: byFallbackReason,
+		Rates:            rates,
+		LatencyP50MS:     agg.LatencyP50MS,
+		LatencyP95MS:     agg.LatencyP95MS,
+		Findings:         findings,
 		BlindSpots: []string{
 			"Events recorded before this feature shipped are absent.",
 			"Query text is not stored by default (only optional SEMIDX_USAGE_LOG_QUERIES).",
@@ -124,6 +128,10 @@ func FormatText(r Report) string {
 	writeCounts(&b, r.BySource)
 	b.WriteString("\n## By outcome\n\n")
 	writeCounts(&b, r.ByOutcome)
+	if len(r.ByFallbackReason) > 0 {
+		b.WriteString("\n## Fallback reasons\n\n")
+		writeCounts(&b, r.ByFallbackReason)
+	}
 
 	b.WriteString("\n## Findings\n\n")
 	if len(r.Findings) == 0 {
@@ -171,4 +179,16 @@ func truncateCounts(rows []Count, limit int) []Count {
 		return rows
 	}
 	return rows[:limit]
+}
+
+// dropEmptyKeys removes the zero-value bucket (events without a fallback
+// reason) from a grouped rollup.
+func dropEmptyKeys(rows []Count) []Count {
+	out := rows[:0]
+	for _, r := range rows {
+		if r.Key != "" {
+			out = append(out, r)
+		}
+	}
+	return out
 }

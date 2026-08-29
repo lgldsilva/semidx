@@ -65,6 +65,13 @@ services:
       - "${SEMIDX_HTTP_PORT:-8080}:8080" # only the API is exposed
     volumes:
       - semidx_data:/data
+    healthcheck:
+      # busybox wget (Alpine base) against the existing /healthz endpoint.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
 volumes:

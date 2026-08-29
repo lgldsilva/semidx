@@ -14,7 +14,7 @@ import (
 // ANY input (kills a mutation dropping the strings.ToLower normalization) and
 // only ever returns one of the known dimension buckets.
 func TestInferDimsCaseInsensitiveProperty(t *testing.T) {
-	valid := map[int]bool{0: true, 768: true, 1024: true, 3072: true}
+	valid := map[int]bool{0: true, 384: true, 768: true, 1024: true, 1536: true, 3072: true}
 	rapid.Check(t, func(rt *rapid.T) {
 		s := rapid.String().Draw(rt, "s")
 		lower := InferDims(strings.ToLower(s))

@@ -26,9 +26,9 @@ func (s *SQLiteStore) RecordUsageEvent(ctx context.Context, e usage.Event) error
 		graph = 1
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO usage_events (ts, project, source, outcome, hit_count, latency_ms, keyword, graph, query_hash, query_text)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.TS.UTC().Format(time.RFC3339Nano), e.Project, src, outcome, e.HitCount, e.LatencyMS, kw, graph, e.QueryHash, e.QueryText,
+		INSERT INTO usage_events (ts, project, source, outcome, hit_count, latency_ms, keyword, graph, query_hash, query_text, fallback_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.TS.UTC().Format(time.RFC3339Nano), e.Project, src, outcome, e.HitCount, e.LatencyMS, kw, graph, e.QueryHash, e.QueryText, e.FallbackReason,
 	)
 	if err != nil {
 		return fmt.Errorf("record usage event: %w", err)
@@ -74,6 +74,11 @@ func (s *SQLiteStore) UsageAggregate(ctx context.Context, since time.Time, proje
 		return agg, err
 	}
 	agg.ByOutcome = byOutcome
+	byFallbackReason, err := s.usageGroup(ctx, sinceStr, project, "fallback_reason", topLimit)
+	if err != nil {
+		return agg, err
+	}
+	agg.ByFallbackReason = byFallbackReason
 
 	latencies, err := s.usageLatencies(ctx, sinceStr, project)
 	if err != nil {
@@ -135,7 +140,7 @@ func percentileMS(sorted []int64, p float64) float64 {
 
 func (s *SQLiteStore) usageGroup(ctx context.Context, since, project, col string, limit int) ([]usage.Count, error) {
 	switch col {
-	case "project", "source", "outcome":
+	case "project", "source", "outcome", "fallback_reason":
 	default:
 		return nil, fmt.Errorf("invalid usage group column %q", col)
 	}

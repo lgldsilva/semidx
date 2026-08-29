@@ -52,15 +52,16 @@ func remoteToResponse(cr *client.SearchResponse, projectPath string) *search.Res
 		})
 	}
 	return &search.Response{
-		Project:    &store.Project{Name: cr.Project, Path: projectPath},
-		Model:      cr.Model,
-		Route:      route,
-		TookMS:     cr.TookMS,
-		Results:    results,
-		Fallback:   cr.Fallback,
-		Keyword:    cr.Keyword,
-		Degraded:   cr.Degraded,
-		RetryAfter: time.Duration(cr.RetryAfterMS) * time.Millisecond,
+		Project:        &store.Project{Name: cr.Project, Path: projectPath},
+		Model:          cr.Model,
+		Route:          route,
+		TookMS:         cr.TookMS,
+		Results:        results,
+		Fallback:       cr.Fallback,
+		Keyword:        cr.Keyword,
+		Degraded:       cr.Degraded,
+		RetryAfter:     time.Duration(cr.RetryAfterMS) * time.Millisecond,
+		FallbackReason: cr.FallbackReason,
 	}
 }
 

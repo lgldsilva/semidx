@@ -57,15 +57,7 @@ func (r *LexicalReranker) Rerank(_ context.Context, query string, results []stor
 	}
 	scored := make([]keyed, len(results))
 	for i, res := range results {
-		content := strings.ToLower(res.Content)
-		hit := 0
-		for t := range terms {
-			if strings.Contains(content, t) {
-				hit++
-			}
-		}
-		overlap := float64(hit) / float64(len(terms))
-		scored[i] = keyed{res: res, blend: (1-r.Weight)*res.Score + r.Weight*overlap}
+		scored[i] = keyed{res: res, blend: r.blend(res, terms)}
 	}
 	// Stable sort by blended score descending so equal blends preserve the input
 	// (semantic) order.
@@ -77,16 +69,73 @@ func (r *LexicalReranker) Rerank(_ context.Context, query string, results []stor
 	return out
 }
 
-// tokenize lowercases query and splits on non-alphanumeric runes, keeping tokens
-// of length >= 2 as a set (deduplicated) so repeated words don't skew overlap.
+func (r *LexicalReranker) blend(res store.SearchResult, terms map[string]struct{}) float64 {
+	overlap := termOverlap(res.Content, terms)
+	return (1-r.Weight)*res.Score + r.Weight*(overlap+extractedSymbolBoost(res, terms))
+}
+
+func termOverlap(content string, terms map[string]struct{}) float64 {
+	lower := strings.ToLower(content)
+	hit := 0
+	for t := range terms {
+		if strings.Contains(lower, t) {
+			hit++
+		}
+	}
+	return float64(hit) / float64(len(terms))
+}
+
+// extractedSymbolBoost lifts EXTRACTED symbols that match a query term over
+// incidental text mentions of the same token. Zero when the hit is not a
+// confidently extracted symbol.
+func extractedSymbolBoost(res store.SearchResult, terms map[string]struct{}) float64 {
+	if res.Confidence != "EXTRACTED" || res.Symbol == "" {
+		return 0
+	}
+	symLower := strings.ToLower(res.Symbol)
+	for t := range terms {
+		if strings.Contains(symLower, t) || strings.Contains(t, symLower) {
+			return 0.2
+		}
+	}
+	return 0
+}
+
+// splitCamelCaseTokens splits PascalCase and camelCase words into component sub-tokens.
+func splitCamelCaseTokens(word string) []string {
+	var tokens []string
+	var current strings.Builder
+	for _, r := range word {
+		if unicode.IsUpper(r) {
+			if current.Len() > 0 {
+				tokens = append(tokens, strings.ToLower(current.String()))
+				current.Reset()
+			}
+		}
+		current.WriteRune(r)
+	}
+	if current.Len() > 0 {
+		tokens = append(tokens, strings.ToLower(current.String()))
+	}
+	return tokens
+}
+
+// tokenize lowercases query, splits on non-alphanumeric runes, and expands
+// camelCase/PascalCase identifiers, keeping tokens of length >= 2 as a set (deduplicated).
 func tokenize(query string) map[string]struct{} {
-	fields := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
+	fields := strings.FieldsFunc(query, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
 	})
-	set := make(map[string]struct{}, len(fields))
+	set := make(map[string]struct{}, len(fields)*2)
 	for _, f := range fields {
-		if len(f) >= 2 {
-			set[f] = struct{}{}
+		lower := strings.ToLower(f)
+		if len(lower) >= 2 {
+			set[lower] = struct{}{}
+		}
+		for _, sub := range splitCamelCaseTokens(f) {
+			if len(sub) >= 2 {
+				set[sub] = struct{}{}
+			}
 		}
 	}
 	return set

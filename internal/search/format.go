@@ -189,13 +189,17 @@ func (JSONFormatter) Format(w io.Writer, resp *Response) error {
 		Keyword      bool   `json:"keyword"`
 		Degraded     bool   `json:"degraded"`
 		RetryAfterMS int64  `json:"retry_after_ms"`
-		TookMS       int64  `json:"took_ms"`
-		Results      []row  `json:"results"`
+		// FallbackReason explains a degraded search ("<provider>: <class>");
+		// empty for keyword searches the user asked for.
+		FallbackReason string `json:"fallback_reason,omitempty"`
+		TookMS         int64  `json:"took_ms"`
+		Results        []row  `json:"results"`
 	}{
 		Model: resp.Model, Route: resp.Route, Fallback: resp.Fallback, Keyword: resp.Keyword,
 		Degraded: resp.Degraded, RetryAfterMS: resp.RetryAfter.Milliseconds(),
-		TookMS:  resp.TookMS,
-		Results: []row{},
+		FallbackReason: resp.FallbackReason,
+		TookMS:         resp.TookMS,
+		Results:        []row{},
 	}
 	if resp.Project != nil {
 		out.Project = resp.Project.Name
@@ -225,8 +229,12 @@ func DegradedNotice(resp *Response) string {
 	if !resp.Degraded {
 		return ""
 	}
-	return fmt.Sprintf("[warn] embedding temporarily unavailable — keyword results; retry in ~%ds",
-		RetrySeconds(resp.RetryAfter.Milliseconds()))
+	reason := ""
+	if resp.FallbackReason != "" {
+		reason = " (" + resp.FallbackReason + ")"
+	}
+	return fmt.Sprintf("[warn] embedding temporarily unavailable%s — keyword results; retry in ~%ds",
+		reason, RetrySeconds(resp.RetryAfter.Milliseconds()))
 }
 
 // RetrySeconds converts a retry-after hint in milliseconds to whole seconds
