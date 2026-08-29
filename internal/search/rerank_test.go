@@ -117,6 +117,20 @@ func TestTokenize_CamelCase(t *testing.T) {
 	}
 }
 
+func TestExtractedSymbolBoost(t *testing.T) {
+	terms := tokenize("ValidateToken")
+	if extractedSymbolBoost(store.SearchResult{Confidence: "AMBIGUOUS", Symbol: "ValidateToken"}, terms) != 0 {
+		t.Error("non-EXTRACTED hits must not receive a symbol boost")
+	}
+	if extractedSymbolBoost(store.SearchResult{Confidence: "EXTRACTED"}, terms) != 0 {
+		t.Error("empty symbol must not receive a boost")
+	}
+	got := extractedSymbolBoost(store.SearchResult{Confidence: "EXTRACTED", Symbol: "ValidateToken"}, terms)
+	if got != 0.2 {
+		t.Errorf("extracted symbol boost = %v, want 0.2", got)
+	}
+}
+
 func TestLexicalReranker_SymbolBoost(t *testing.T) {
 	in := []store.SearchResult{
 		{

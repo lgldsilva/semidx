@@ -139,14 +139,15 @@ const rubyQuery = `
 
 const phpQuery = `
 (function_definition name: (name) @name) @decl
+(method_declaration name: (name) @name) @decl
 (class_declaration name: (name) @name) @decl
 (interface_declaration name: (name) @name) @decl
 `
 
 const swiftQuery = `
 (function_declaration name: (simple_identifier) @name) @decl
-(class_declaration name: (simple_identifier) @name) @decl
-(protocol_declaration name: (simple_identifier) @name) @decl
+(class_declaration name: (type_identifier) @name) @decl
+(protocol_declaration name: (type_identifier) @name) @decl
 `
 
 const bashQuery = `

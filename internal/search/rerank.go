@@ -57,29 +57,7 @@ func (r *LexicalReranker) Rerank(_ context.Context, query string, results []stor
 	}
 	scored := make([]keyed, len(results))
 	for i, res := range results {
-		content := strings.ToLower(res.Content)
-		hit := 0
-		for t := range terms {
-			if strings.Contains(content, t) {
-				hit++
-			}
-		}
-		overlap := float64(hit) / float64(len(terms))
-
-		// Symbol confidence boost: direct symbol matches (EXTRACTED) receive an
-		// ordinal boost over incidental text mentions.
-		symbolBoost := 0.0
-		if res.Confidence == "EXTRACTED" && res.Symbol != "" {
-			symLower := strings.ToLower(res.Symbol)
-			for t := range terms {
-				if strings.Contains(symLower, t) || strings.Contains(t, symLower) {
-					symbolBoost = 0.2
-					break
-				}
-			}
-		}
-
-		scored[i] = keyed{res: res, blend: (1-r.Weight)*res.Score + r.Weight*(overlap+symbolBoost)}
+		scored[i] = keyed{res: res, blend: r.blend(res, terms)}
 	}
 	// Stable sort by blended score descending so equal blends preserve the input
 	// (semantic) order.
@@ -89,6 +67,38 @@ func (r *LexicalReranker) Rerank(_ context.Context, query string, results []stor
 		out[i] = scored[i].res
 	}
 	return out
+}
+
+func (r *LexicalReranker) blend(res store.SearchResult, terms map[string]struct{}) float64 {
+	overlap := termOverlap(res.Content, terms)
+	return (1-r.Weight)*res.Score + r.Weight*(overlap+extractedSymbolBoost(res, terms))
+}
+
+func termOverlap(content string, terms map[string]struct{}) float64 {
+	lower := strings.ToLower(content)
+	hit := 0
+	for t := range terms {
+		if strings.Contains(lower, t) {
+			hit++
+		}
+	}
+	return float64(hit) / float64(len(terms))
+}
+
+// extractedSymbolBoost lifts EXTRACTED symbols that match a query term over
+// incidental text mentions of the same token. Zero when the hit is not a
+// confidently extracted symbol.
+func extractedSymbolBoost(res store.SearchResult, terms map[string]struct{}) float64 {
+	if res.Confidence != "EXTRACTED" || res.Symbol == "" {
+		return 0
+	}
+	symLower := strings.ToLower(res.Symbol)
+	for t := range terms {
+		if strings.Contains(symLower, t) || strings.Contains(t, symLower) {
+			return 0.2
+		}
+	}
+	return 0
 }
 
 // splitCamelCaseTokens splits PascalCase and camelCase words into component sub-tokens.
