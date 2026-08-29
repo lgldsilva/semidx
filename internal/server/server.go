@@ -443,14 +443,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 func mapSearchResponse(resp *search.Response) client.SearchResponse {
 	out := client.SearchResponse{
-		Project:      resp.Project.Name,
-		Model:        resp.Model,
-		Route:        resp.Route,
-		Fallback:     resp.Fallback,
-		Keyword:      resp.Keyword,
-		Degraded:     resp.Degraded,
-		RetryAfterMS: resp.RetryAfter.Milliseconds(),
-		Results:      make([]client.SearchHit, 0, len(resp.Results)),
+		Project:        resp.Project.Name,
+		Model:          resp.Model,
+		Route:          resp.Route,
+		Fallback:       resp.Fallback,
+		Keyword:        resp.Keyword,
+		Degraded:       resp.Degraded,
+		RetryAfterMS:   resp.RetryAfter.Milliseconds(),
+		FallbackReason: resp.FallbackReason,
+		Results:        make([]client.SearchHit, 0, len(resp.Results)),
 	}
 	for _, hit := range resp.Results {
 		out.Results = append(out.Results, client.SearchHit{

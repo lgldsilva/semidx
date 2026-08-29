@@ -249,3 +249,38 @@ func stringIndex(s, sub string) int {
 	}
 	return -1
 }
+
+func TestBuildReportFallbackReasons(t *testing.T) {
+	t.Parallel()
+	agg := Aggregate{
+		Total: 4,
+		ByOutcome: []Count{
+			{Key: string(OutcomeFallback), Count: 2},
+			{Key: string(OutcomeOK), Count: 2},
+		},
+		BySource:  []Count{{Key: string(SourceMCP), Count: 4}},
+		ByProject: []Count{{Key: "a", Count: 4}},
+		ByFallbackReason: []Count{
+			{Key: "", Count: 2}, // non-fallback events: dropped from the report
+			{Key: "ollama: timeout", Count: 1},
+			{Key: "gemini: 5xx", Count: 1},
+		},
+	}
+	r := BuildReport(agg, DefaultParams(), time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC))
+	if len(r.ByFallbackReason) != 2 {
+		t.Fatalf("ByFallbackReason = %+v, want 2 non-empty rows", r.ByFallbackReason)
+	}
+	text := FormatText(r)
+	if !containsAll(text, "Fallback reasons", "ollama: timeout", "gemini: 5xx") {
+		t.Fatalf("bad text:\n%s", text)
+	}
+
+	// No fallback reasons recorded: the section is omitted entirely.
+	r2 := BuildReport(Aggregate{Total: 1, ByOutcome: []Count{{Key: string(OutcomeOK), Count: 1}}}, DefaultParams(), time.Time{})
+	if len(r2.ByFallbackReason) != 0 {
+		t.Fatalf("ByFallbackReason = %+v, want empty", r2.ByFallbackReason)
+	}
+	if contains(FormatText(r2), "Fallback reasons") {
+		t.Fatal("empty fallback reasons should not render a section")
+	}
+}

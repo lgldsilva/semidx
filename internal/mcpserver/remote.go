@@ -51,7 +51,7 @@ func (b *clientBackend) Search(ctx context.Context, project, query, model string
 	}
 	out := &SearchOutput{
 		Project: resp.Project, Model: resp.Model, Route: resp.Route, Keyword: resp.Keyword, Fallback: resp.Fallback,
-		Degraded: resp.Degraded, RetryAfterMS: resp.RetryAfterMS,
+		Degraded: resp.Degraded, RetryAfterMS: resp.RetryAfterMS, FallbackReason: resp.FallbackReason,
 		TookMS: resp.TookMS,
 	}
 	for _, r := range resp.Results {

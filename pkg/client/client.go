@@ -120,10 +120,14 @@ type SearchResponse struct {
 	// Degraded is true when the embedding circuit was open on the server and
 	// keyword results were served; RetryAfterMS hints when to retry semantic
 	// search. Absent (false/0) on older servers.
-	Degraded     bool        `json:"degraded"`
-	RetryAfterMS int64       `json:"retry_after_ms"`
-	TookMS       int64       `json:"took_ms"`
-	Results      []SearchHit `json:"results"`
+	Degraded     bool  `json:"degraded"`
+	RetryAfterMS int64 `json:"retry_after_ms"`
+	// FallbackReason is a short "<provider>: <class>" hint (e.g. "ollama:
+	// timeout") explaining why semantic search degraded to keyword. Absent on
+	// older servers and on user-requested keyword searches.
+	FallbackReason string      `json:"fallback_reason,omitempty"`
+	TookMS         int64       `json:"took_ms"`
+	Results        []SearchHit `json:"results"`
 }
 
 // MultiSearchResponse is the tenant-scoped result envelope for a search over
@@ -425,6 +429,12 @@ type UsageReport struct {
 		Key   string `json:"key"`
 		Count int    `json:"count"`
 	} `json:"by_outcome"`
+	// ByFallbackReason breaks fallback outcomes down by "provider: class";
+	// omitted by older servers.
+	ByFallbackReason []struct {
+		Key   string `json:"key"`
+		Count int    `json:"count"`
+	} `json:"by_fallback_reason"`
 	Rates struct {
 		OK       float64 `json:"ok"`
 		Empty    float64 `json:"empty"`

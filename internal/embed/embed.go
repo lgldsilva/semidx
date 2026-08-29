@@ -5,6 +5,7 @@ package embed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -54,6 +55,76 @@ type Embedder interface {
 	ListModels(ctx context.Context) ([]string, error)
 }
 
+// ProviderFailure records one provider's failure inside an exhausted chain.
+type ProviderFailure struct {
+	Name string
+	Err  error
+}
+
+// ChainError reports that every provider in the chain failed. Unwrap returns
+// the LAST provider's error, preserving the previous %w contract: errors.As
+// still finds a *RetryableError when the final failure was an open circuit.
+// The full failure list (which provider failed, in order) is what the old
+// "chain: op: lastErr" wrapping discarded.
+type ChainError struct {
+	Op       string // e.g. "failed to generate embedding"
+	Failures []ProviderFailure
+}
+
+func (e *ChainError) Error() string {
+	last := e.Failures[len(e.Failures)-1]
+	return fmt.Sprintf("chain: %s: %v", e.Op, last.Err)
+}
+
+func (e *ChainError) Unwrap() error {
+	return e.Failures[len(e.Failures)-1].Err
+}
+
+// SummarizeFailure derives a short, low-cardinality reason ("provider: class",
+// e.g. "ollama: timeout") from an embedder error, for usage analytics and
+// search responses. When err is (or wraps) a *ChainError the provider is the
+// last one that failed; otherwise only the error class is known. Returns ""
+// for a nil error.
+func SummarizeFailure(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ce *ChainError
+	if errors.As(err, &ce) && len(ce.Failures) > 0 {
+		last := ce.Failures[len(ce.Failures)-1]
+		return last.Name + ": " + failureClass(last.Err)
+	}
+	return failureClass(err)
+}
+
+// failureClass buckets an embedder error into a stable, low-cardinality class
+// (aggregate-friendly; mirrors the isTransient heuristics). Free-form error
+// messages must never reach analytics columns.
+func failureClass(err error) string {
+	if err == nil {
+		return ""
+	}
+	var re *RetryableError
+	if errors.As(err, &re) {
+		return "circuit open"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "timeout"):
+		return "timeout"
+	case strings.Contains(msg, "429") || strings.Contains(msg, "too many requests") || strings.Contains(msg, "rate limit"):
+		return "rate limited"
+	case strings.Contains(msg, "502") || strings.Contains(msg, "503") || strings.Contains(msg, "504") ||
+		strings.Contains(msg, "bad gateway") || strings.Contains(msg, "service unavailable") ||
+		strings.Contains(msg, "gateway timeout") || strings.Contains(msg, "temporarily unavailable"):
+		return "5xx"
+	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "connection reset"):
+		return "unreachable"
+	default:
+		return "error"
+	}
+}
+
 // ProviderInstance is one provider in the chain, flagged local or remote.
 type ProviderInstance struct {
 	Name     string
@@ -83,10 +154,11 @@ func (ce *ChainEmbedder) skip(p ProviderInstance, forceLocal bool) bool {
 }
 
 // tryEach iterates providers, calling fn on each non-skipped one, returning the
-// first successful result. Returns lastErr when all providers fail.
+// first successful result. When every provider fails it returns a *ChainError
+// carrying each provider's failure (the last one is also the Unwrap target).
 func (ce *ChainEmbedder) tryEach(ctx context.Context, onEmpty string, fn func(context.Context, Embedder) error) error {
 	forceLocal := isForceLocal(ctx)
-	var lastErr error
+	var failures []ProviderFailure
 	for _, p := range ce.providers {
 		if ce.skip(p, forceLocal) {
 			continue
@@ -108,15 +180,15 @@ func (ce *ChainEmbedder) tryEach(ctx context.Context, onEmpty string, fn func(co
 		if err == nil {
 			return nil
 		}
-		lastErr = err
+		failures = append(failures, ProviderFailure{Name: p.Name, Err: err})
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 	}
-	if lastErr == nil {
+	if len(failures) == 0 {
 		return fmt.Errorf("chain: %s: no embedding model available", onEmpty)
 	}
-	return fmt.Errorf("chain: %s: %w", onEmpty, lastErr)
+	return &ChainError{Op: onEmpty, Failures: failures}
 }
 
 func (ce *ChainEmbedder) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {

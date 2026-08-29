@@ -56,3 +56,52 @@ func TestUsageEventsRoundTrip(t *testing.T) {
 		t.Fatalf("missing project total=%d", other.Total)
 	}
 }
+
+func TestUsageFallbackReasonRoundTrip(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	s, err := New(dir + "/index.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := s.RecordUsageEvent(ctx, usage.Event{
+		TS: now, Project: "demo", Source: usage.SourceMCP,
+		Outcome: usage.OutcomeFallback, HitCount: 2, FallbackReason: "ollama: timeout",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordUsageEvent(ctx, usage.Event{
+		TS: now, Project: "demo", Source: usage.SourceCLI,
+		Outcome: usage.OutcomeOK, HitCount: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	agg, err := s.UsageAggregate(ctx, now.Add(-time.Hour), "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, c := range agg.ByFallbackReason {
+		got[c.Key] = c.Count
+	}
+	if got["ollama: timeout"] != 1 || got[""] != 1 {
+		t.Fatalf("ByFallbackReason = %+v, want ollama: timeout=1 and empty=1", agg.ByFallbackReason)
+	}
+
+	report := usage.BuildReport(agg, usage.DefaultParams(), now)
+	if len(report.ByFallbackReason) != 1 || report.ByFallbackReason[0].Key != "ollama: timeout" {
+		t.Fatalf("report ByFallbackReason = %+v", report.ByFallbackReason)
+	}
+
+	// Existing databases gain the column via the guarded ALTER; a second New on
+	// the same file must be idempotent.
+	s2, err := New(dir + "/index.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2.Close()
+}

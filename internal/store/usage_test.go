@@ -31,23 +31,36 @@ func TestUsageEventsRoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.RecordUsageEvent(ctx, usage.Event{
+		TS: now, Project: "alpha", Source: usage.SourceMCP, Outcome: usage.OutcomeFallback,
+		HitCount: 2, FallbackReason: "ollama: timeout",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	agg, err := s.UsageAggregate(ctx, now.Add(-time.Hour), "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agg.Total != 3 {
+	if agg.Total != 4 {
 		t.Fatalf("total=%d", agg.Total)
 	}
 	if len(agg.ByProject) == 0 || len(agg.BySource) == 0 || len(agg.ByOutcome) == 0 {
 		t.Fatalf("incomplete aggregate: %+v", agg)
+	}
+	reasons := map[string]int{}
+	for _, c := range agg.ByFallbackReason {
+		reasons[c.Key] = c.Count
+	}
+	if reasons["ollama: timeout"] != 1 || reasons[""] != 3 {
+		t.Fatalf("ByFallbackReason = %+v", agg.ByFallbackReason)
 	}
 
 	filtered, err := s.UsageAggregate(ctx, now.Add(-time.Hour), "alpha", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filtered.Total != 2 {
+	if filtered.Total != 3 {
 		t.Fatalf("filtered total=%d", filtered.Total)
 	}
 

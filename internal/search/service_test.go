@@ -11,6 +11,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/store"
+	"github.com/lgldsilva/semidx/internal/usage"
 )
 
 // fakeStore implements store.Store; only the methods Search uses are overridden.
@@ -548,5 +549,68 @@ func TestSearchRoutesExactStripsQuotes(t *testing.T) {
 	}
 	if emb.embedCalls != 0 {
 		t.Fatal("exact query should not embed")
+	}
+}
+
+// recordEvents is a usage.Recorder that captures events for assertions.
+type recordEvents struct{ events []usage.Event }
+
+func (r *recordEvents) Record(_ context.Context, e usage.Event) { r.events = append(r.events, e) }
+
+func TestSearchFallbackReason(t *testing.T) {
+	st := &fakeStore{
+		project:   &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		kwResults: []store.SearchResult{{FilePath: "b.go", Content: "y", Score: 0.5}},
+	}
+	emb := &fakeEmbedder{embedErr: &embed.ChainError{
+		Op: "failed to generate embedding",
+		Failures: []embed.ProviderFailure{
+			{Name: "gemini", Err: errors.New("HTTP 503 service unavailable")},
+			{Name: "ollama", Err: errors.New("request timeout")},
+		},
+	}, dims: 3}
+	rec := &recordEvents{}
+	svc := NewService(st, emb).WithUsage(rec)
+
+	resp, err := svc.Search(context.Background(), Request{Project: "p", Query: "offline keyword fallback"})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if !resp.Fallback {
+		t.Fatal("Fallback should be true when embedding fails")
+	}
+	if resp.FallbackReason != "ollama: timeout" {
+		t.Errorf("FallbackReason = %q, want %q", resp.FallbackReason, "ollama: timeout")
+	}
+	if len(rec.events) != 1 {
+		t.Fatalf("recorded %d events, want 1", len(rec.events))
+	}
+	ev := rec.events[0]
+	if ev.Outcome != usage.OutcomeFallback || ev.FallbackReason != "ollama: timeout" {
+		t.Errorf("event = %+v, want fallback outcome with reason", ev)
+	}
+}
+
+func TestSearchKeywordOnlyHasNoFallbackReason(t *testing.T) {
+	st := &fakeStore{
+		project:   &store.Project{ID: 1, Name: "p", Model: "bge-m3"},
+		kwResults: []store.SearchResult{{FilePath: "b.go", Content: "y", Score: 0.5}},
+	}
+	rec := &recordEvents{}
+	svc := NewService(st, &fakeEmbedder{embedErr: errors.New("must not embed")}).WithUsage(rec)
+
+	resp, err := svc.Search(context.Background(), Request{Project: "p", Query: "q", KeywordOnly: true})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if resp.Fallback || resp.FallbackReason != "" {
+		t.Errorf("keyword-only: Fallback=%v FallbackReason=%q, want false/\"\"", resp.Fallback, resp.FallbackReason)
+	}
+	if len(rec.events) != 1 {
+		t.Fatalf("recorded %d events, want 1", len(rec.events))
+	}
+	// Keyword-only still classifies as outcome=fallback, but never carries a reason.
+	if ev := rec.events[0]; ev.Outcome != usage.OutcomeFallback || ev.FallbackReason != "" {
+		t.Errorf("event = %+v, want fallback outcome with empty reason", ev)
 	}
 }
