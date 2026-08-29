@@ -869,12 +869,26 @@ func (s *PgStore) GetProjectByIdentity(ctx context.Context, identity string) (*P
 // CreateProject registers a project with its content source. Returns
 // ErrProjectExists if the name is taken.
 func (s *PgStore) CreateProject(ctx context.Context, name, model, sourceType, gitURL, branch string, dims int) (*Project, error) {
+	// Cheap existence pre-check: a duplicate registration is expected
+	// user-facing behavior (409), so don't pay a unique-violation round trip
+	// that also logs a scary ERROR in the Postgres server log. The 23505
+	// mapping below stays as the backstop for the residual race.
+	var existing int
+	err := s.pool.QueryRow(ctx, `SELECT id FROM projects WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) AND identity = $3`,
+		tenant.ID(ctx), activeWorkspaceID(ctx), name).Scan(&existing)
+	if err == nil {
+		return nil, ErrProjectExists
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+
 	var id int
 	// identity = name: server-registered projects are keyed by their (user-chosen,
 	// unique) name via the identity unique index — the UNIQUE(name) constraint is
 	// gone (F14, so index-path projects can share a basename), so name uniqueness
 	// for API projects is preserved through identity instead.
-	err := s.pool.QueryRow(ctx, `
+	err = s.pool.QueryRow(ctx, `
 		INSERT INTO projects (tenant_id, workspace_id, name, path, model, status, source_type, git_url, branch, identity, dims)
 		VALUES ($1, COALESCE(NULLIF($2, 0), (SELECT id FROM workspaces WHERE tenant_id = $1 AND slug = 'default')), $3, '', $4, 'registered', $5, NULLIF($6, ''), NULLIF($7, ''), $3, $8)
 		RETURNING id
