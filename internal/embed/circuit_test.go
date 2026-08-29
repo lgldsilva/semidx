@@ -345,6 +345,24 @@ func (tr *transientRetryEmbedder) ListModels(_ context.Context) ([]string, error
 	return []string{"m"}, nil
 }
 
+func TestCircuitEmbedderExhaustedTransientTripsBreaker(t *testing.T) {
+	inner := &transientRetryEmbedder{failuresRemaining: 10}
+	ce := wrapWithCircuit("t", inner, 1, time.Minute)
+
+	_, err := ce.Embed(context.Background(), "m", "x")
+	if err == nil {
+		t.Fatal("expected exhausted transient retries to fail")
+	}
+	if inner.calls != 1+len(quickRetryBackoffs) {
+		t.Errorf("calls = %d, want %d (initial + backoffs)", inner.calls, 1+len(quickRetryBackoffs))
+	}
+
+	_, err = ce.Embed(context.Background(), "m", "x")
+	if err == nil || !strings.Contains(err.Error(), "circuit breaker open") {
+		t.Errorf("expected open circuit after exhausted retries, got %v", err)
+	}
+}
+
 func TestCircuitEmbedderQuickRetryOnTransientSuccess(t *testing.T) {
 	inner := &transientRetryEmbedder{failuresRemaining: 1}
 	ce := wrapWithCircuit("transient-test", inner, 2, time.Minute)

@@ -122,6 +122,51 @@ type circuitEmbedder struct {
 	name  string
 }
 
+// quickRetryBackoffs is the delay before each extra attempt on a transient
+// provider error (429/5xx/timeout). The first call has no delay; two extra
+// attempts gives three tries total before the circuit counts a failure.
+var quickRetryBackoffs = []time.Duration{50 * time.Millisecond, 150 * time.Millisecond}
+
+func waitOrCancel(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
+// retryTransient runs fn immediately, then retries on isTransient errors with
+// quickRetryBackoffs. Context cancellation aborts without further attempts.
+func retryTransient(ctx context.Context, fn func() error) error {
+	err := fn()
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if !isTransient(err) {
+		return err
+	}
+	for _, wait := range quickRetryBackoffs {
+		if werr := waitOrCancel(ctx, wait); werr != nil {
+			return werr
+		}
+		err = fn()
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !isTransient(err) {
+			return err
+		}
+	}
+	return err
+}
+
 func (ce *circuitEmbedder) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {
 	if ok, remaining := ce.cb.allow(); !ok {
 		return nil, &RetryableError{
@@ -129,33 +174,20 @@ func (ce *circuitEmbedder) Embed(ctx context.Context, model string, inputs ...st
 			After: remaining,
 		}
 	}
-	var lastErr error
-	backoffs := []time.Duration{50 * time.Millisecond, 150 * time.Millisecond}
-	for attempt := 0; attempt <= len(backoffs); attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(backoffs[attempt-1]):
-			}
-		}
-		result, err := ce.inner.Embed(ctx, model, inputs...)
-		if err == nil {
-			ce.cb.recordSuccess()
-			return result, nil
-		}
-		lastErr = err
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if !isTransient(err) {
-			break
-		}
+	var result [][]float32
+	err := retryTransient(ctx, func() error {
+		var e error
+		result, e = ce.inner.Embed(ctx, model, inputs...)
+		return e
+	})
+	if err == nil {
+		ce.cb.recordSuccess()
+		return result, nil
 	}
 	if ctx.Err() == nil {
 		ce.cb.recordFailure()
 	}
-	return nil, lastErr
+	return nil, err
 }
 
 func (ce *circuitEmbedder) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
@@ -165,33 +197,20 @@ func (ce *circuitEmbedder) EmbedSingle(ctx context.Context, model, text string) 
 			After: remaining,
 		}
 	}
-	var lastErr error
-	backoffs := []time.Duration{50 * time.Millisecond, 150 * time.Millisecond}
-	for attempt := 0; attempt <= len(backoffs); attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(backoffs[attempt-1]):
-			}
-		}
-		result, err := ce.inner.EmbedSingle(ctx, model, text)
-		if err == nil {
-			ce.cb.recordSuccess()
-			return result, nil
-		}
-		lastErr = err
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if !isTransient(err) {
-			break
-		}
+	var result []float32
+	err := retryTransient(ctx, func() error {
+		var e error
+		result, e = ce.inner.EmbedSingle(ctx, model, text)
+		return e
+	})
+	if err == nil {
+		ce.cb.recordSuccess()
+		return result, nil
 	}
 	if ctx.Err() == nil {
 		ce.cb.recordFailure()
 	}
-	return nil, lastErr
+	return nil, err
 }
 
 func (ce *circuitEmbedder) ModelInfo(ctx context.Context, model string) (*ModelInfo, error) {
