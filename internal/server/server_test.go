@@ -599,3 +599,27 @@ func TestTokenGenerationAndHash(t *testing.T) {
 		t.Error("HashToken must be deterministic and not the plaintext")
 	}
 }
+
+func TestInstrumentRequestIDGenerationAndPropagation(t *testing.T) {
+	srv := New(&fakeStore{}, fakeEmbedder{}, nil)
+
+	// Case 1: When client does not provide X-Request-ID, server generates one.
+	rec1 := do(t, srv, "GET", "/healthz", "", "")
+	reqID1 := rec1.Header().Get("X-Request-ID")
+	if reqID1 == "" {
+		t.Fatal("expected generated X-Request-ID header in response")
+	}
+	if len(reqID1) != 32 {
+		t.Errorf("expected 32 hex chars request ID, got %q", reqID1)
+	}
+
+	// Case 2: When client provides X-Request-ID, server preserves and propagates it.
+	customID := "custom-req-id-12345"
+	req := httptest.NewRequest("GET", "/healthz", nil)
+	req.Header.Set("X-Request-ID", customID)
+	rec2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec2, req)
+	if got := rec2.Header().Get("X-Request-ID"); got != customID {
+		t.Errorf("X-Request-ID = %q, want %q", got, customID)
+	}
+}
