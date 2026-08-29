@@ -95,8 +95,7 @@ func (r *LexicalReranker) Rerank(_ context.Context, query string, results []stor
 func splitCamelCaseTokens(word string) []string {
 	var tokens []string
 	var current strings.Builder
-	runes := []rune(word)
-	for _, r := range runes {
+	for _, r := range word {
 		if unicode.IsUpper(r) {
 			if current.Len() > 0 {
 				tokens = append(tokens, strings.ToLower(current.String()))
