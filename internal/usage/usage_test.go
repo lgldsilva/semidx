@@ -10,13 +10,20 @@ import (
 func TestParseSource(t *testing.T) {
 	t.Parallel()
 	cases := map[string]Source{
-		"MCP":     SourceMCP,
-		" cli ":   SourceCLI,
-		"ADMIN":   SourceAdmin,
-		"sdk":     SourceSDK,
-		"nope":    SourceUnknown,
-		"":        SourceUnknown,
-		"unknown": SourceUnknown,
+		"MCP":          SourceMCP,
+		"mcp-stdio":    SourceMCP,
+		"mcp/1.0":      SourceMCP,
+		"agent-cursor": SourceMCP,
+		" cli ":        SourceCLI,
+		"cli-search":   SourceCLI,
+		"ADMIN":        SourceAdmin,
+		"admin-ui":     SourceAdmin,
+		"web-admin":    SourceAdmin,
+		"sdk":          SourceSDK,
+		"sdk-go":       SourceSDK,
+		"nope":         SourceUnknown,
+		"":             SourceUnknown,
+		"unknown":      SourceUnknown,
 	}
 	for in, want := range cases {
 		if got := ParseSource(in); got != want {

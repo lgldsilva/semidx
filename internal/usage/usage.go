@@ -116,14 +116,15 @@ type Finding struct {
 
 // ParseSource validates a client-origin string into a Source enum.
 func ParseSource(s string) Source {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case string(SourceCLI):
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch {
+	case s == string(SourceCLI) || strings.HasPrefix(s, "cli"):
 		return SourceCLI
-	case string(SourceMCP):
+	case s == string(SourceMCP) || strings.HasPrefix(s, "mcp") || strings.HasPrefix(s, "agent"):
 		return SourceMCP
-	case string(SourceAdmin):
+	case s == string(SourceAdmin) || strings.HasPrefix(s, "admin") || strings.HasPrefix(s, "web"):
 		return SourceAdmin
-	case string(SourceSDK):
+	case s == string(SourceSDK) || strings.HasPrefix(s, "sdk"):
 		return SourceSDK
 	default:
 		return SourceUnknown
