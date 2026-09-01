@@ -116,6 +116,9 @@ semidx status --project .
 ```
 
 Once status shows `"ready"`, switch to `semantic_search` for intent queries.
+After `semantic_search` lands you on a symbol, use the `code-intel`,
+`semantic-graph`, and `impact-before-refactor` skills to explore callers,
+dependency paths, and blast radius before editing.
 
 ### Remote / server setups
 

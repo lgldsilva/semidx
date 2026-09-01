@@ -58,6 +58,9 @@ var extractors = map[string]extractor{
 	".swift": {grammars.SwiftLanguage, swiftQuery},
 	".sh":    {grammars.BashLanguage, bashQuery},
 	".bash":  {grammars.BashLanguage, bashQuery},
+	".zsh":   {grammars.BashLanguage, bashQuery},
+	".ksh":   {grammars.BashLanguage, bashQuery},
+	".dash":  {grammars.BashLanguage, bashQuery},
 }
 
 const goQuery = `

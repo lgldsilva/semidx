@@ -96,13 +96,43 @@ func lookupSymbolAtLine(syms []analyzer.Symbol, line int) *analyzer.Symbol {
 // DependencyDirsForFile returns the graph directory keys that can identify the
 // package containing file. Python projects commonly store importable modules
 // below src/ or lib/, while Go and other languages retain the full directory.
+// TypeScript/JavaScript imports frequently refer to a file without its
+// extension (e.g. "./pages/LibraryPage" for "LibraryPage.tsx"), so we also
+// return a directory keyed by the file's basename so callers can match those
+// import forms.
 func DependencyDirsForFile(file string) []string {
 	clean := filepath.ToSlash(filepath.Clean(file))
 	dir := filepath.ToSlash(filepath.Dir(clean))
-	if strings.ToLower(filepath.Ext(clean)) != ".py" {
-		return []string{normalizeDependencyDir(dir)}
+	ext := strings.ToLower(filepath.Ext(clean))
+	if ext == ".py" {
+		return dependencyDirs(dir)
 	}
-	return dependencyDirs(dir)
+	if isJSFamilyExt(ext) {
+		return jsFamilyDependencyDirs(dir, clean, ext)
+	}
+	return []string{normalizeDependencyDir(dir)}
+}
+
+func isJSFamilyExt(ext string) bool {
+	switch ext {
+	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs":
+		return true
+	default:
+		return false
+	}
+}
+
+func jsFamilyDependencyDirs(dir, clean, ext string) []string {
+	result := []string{normalizeDependencyDir(dir)}
+	base := strings.TrimSuffix(filepath.Base(clean), ext)
+	if base == "" || base == "." {
+		return result
+	}
+	alias := normalizeDependencyDir(filepath.ToSlash(filepath.Join(dir, base)))
+	if alias == result[0] {
+		return result
+	}
+	return append(result, alias)
 }
 
 func dependencyDirs(dir string) []string {

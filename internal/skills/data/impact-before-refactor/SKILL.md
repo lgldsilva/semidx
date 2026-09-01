@@ -20,6 +20,10 @@ tool call and prevents most refactor regressions.
    tagged by depth. **Depth-1 files will most likely break** — those are your
    review/test targets.
 
+   > Note: `semantic_impact` is currently **MCP-only**. On the CLI, use
+   > `semidx callers <file:line>` for direct importers and `semidx graph path`
+   > for transitive structure as a partial fallback.
+
 2. If the impact set is **large** (many depth-1 files), either:
    - narrow the change (add instead of modify; keep the old signature as a
      shim), or
@@ -33,6 +37,10 @@ tool call and prevents most refactor regressions.
    ```
    semantic_diff  ref_range=main..HEAD
    ```
+
+5. **Combine with search**: if you don't yet know the exact file:line, start
+   with `semantic_search` to locate the symbol, then run `semantic_impact` on
+   the result.
 
 ## Decision rules
 

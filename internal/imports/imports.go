@@ -51,6 +51,21 @@ var (
 
 	// C#
 	csUsingRe = regexp.MustCompile(`(?m)^\s*using\s+([\w.]+)\s*;`)
+
+	// Shell: source / . / bash / sh / zsh
+	// Matches:
+	//   source ./lib/utils.sh
+	//   . ./lib/config.sh
+	//   bash ./lib/runner.sh
+	//   sh -c './lib/runner.sh'
+	// Also catches plain execution like ./script.sh when it starts a line or after ;/&&/||.
+	// Anchored to line-start (allowing indentation, so sources inside if/while
+	// blocks and functions are seen) or to a statement boundary, which keeps
+	// matches inside arguments (e.g. `echo source ./foo.sh`) and comments out.
+	shellSourceRe     = regexp.MustCompile(`(?m)(?:^[ \t]*|[;|&()][ \t]*)(?:source|\.)[ \t]+(?:['"]([^'"]+)['"]|([^\s;'"|&()]+))`)
+	shellExecRe       = regexp.MustCompile(`(?m)(?:^[ \t]*|[;|&()][ \t]*)(?:bash|sh|zsh|dash|ksh)[ \t]+(?:-[a-zA-Z]+[ \t]+)*(?:['"]([^'"]+)['"]|([^\s;'"|&()]+))`)
+	shellDirectExecRe = regexp.MustCompile(`(?m)(?:^[ \t]*|[;|&()][ \t]*)(\.\/[^\s;'"|&()]+)`)
+	shellExecDashCRe  = regexp.MustCompile(`(?:bash|sh|zsh|dash|ksh)(?:\s+-[a-zA-Z]+)*\s+-c\s+['"]([^'"]+)['"]`)
 )
 
 // ---------------------------------------------------------------------------
@@ -223,6 +238,8 @@ func AnalyzeWithFiles(path string, content []byte, modulePath string, projectFil
 		return analyzeRuby(path, content)
 	case ".cs":
 		return analyzeCsharp(content)
+	case ".sh", ".bash", ".zsh", ".ksh", ".dash":
+		return analyzeShell(path, content)
 	case ".md", ".mdx", ".markdown", ".rst", ".adoc":
 		return analyzeMarkdown(content)
 	default:
@@ -780,6 +797,130 @@ func analyzeC(content []byte) []string {
 	if len(result) == 0 {
 		return nil
 	}
+	return result
+}
+
+// ---------------------------------------------------------------------------
+// Shell extractor
+// ---------------------------------------------------------------------------
+
+// shellRefDir resolves a raw shell reference (the argument of source/./bash/…)
+// to the project-relative directory holding the referenced script, matching the
+// convention used by every other extractor. It returns "" when the reference is
+// not a local, in-project path.
+func shellRefDir(srcDir, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "." {
+		return ""
+	}
+	// Absolute paths, variable-only references and remote resources are not
+	// project files.
+	if strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "$") || strings.Contains(raw, "://") {
+		return ""
+	}
+	// Command strings that accidentally matched (e.g. bash -c 'a && b').
+	if strings.ContainsAny(raw, "&|;<>()$`") {
+		return ""
+	}
+	resolved := filepath.ToSlash(filepath.Dir(filepath.Join(srcDir, raw)))
+	// filepath.Join cleans the path, so a reference climbing above the project
+	// root keeps a leading "..".
+	if resolved == ".." || strings.HasPrefix(resolved, "../") || filepath.IsAbs(resolved) {
+		return ""
+	}
+	if resolved == "." {
+		return ""
+	}
+	return resolved + "/"
+}
+
+// analyzeShell extracts local script dependencies from shell scripts.
+// It detects source/., explicit interpreter invocations (bash/sh/zsh/dash/ksh),
+// and direct execution of scripts (./script.sh). Only relative in-project paths
+// are kept; absolute paths and bare built-ins are ignored. The returned path is
+// the project-relative directory containing the referenced script, matching the
+// convention used by other extractors.
+func analyzeShell(path string, content []byte) []string {
+	seen := make(map[string]bool)
+	srcDir := filepath.Dir(path)
+	collectShellSources(srcDir, content, seen)
+	collectShellInterpreterExecs(srcDir, content, seen)
+	collectShellDirectExecs(srcDir, content, seen)
+	collectShellDashCEmbedded(srcDir, content, seen)
+	return sortedSeenDirs(seen)
+}
+
+func collectShellRef(srcDir, raw string, seen map[string]bool) {
+	if dir := shellRefDir(srcDir, raw); dir != "" {
+		seen[dir] = true
+	}
+}
+
+func collectShellPair(srcDir string, m [][]byte, seen map[string]bool) {
+	if len(m) < 3 {
+		return
+	}
+	if p := string(m[1]); p != "" {
+		collectShellRef(srcDir, p, seen)
+		return
+	}
+	if p := string(m[2]); p != "" {
+		collectShellRef(srcDir, p, seen)
+	}
+}
+
+func collectShellSources(srcDir string, content []byte, seen map[string]bool) {
+	for _, m := range shellSourceRe.FindAllSubmatch(content, -1) {
+		collectShellPair(srcDir, m, seen)
+	}
+}
+
+func collectShellInterpreterExecs(srcDir string, content []byte, seen map[string]bool) {
+	for _, m := range shellExecRe.FindAllSubmatch(content, -1) {
+		// Ignore bash -c '...' here; it is handled by collectShellDashCEmbedded.
+		if isShellDashCMatch(m[0]) {
+			continue
+		}
+		collectShellPair(srcDir, m, seen)
+	}
+}
+
+func isShellDashCMatch(match []byte) bool {
+	s := string(match)
+	return strings.Contains(s, " -c ") || strings.Contains(s, "\t-c ")
+}
+
+func collectShellDirectExecs(srcDir string, content []byte, seen map[string]bool) {
+	for _, m := range shellDirectExecRe.FindAllSubmatch(content, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		collectShellRef(srcDir, string(m[1]), seen)
+	}
+}
+
+// collectShellDashCEmbedded best-effort re-scans the command string of
+// `bash -c '...'` (and siblings) for source/. and ./script.sh references.
+// It does not recursively invoke the full analyzer.
+func collectShellDashCEmbedded(srcDir string, content []byte, seen map[string]bool) {
+	for _, m := range shellExecDashCRe.FindAllSubmatch(content, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		collectShellSources(srcDir, m[1], seen)
+		collectShellDirectExecs(srcDir, m[1], seen)
+	}
+}
+
+func sortedSeenDirs(seen map[string]bool) []string {
+	if len(seen) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(seen))
+	for dir := range seen {
+		result = append(result, dir)
+	}
+	sort.Strings(result)
 	return result
 }
 

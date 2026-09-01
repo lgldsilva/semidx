@@ -68,6 +68,33 @@ Related (already in the MCP server, not graph BFS): `semantic_callers`,
 `semantic_impact`, `semantic_explain` for symbol-at-file:line analysis, and
 `semantic_trace` for BFS depth-per-file from seed files.
 
+## Combined workflow: from two concepts to their connection
+
+The graph answers *how files connect*, but you usually start from *what* they
+are. Pair it with semantic search:
+
+1. **Find both ends** with `semantic_search`:
+   ```
+   semantic_search project=myapp query="auth middleware"
+   → internal/auth/middleware.go
+
+   semantic_search project=myapp query="database transaction helper"
+   → internal/db/tx.go
+   ```
+
+2. **Ask how they connect** with `semantic_path`:
+   ```
+   semantic_path project=myapp from=internal/auth/middleware.go to=internal/db/tx.go
+   ```
+   → shows whether auth middleware reaches the DB layer directly or through
+   intermediate packages.
+
+3. **Explore the neighborhood** of any file along the path with
+   `semantic_subgraph` to see hubs and alternative routes.
+
+Use this when you need to explain a data/control flow across packages, not just
+find a single code location.
+
 ## Anti-patterns
 
 - Don't assume an undirected path proves A imports B — read `directed` /

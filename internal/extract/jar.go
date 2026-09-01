@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 )
@@ -39,11 +40,22 @@ func extractArchive(name string, data []byte) (docs []Doc, err error) {
 
 	dec := newDecompiler() // nil unless SEMIDX_JAVA_DECOMPILER is configured
 	for _, f := range zr.File {
+		if strings.Contains(f.Name, "..") || !isLocalArchiveEntry(f.Name) {
+			continue
+		}
 		if doc, ok := archiveEntryDoc(name, f, dec); ok {
 			docs = append(docs, doc)
 		}
 	}
 	return docs, nil
+}
+
+func isLocalArchiveEntry(name string) bool {
+	name = strings.ReplaceAll(name, "\\", "/")
+	if name == "" || strings.HasPrefix(name, "/") {
+		return false
+	}
+	return filepath.IsLocal(filepath.FromSlash(name))
 }
 
 // archiveEntryDoc turns one archive entry into a Doc: a .class becomes its API

@@ -103,6 +103,15 @@ func TestExtractArchiveSkipsUnparseableEntries(t *testing.T) {
 	}
 }
 
+func TestIsLocalArchiveEntry(t *testing.T) {
+	if isLocalArchiveEntry("../evil.class") || isLocalArchiveEntry("/abs/Evil.class") {
+		t.Fatal("expected traversal/absolute zip names to be rejected")
+	}
+	if !isLocalArchiveEntry("com/example/Greeter.class") {
+		t.Fatal("expected a package-relative class path to be accepted")
+	}
+}
+
 func keys(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

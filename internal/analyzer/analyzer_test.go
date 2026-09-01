@@ -227,6 +227,29 @@ output "instance_ip" {
 	}
 }
 
+func TestSymbols_Shell(t *testing.T) {
+	content := []byte(`#!/bin/bash
+
+function cleanup() {
+    echo "cleaning"
+}
+
+backup_files() {
+    echo "backup"
+}
+
+# POSIX-style no-function keyword
+run_check () {
+    echo "check"
+}
+`)
+	syms := Symbols("cleanup.sh", content)
+	if len(syms) == 0 {
+		t.Fatal("expected symbols, got none")
+	}
+	containsAll(t, syms, "cleanup", "backup_files", "run_check")
+}
+
 func TestDedupe(t *testing.T) {
 	in := []Symbol{
 		{Name: "a"}, {Name: "b"}, {Name: "a"}, {Name: ""}, {Name: "c"}, {Name: "b"},

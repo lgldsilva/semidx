@@ -273,11 +273,27 @@ func TestDependencyDirsForFileIncludesPythonSourceRootAlias(t *testing.T) {
 }
 
 func TestDependencyDirsForFileDoesNotAliasNonPythonPaths(t *testing.T) {
-	for _, file := range []string{"src/auth/token.go", "src/ui/app.ts"} {
+	for _, file := range []string{"src/auth/token.go"} {
 		got := DependencyDirsForFile(file)
 		want := []string{filepath.Dir(file) + "/"}
 		if len(got) != len(want) || got[0] != want[0] {
 			t.Errorf("DependencyDirsForFile(%q) = %v, want %v", file, got, want)
+		}
+	}
+}
+
+func TestDependencyDirsForFileTypeScriptIncludesBasenameAlias(t *testing.T) {
+	got := DependencyDirsForFile("src/ui/Page.tsx")
+	want := map[string]bool{
+		"src/ui/":      true,
+		"src/ui/Page/": true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("DependencyDirsForFile() = %v, want %v", got, want)
+	}
+	for _, dir := range got {
+		if !want[dir] {
+			t.Errorf("unexpected dir %q in %v", dir, got)
 		}
 	}
 }

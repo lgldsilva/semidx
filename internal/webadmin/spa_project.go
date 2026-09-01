@@ -231,7 +231,7 @@ func (a *Admin) apiProjectFileContent(w http.ResponseWriter, r *http.Request, ac
 	}
 	// Prevent path traversal tricks in the index key.
 	if strings.Contains(filePath, "..") || strings.HasPrefix(filePath, "/") {
-		writeJSONErr(w, http.StatusBadRequest, "invalid path")
+		writeJSONErr(w, http.StatusBadRequest, spaErrInvalidPath)
 		return
 	}
 	proj, err := a.store.GetProject(r.Context(), name)

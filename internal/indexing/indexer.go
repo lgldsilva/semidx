@@ -61,14 +61,17 @@ type Indexer struct {
 	verbose             bool
 	gitMode             bool
 	gitSince            string
-	keywordOnly         bool         // when true, store text-only (no embeddings) for keyword search
-	astOnly             bool         // when true, keywordOnly is also true, but symbols are extracted and prepended to chunks
-	privacyMode         privacy.Mode // project-level cloud/hybrid/edge routing policy
-	noSymbols           bool         // when true, skip symbol enrichment (even when embedding)
-	modulePath          string       // Go module path from go.mod (for import-dependency extraction)
-	projectFiles        []string     // project-relative inventory used for dependency resolution
-	force               bool         // when true, bypass hash fast paths and rebuild every file
-	worktree            string       // when set, record this worktree's manifest + prune after indexing
+	keywordOnly         bool                            // when true, store text-only (no embeddings) for keyword search
+	astOnly             bool                            // when true, keywordOnly is also true, but symbols are extracted and prepended to chunks
+	privacyMode         privacy.Mode                    // project-level cloud/hybrid/edge routing policy
+	noSymbols           bool                            // when true, skip symbol enrichment (even when embedding)
+	modulePath          string                          // Go module path from projectPath/go.mod (for import-dependency extraction)
+	modulePathCache     map[string]modulePathCacheEntry // lazy per-directory Go module path cache
+	modulePathCacheMu   sync.RWMutex                    // guards modulePathCache
+	projectFiles        []string                        // project-relative inventory used for dependency resolution
+	force               bool                            // when true, bypass hash fast paths and rebuild every file
+	worktree            string                          // when set, record this worktree's manifest + prune after indexing
+	projectPath         string                          // root path passed to IndexProject
 
 	// Secret scan: when enabled, every file's content is scanned with gitleaks
 	// before chunking. Files with detected secrets are stored text-only (no
@@ -224,6 +227,14 @@ func (idx *Indexer) SetWorktree(worktree string) *Indexer {
 	return idx
 }
 
+// SetForce enables force-reindex mode, bypassing hash fast paths so every file
+// is reprocessed and its derived artifacts (chunks, symbols, dependency edges)
+// are rebuilt.
+func (idx *Indexer) SetForce(force bool) *Indexer {
+	idx.force = force
+	return idx
+}
+
 // IndexProject scans projectPath, indexes each eligible file, optionally indexes
 // git history, and marks the project ready. When the project is a git repo and a
 // previous index stored a commit SHA, only files changed since that commit are
@@ -237,6 +248,10 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 	if idx.modulePath == "" {
 		idx.modulePath = ReadModulePath(projectPath)
 	}
+	idx.projectPath = projectPath
+	// Reset per-directory module cache for each project run so stale entries
+	// from a previous project do not leak into nested-module resolution.
+	idx.modulePathCache = make(map[string]modulePathCacheEntry)
 	idx.projectFiles = projectInventory(projectPath)
 
 	files, err := idx.resolveIndexFiles(ctx, projectID, projectPath, maxFiles)
@@ -292,6 +307,91 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 
 	idx.finalizeProject(ctx, projectID, projectPath, model, stats, manifest)
 	return stats, nil
+}
+
+// moduleInfoFor returns the go.mod directory and module path for rel, cached by
+// the file's own directory (the lookup key) so that every file in a directory
+// pays the go.mod walk only once.
+func (idx *Indexer) moduleInfoFor(rel string) (dir, modulePath string) {
+	if idx.projectPath == "" || strings.ToLower(filepath.Ext(rel)) != ".go" {
+		return ".", idx.modulePath
+	}
+	fileDir := filepath.Dir(rel)
+	if fileDir == "." || fileDir == "/" {
+		return ".", idx.modulePath
+	}
+
+	idx.modulePathCacheMu.RLock()
+	cached, ok := idx.modulePathCache[fileDir]
+	idx.modulePathCacheMu.RUnlock()
+	if ok {
+		return cached.dir, cached.modulePath
+	}
+
+	dir = FindModuleDir(idx.projectPath, rel)
+	mp := ""
+	if dir != "" {
+		mp = readModulePathAt(idx.projectPath, moduleRel(dir))
+	}
+	if mp == "" {
+		dir, mp = ".", idx.modulePath
+	}
+	idx.modulePathCacheMu.Lock()
+	if idx.modulePathCache == nil {
+		idx.modulePathCache = make(map[string]modulePathCacheEntry)
+	}
+	idx.modulePathCache[fileDir] = modulePathCacheEntry{dir: dir, modulePath: mp}
+	idx.modulePathCacheMu.Unlock()
+	return dir, mp
+}
+
+// fileDependencies extracts the project-relative dependency directories for one
+// unit. For Go files inside a nested module it analyses twice: once against the
+// nested module path (whose results are relative to that module root and get
+// re-anchored to the project root) and once against the root module path, so
+// cross-module imports inside a monorepo keep their edges.
+func (idx *Indexer) fileDependencies(rel string, content []byte) []string {
+	moduleDir, modulePath := idx.moduleInfoFor(rel)
+	deps := si.AnalyzeWithFiles(rel, content, modulePath, idx.projectFiles)
+	if moduleDir == "." {
+		return deps
+	}
+
+	seen := make(map[string]bool, len(deps))
+	out := make([]string, 0, len(deps))
+	for _, d := range deps {
+		out = appendUniqueDir(out, seen, filepath.ToSlash(filepath.Join(moduleDir, d)))
+	}
+	// Imports of the root module resolve against the root module path only; they
+	// are already project-relative, so they are not re-anchored.
+	if idx.modulePath != "" && idx.modulePath != modulePath {
+		for _, d := range si.AnalyzeWithFiles(rel, content, idx.modulePath, idx.projectFiles) {
+			out = appendUniqueDir(out, seen, filepath.ToSlash(d))
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func appendUniqueDir(out []string, seen map[string]bool, d string) []string {
+	if d == "" {
+		return out
+	}
+	if !strings.HasSuffix(d, "/") {
+		d += "/"
+	}
+	if !seen[d] {
+		seen[d] = true
+		out = append(out, d)
+	}
+	return out
+}
+
+type modulePathCacheEntry struct {
+	dir        string
+	modulePath string
 }
 
 // recordDependencyCatalog extracts declarations once per indexing run. It is
@@ -702,7 +802,7 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 	// Replace dependency edges before the content fast path. Imports are a
 	// separate derived artifact and must be repairable for files whose chunks
 	// are already current, including after analyzer/path-resolution upgrades.
-	deps := si.AnalyzeWithFiles(rel, content, idx.modulePath, idx.projectFiles)
+	deps := idx.fileDependencies(rel, content)
 	if err := idx.db.InsertFileDependencies(ctx, projectID, rel, deps); err != nil {
 		return 0, 0, outcomeSkippedEmpty, "", fmt.Errorf("record dependencies for %s: %w", rel, err)
 	}

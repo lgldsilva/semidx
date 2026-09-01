@@ -37,6 +37,9 @@ services:
       SEMIDX_LISTEN_ADDR: ":8080"
       SEMIDX_INDEX_WORKERS: ${SEMIDX_INDEX_WORKERS:-1}
       SEMIDX_COOKIE_SECURE: "false"
+      SEMIDX_DATA_DIR: /data
+    volumes:
+      - serve_data:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,3 +62,6 @@ services:
         condition: service_healthy
       serve:
         condition: service_started
+
+volumes:
+  serve_data:
