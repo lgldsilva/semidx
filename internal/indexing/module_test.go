@@ -109,6 +109,12 @@ func TestFindModulePath(t *testing.T) {
 			rel:   "main.go",
 			want:  "",
 		},
+		{
+			name:  "rejects parent escape",
+			files: map[string]string{"go.mod": "module example.com/root\n"},
+			rel:   "../go.mod",
+			want:  "",
+		},
 	}
 
 	for _, tt := range tests {

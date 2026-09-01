@@ -40,11 +40,18 @@ func findModuleInfo(projectPath, fileRel string) (dir, modulePath string) {
 	if projectPath == "" || fileRel == "" {
 		return "", ""
 	}
+	fileRel = filepath.Clean(fileRel)
+	if fileRel != "." && !filepath.IsLocal(fileRel) {
+		return "", ""
+	}
 
 	dir = filepath.Dir(fileRel)
 	for {
-		path := filepath.Join(projectPath, dir, "go.mod")
-		mp := readModulePathAt(path)
+		modPath := confinedGoMod(projectPath, dir)
+		if modPath == "" {
+			return "", ""
+		}
+		mp := readModulePathAt(modPath)
 		if mp != "" {
 			return dir, mp
 		}
@@ -60,8 +67,27 @@ func findModuleInfo(projectPath, fileRel string) (dir, modulePath string) {
 	return "", ""
 }
 
+// confinedGoMod joins projectPath/relDir/go.mod and returns the cleaned path
+// only when it stays inside the project root. Empty means "skip this hop".
+func confinedGoMod(projectPath, relDir string) string {
+	relDir = filepath.Clean(relDir)
+	if relDir != "." && !filepath.IsLocal(relDir) {
+		return ""
+	}
+	root := filepath.Clean(projectPath)
+	full := filepath.Clean(filepath.Join(root, relDir, "go.mod"))
+	if full != filepath.Join(root, "go.mod") && !strings.HasPrefix(full, root+string(filepath.Separator)) {
+		return ""
+	}
+	return full
+}
+
 func readModulePathAt(path string) string {
-	f, err := os.Open(filepath.Clean(path))
+	if path == "" {
+		return ""
+	}
+	// #nosec G304 -- path is confined to the project root by confinedGoMod
+	f, err := os.Open(path)
 	if err != nil {
 		return ""
 	}

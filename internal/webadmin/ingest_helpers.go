@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -146,13 +147,19 @@ func ingestIndexZipEntries(ctx context.Context, log *slog.Logger, idx *indexing.
 		if zf.FileInfo().IsDir() {
 			continue
 		}
+		rel := cleanRelPath(zf.Name)
+		if rel == "" || !filepath.IsLocal(filepath.FromSlash(rel)) {
+			res.errs++
+			res.fileErrors = append(res.fileErrors, map[string]string{"path": zf.Name, "error": "invalid path"})
+			continue
+		}
 		content, ferr := readZipEntry(zf)
 		if ferr != nil {
 			res.errs++
 			res.fileErrors = append(res.fileErrors, ferr)
 			continue
 		}
-		n, ierr, indexErr := ingestIndexOneFile(ctx, idx, projectID, model, zf.Name, string(content))
+		n, ierr, indexErr := ingestIndexOneFile(ctx, idx, projectID, model, rel, string(content))
 		if ierr != nil {
 			res.errs++
 			res.fileErrors = append(res.fileErrors, ierr)
