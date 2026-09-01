@@ -129,25 +129,36 @@ func detectModulePathForFile(root, file string) string {
 	}
 	dir := filepath.Dir(file)
 	for {
-		gm := filepath.Clean(filepath.Join(root, dir, "go.mod"))
-		// #nosec G304 -- gm points to a go.mod inside the project root
-		data, err := os.ReadFile(gm)
-		if err == nil {
-			for _, line := range strings.Split(string(data), "\n") {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "module ") {
-					return strings.TrimSpace(strings.TrimPrefix(line, "module "))
-				}
-			}
+		if mp := modulePathInDir(root, dir); mp != "" {
+			return mp
 		}
 		if dir == "." || dir == string(filepath.Separator) {
-			break
+			return ""
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			break
+			return ""
 		}
 		dir = parent
+	}
+}
+
+func modulePathInDir(root, dir string) string {
+	gm := filepath.Clean(filepath.Join(root, dir, "go.mod"))
+	// #nosec G304 -- gm points to a go.mod inside the project root
+	data, err := os.ReadFile(gm)
+	if err != nil {
+		return ""
+	}
+	return parseGoModuleLine(data)
+}
+
+func parseGoModuleLine(data []byte) string {
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
 	}
 	return ""
 }
