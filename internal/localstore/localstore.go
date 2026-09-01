@@ -198,7 +198,8 @@ CREATE TABLE IF NOT EXISTS usage_events (
     keyword     INTEGER NOT NULL DEFAULT 0,
     graph       INTEGER NOT NULL DEFAULT 0,
     query_hash  TEXT NOT NULL DEFAULT '',
-    query_text  TEXT NOT NULL DEFAULT ''
+    query_text  TEXT NOT NULL DEFAULT '',
+    fallback_reason TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_usage_events_ts ON usage_events(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_events_project_ts ON usage_events(project, ts DESC);
@@ -362,6 +363,13 @@ func ensureSchema(db *sql.DB) error {
 	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('chunks') WHERE name='symbol'`).Scan(&hasSymbol)
 	if hasSymbol == 0 {
 		if _, err := db.Exec(`ALTER TABLE chunks ADD COLUMN symbol TEXT`); err != nil {
+			return err
+		}
+	}
+	var hasFallbackReason int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('usage_events') WHERE name='fallback_reason'`).Scan(&hasFallbackReason)
+	if hasFallbackReason == 0 {
+		if _, err := db.Exec(`ALTER TABLE usage_events ADD COLUMN fallback_reason TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}

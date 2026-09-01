@@ -46,6 +46,16 @@ var extractors = map[string]extractor{
 	".tsx":   {grammars.TsxLanguage, tsxQuery},
 	".py":    {grammars.PythonLanguage, pyQuery},
 	".tf":    {grammars.HclLanguage, hclQuery},
+	".rs":    {grammars.RustLanguage, rustQuery},
+	".c":     {grammars.CLanguage, cQuery},
+	".h":     {grammars.CLanguage, cQuery},
+	".cpp":   {grammars.CppLanguage, cppQuery},
+	".cc":    {grammars.CppLanguage, cppQuery},
+	".hpp":   {grammars.CppLanguage, cppQuery},
+	".cs":    {grammars.CSharpLanguage, csharpQuery},
+	".rb":    {grammars.RubyLanguage, rubyQuery},
+	".php":   {grammars.PhpLanguage, phpQuery},
+	".swift": {grammars.SwiftLanguage, swiftQuery},
 	".sh":    {grammars.BashLanguage, bashQuery},
 	".bash":  {grammars.BashLanguage, bashQuery},
 	".zsh":   {grammars.BashLanguage, bashQuery},
@@ -96,6 +106,51 @@ const tsxQuery = `
 (class_declaration name: [(identifier) (type_identifier)] @name) @decl
 (interface_declaration name: (type_identifier) @name) @decl
 (enum_declaration name: (identifier) @name) @decl
+`
+
+const rustQuery = `
+(function_item name: (identifier) @name) @decl
+(struct_item name: (type_identifier) @name) @decl
+(enum_item name: (type_identifier) @name) @decl
+(impl_item type: (type_identifier) @name) @decl
+`
+
+const cQuery = `
+(function_definition declarator: (function_declarator declarator: (identifier) @name)) @decl
+(struct_specifier name: (type_identifier) @name) @decl
+`
+
+const cppQuery = `
+(function_definition declarator: (function_declarator declarator: (identifier) @name)) @decl
+(class_specifier name: (type_identifier) @name) @decl
+(struct_specifier name: (type_identifier) @name) @decl
+`
+
+const csharpQuery = `
+(class_declaration name: (identifier) @name) @decl
+(method_declaration name: (identifier) @name) @decl
+(interface_declaration name: (identifier) @name) @decl
+(enum_declaration name: (identifier) @name) @decl
+(record_declaration name: (identifier) @name) @decl
+`
+
+const rubyQuery = `
+(method name: (identifier) @name) @decl
+(class name: (constant) @name) @decl
+(module name: (constant) @name) @decl
+`
+
+const phpQuery = `
+(function_definition name: (name) @name) @decl
+(method_declaration name: (name) @name) @decl
+(class_declaration name: (name) @name) @decl
+(interface_declaration name: (name) @name) @decl
+`
+
+const swiftQuery = `
+(function_declaration name: (simple_identifier) @name) @decl
+(class_declaration name: (type_identifier) @name) @decl
+(protocol_declaration name: (type_identifier) @name) @decl
 `
 
 const bashQuery = `
@@ -200,26 +255,32 @@ func extract(ce *compiledExtractor, content []byte) []Symbol {
 // kindFromNodeType maps tree-sitter node type names to short Kind strings.
 func kindFromNodeType(nt string) string {
 	switch nt {
-	case "function_declaration":
+	case "function_declaration", "function_item":
 		return "func"
-	case "method_declaration", "method_definition":
+	case "method_declaration", "method_definition", "method":
 		return "method"
 	case "type_spec":
 		return "type"
-	case "class_declaration":
+	case "class_declaration", "class", "class_specifier", "class_definition":
 		return "class"
 	case "interface_declaration":
 		return "interface"
-	case "enum_declaration":
+	case "enum_declaration", "enum_item":
 		return "enum"
 	case "record_declaration":
 		return "record"
 	case "function_definition":
 		return "func"
-	case "class_definition":
-		return "class"
 	case "block":
 		return "block"
+	case "struct_item", "struct_specifier":
+		return "struct"
+	case "impl_item":
+		return "impl"
+	case "module":
+		return "module"
+	case "protocol_declaration":
+		return "protocol"
 	default:
 		return nt
 	}

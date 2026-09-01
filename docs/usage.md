@@ -39,6 +39,7 @@ API: `GET /api/v1/search-usage?days=30` (not to be confused with
 | source | `cli` / `mcp` / `admin` / `sdk` / `unknown` |
 | outcome | `ok` / `empty` / `fallback` / `error` |
 | hit_count, latency_ms, keyword, graph | latency rolls up as p50/p95 in the report |
+| fallback_reason | low-cardinality `provider: class` (e.g. `ollama: timeout`) for real embedding-degradation fallbacks; empty otherwise — the report shows a "Fallback reasons" section when present |
 | query_hash | SHA-256; text only if `SEMIDX_USAGE_LOG_QUERIES=true` |
 
 Prometheus also exposes `semidx_search_total{project,source,outcome}`.

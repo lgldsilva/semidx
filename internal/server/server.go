@@ -6,7 +6,9 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -409,13 +411,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	src := usage.ParseSource(r.Header.Get(client.HeaderClientSource))
 	ctx := usage.WithSource(r.Context(), src)
+	reqID := RequestIDFrom(r.Context())
 	start := time.Now()
 	resp, err := s.search.Search(ctx, search.Request{
 		Project: project, Query: body.Query, Model: body.Model, TopK: body.TopK,
 		KeywordOnly: body.Keyword, Graph: body.Graph, GraphMaxDepth: body.GraphDepth,
 	})
 	if err != nil {
-		s.log.Warn(msgSearchFailed, "project", project, "err", err)
+		s.log.Warn(msgSearchFailed, "project", project, "source", string(src), "req_id", reqID, "err", err)
 		s.searchTotal.WithLabelValues(project, string(src), string(usage.OutcomeError)).Inc()
 		if errors.Is(err, store.ErrNotFound) {
 			writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
@@ -433,20 +436,22 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	out := mapSearchResponse(resp)
 	out.TookMS = time.Since(start).Milliseconds()
+	s.log.Info("search completed", "project", project, "source", string(src), "route", resp.Route, "hits", len(resp.Results), "took_ms", out.TookMS, "fallback", resp.Fallback, "degraded", resp.Degraded, "req_id", reqID)
 	s.searchDuration.WithLabelValues(project).Observe(time.Since(start).Seconds())
 	writeJSON(w, http.StatusOK, out)
 }
 
 func mapSearchResponse(resp *search.Response) client.SearchResponse {
 	out := client.SearchResponse{
-		Project:      resp.Project.Name,
-		Model:        resp.Model,
-		Route:        resp.Route,
-		Fallback:     resp.Fallback,
-		Keyword:      resp.Keyword,
-		Degraded:     resp.Degraded,
-		RetryAfterMS: resp.RetryAfter.Milliseconds(),
-		Results:      make([]client.SearchHit, 0, len(resp.Results)),
+		Project:        resp.Project.Name,
+		Model:          resp.Model,
+		Route:          resp.Route,
+		Fallback:       resp.Fallback,
+		Keyword:        resp.Keyword,
+		Degraded:       resp.Degraded,
+		RetryAfterMS:   resp.RetryAfter.Milliseconds(),
+		FallbackReason: resp.FallbackReason,
+		Results:        make([]client.SearchHit, 0, len(resp.Results)),
 	}
 	for _, hit := range resp.Results {
 		out.Results = append(out.Results, client.SearchHit{
@@ -498,6 +503,7 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	src := usage.ParseSource(r.Header.Get(client.HeaderClientSource))
 	ctx := usage.WithSource(r.Context(), src)
+	reqID := RequestIDFrom(r.Context())
 	start := time.Now()
 	var resp *search.MultiResponse
 	var err error
@@ -562,7 +568,7 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if err != nil {
-		s.log.Warn("multi-project search failed", "err", err)
+		s.log.Warn("multi-project search failed", "source", string(src), "req_id", reqID, "err", err)
 		writeJSONError(w, http.StatusInternalServerError, msgSearchFailed)
 		return
 	}
@@ -593,6 +599,7 @@ func (s *Server) handleMultiSearch(w http.ResponseWriter, r *http.Request) {
 			Stale:      hit.Stale, IndexedAt: hit.IndexedAt,
 		})
 	}
+	s.log.Info("multi-search completed", "source", string(src), "route", route, "projects", resp.ProjectCount, "hits", len(resp.Results), "took_ms", out.TookMS, "fallback", resp.Fallback, "degraded", resp.Degraded, "req_id", reqID)
 	s.searchDuration.WithLabelValues("*").Observe(time.Since(start).Seconds())
 	writeJSON(w, http.StatusOK, out)
 }
@@ -623,13 +630,43 @@ func (s *Server) handleSearchUsage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
+type reqIDKey struct{}
+
+func withRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, reqIDKey{}, id)
+}
+
+// RequestIDFrom extracts the request ID from ctx, or returns "".
+func RequestIDFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if id, ok := ctx.Value(reqIDKey{}).(string); ok {
+		return id
+	}
+	return ""
+}
+
+func newRequestID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
 // instrument wraps the mux to count requests by method and status, track
-// in-flight count, and record request duration.
+// in-flight count, record request duration, and assign a request ID.
 func (s *Server) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.observeDBPool()
 		s.activeRequests.WithLabelValues(r.Method).Inc()
 		defer s.activeRequests.WithLabelValues(r.Method).Dec()
+
+		reqID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+		if reqID == "" {
+			reqID = newRequestID()
+		}
+		w.Header().Set("X-Request-ID", reqID)
+		r = r.WithContext(withRequestID(r.Context(), reqID))
 
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}

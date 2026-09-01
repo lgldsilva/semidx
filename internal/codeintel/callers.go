@@ -107,24 +107,32 @@ func DependencyDirsForFile(file string) []string {
 	if ext == ".py" {
 		return dependencyDirs(dir)
 	}
-	if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".mjs" || ext == ".cjs" {
-		seen := map[string]bool{}
-		var result []string
-		add := func(d string) {
-			d = normalizeDependencyDir(d)
-			if !seen[d] {
-				seen[d] = true
-				result = append(result, d)
-			}
-		}
-		add(dir)
-		base := strings.TrimSuffix(filepath.Base(clean), ext)
-		if base != "" && base != "." {
-			add(filepath.ToSlash(filepath.Join(dir, base)))
-		}
-		return result
+	if isJSFamilyExt(ext) {
+		return jsFamilyDependencyDirs(dir, clean, ext)
 	}
 	return []string{normalizeDependencyDir(dir)}
+}
+
+func isJSFamilyExt(ext string) bool {
+	switch ext {
+	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs":
+		return true
+	default:
+		return false
+	}
+}
+
+func jsFamilyDependencyDirs(dir, clean, ext string) []string {
+	result := []string{normalizeDependencyDir(dir)}
+	base := strings.TrimSuffix(filepath.Base(clean), ext)
+	if base == "" || base == "." {
+		return result
+	}
+	alias := normalizeDependencyDir(filepath.ToSlash(filepath.Join(dir, base)))
+	if alias == result[0] {
+		return result
+	}
+	return append(result, alias)
 }
 
 func dependencyDirs(dir string) []string {

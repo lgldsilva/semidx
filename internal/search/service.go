@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"time"
 
@@ -94,6 +95,10 @@ type Response struct {
 	// RetryAfter hints when the embedding provider may recover (only set when
 	// Degraded is true).
 	RetryAfter time.Duration
+	// FallbackReason summarizes why the embedding failed and the search fell
+	// back to keyword ("provider: class", e.g. "ollama: timeout"); only set
+	// when Fallback is true — never for an explicit keyword-only request.
+	FallbackReason string `json:"fallback_reason,omitempty"`
 }
 
 // Search resolves the model, embeds the query and runs a vector search,
@@ -126,7 +131,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 
 	project, err := s.resolveProject(ctx, req)
 	if err != nil {
-		s.recordUsage(ctx, req, "", usage.OutcomeError, 0, start)
+		s.recordUsage(ctx, req, "", usage.OutcomeError, 0, "", start)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, err
 		}
@@ -177,7 +182,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		resp, err = s.searchSemantic(ctx, project.ID, req, model, dims, worktree, resp)
 	}
 	if err != nil {
-		s.recordUsage(ctx, req, project.Name, usage.OutcomeError, 0, start)
+		s.recordUsage(ctx, req, project.Name, usage.OutcomeError, 0, "", start)
 		return nil, err
 	}
 
@@ -199,7 +204,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	resp.TookMS = time.Since(start).Milliseconds()
 
 	outcome := usage.Classify(len(resp.Results), resp.Fallback, resp.Keyword)
-	s.recordUsage(ctx, req, project.Name, outcome, len(resp.Results), start)
+	s.recordUsage(ctx, req, project.Name, outcome, len(resp.Results), resp.FallbackReason, start)
 	return resp, nil
 }
 
@@ -219,8 +224,9 @@ func (s *Service) searchVectorOnly(ctx context.Context, projectID int, req Reque
 // recordUsage emits a usage.Event for this search attempt. Failures inside the
 // recorder are swallowed (analytics must never fail a search). project may be
 // "" when project resolution itself failed, in which case req.Project (the raw
-// ref the caller passed) is used instead.
-func (s *Service) recordUsage(ctx context.Context, req Request, project string, outcome usage.Outcome, hits int, start time.Time) {
+// ref the caller passed) is used instead. fallbackReason is only non-empty on a
+// real embedding-degradation fallback (resp.Fallback), never for keyword-only.
+func (s *Service) recordUsage(ctx context.Context, req Request, project string, outcome usage.Outcome, hits int, fallbackReason string, start time.Time) {
 	if s.usage == nil {
 		return
 	}
@@ -228,15 +234,16 @@ func (s *Service) recordUsage(ctx context.Context, req Request, project string, 
 		project = req.Project
 	}
 	s.usage.Record(ctx, usage.Event{
-		Project:   project,
-		Source:    usage.SourceFrom(ctx),
-		Outcome:   outcome,
-		HitCount:  hits,
-		LatencyMS: time.Since(start).Milliseconds(),
-		Keyword:   req.KeywordOnly,
-		Graph:     req.Graph,
-		QueryHash: usage.HashQuery(req.Query),
-		QueryText: req.Query,
+		Project:        project,
+		Source:         usage.SourceFrom(ctx),
+		Outcome:        outcome,
+		HitCount:       hits,
+		LatencyMS:      time.Since(start).Milliseconds(),
+		Keyword:        req.KeywordOnly,
+		Graph:          req.Graph,
+		FallbackReason: fallbackReason,
+		QueryHash:      usage.HashQuery(req.Query),
+		QueryText:      req.Query,
 	})
 }
 
@@ -311,6 +318,7 @@ func (s *Service) searchSemantic(ctx context.Context, projectID int, req Request
 		}
 		resp.Fallback = true
 		resp.Keyword = true
+		resp.FallbackReason = embed.SummarizeFailure(err)
 		results, kerr := s.keywordSearch(ctx, projectID, req.Query, dims, req.TopK, worktree)
 		if kerr != nil {
 			return nil, kerr
@@ -357,60 +365,123 @@ func (s *Service) keywordSearch(ctx context.Context, projectID int, query string
 	return s.store.SearchSimilarKeywords(ctx, projectID, query, dims, topK)
 }
 
-// expandByGraph runs BFS through the project's dependency graph from the seed
-// result file paths, collecting chunks from newly discovered files with a
-// decayed score. Returns nil (no error) when the graph is empty.
-func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults []store.SearchResult, projectID, dims int) ([]store.SearchResult, error) {
-	if len(seedResults) == 0 {
-		return nil, nil
-	}
+const (
+	graphExpandDecay    = 0.85
+	graphExpandFloor    = 0.3
+	maxGraphExpandPaths = 100 // cap chunk fetches per query (DoS guard)
+)
 
-	// Fetch the full dependency graph for the project.
-	graph, err := s.store.FetchGraphNeighbors(ctx, projectID)
-	if err != nil {
-		return nil, fmt.Errorf("fetch graph neighbors: %w", err)
-	}
-	if len(graph) == 0 {
-		return nil, nil // no graph data — nothing to expand
-	}
+// graphSeeds is the deduplicated seed set used by both the SQL CTE path and
+// the in-memory BFS fallback.
+type graphSeeds struct {
+	list     []string
+	paths    map[string]bool
+	maxScore float64
+}
 
-	// Build reverse edges so BFS traverses both directions (imports and
-	// imported-by).
+func collectGraphSeeds(seedResults []store.SearchResult) graphSeeds {
+	out := graphSeeds{
+		list:  make([]string, 0, len(seedResults)),
+		paths: make(map[string]bool, len(seedResults)),
+	}
+	for _, r := range seedResults {
+		if !out.paths[r.FilePath] {
+			out.list = append(out.list, r.FilePath)
+		}
+		out.paths[r.FilePath] = true
+		if r.Score > out.maxScore {
+			out.maxScore = r.Score
+		}
+	}
+	if out.maxScore == 0 {
+		out.maxScore = 1.0
+	}
+	return out
+}
+
+func hopsFromCTEPaths(paths map[string]int, maxSeedScore float64) map[string]graphHop {
+	expanded := make(map[string]graphHop, len(paths))
+	for path, depth := range paths {
+		if len(expanded) >= maxGraphExpandPaths {
+			break
+		}
+		score := maxSeedScore * math.Pow(graphExpandDecay, float64(depth))
+		if score < graphExpandFloor {
+			continue
+		}
+		expanded[path] = graphHop{Score: score, Depth: depth}
+	}
+	return expanded
+}
+
+// tryExpandByGraphCTE uses FetchGraphPathsBFS (single SQL round trip) when the
+// store supports it. Returns nil when the CTE is unavailable or yields nothing
+// usable, so the caller can fall back to the in-memory BFS.
+func (s *Service) tryExpandByGraphCTE(ctx context.Context, projectID, dims, maxDepth int, seeds graphSeeds) []store.SearchResult {
+	paths, err := s.store.FetchGraphPathsBFS(ctx, projectID, seeds.list, maxDepth)
+	if err != nil || len(paths) == 0 {
+		return nil
+	}
+	expanded := hopsFromCTEPaths(paths, seeds.maxScore)
+	if len(expanded) == 0 {
+		return nil
+	}
+	return fetchGraphChunks(ctx, s, projectID, dims, expanded)
+}
+
+func reverseGraphEdges(graph map[string][]string) map[string][]string {
 	reverse := make(map[string][]string, len(graph))
 	for src, targets := range graph {
 		for _, tgt := range targets {
 			reverse[tgt] = append(reverse[tgt], src)
 		}
 	}
+	return reverse
+}
 
-	maxDepth := req.GraphMaxDepth // already clamped in Search
-
-	const decay = 0.85
-	const floor = 0.3
-	const maxGraphExpandPaths = 100 // cap chunk fetches per query (DoS guard)
-
-	seedPaths := make(map[string]bool, len(seedResults))
-	for _, r := range seedResults {
-		seedPaths[r.FilePath] = true
+func (s *Service) expandByGraphGo(ctx context.Context, seedResults []store.SearchResult, projectID, dims, maxDepth int, seeds graphSeeds) ([]store.SearchResult, error) {
+	graph, err := s.store.FetchGraphNeighbors(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("fetch graph neighbors: %w", err)
 	}
-
+	if len(graph) == 0 {
+		return nil, nil
+	}
 	expanded := runGraphBFS(bfsParams{
 		graph:     graph,
-		reverse:   reverse,
-		seedPaths: seedPaths,
+		reverse:   reverseGraphEdges(graph),
+		seedPaths: seeds.paths,
 		seeds:     seedResults,
 		maxDepth:  maxDepth,
-		decay:     decay,
-		floor:     floor,
+		decay:     graphExpandDecay,
+		floor:     graphExpandFloor,
 		maxPaths:  maxGraphExpandPaths,
 	})
-
 	if len(expanded) == 0 {
 		return nil, nil
 	}
+	return fetchGraphChunks(ctx, s, projectID, dims, expanded), nil
+}
 
-	results := fetchGraphChunks(ctx, s, projectID, dims, expanded)
-	return results, nil
+// expandByGraph runs BFS through the project's dependency graph from the seed
+// result file paths, collecting chunks from newly discovered files with a
+// decayed score. Returns nil (no error) when the graph is empty.
+//
+// For scale, it prefers the SQL recursive CTE (FetchGraphPathsBFS) which
+// avoids loading the full graph into Go. It computes decayed scores from
+// depth and the best seed score, then falls back to the in-memory BFS when
+// the CTE is unavailable or yields no results.
+func (s *Service) expandByGraph(ctx context.Context, req *Request, seedResults []store.SearchResult, projectID, dims int) ([]store.SearchResult, error) {
+	if len(seedResults) == 0 {
+		return nil, nil
+	}
+	seeds := collectGraphSeeds(seedResults)
+	if results := s.tryExpandByGraphCTE(ctx, projectID, dims, req.GraphMaxDepth, seeds); len(results) > 0 {
+		return results, nil
+	}
+	// Fallback: load full graph and BFS in Go (covers stores without CTE or
+	// an empty/unusable CTE result).
+	return s.expandByGraphGo(ctx, seedResults, projectID, dims, req.GraphMaxDepth, seeds)
 }
 
 // graphHop is one BFS-discovered path with its decayed score and hop depth.

@@ -359,30 +359,32 @@ func (idx *Indexer) fileDependencies(rel string, content []byte) []string {
 
 	seen := make(map[string]bool, len(deps))
 	out := make([]string, 0, len(deps))
-	add := func(d string) {
-		if d == "" {
-			return
-		}
-		if !strings.HasSuffix(d, "/") {
-			d += "/"
-		}
-		if !seen[d] {
-			seen[d] = true
-			out = append(out, d)
-		}
-	}
 	for _, d := range deps {
-		add(filepath.ToSlash(filepath.Join(moduleDir, d)))
+		out = appendUniqueDir(out, seen, filepath.ToSlash(filepath.Join(moduleDir, d)))
 	}
 	// Imports of the root module resolve against the root module path only; they
 	// are already project-relative, so they are not re-anchored.
 	if idx.modulePath != "" && idx.modulePath != modulePath {
 		for _, d := range si.AnalyzeWithFiles(rel, content, idx.modulePath, idx.projectFiles) {
-			add(filepath.ToSlash(d))
+			out = appendUniqueDir(out, seen, filepath.ToSlash(d))
 		}
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+func appendUniqueDir(out []string, seen map[string]bool, d string) []string {
+	if d == "" {
+		return out
+	}
+	if !strings.HasSuffix(d, "/") {
+		d += "/"
+	}
+	if !seen[d] {
+		seen[d] = true
+		out = append(out, d)
 	}
 	return out
 }

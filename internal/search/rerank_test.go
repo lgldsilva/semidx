@@ -107,3 +107,49 @@ func TestTokenize(t *testing.T) {
 		t.Error("single-char token should be dropped")
 	}
 }
+
+func TestTokenize_CamelCase(t *testing.T) {
+	set := tokenize("validateUserToken")
+	for _, want := range []string{"validateusertoken", "validate", "user", "token"} {
+		if _, ok := set[want]; !ok {
+			t.Errorf("missing token %q in %v", want, set)
+		}
+	}
+}
+
+func TestExtractedSymbolBoost(t *testing.T) {
+	terms := tokenize("ValidateToken")
+	if extractedSymbolBoost(store.SearchResult{Confidence: "AMBIGUOUS", Symbol: "ValidateToken"}, terms) != 0 {
+		t.Error("non-EXTRACTED hits must not receive a symbol boost")
+	}
+	if extractedSymbolBoost(store.SearchResult{Confidence: "EXTRACTED"}, terms) != 0 {
+		t.Error("empty symbol must not receive a boost")
+	}
+	got := extractedSymbolBoost(store.SearchResult{Confidence: "EXTRACTED", Symbol: "ValidateToken"}, terms)
+	if got != 0.2 {
+		t.Errorf("extracted symbol boost = %v, want 0.2", got)
+	}
+}
+
+func TestLexicalReranker_SymbolBoost(t *testing.T) {
+	in := []store.SearchResult{
+		{
+			FilePath:   "a.go",
+			Content:    "just mentions validate token in a comment",
+			Score:      0.5,
+			Confidence: "AMBIGUOUS",
+			Symbol:     "",
+		},
+		{
+			FilePath:   "b.go",
+			Content:    "func ValidateToken() bool { return true }",
+			Score:      0.5,
+			Confidence: "EXTRACTED",
+			Symbol:     "ValidateToken",
+		},
+	}
+	out := NewLexicalReranker(0.5).Rerank(context.Background(), "ValidateToken", in)
+	if out[0].FilePath != "b.go" {
+		t.Fatalf("expected extracted symbol b.go to be ranked first, got %s", out[0].FilePath)
+	}
+}

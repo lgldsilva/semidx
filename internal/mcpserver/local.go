@@ -66,7 +66,7 @@ func (b *localBackend) Search(ctx context.Context, project, query, model string,
 	}
 	out := &SearchOutput{
 		Project: resp.Project.Name, Model: resp.Model, Route: resp.Route, Keyword: resp.Keyword, Fallback: resp.Fallback,
-		Degraded: resp.Degraded, RetryAfterMS: resp.RetryAfter.Milliseconds(), TookMS: resp.TookMS,
+		Degraded: resp.Degraded, RetryAfterMS: resp.RetryAfter.Milliseconds(), FallbackReason: resp.FallbackReason, TookMS: resp.TookMS,
 	}
 	for _, r := range resp.Results {
 		out.Results = append(out.Results, Hit{
