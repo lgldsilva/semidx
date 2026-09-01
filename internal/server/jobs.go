@@ -191,6 +191,11 @@ func (s *Server) runIndexJob(ctx context.Context, job *store.Job, proj *store.Pr
 		fail("project has no indexable source path (push projects upload via files/batch)")
 		return
 	}
+	if proj.SourceType == "git" && path != proj.Path {
+		if err := s.store.UpdateProjectPath(ctx, job.ProjectID, path); err != nil {
+			s.log.Warn("update project path", "project", proj.Name, "path", path, "err", err)
+		}
+	}
 
 	modelCtx := ctx
 	privacyMode, modeErr := privacy.NormalizeMode(proj.PrivacyMode)
@@ -218,6 +223,9 @@ func (s *Server) runIndexJob(ctx context.Context, job *store.Job, proj *store.Pr
 	})
 	opts.PrivacyMode = privacyMode
 	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, opts)
+	if isForceJob(job.Payload) {
+		idx.SetForce(true)
+	}
 	if proj.SourceType == "git" && job.Type != "git_history" {
 		idx.SetWorktree(path)
 	}
@@ -353,9 +361,21 @@ func (s *Server) runBatchJob(ctx context.Context, job *store.Job, proj *store.Pr
 		"files", indexed, "chunks", chunks, "deleted", deleted, "errors", errors)
 }
 
+func isForceJob(payload string) bool {
+	if payload == "" {
+		return false
+	}
+	var v struct {
+		Force bool `json:"force"`
+	}
+	_ = json.Unmarshal([]byte(payload), &v)
+	return v.Force
+}
+
 func (s *Server) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Type string `json:"type"`
+		Type  string `json:"type"`
+		Force bool   `json:"force"`
 	}
 	// An empty body is allowed (defaults to a full index).
 	_ = json.NewDecoder(r.Body).Decode(&body)
@@ -377,14 +397,18 @@ func (s *Server) handleEnqueueJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := s.store.EnqueueJob(r.Context(), proj.ID, body.Type)
+	payload := ""
+	if body.Force {
+		payload = `{"force":true}`
+	}
+	id, err := s.store.EnqueueJobWithPayload(r.Context(), proj.ID, body.Type, payload)
 	if err != nil {
 		s.log.Error("enqueue job", "err", err)
 		writeJSONError(w, http.StatusInternalServerError, "could not enqueue job")
 		return
 	}
 	s.jobsQueued.Inc()
-	writeJSON(w, http.StatusAccepted, map[string]any{"job_id": id, "status": "queued"})
+	writeJSON(w, http.StatusAccepted, map[string]any{"job_id": id, "status": "queued", "force": body.Force})
 }
 
 type jobView struct {

@@ -147,6 +147,7 @@ type IndexStore interface {
 	ListProjects(ctx context.Context, limit, offset int) ([]Project, error)
 	DeleteProject(ctx context.Context, name string) error
 	UpdateProjectStatus(ctx context.Context, id int, status string) error
+	UpdateProjectPath(ctx context.Context, id int, path string) error
 	UpsertFile(ctx context.Context, projectID int, path, hash string, size int) (int, error)
 	FileUpToDate(ctx context.Context, projectID int, path, hash string, dims int) (bool, error)
 	CountProjectFiles(ctx context.Context, projectID int) (int, error)
@@ -357,6 +358,7 @@ type SessionStore interface {
 // JobStore groups job-queue operations.
 type JobStore interface {
 	EnqueueJob(ctx context.Context, projectID int, jobType string) (int, error)
+	EnqueueJobWithPayload(ctx context.Context, projectID int, jobType, payload string) (int, error)
 	EnqueueBatchJob(ctx context.Context, projectID int, payload string) (int, error)
 	ClaimJob(ctx context.Context) (*Job, error)
 	CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated, deletedFiles, errorCount int) error
@@ -943,6 +945,11 @@ func (s *PgStore) DeleteProject(ctx context.Context, name string) error {
 
 func (s *PgStore) UpdateProjectStatus(ctx context.Context, id int, status string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE projects SET status = $1 WHERE tenant_id = $2 AND ($3 = 0 OR workspace_id = $3) AND id = $4`, status, tenant.ID(ctx), activeWorkspaceID(ctx), id)
+	return err
+}
+
+func (s *PgStore) UpdateProjectPath(ctx context.Context, id int, path string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE projects SET path = $1 WHERE tenant_id = $2 AND ($3 = 0 OR workspace_id = $3) AND id = $4`, path, tenant.ID(ctx), activeWorkspaceID(ctx), id)
 	return err
 }
 

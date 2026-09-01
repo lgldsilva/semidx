@@ -51,6 +51,20 @@ var (
 
 	// C#
 	csUsingRe = regexp.MustCompile(`(?m)^\s*using\s+([\w.]+)\s*;`)
+
+	// Shell: source / . / bash / sh / zsh
+	// Matches:
+	//   source ./lib/utils.sh
+	//   . ./lib/config.sh
+	//   bash ./lib/runner.sh
+	//   sh -c './lib/runner.sh'
+	// Also catches plain execution like ./script.sh when it starts a line or after ;/&&/||.
+	// Anchored to line-start or statement boundaries to avoid matching inside
+	// arguments (e.g. `echo source ./foo.sh`) and comments.
+	shellSourceRe     = regexp.MustCompile(`(?m)(?:^|\s*[;|&()]\s*)(?:source|\.)\s+(?:['"]([^'"]+)['"]|([^\s;'"|&()]+))`)
+	shellExecRe       = regexp.MustCompile(`(?m)(?:^|\s*[;|&()]\s*)(?:bash|sh|zsh|dash|ksh)\s+(?:-[a-zA-Z]+\s+)*(?:['"]([^'"]+)['"]|([^\s;'"|&()]+))`)
+	shellDirectExecRe = regexp.MustCompile(`(?m)(?:^|\s*[;|&()]\s*)(\.\/[^\s;'"|&()]+)`)
+	shellExecDashCRe  = regexp.MustCompile(`(?:bash|sh|zsh|dash|ksh)(?:\s+-[a-zA-Z]+)*\s+-c\s+['"]([^'"]+)['"]`)
 )
 
 // ---------------------------------------------------------------------------
@@ -223,6 +237,8 @@ func AnalyzeWithFiles(path string, content []byte, modulePath string, projectFil
 		return analyzeRuby(path, content)
 	case ".cs":
 		return analyzeCsharp(content)
+	case ".sh", ".bash", ".zsh", ".ksh", ".dash":
+		return analyzeShell(path, content)
 	case ".md", ".mdx", ".markdown", ".rst", ".adoc":
 		return analyzeMarkdown(content)
 	default:
@@ -780,6 +796,176 @@ func analyzeC(content []byte) []string {
 	if len(result) == 0 {
 		return nil
 	}
+	return result
+}
+
+// ---------------------------------------------------------------------------
+// Shell extractor
+// ---------------------------------------------------------------------------
+
+// isLocalShellRef reports whether a resolved shell dependency stays inside the
+// project. Relative references that climb above the project root (more .. levels
+// than the source directory has components) are rejected.
+func isLocalShellRef(srcDir, raw, resolved string) bool {
+	if filepath.IsAbs(resolved) {
+		return false
+	}
+	if strings.HasPrefix(raw, "../") {
+		srcParts := strings.Split(filepath.ToSlash(filepath.Clean(srcDir)), "/")
+		depth := 0
+		for strings.HasPrefix(raw, "../") {
+			depth++
+			raw = raw[3:]
+		}
+		// srcDir == "." has zero components; any ../ would escape.
+		if srcDir == "." || depth > len(srcParts) || (len(srcParts) == 1 && srcParts[0] == ".") {
+			return false
+		}
+	}
+	return true
+}
+
+// analyzeShell extracts local script dependencies from shell scripts.
+// It detects source/., explicit interpreter invocations (bash/sh/zsh/dash/ksh),
+// and direct execution of scripts (./script.sh). Only relative paths are kept;
+// absolute paths and bare built-ins are ignored. The returned path is the
+// directory containing the referenced script, matching the convention used by
+// other extractors.
+func analyzeShell(path string, content []byte) []string {
+	seen := make(map[string]bool)
+	srcDir := filepath.Dir(path)
+
+	collect := func(raw string) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return
+		}
+		// Ignore absolute paths, variable-only references, and obvious builtins.
+		if strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "$") || raw == "." {
+			return
+		}
+		// Ignore URLs and remote resources.
+		if strings.Contains(raw, "://") {
+			return
+		}
+		// Ignore command strings that accidentally matched (e.g. bash -c 'a && b').
+		if strings.ContainsAny(raw, "&|;<>()$`") {
+			return
+		}
+		// Determine the referenced script's directory relative to the project root.
+		// We preserve the original relative prefix (./ or ../) when present.
+		joined := filepath.Join(srcDir, raw)
+		targetDir := filepath.Dir(joined)
+		var resolved string
+		switch {
+		case strings.HasPrefix(raw, "./"):
+			if targetDir == "." {
+				resolved = "./"
+			} else {
+				resolved = "./" + strings.TrimPrefix(filepath.ToSlash(filepath.Clean(targetDir)), "./")
+			}
+		case strings.HasPrefix(raw, "../"):
+			rel, err := filepath.Rel(srcDir, targetDir)
+			if err != nil || rel == "." || rel == "" {
+				return
+			}
+			resolved = filepath.ToSlash(filepath.Clean(rel))
+		default:
+			// No explicit relative prefix; treat as same-dir or project-root relative.
+			rel, err := filepath.Rel(srcDir, targetDir)
+			if err != nil || rel == "." || rel == "" {
+				resolved = "./"
+			} else {
+				resolved = "./" + filepath.ToSlash(filepath.Clean(rel))
+			}
+		}
+		if resolved == "/" || resolved == "./" && raw == "." {
+			return
+		}
+		if !isLocalShellRef(srcDir, raw, resolved) {
+			return
+		}
+		resolved = strings.TrimSuffix(resolved, "/")
+		if resolved == "." {
+			resolved = "./"
+		} else {
+			resolved = resolved + "/"
+		}
+		if !seen[resolved] {
+			seen[resolved] = true
+		}
+	}
+
+	// source / .
+	for _, m := range shellSourceRe.FindAllSubmatch(content, -1) {
+		if len(m) < 3 {
+			continue
+		}
+		if p := string(m[1]); p != "" {
+			collect(p)
+		} else if p := string(m[2]); p != "" {
+			collect(p)
+		}
+	}
+
+	// bash/sh/zsh ... script
+	for _, m := range shellExecRe.FindAllSubmatch(content, -1) {
+		if len(m) < 3 {
+			continue
+		}
+		// Ignore bash -c '...' here; it is handled by shellExecDashCRe.
+		if strings.Contains(string(m[0]), " -c ") || strings.Contains(string(m[0]), "\t-c ") {
+			continue
+		}
+		if p := string(m[1]); p != "" {
+			collect(p)
+		} else if p := string(m[2]); p != "" {
+			collect(p)
+		}
+	}
+
+	// ./script.sh
+	for _, m := range shellDirectExecRe.FindAllSubmatch(content, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		collect(string(m[1]))
+	}
+
+	// bash -c '...' — best-effort: re-scan the embedded command for direct
+	// executions and source calls. We deliberately do not recursively invoke
+	// the full analyzer to avoid complexity; this covers the common case.
+	for _, m := range shellExecDashCRe.FindAllSubmatch(content, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		embedded := m[1]
+		for _, sm := range shellSourceRe.FindAllSubmatch(embedded, -1) {
+			if len(sm) < 3 {
+				continue
+			}
+			if p := string(sm[1]); p != "" {
+				collect(p)
+			} else if p := string(sm[2]); p != "" {
+				collect(p)
+			}
+		}
+		for _, sm := range shellDirectExecRe.FindAllSubmatch(embedded, -1) {
+			if len(sm) < 2 {
+				continue
+			}
+			collect(string(sm[1]))
+		}
+	}
+
+	if len(seen) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(seen))
+	for dir := range seen {
+		result = append(result, dir)
+	}
+	sort.Strings(result)
 	return result
 }
 

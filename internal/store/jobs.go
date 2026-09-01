@@ -46,11 +46,18 @@ type Job struct {
 
 // EnqueueJob queues an indexing job for a project.
 func (s *PgStore) EnqueueJob(ctx context.Context, projectID int, jobType string) (int, error) {
+	return s.EnqueueJobWithPayload(ctx, projectID, jobType, "")
+}
+
+// EnqueueJobWithPayload queues an indexing job with an optional JSON payload.
+// The payload is opaque to the store; callers use it for job-specific flags such
+// as force-reindex.
+func (s *PgStore) EnqueueJobWithPayload(ctx context.Context, projectID int, jobType, payload string) (int, error) {
 	var id int
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO index_jobs (project_id, type)
-		 SELECT id, $2 FROM projects WHERE id = $1 AND tenant_id = $3
-		 RETURNING id`, projectID, jobType, tenant.ID(ctx)).Scan(&id)
+		`INSERT INTO index_jobs (project_id, type, payload)
+		 SELECT id, $2, $3 FROM projects WHERE id = $1 AND tenant_id = $4
+		 RETURNING id`, projectID, jobType, payload, tenant.ID(ctx)).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, ErrNotFound
 	}

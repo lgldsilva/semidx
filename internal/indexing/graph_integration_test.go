@@ -407,3 +407,74 @@ func TestGraphIntegrationEncryptedDocument(t *testing.T) {
 		t.Errorf("encrypted document produced %d chunks, want 0", created)
 	}
 }
+
+// TestGraphIntegrationGoMonorepo verifies that nested go.mod files are respected
+// when resolving local imports, so monorepo packages map to real file paths.
+func TestGraphIntegrationGoMonorepo(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	st, err := localstore.New(dbPath)
+	if err != nil {
+		t.Fatalf("localstore.New: %v", err)
+	}
+	t.Cleanup(st.Close)
+
+	src := t.TempDir()
+	writeFile(t, src, "go.mod", "module github.com/example/root\n\ngo 1.25\n")
+	writeFile(t, src, "root.go", `package root
+
+import "github.com/example/root/pkg/shared"
+
+func Run() { shared.Help() }
+`)
+	writeFile(t, src, "service-a/go.mod", "module github.com/example/service-a\n\ngo 1.25\n")
+	writeFile(t, src, "service-a/main.go", `package main
+
+import "github.com/example/service-a/internal/lib"
+
+func main() { lib.Run() }
+`)
+	writeFile(t, src, "service-a/internal/lib/lib.go", "package lib\n\nfunc Run() {}\n")
+	writeFile(t, src, "pkg/shared/shared.go", "package shared\n\nfunc Help() {}\n")
+
+	pid, err := st.UpsertProject(ctx, "mono", src, "m", 0)
+	if err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+
+	emb := &semanticEmbedder{}
+	idx := NewIndexer(st, emb, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+
+	if _, err := idx.IndexProject(ctx, pid, src, "m", 0); err != nil {
+		t.Fatalf("IndexProject: %v", err)
+	}
+
+	graph, err := st.FetchGraphNeighbors(ctx, pid)
+	if err != nil {
+		t.Fatalf("FetchGraphNeighbors: %v", err)
+	}
+
+	wantDeps := map[string][]string{
+		"root.go":           {"pkg/shared/"},
+		"service-a/main.go": {"service-a/internal/lib/"},
+	}
+	for file, want := range wantDeps {
+		got, ok := graph[file]
+		if !ok {
+			t.Fatalf("%s not found in graph", file)
+		}
+		gotSet := make(map[string]bool, len(got))
+		for _, d := range got {
+			gotSet[d] = true
+		}
+		for _, d := range want {
+			if !gotSet[d] {
+				t.Errorf("%s missing dependency %q, got %v", file, d, got)
+			}
+			delete(gotSet, d)
+		}
+		if len(gotSet) > 0 {
+			t.Errorf("%s unexpected dependencies: %v", file, gotSet)
+		}
+	}
+}

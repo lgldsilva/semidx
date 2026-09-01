@@ -119,6 +119,12 @@ func (f *fakeStore) GetProjectByIdentity(_ context.Context, identity string) (*s
 	}
 	return nil, store.ErrNotFound
 }
+func (f *fakeStore) UpdateProjectPath(_ context.Context, id int, path string) error {
+	if f.project != nil && f.project.ID == id {
+		f.project.Path = path
+	}
+	return nil
+}
 func (f *fakeStore) CreateProject(_ context.Context, name, model, sourceType, gitURL, branch string, _ int) (*store.Project, error) {
 	if f.createErr != nil {
 		return nil, f.createErr
@@ -130,6 +136,9 @@ func (f *fakeStore) ListProjects(context.Context, int, int) ([]store.Project, er
 }
 func (f *fakeStore) DeleteProject(context.Context, string) error { return f.deleteErr }
 func (f *fakeStore) EnqueueJob(context.Context, int, string) (int, error) {
+	return f.enqueuedID, f.enqueueErr
+}
+func (f *fakeStore) EnqueueJobWithPayload(context.Context, int, string, string) (int, error) {
 	return f.enqueuedID, f.enqueueErr
 }
 func (f *fakeStore) GetJob(_ context.Context, id int) (*store.Job, error) {

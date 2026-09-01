@@ -34,8 +34,9 @@ func Explain(ctx context.Context, db store.IndexStore, proj *store.Project, fl F
 	}
 	root := proj.Path
 
-	modulePath := detectModulePath(root)
+	modulePath := detectModulePathForFile(root, fl.File)
 	fileImports := imports.AnalyzeProject(root, fl.File, content, modulePath)
+	fileImports = reanchorGoImports(fileImports, root, fl.File)
 	sort.Strings(fileImports)
 
 	graph, err := db.FetchGraphNeighbors(ctx, proj.ID)
@@ -68,6 +69,42 @@ func findImportersInGraph(graph map[string][]string, file string) []string {
 	return findDirectCallersForDirs(graph, DependencyDirsForFile(file))
 }
 
+// reanchorGoImports prefixes import paths with the directory containing the
+// nearest go.mod when the file lives in a nested module. This makes explain's
+// "Dependencies" output match the real project-relative file paths.
+func reanchorGoImports(imports []string, root, file string) []string {
+	if len(imports) == 0 {
+		return imports
+	}
+	moduleDir := filepath.Dir(file)
+	for {
+		gm := filepath.Clean(filepath.Join(root, moduleDir, "go.mod"))
+		if _, err := os.Stat(gm); err == nil {
+			break
+		}
+		if moduleDir == "." || moduleDir == string(filepath.Separator) {
+			return imports
+		}
+		parent := filepath.Dir(moduleDir)
+		if parent == moduleDir {
+			return imports
+		}
+		moduleDir = parent
+	}
+	if moduleDir == "." {
+		return imports
+	}
+	result := make([]string, len(imports))
+	for i, imp := range imports {
+		reanchored := filepath.ToSlash(filepath.Join(moduleDir, imp))
+		if !strings.HasSuffix(reanchored, "/") {
+			reanchored += "/"
+		}
+		result[i] = reanchored
+	}
+	return result
+}
+
 // goPackageName extracts the package name from a Go source file.
 func goPackageName(content []byte) string {
 	for _, line := range strings.Split(string(content), "\n") {
@@ -81,17 +118,36 @@ func goPackageName(content []byte) string {
 
 // detectModulePath tries to read go.mod from project root to get the module path.
 func detectModulePath(root string) string {
-	gm := filepath.Clean(filepath.Join(root, "go.mod"))
-	// #nosec G304 -- gm points to the project go.mod file, which is safe
-	data, err := os.ReadFile(gm)
-	if err != nil {
+	return detectModulePathForFile(root, "")
+}
+
+// detectModulePathForFile walks up from the given file's directory looking for
+// the nearest go.mod. It supports monorepos with multiple Go modules.
+func detectModulePathForFile(root, file string) string {
+	if root == "" {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "module ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+	dir := filepath.Dir(file)
+	for {
+		gm := filepath.Clean(filepath.Join(root, dir, "go.mod"))
+		// #nosec G304 -- gm points to a go.mod inside the project root
+		data, err := os.ReadFile(gm)
+		if err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "module ") {
+					return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+				}
+			}
 		}
+		if dir == "." || dir == string(filepath.Separator) {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
 	return ""
 }

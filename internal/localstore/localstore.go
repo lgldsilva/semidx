@@ -675,6 +675,11 @@ func (s *SQLiteStore) UpdateProjectStatus(ctx context.Context, id int, status st
 	return err
 }
 
+func (s *SQLiteStore) UpdateProjectPath(ctx context.Context, id int, path string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE projects SET path = ? WHERE id = ?`, path, id)
+	return err
+}
+
 // SetProjectPrivacy persists the local project policy. Standalone mode keeps
 // the same contract as the server even though it has no tenant selector.
 func (s *SQLiteStore) SetProjectPrivacy(ctx context.Context, projectID int, mode string) error {

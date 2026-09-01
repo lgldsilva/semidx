@@ -82,6 +82,9 @@ func (f *fakeIndexStore) DeleteProject(context.Context, string) error {
 func (f *fakeIndexStore) UpdateProjectStatus(context.Context, int, string) error {
 	return errors.New("unimplemented")
 }
+func (f *fakeIndexStore) UpdateProjectPath(context.Context, int, string) error {
+	return errors.New("unimplemented")
+}
 func (f *fakeIndexStore) UpsertFile(context.Context, int, string, string, int) (int, error) {
 	return 0, errors.New("unimplemented")
 }

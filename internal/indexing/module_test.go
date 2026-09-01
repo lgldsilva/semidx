@@ -68,3 +68,66 @@ func TestReadModulePathTrailingNewline(t *testing.T) {
 		t.Errorf("ReadModulePath = %q, want %q", got, want)
 	}
 }
+
+func TestFindModulePath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("root go.mod", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeGoMod(t, dir, "go.mod", "module example.com/root\n")
+		got := FindModulePath(dir, "main.go")
+		want := "example.com/root"
+		if got != want {
+			t.Errorf("FindModulePath = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("nested go.mod", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeGoMod(t, dir, "go.mod", "module example.com/root\n")
+		writeGoMod(t, dir, "service-a/go.mod", "module example.com/service-a\n")
+		writeGoMod(t, dir, "service-a/internal/lib/lib.go", "package lib\n")
+
+		got := FindModulePath(dir, "service-a/internal/lib/lib.go")
+		want := "example.com/service-a"
+		if got != want {
+			t.Errorf("FindModulePath = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("falls back to root", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeGoMod(t, dir, "go.mod", "module example.com/root\n")
+		writeGoMod(t, dir, "cmd/tool/main.go", "package main\n")
+
+		got := FindModulePath(dir, "cmd/tool/main.go")
+		want := "example.com/root"
+		if got != want {
+			t.Errorf("FindModulePath = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("no go.mod", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeGoMod(t, dir, "main.go", "package main\n")
+		got := FindModulePath(dir, "main.go")
+		if got != "" {
+			t.Errorf("FindModulePath = %q, want empty string", got)
+		}
+	})
+}
+
+func writeGoMod(t *testing.T, root, rel, content string) {
+	t.Helper()
+	path := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
