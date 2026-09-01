@@ -7,15 +7,12 @@ import (
 	"strings"
 )
 
+const goModFilename = "go.mod"
+
 // ReadModulePath reads the Go module path from projectPath/go.mod.
 // Returns empty string if go.mod doesn't exist or can't be read.
 func ReadModulePath(projectPath string) string {
-	f, err := os.Open(filepath.Clean(filepath.Join(projectPath, "go.mod")))
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-	return readModulePathFromFile(f)
+	return readModulePathAt(projectPath, goModFilename)
 }
 
 // FindModulePath walks up from the directory containing fileRel until it finds
@@ -47,11 +44,11 @@ func findModuleInfo(projectPath, fileRel string) (dir, modulePath string) {
 
 	dir = filepath.Dir(fileRel)
 	for {
-		modPath := confinedGoMod(projectPath, dir)
-		if modPath == "" {
+		relFile := moduleRel(dir)
+		if !filepath.IsLocal(relFile) {
 			return "", ""
 		}
-		mp := readModulePathAt(modPath)
+		mp := readModulePathAt(projectPath, relFile)
 		if mp != "" {
 			return dir, mp
 		}
@@ -67,27 +64,40 @@ func findModuleInfo(projectPath, fileRel string) (dir, modulePath string) {
 	return "", ""
 }
 
+func moduleRel(relDir string) string {
+	relDir = filepath.Clean(relDir)
+	if relDir == "." || relDir == "" {
+		return goModFilename
+	}
+	return filepath.Join(relDir, goModFilename)
+}
+
 // confinedGoMod joins projectPath/relDir/go.mod and returns the cleaned path
 // only when it stays inside the project root. Empty means "skip this hop".
 func confinedGoMod(projectPath, relDir string) string {
-	relDir = filepath.Clean(relDir)
-	if relDir != "." && !filepath.IsLocal(relDir) {
+	relFile := moduleRel(relDir)
+	if !filepath.IsLocal(relFile) {
 		return ""
 	}
 	root := filepath.Clean(projectPath)
-	full := filepath.Clean(filepath.Join(root, relDir, "go.mod"))
-	if full != filepath.Join(root, "go.mod") && !strings.HasPrefix(full, root+string(filepath.Separator)) {
+	full := filepath.Clean(filepath.Join(root, relFile))
+	if full != filepath.Join(root, goModFilename) && !strings.HasPrefix(full, root+string(filepath.Separator)) {
 		return ""
 	}
 	return full
 }
 
-func readModulePathAt(path string) string {
-	if path == "" {
+func readModulePathAt(root, relFile string) string {
+	relFile = filepath.Clean(relFile)
+	if !filepath.IsLocal(relFile) {
 		return ""
 	}
-	// #nosec G304 -- path is confined to the project root by confinedGoMod
-	f, err := os.Open(path)
+	full := confinedGoMod(root, filepath.Dir(relFile))
+	if full == "" {
+		return ""
+	}
+	// #nosec G304 -- relFile passed filepath.IsLocal; full is confined to root
+	f, err := os.Open(full)
 	if err != nil {
 		return ""
 	}

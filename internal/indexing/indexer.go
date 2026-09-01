@@ -331,7 +331,7 @@ func (idx *Indexer) moduleInfoFor(rel string) (dir, modulePath string) {
 	dir = FindModuleDir(idx.projectPath, rel)
 	mp := ""
 	if dir != "" {
-		mp = readModulePathAt(filepath.Join(idx.projectPath, dir, "go.mod"))
+		mp = readModulePathAt(idx.projectPath, moduleRel(dir))
 	}
 	if mp == "" {
 		dir, mp = ".", idx.modulePath

@@ -40,7 +40,7 @@ func extractArchive(name string, data []byte) (docs []Doc, err error) {
 
 	dec := newDecompiler() // nil unless SEMIDX_JAVA_DECOMPILER is configured
 	for _, f := range zr.File {
-		if !isLocalArchiveEntry(f.Name) {
+		if strings.Contains(f.Name, "..") || !isLocalArchiveEntry(f.Name) {
 			continue
 		}
 		if doc, ok := archiveEntryDoc(name, f, dec); ok {

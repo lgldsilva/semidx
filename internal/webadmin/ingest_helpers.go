@@ -94,7 +94,7 @@ func (a *Admin) ingestDeletePaths(ctx context.Context, projectID int, paths []st
 func ingestIndexOneFile(ctx context.Context, idx *indexing.Indexer, projectID int, model, rawPath, content string) (chunks int, ferr map[string]string, err error) {
 	p := cleanRelPath(rawPath)
 	if p == "" {
-		return 0, map[string]string{"path": rawPath, "error": "invalid path"}, nil
+		return 0, ingestInvalidPath(rawPath), nil
 	}
 	if !utf8.ValidString(content) {
 		return 0, map[string]string{"path": p, "error": "content is not valid UTF-8 (binary?)"}, nil
@@ -150,7 +150,7 @@ func ingestIndexZipEntries(ctx context.Context, log *slog.Logger, idx *indexing.
 		rel := cleanRelPath(zf.Name)
 		if rel == "" || !filepath.IsLocal(filepath.FromSlash(rel)) {
 			res.errs++
-			res.fileErrors = append(res.fileErrors, map[string]string{"path": zf.Name, "error": "invalid path"})
+			res.fileErrors = append(res.fileErrors, ingestInvalidPath(zf.Name))
 			continue
 		}
 		content, ferr := readZipEntry(zf)
@@ -177,7 +177,7 @@ func ingestIndexZipEntries(ctx context.Context, log *slog.Logger, idx *indexing.
 func readZipEntry(zf *zip.File) ([]byte, map[string]string) {
 	p := cleanRelPath(zf.Name)
 	if p == "" {
-		return nil, map[string]string{"path": zf.Name, "error": "invalid path"}
+		return nil, ingestInvalidPath(zf.Name)
 	}
 	if zf.UncompressedSize64 > adminIngestMaxFileBytes {
 		return nil, map[string]string{"path": p, "error": spaErrFileTooLargeIngest}
@@ -198,6 +198,10 @@ func readZipEntry(zf *zip.File) ([]byte, map[string]string) {
 		return nil, map[string]string{"path": p, "error": "content is not valid UTF-8 (binary?)"}
 	}
 	return content, nil
+}
+
+func ingestInvalidPath(raw string) map[string]string {
+	return map[string]string{"path": raw, "error": spaErrInvalidPath}
 }
 
 func openZipReader(data []byte) (*zip.Reader, int, string) {
