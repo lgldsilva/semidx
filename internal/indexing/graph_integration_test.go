@@ -130,17 +130,7 @@ import "github.com/semidx/test/internal/worker"
 func main() { worker.Run() }
 `)
 
-	pid, err := st.UpsertProject(ctx, "proj", src, "m", 0)
-	if err != nil {
-		t.Fatalf("UpsertProject: %v", err)
-	}
-
-	emb := &semanticEmbedder{}
-	idx := NewIndexer(st, emb, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
-
-	if _, err := idx.IndexProject(ctx, pid, src, "m", 0); err != nil {
-		t.Fatalf("IndexProject (first): %v", err)
-	}
+	pid, idx := indexGraphFixture(t, ctx, st, "proj", src)
 
 	graph, err := st.FetchGraphNeighbors(ctx, pid)
 	if err != nil {
@@ -440,17 +430,7 @@ func main() { lib.Run(); shared.Help() }
 	writeFile(t, src, "service-a/internal/lib/lib.go", "package lib\n\nfunc Run() {}\n")
 	writeFile(t, src, "pkg/shared/shared.go", "package shared\n\nfunc Help() {}\n")
 
-	pid, err := st.UpsertProject(ctx, "mono", src, "m", 0)
-	if err != nil {
-		t.Fatalf("UpsertProject: %v", err)
-	}
-
-	emb := &semanticEmbedder{}
-	idx := NewIndexer(st, emb, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
-
-	if _, err := idx.IndexProject(ctx, pid, src, "m", 0); err != nil {
-		t.Fatalf("IndexProject: %v", err)
-	}
+	pid, _ := indexGraphFixture(t, ctx, st, "mono", src)
 
 	graph, err := st.FetchGraphNeighbors(ctx, pid)
 	if err != nil {
@@ -483,4 +463,17 @@ func main() { lib.Run(); shared.Help() }
 			t.Errorf("%s unexpected dependencies: %v", file, gotSet)
 		}
 	}
+}
+
+func indexGraphFixture(t *testing.T, ctx context.Context, st *localstore.SQLiteStore, name, src string) (int, *Indexer) {
+	t.Helper()
+	pid, err := st.UpsertProject(ctx, name, src, "m", 0)
+	if err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+	idx := NewIndexer(st, &semanticEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
+	if _, err := idx.IndexProject(ctx, pid, src, "m", 0); err != nil {
+		t.Fatalf("IndexProject: %v", err)
+	}
+	return pid, idx
 }
