@@ -181,7 +181,6 @@ func (s *Server) runSpecialJob(ctx context.Context, job *store.Job, proj *store.
 }
 
 func (s *Server) runIndexJob(ctx context.Context, job *store.Job, proj *store.Project, dataDir string, fail func(string)) {
-
 	path, failMsg := s.resolveJobIndexPath(ctx, proj, dataDir)
 	if failMsg != "" {
 		fail(failMsg)
@@ -191,28 +190,10 @@ func (s *Server) runIndexJob(ctx context.Context, job *store.Job, proj *store.Pr
 		fail("project has no indexable source path (push projects upload via files/batch)")
 		return
 	}
-	if proj.SourceType == "git" && path != proj.Path {
-		if err := s.store.UpdateProjectPath(ctx, job.ProjectID, path); err != nil {
-			s.log.Warn("update project path", "project", proj.Name, "path", path, "err", err)
-		}
-	}
+	s.persistResolvedGitPath(ctx, job, proj, path)
 
-	modelCtx := ctx
-	privacyMode, modeErr := privacy.NormalizeMode(proj.PrivacyMode)
-	if modeErr != nil {
-		fail("invalid project privacy policy")
-		return
-	}
-	if privacyMode == privacy.Edge {
-		modelCtx = embed.WithForceLocal(ctx, true)
-	}
-	info, err := s.emb.ModelInfo(modelCtx, proj.Model)
-	if err != nil {
-		fail("model info: " + err.Error())
-		return
-	}
-	if err := s.store.EnsureChunksTable(ctx, info.Dims); err != nil {
-		fail("ensure chunks table: " + err.Error())
+	privacyMode, info, ok := s.prepareJobEmbedder(ctx, proj, fail)
+	if !ok {
 		return
 	}
 
@@ -223,12 +204,7 @@ func (s *Server) runIndexJob(ctx context.Context, job *store.Job, proj *store.Pr
 	})
 	opts.PrivacyMode = privacyMode
 	idx := indexing.NewIndexer(s.store, s.emb, info.Dims, opts)
-	if isForceJob(job.Payload) {
-		idx.SetForce(true)
-	}
-	if proj.SourceType == "git" && job.Type != "git_history" {
-		idx.SetWorktree(path)
-	}
+	applyIndexJobFlags(idx, job, proj, path)
 	stats, err := idx.IndexProject(ctx, job.ProjectID, path, proj.Model, s.indexLimits.MaxFilesPerProject)
 	if err != nil {
 		fail("index: " + err.Error())
@@ -242,6 +218,48 @@ func (s *Server) runIndexJob(ctx context.Context, job *store.Job, proj *store.Pr
 	s.jobsTotal.WithLabelValues(job.Type, "succeeded").Inc()
 	s.log.Info("index job done", "job", job.ID, "project", proj.Name,
 		"files", stats.FilesIndexed, "chunks", stats.ChunksCreated)
+}
+
+func (s *Server) persistResolvedGitPath(ctx context.Context, job *store.Job, proj *store.Project, path string) {
+	if proj.SourceType != "git" || path == proj.Path {
+		return
+	}
+	if err := s.store.UpdateProjectPath(ctx, job.ProjectID, path); err != nil {
+		s.log.Warn("update project path", "project", proj.Name, "path", path, "err", err)
+	}
+}
+
+func applyIndexJobFlags(idx *indexing.Indexer, job *store.Job, proj *store.Project, path string) {
+	if isForceJob(job.Payload) {
+		idx.SetForce(true)
+	}
+	if proj.SourceType == "git" && job.Type != "git_history" {
+		idx.SetWorktree(path)
+	}
+}
+
+// prepareJobEmbedder normalizes the project privacy policy, optionally forces
+// local embeddings for edge mode, and ensures the chunks table exists.
+func (s *Server) prepareJobEmbedder(ctx context.Context, proj *store.Project, fail func(string)) (privacy.Mode, *embed.ModelInfo, bool) {
+	privacyMode, modeErr := privacy.NormalizeMode(proj.PrivacyMode)
+	if modeErr != nil {
+		fail("invalid project privacy policy")
+		return "", nil, false
+	}
+	modelCtx := ctx
+	if privacyMode == privacy.Edge {
+		modelCtx = embed.WithForceLocal(ctx, true)
+	}
+	info, err := s.emb.ModelInfo(modelCtx, proj.Model)
+	if err != nil {
+		fail("model info: " + err.Error())
+		return "", nil, false
+	}
+	if err := s.store.EnsureChunksTable(ctx, info.Dims); err != nil {
+		fail("ensure chunks table: " + err.Error())
+		return "", nil, false
+	}
+	return privacyMode, info, true
 }
 
 // runDependencyResolveJob executes native package-manager tooling in a
@@ -331,22 +349,8 @@ func (s *Server) runBatchJob(ctx context.Context, job *store.Job, proj *store.Pr
 		return
 	}
 
-	modelCtx := ctx
-	privacyMode, modeErr := privacy.NormalizeMode(proj.PrivacyMode)
-	if modeErr != nil {
-		fail("invalid project privacy policy")
-		return
-	}
-	if privacyMode == privacy.Edge {
-		modelCtx = embed.WithForceLocal(ctx, true)
-	}
-	info, err := s.emb.ModelInfo(modelCtx, proj.Model)
-	if err != nil {
-		fail("model info: " + err.Error())
-		return
-	}
-	if err := s.store.EnsureChunksTable(ctx, info.Dims); err != nil {
-		fail("ensure chunks table: " + err.Error())
+	_, info, ok := s.prepareJobEmbedder(ctx, proj, fail)
+	if !ok {
 		return
 	}
 
