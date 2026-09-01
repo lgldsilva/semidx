@@ -843,65 +843,76 @@ func shellRefDir(srcDir, raw string) string {
 func analyzeShell(path string, content []byte) []string {
 	seen := make(map[string]bool)
 	srcDir := filepath.Dir(path)
+	collectShellSources(srcDir, content, seen)
+	collectShellInterpreterExecs(srcDir, content, seen)
+	collectShellDirectExecs(srcDir, content, seen)
+	collectShellDashCEmbedded(srcDir, content, seen)
+	return sortedSeenDirs(seen)
+}
 
-	collect := func(raw string) {
-		if dir := shellRefDir(srcDir, raw); dir != "" {
-			seen[dir] = true
-		}
+func collectShellRef(srcDir, raw string, seen map[string]bool) {
+	if dir := shellRefDir(srcDir, raw); dir != "" {
+		seen[dir] = true
 	}
+}
 
-	collectPair := func(m [][]byte) {
-		if len(m) < 3 {
-			return
-		}
-		if p := string(m[1]); p != "" {
-			collect(p)
-		} else if p := string(m[2]); p != "" {
-			collect(p)
-		}
+func collectShellPair(srcDir string, m [][]byte, seen map[string]bool) {
+	if len(m) < 3 {
+		return
 	}
+	if p := string(m[1]); p != "" {
+		collectShellRef(srcDir, p, seen)
+		return
+	}
+	if p := string(m[2]); p != "" {
+		collectShellRef(srcDir, p, seen)
+	}
+}
 
-	// source / .
+func collectShellSources(srcDir string, content []byte, seen map[string]bool) {
 	for _, m := range shellSourceRe.FindAllSubmatch(content, -1) {
-		collectPair(m)
+		collectShellPair(srcDir, m, seen)
 	}
+}
 
-	// bash/sh/zsh ... script
+func collectShellInterpreterExecs(srcDir string, content []byte, seen map[string]bool) {
 	for _, m := range shellExecRe.FindAllSubmatch(content, -1) {
-		// Ignore bash -c '...' here; it is handled by shellExecDashCRe.
-		if strings.Contains(string(m[0]), " -c ") || strings.Contains(string(m[0]), "\t-c ") {
+		// Ignore bash -c '...' here; it is handled by collectShellDashCEmbedded.
+		if isShellDashCMatch(m[0]) {
 			continue
 		}
-		collectPair(m)
+		collectShellPair(srcDir, m, seen)
 	}
+}
 
-	// ./script.sh
+func isShellDashCMatch(match []byte) bool {
+	s := string(match)
+	return strings.Contains(s, " -c ") || strings.Contains(s, "\t-c ")
+}
+
+func collectShellDirectExecs(srcDir string, content []byte, seen map[string]bool) {
 	for _, m := range shellDirectExecRe.FindAllSubmatch(content, -1) {
 		if len(m) < 2 {
 			continue
 		}
-		collect(string(m[1]))
+		collectShellRef(srcDir, string(m[1]), seen)
 	}
+}
 
-	// bash -c '...' — best-effort: re-scan the embedded command for direct
-	// executions and source calls. We deliberately do not recursively invoke
-	// the full analyzer to avoid complexity; this covers the common case.
+// collectShellDashCEmbedded best-effort re-scans the command string of
+// `bash -c '...'` (and siblings) for source/. and ./script.sh references.
+// It does not recursively invoke the full analyzer.
+func collectShellDashCEmbedded(srcDir string, content []byte, seen map[string]bool) {
 	for _, m := range shellExecDashCRe.FindAllSubmatch(content, -1) {
 		if len(m) < 2 {
 			continue
 		}
-		embedded := m[1]
-		for _, sm := range shellSourceRe.FindAllSubmatch(embedded, -1) {
-			collectPair(sm)
-		}
-		for _, sm := range shellDirectExecRe.FindAllSubmatch(embedded, -1) {
-			if len(sm) < 2 {
-				continue
-			}
-			collect(string(sm[1]))
-		}
+		collectShellSources(srcDir, m[1], seen)
+		collectShellDirectExecs(srcDir, m[1], seen)
 	}
+}
 
+func sortedSeenDirs(seen map[string]bool) []string {
 	if len(seen) == 0 {
 		return nil
 	}
