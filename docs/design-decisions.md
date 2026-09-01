@@ -222,6 +222,54 @@ This document records the main architectural decisions made during the evolution
 
 ---
 
+## 11. Cross-language code-intel: Go, Java, TypeScript/JavaScript and shell
+
+- **Decision**: Extend tree-sitter symbol extraction and import graph building
+  to cover the languages the team uses most (Go, Java, TypeScript/JavaScript,
+  shell), while documenting hard limits rather than pretending dynamic features
+  are fully analyzable. Java and TypeScript symbol extraction already existed;
+  this decision adds shell, the TS/JS import edges and nested-module resolution
+  for Go.
+- **Why**:
+  - Agents were asking "who calls this" across polyglot repos and getting
+    incomplete or misleading answers because Java/TS/shell were under-represented
+    in the symbol/dependency graph.
+  - Existing Go import extraction missed TS/JS module imports without an explicit
+    extension (`import Button from './ui/Button'`), and shell functions were not
+    extracted at all.
+- **How**:
+  - `internal/analyzer` registers Java (tree-sitter `java`), TypeScript
+    (`typescript`/`tsx`) and shell (`bash` grammar applied to `.sh`/`.bash`/etc)
+    symbol extractors alongside Go.
+  - `internal/imports` parses TS/JS `import`/`require` and records them as file
+    dependencies, with a basename heuristic so `import './ui/Button'` can match
+    both `ui/Button.tsx` and `ui/Button/index.tsx`.
+  - `internal/codeintel/callers.go` generates synthetic dependency directories
+    for TS/JS so that callers of `src/ui/Button` resolve whether the import
+    points to the file or to its containing directory.
+  - Shell functions are extracted as symbols; static `source`/`.` inclusions
+    and direct script executions are traced as dependencies.
+- **Trade-offs**:
+  - Dynamic imports (`import(path)`, `React.lazy(() => import(...))`) and any
+    path assembled at runtime cannot be reliably resolved. We use a
+    best-effort basename heuristic and flag the limitation in skills/docs.
+  - Java inner classes and reflection are visible at the symbol level but not
+    fully resolved for callers.
+  - Shell dependency analysis is regex-based and best-effort: `source`/`.`
+    and interpreter invocations are matched at a line start (indentation
+    included, so blocks and functions are covered) or after a statement
+    separator, which keeps comments and `echo` arguments out, but paths built
+    from variables, `eval`, or here-docs cannot be resolved. Resolved paths are
+    project-relative like every other extractor, and references climbing above
+    the project root are dropped.
+  - Go monorepos with nested `go.mod` files are resolved against the nearest
+    module, and imports are re-anchored to the project root. Each nested-module
+    Go file is analysed twice (nested module + root module) so cross-module
+    imports keep their edges; the extra parse is limited to files under a
+    nested module.
+
+---
+
 ## 🚫 What we will NOT do (for now)
 
 - **`models` table in the database**: `InferDims` (name→dimension map) is already the single source in `internal/embed`; moving it to a database table would couple `embed`→`store` for marginal benefit. Re-evaluate if/when per-model config (provider/local) without recompilation is needed.

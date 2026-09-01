@@ -46,6 +46,11 @@ var extractors = map[string]extractor{
 	".tsx":   {grammars.TsxLanguage, tsxQuery},
 	".py":    {grammars.PythonLanguage, pyQuery},
 	".tf":    {grammars.HclLanguage, hclQuery},
+	".sh":    {grammars.BashLanguage, bashQuery},
+	".bash":  {grammars.BashLanguage, bashQuery},
+	".zsh":   {grammars.BashLanguage, bashQuery},
+	".ksh":   {grammars.BashLanguage, bashQuery},
+	".dash":  {grammars.BashLanguage, bashQuery},
 }
 
 const goQuery = `
@@ -91,6 +96,10 @@ const tsxQuery = `
 (class_declaration name: [(identifier) (type_identifier)] @name) @decl
 (interface_declaration name: (type_identifier) @name) @decl
 (enum_declaration name: (identifier) @name) @decl
+`
+
+const bashQuery = `
+(function_definition name: (word) @name) @decl
 `
 
 // compiledExtractor holds a pre-compiled query and its language.

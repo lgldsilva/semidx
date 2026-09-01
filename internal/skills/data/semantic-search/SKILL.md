@@ -125,6 +125,41 @@ adjust rather than retrying blindly.
   re-index (`semidx repo add`/reindex, or the `semantic_reindex` MCP tool) and
   search again.
 
+## Combined workflow: from concept to structure
+
+Semantic search finds *where* a concept lives; the structural tools explain
+*how it is wired*. Use them as a sequence:
+
+1. **Locate the concept** with `semantic_search`:
+   ```
+   semantic_search project=myapp query="how is retry handled"
+   ```
+   → yields `internal/retry/retry.go:45` (function `WithBackoff`).
+
+2. **Understand the symbol** with `semantic_explain`:
+   ```
+   semantic_explain file=internal/retry/retry.go line=45 project=myapp
+   ```
+   → kind, direct dependencies, importers, related tests.
+
+3. **See who calls it** with `semantic_callers`:
+   ```
+   semantic_callers file=internal/retry/retry.go line=45 project=myapp
+   ```
+   → files that import the package (direct callers).
+
+4. **Trace the dependency path** between two files with `semantic_path`:
+   ```
+   semantic_path project=myapp from=cmd/myapp/main.go to=internal/retry/retry.go
+   ```
+   → shortest import walk (main.go → internal/retry/ → retry.go).
+
+5. **Before refactoring**, run `semantic_impact` to get the transitive blast
+   radius (see the `impact-before-refactor` skill).
+
+Use this chain whenever a search result lands you on a symbol you need to
+change, delete, or explain to someone else.
+
 ## Anti-patterns
 
 - Don't use semantic search for exact-string work (a symbol rename, counting

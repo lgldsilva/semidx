@@ -370,6 +370,10 @@ func (f *fakeStore) EnqueueJob(context.Context, int, string) (int, error) {
 	f.nextJob++
 	return f.nextJob, nil
 }
+func (f *fakeStore) EnqueueJobWithPayload(_ context.Context, _ int, _ string, _ string) (int, error) {
+	f.nextJob++
+	return f.nextJob, nil
+}
 
 func (f *fakeStore) GetJob(_ context.Context, id int) (*store.Job, error) {
 	for i := range f.jobs {
@@ -404,6 +408,14 @@ func (f *fakeStore) UpdateProjectStatus(_ context.Context, id int, status string
 	for i := range f.projects {
 		if f.projects[i].ID == id {
 			f.projects[i].Status = status
+		}
+	}
+	return nil
+}
+func (f *fakeStore) UpdateProjectPath(_ context.Context, id int, path string) error {
+	for i := range f.projects {
+		if f.projects[i].ID == id {
+			f.projects[i].Path = path
 		}
 	}
 	return nil

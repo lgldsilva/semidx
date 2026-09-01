@@ -170,6 +170,16 @@ func TestAnalyze_TypeScript(t *testing.T) {
 		assertSlice(t, got, want)
 	})
 
+	t.Run("lazy dynamic import", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`const LibraryPage = lazy(() => import('./pages/LibraryPage'));`)
+		got := Analyze("src/app/App.tsx", src, "")
+		// The import path is treated as a module reference; callers resolves it
+		// against the file's parent directory plus basename candidates.
+		want := []string{"src/app/pages/LibraryPage/"}
+		assertSlice(t, got, want)
+	})
+
 	t.Run("@ alias", func(t *testing.T) {
 		t.Parallel()
 		src := []byte(`import {x} from '@/components/Foo';`)
@@ -482,6 +492,146 @@ using MyApp.Data;
 		// The using statement `using (var conn ...)` should not match.
 		got := Analyze("Test.cs", src, "")
 		want := []string{"MyApp/Data/"}
+		assertSlice(t, got, want)
+	})
+}
+
+func TestAnalyze_Shell(t *testing.T) {
+	t.Parallel()
+
+	t.Run("source relative", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`#!/bin/bash
+source ./lib/utils.sh
+. ./lib/config.sh
+`)
+		got := Analyze("main.sh", src, "")
+		want := []string{"lib/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("paths are project relative", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`source ./lib/utils.sh
+source helpers/env.sh
+`)
+		got := Analyze("deploy/scripts/run.sh", src, "")
+		want := []string{"deploy/scripts/helpers/", "deploy/scripts/lib/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("indented source", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`#!/bin/bash
+if [ -f ./lib/utils.sh ]; then
+    source ./lib/utils.sh
+fi
+
+main() {
+	. ./lib/config.sh
+}
+`)
+		got := Analyze("deploy/scripts/run.sh", src, "")
+		want := []string{"deploy/scripts/lib/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("interpreter invocation", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`#!/bin/bash
+bash ./lib/runner.sh
+sh -x ./lib/setup.sh
+`)
+		got := Analyze("main.sh", src, "")
+		want := []string{"lib/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("direct execution", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`#!/bin/bash
+./scripts/deploy.sh
+./scripts/build.sh
+`)
+		got := Analyze("main.sh", src, "")
+		want := []string{"scripts/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("nested relative", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`source ../common/logging.sh
+bash ../common/helpers.sh
+`)
+		got := Analyze("deploy/scripts/run.sh", src, "")
+		want := []string{"deploy/common/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("escaping the project root is ignored", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`source ../../outside/env.sh
+`)
+		got := Analyze("deploy/run.sh", src, "")
+		if got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("absolute and variables ignored", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`source /etc/profile
+source $LIB_DIR/helper.sh
+source ""
+`)
+		got := Analyze("main.sh", src, "")
+		if got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("bash -c embedded", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`#!/bin/bash
+bash -c 'source ./lib/remote.sh && ./lib/push.sh'
+`)
+		got := Analyze("main.sh", src, "")
+		want := []string{"lib/"}
+		assertSlice(t, got, want)
+	})
+
+	t.Run("bash -c command string ignored", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`#!/bin/bash
+bash -c 'echo hi'
+`)
+		got := Analyze("main.sh", src, "")
+		if got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("source inside echo and comments ignored", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`#!/bin/bash
+# source ./lib/ignored.sh
+    # source ./lib/also_ignored.sh
+echo source ./lib/echoed.sh
+`)
+		got := Analyze("main.sh", src, "")
+		if got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("deduplication", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`source ./lib/a.sh
+source ./lib/b.sh
+bash ./lib/a.sh
+`)
+		got := Analyze("main.sh", src, "")
+		want := []string{"lib/"}
 		assertSlice(t, got, want)
 	})
 }

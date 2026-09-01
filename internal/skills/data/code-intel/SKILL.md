@@ -25,7 +25,7 @@ defaults to the project enclosing your current directory.
 |---|---|---|---|
 | **callers** | Who imports/depends on the package containing this symbol? | `file`, `line`, `project?` | `semidx callers <file:line>` |
 | **explain** | What is this symbol? Its kind, deps, importers, related tests. | `file`, `line`, `project?` | `semidx explain <file:line>` |
-| **impact** | What's the blast radius if I change this? Transitive reverse deps. | `file`, `line`, `project?`, `depth?` (default 5, max 10) | `semidx explain`/graph |
+| **impact** | What's the blast radius if I change this? Transitive reverse deps. | `file`, `line`, `project?`, `depth?` (default 5, max 10) | **MCP only** (`semantic_impact`) — no standalone CLI yet |
 | **deadcode** | Which symbols are unused (no importers)? | `project?` | `semidx dead-code` |
 | **diff** | What code *symbols* (not lines) changed between two git refs? | `ref_range` (`ref1..ref2` or `ref1...ref2`) | `semidx diff main..feat/x` |
 
@@ -93,6 +93,51 @@ introduced since divergence).
 - These tools need an **indexed** project (`semantic_status` / `semidx status`).
   If the index is stale, callers/impact can miss recently-added files — re-index
   after big changes (`semantic_reindex` or `semidx index`).
+
+## Combined workflow: from semantic search to safe edits
+
+These tools rarely stand alone. A typical agent flow:
+
+1. **Find the symbol** with `semantic_search` when you only know the behavior:
+   ```
+   semantic_search project=myapp query="where is the token parsed"
+   → internal/auth/token.go:42 (function parseToken)
+   ```
+
+2. **Understand it** with `semantic_explain`:
+   ```
+   semantic_explain file=internal/auth/token.go line=42 project=myapp
+   ```
+
+3. **Check blast radius** before editing:
+   - MCP: `semantic_impact file=internal/auth/token.go line=42 depth=5`
+   - CLI fallback: `semidx callers internal/auth/token.go:42`
+
+4. **Trace structure** across packages with `semantic_path` if the impact set
+   spans layers you don't recognize.
+
+5. **Verify the edit** with `semantic_diff ref_range=main..HEAD`.
+
+This chain prevents the most common agent regression: editing a symbol without
+knowing its callers.
+
+## Known limitations
+
+- **Standalone/local mode only.** Code-intel reads the indexed dependency graph
+  from the local store; against a remote server it returns a "standalone/local
+  mode only" message. Index locally (`semidx index --project .`) and re-run.
+- **Dynamic imports are best-effort.** Static `import`/`require` are always
+  captured. Dynamic imports such as `import('./pages/LibraryPage')` or
+  `React.lazy(() => import('./ui/Button'))` are heuristically resolved only when
+  the import path maps cleanly to a directory or file in the index. String
+  concatenation, variables, or runtime path assembly are invisible.
+- **Shell symbol extraction is present but shallow.** The indexer extracts
+  function definitions from `.sh`/`.bash`/`.zsh`/`.ksh`/`.dash` files and traces
+  static `source`/`.` inclusions and direct script executions as dependencies.
+  It does **not** resolve variable paths, paths inside `bash -c '...'` command
+  strings, or comments.
+- **Callers list files, not exact call expressions.** Use grep inside the
+  returned files to confirm the precise call site.
 
 ## Anti-patterns
 

@@ -72,6 +72,12 @@ func (e *errStore) EnqueueJob(ctx context.Context, projectID int, typ string) (i
 	}
 	return e.fakeStore.EnqueueJob(ctx, projectID, typ)
 }
+func (e *errStore) EnqueueJobWithPayload(ctx context.Context, projectID int, typ, payload string) (int, error) {
+	if e.enqueueErr != nil {
+		return 0, e.enqueueErr
+	}
+	return e.fakeStore.EnqueueJobWithPayload(ctx, projectID, typ, payload)
+}
 func (e *errStore) DeleteProject(ctx context.Context, name string) error {
 	if e.deleteProjErr != nil {
 		return e.deleteProjErr
