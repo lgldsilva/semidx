@@ -7,6 +7,7 @@ package gitmeta
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 
 	"github.com/lgldsilva/semidx/internal/gitexec"
@@ -37,12 +38,44 @@ func Resolve(ctx context.Context, dir string) Info {
 		return info
 	}
 	// No remote (a local-only repo): all worktrees share the common git dir.
-	if common, err := gitexec.Run(ctx, dir, "rev-parse", "--git-common-dir"); err == nil && common != "" {
-		info.Identity = "local:" + common
-	} else {
-		info.Identity = "local:" + top
-	}
+	info.Identity = "local:" + localIdentity(ctx, dir, top)
 	return info
+}
+
+// localIdentity returns the absolute common git dir of a remote-less repo, which
+// every worktree of that clone shares. `git rev-parse --git-common-dir` answers
+// relative to the current directory (".git" at the repo root, "../.git" one level
+// down), so the raw value both collides across unrelated local repos and changes
+// with the directory it is asked from; --path-format=absolute (git >= 2.31) fixes
+// both. Older git falls back to resolving the relative answer against dir, and a
+// repo whose common dir cannot be resolved at all falls back to the worktree root.
+func localIdentity(ctx context.Context, dir, top string) string {
+	if common, err := gitexec.Run(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil && filepath.IsAbs(common) {
+		return filepath.Clean(common)
+	}
+	common, err := gitexec.Run(ctx, dir, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return top
+	}
+	return resolveCommonDir(dir, top, common)
+}
+
+// resolveCommonDir turns a --git-common-dir answer into an absolute path. The
+// answer is relative to dir (".git" at a repo root, "../.git" one level down),
+// so it must be joined with dir before it identifies anything; top is the
+// fallback for an empty or unresolvable answer.
+func resolveCommonDir(dir, top, common string) string {
+	if common == "" {
+		return top
+	}
+	if filepath.IsAbs(common) {
+		return filepath.Clean(common)
+	}
+	abs, err := filepath.Abs(filepath.Join(dir, common))
+	if err != nil {
+		return top
+	}
+	return filepath.Clean(abs)
 }
 
 // NormalizeRemote reduces a git remote URL to a canonical "host/path" key so the
