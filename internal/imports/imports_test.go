@@ -624,6 +624,27 @@ echo source ./lib/echoed.sh
 		}
 	})
 
+	t.Run("urls and command strings ignored", func(t *testing.T) {
+		t.Parallel()
+		src := []byte(`#!/bin/bash
+source https://example.com/remote.sh
+bash "$(dirname "$0")/x.sh"
+`)
+		got := Analyze("deploy/run.sh", src, "")
+		if got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("bare dot is not a dependency", func(t *testing.T) {
+		t.Parallel()
+		src := []byte("cd . ;\n. .\n")
+		got := Analyze("deploy/run.sh", src, "")
+		if got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
 	t.Run("deduplication", func(t *testing.T) {
 		t.Parallel()
 		src := []byte(`source ./lib/a.sh
