@@ -297,6 +297,7 @@ func registerCommandGroups(root *cobra.Command, d *deps) {
 		newDoctorCmd(d),
 	)
 	addGroup("advanced",
+		newDockerCmd(),
 		newServeCmd(d),
 		newMCPCmd(d),
 		newRepoCmd(d),
