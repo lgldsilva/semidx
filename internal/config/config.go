@@ -156,6 +156,13 @@ type Config struct {
 	// SQLite file instead of PostgreSQL (SEMIDX_LOCAL_INDEX: a path, or a truthy
 	// value to use the default location). Empty means server/Postgres mode.
 	LocalIndexPath string
+
+	// LocalIndexRequested is the path SEMIDX_LOCAL_INDEX asks for, kept even when
+	// a configured SEMIDX_DB_DSN wins the automatic backend choice. When the user
+	// forces SQLite (--local or --backend=local), this is the file they asked
+	// for; without it an explicit index path would be silently replaced by the
+	// default one and a run could write to the wrong index.
+	LocalIndexRequested string
 	// KeywordOnly indexes and searches without any embedding model — text is
 	// stored and matched by keyword (SEMIDX_EMBED_MODE=none). The zero-dependency
 	// baseline for a machine with no GPU, API key or Ollama.
@@ -471,7 +478,8 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 			}
 			return resolveLocalIndex(env.get("SEMIDX_LOCAL_INDEX", ""))
 		}(),
-		KeywordOnly: env.get("SEMIDX_EMBED_MODE", "") == "none",
+		LocalIndexRequested: resolveLocalIndex(env.get("SEMIDX_LOCAL_INDEX", "")),
+		KeywordOnly:         env.get("SEMIDX_EMBED_MODE", "") == "none",
 
 		EmbedCircuitThreshold: func() int {
 			return atoiDefault(env.get("SEMIDX_EMBED_CIRCUIT_THRESHOLD", ""), 3)

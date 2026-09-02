@@ -15,9 +15,6 @@ import (
 func (d *deps) setup(cmd *cobra.Command, forceLocal, keywordOnly bool, backendFlag string) error {
 	d.cfg = config.Load()
 	d.localIndexPath = d.cfg.LocalIndexPath
-	if forceLocal && d.localIndexPath == "" {
-		d.localIndexPath = config.DefaultLocalIndexPath()
-	}
 	d.keywordOnly = d.cfg.KeywordOnly || keywordOnly
 
 	cc, err := clientconfig.Load()
@@ -31,9 +28,25 @@ func (d *deps) setup(cmd *cobra.Command, forceLocal, keywordOnly bool, backendFl
 		return err
 	}
 	d.useRemote = useRemote
+
 	// --backend local (without --local) still means "do not use the server".
 	// Prefer an existing SEMIDX_LOCAL_INDEX; otherwise fall through to Postgres
 	// (or zero-config SQLite) like a machine that never logged in.
+	mode, err := resolveBackendMode(backendFlag)
+	if err != nil {
+		return err
+	}
+	if forceLocal || mode == backendLocal {
+		// A configured Postgres DSN blanks Config.LocalIndexPath, but forcing
+		// SQLite must still honour the file the user pointed at rather than
+		// silently writing to the default index.
+		if d.localIndexPath == "" {
+			d.localIndexPath = d.cfg.LocalIndexRequested
+		}
+		if forceLocal && d.localIndexPath == "" {
+			d.localIndexPath = config.DefaultLocalIndexPath()
+		}
+	}
 
 	d.applyZeroConfigDefaults(cmd, forceLocal, keywordOnly)
 	d.emb = embed.NewChainFromConfig(embedChainConfig(d.cfg))
