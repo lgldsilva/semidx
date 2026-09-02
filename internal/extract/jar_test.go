@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -109,6 +110,33 @@ func TestIsLocalArchiveEntry(t *testing.T) {
 	}
 	if !isLocalArchiveEntry("com/example/Greeter.class") {
 		t.Fatal("expected a package-relative class path to be accepted")
+	}
+}
+
+// TestExtractArchiveCapsEntries: a zip-bomb-style JAR with more entries than
+// maxJarEntries must be truncated to the cap, not expanded without bound.
+func TestExtractArchiveCapsEntries(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for i := 0; i < maxJarEntries+50; i++ {
+		w, err := zw.Create(fmt.Sprintf("res%d.txt", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte("resource text")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	docs, err := ExtractAll("bomb.jar", buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != maxJarEntries {
+		t.Errorf("docs = %d, want capped at %d", len(docs), maxJarEntries)
 	}
 }
 

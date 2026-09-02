@@ -2,12 +2,14 @@ package search
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
@@ -71,7 +73,9 @@ func listFileHashInfos(ctx context.Context, db store.IndexStore, projectID int) 
 }
 
 // hashProjectFile returns the content hash of root/rel, or "" when the file
-// cannot be read or rel escapes the project root.
+// cannot be read or rel escapes the project root. The file is hashed as a
+// stream, so memory stays flat regardless of the file size (a hit on a
+// multi-GB file must not load it into RAM).
 func hashProjectFile(root, rel string) string {
 	if root == "" || rel == "" {
 		return ""
@@ -84,9 +88,16 @@ func hashProjectFile(root, rel string) string {
 		slog.Debug("staleness: path escapes project root", "root", cleanRoot, "path", rel)
 		return ""
 	}
-	data, err := os.ReadFile(full) // #nosec G304 -- path confined to project root above
+	f, err := os.Open(full) // #nosec G304 -- path confined to project root above
 	if err != nil {
 		return ""
 	}
-	return indexing.ContentHash(data)
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	// codeql[go/weak-sensitive-data-hashing] : content-addressed digest, same
+	// as indexing.ContentHash, not a security control.
+	return hex.EncodeToString(h.Sum(nil))
 }

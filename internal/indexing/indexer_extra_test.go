@@ -1,6 +1,7 @@
 package indexing
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -35,6 +36,23 @@ func runGit(t *testing.T, dir string, args ...string) {
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// writeAndCommit stages a single file and commits it, optionally with extra
+// env (e.g. backdated GIT_AUTHOR_DATE for history-window tests). Shared by the
+// git-history tests so their setup stays identical.
+func writeAndCommit(t *testing.T, dir, name, content, msg string, extraEnv ...string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", ".")
+	cmd := exec.Command("git", "-C", dir, "commit", "-q", "-m", msg)
+	cmd.Env = append(append(gitenv.Clean(os.Environ()),
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null"), extraEnv...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
 	}
 }
 
@@ -423,11 +441,7 @@ func TestIndexGitHistoryContinuesOnInsertError(t *testing.T) {
 	runGit(t, dir, "config", "user.name", "tester")
 	// A file whose diff exceeds maxChunkChars, to exercise commit truncation.
 	big := strings.Repeat("line of source code\n", 500)
-	if err := os.WriteFile(filepath.Join(dir, "big.go"), []byte("package main\n"+big), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-q", "-m", "big commit")
+	writeAndCommit(t, dir, "big.go", "package main\n"+big, "big commit")
 
 	es := &errStore{insertErr: errors.New("insert boom")}
 	idx := NewIndexer(es, &fakeEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, Verbose: true, GitMode: true})
@@ -457,6 +471,94 @@ func TestIndexGitHistoryContinuesOnEmbedSingleError(t *testing.T) {
 	// EmbedSingle failed for every commit, so no commit content is stored.
 	if strings.Contains(strings.Join(fs.embedded, "\n"), "commit ") {
 		t.Error("commits should be skipped when EmbedSingle fails")
+	}
+}
+
+// TestForEachCommitMatchesSplitSemantics pins the streaming commit splitter to
+// the exact block bytes the old buffer-everything runGitLog produced
+// (bytes.Split on "\ncommit " with "commit " re-attached for later blocks), so
+// stored content hashes are unchanged by the streaming refactor.
+func TestForEachCommitMatchesSplitSemantics(t *testing.T) {
+	out := "commit aaa\nAuthor: A\n\ndiff one\n\ncommit bbb\nAuthor: B\n\ndiff two\n"
+	oldBlocks := bytes.Split([]byte(out), []byte("\ncommit "))
+	var want [][]byte
+	for i, b := range oldBlocks {
+		if len(b) == 0 {
+			continue
+		}
+		if i > 0 {
+			b = append([]byte("commit "), b...)
+		}
+		want = append(want, b)
+	}
+
+	var got [][]byte
+	if err := forEachCommit(strings.NewReader(out), func(c []byte) {
+		got = append(got, append([]byte(nil), c...))
+	}); err != nil {
+		t.Fatalf("forEachCommit: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("blocks = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(got[i], want[i]) {
+			t.Errorf("block %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestForEachCommitCapsOversizedBlock: a commit block beyond maxCommitBlock is
+// truncated to the cap and the next commit is still parsed — the memory bound
+// holds on pathological diffs without stalling the stream.
+func TestForEachCommitCapsOversizedBlock(t *testing.T) {
+	huge := strings.Repeat("x", maxCommitBlock+4096)
+	out := "commit aaa\n" + huge + "\ncommit bbb\nsmall\n"
+	var got [][]byte
+	if err := forEachCommit(strings.NewReader(out), func(c []byte) {
+		got = append(got, append([]byte(nil), c...))
+	}); err != nil {
+		t.Fatalf("forEachCommit: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("blocks = %d, want 2", len(got))
+	}
+	if len(got[0]) > maxCommitBlock {
+		t.Errorf("block 0 len = %d, want <= cap %d", len(got[0]), maxCommitBlock)
+	}
+	if !strings.HasPrefix(string(got[1]), "commit bbb") {
+		t.Errorf("block 1 = %.40q, want commit bbb...", got[1])
+	}
+}
+
+// TestIndexGitHistoryEmptySinceFallsBackToDefault: an empty GitSince must NOT
+// fail open to full history (the behaviour that, with the buffered git log,
+// OOM-killed large indexing runs). Repo has an ancient (2020) and a recent
+// commit: the ancient one must be skipped, the recent one indexed.
+func TestIndexGitHistoryEmptySinceFallsBackToDefault(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	runGit(t, dir, "config", "user.email", "t@example.com")
+	runGit(t, dir, "config", "user.name", "tester")
+
+	backdate := []string{"GIT_AUTHOR_DATE=2020-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2020-01-01T00:00:00Z"}
+	writeAndCommit(t, dir, "old.go", "package main\n", "ancient commit", backdate...)
+	writeAndCommit(t, dir, "new.go", "package main\nfunc New() {}\n", "recent commit")
+
+	fs := &fakeStore{}
+	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, GitMode: true, GitSince: ""})
+	if _, err := idx.IndexProject(context.Background(), 1, dir, "bge-m3", 0); err != nil {
+		t.Fatalf("IndexProject: %v", err)
+	}
+	joined := strings.Join(fs.embedded, "\n")
+	if strings.Contains(joined, "ancient") {
+		t.Error("ancient (2020) commit indexed despite empty GitSince; empty must fall back to the default window")
+	}
+	if !strings.Contains(joined, "recent") {
+		t.Error("recent commit NOT indexed; default --since window should include it")
 	}
 }
 

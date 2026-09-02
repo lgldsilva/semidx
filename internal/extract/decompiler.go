@@ -2,11 +2,16 @@ package extract
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 )
+
+// maxDecompiledSource caps the pseudo-source captured from the external
+// decompiler per class (matches the per-entry archive cap).
+const maxDecompiledSource = 1 << 20 // 1 MiB
 
 // decompiler runs an external Java decompiler over a .class file to produce
 // pseudo-source for richer semantic search. It is entirely optional: when
@@ -29,8 +34,9 @@ func newDecompiler() *decompiler {
 }
 
 // decompile writes the class bytes to a temp file, runs the configured tool and
-// returns its stdout. Any failure (missing tool, timeout, non-zero exit) degrades
-// gracefully to ("", false) so indexing continues with the constant-pool surface.
+// returns its stdout, capped at maxDecompiledSource bytes. Any failure (missing
+// tool, timeout, non-zero exit) degrades gracefully to ("", false) so indexing
+// continues with the constant-pool surface.
 func (d *decompiler) decompile(class []byte) (string, bool) {
 	f, err := os.CreateTemp("", "semidx-*.class")
 	if err != nil {
@@ -60,8 +66,22 @@ func (d *decompiler) decompile(class []byte) (string, bool) {
 	cmd := exec.CommandContext(ctx, "sh")
 	cmd.Path = exePath
 	cmd.Args = append([]string{d.argv[0]}, append(d.argv[1:], f.Name())...)
-	out, err := cmd.Output()
-	if err != nil || len(out) == 0 {
+	// Bound the captured source: a runaway or garbage-output decompiler must
+	// not inflate memory, and a single class never legitimately decompiles to
+	// more than the cap.
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", false
+	}
+	if err := cmd.Start(); err != nil {
+		return "", false
+	}
+	out, readErr := io.ReadAll(io.LimitReader(stdout, maxDecompiledSource))
+	// Drain whatever is past the cap: a decompiler blocked on a full pipe
+	// would otherwise stall until the context timeout.
+	_, _ = io.Copy(io.Discard, stdout)
+	waitErr := cmd.Wait()
+	if readErr != nil || waitErr != nil || len(out) == 0 {
 		return "", false
 	}
 	return string(out), true
