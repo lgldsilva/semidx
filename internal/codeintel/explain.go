@@ -34,9 +34,7 @@ func Explain(ctx context.Context, db store.IndexStore, proj *store.Project, fl F
 	}
 	root := proj.Path
 
-	modulePath := detectModulePathForFile(root, fl.File)
-	fileImports := imports.AnalyzeProject(root, fl.File, content, modulePath)
-	fileImports = reanchorGoImports(fileImports, root, fl.File)
+	fileImports := fileDependencies(root, fl.File, content)
 	sort.Strings(fileImports)
 
 	graph, err := db.FetchGraphNeighbors(ctx, proj.ID)
@@ -69,40 +67,60 @@ func findImportersInGraph(graph map[string][]string, file string) []string {
 	return findDirectCallersForDirs(graph, DependencyDirsForFile(file))
 }
 
-// reanchorGoImports prefixes import paths with the directory containing the
-// nearest go.mod when the file lives in a nested module. This makes explain's
-// "Dependencies" output match the real project-relative file paths.
-func reanchorGoImports(imports []string, root, file string) []string {
-	if len(imports) == 0 {
-		return imports
-	}
-	moduleDir := filepath.Dir(file)
-	for {
-		gm := filepath.Clean(filepath.Join(root, moduleDir, "go.mod"))
-		if _, err := os.Stat(gm); err == nil {
-			break
-		}
-		if moduleDir == "." || moduleDir == string(filepath.Separator) {
-			return imports
-		}
-		parent := filepath.Dir(moduleDir)
-		if parent == moduleDir {
-			return imports
-		}
-		moduleDir = parent
-	}
+// fileDependencies resolves the project-relative dependency directories of one
+// file, mirroring what the indexer stores in the graph. For a Go file inside a
+// nested module it analyses twice: against the nested module (whose results are
+// relative to that module root and are re-anchored to the project root) and
+// against the root module, so cross-module imports in a monorepo are not lost.
+func fileDependencies(root, file string, content []byte) []string {
+	moduleDir := goModuleDir(root, file)
+	deps := imports.AnalyzeProject(root, file, content, detectModulePathForFile(root, file))
 	if moduleDir == "." {
-		return imports
+		return deps
 	}
-	result := make([]string, len(imports))
-	for i, imp := range imports {
-		reanchored := filepath.ToSlash(filepath.Join(moduleDir, imp))
-		if !strings.HasSuffix(reanchored, "/") {
-			reanchored += "/"
+
+	seen := make(map[string]bool, len(deps))
+	out := make([]string, 0, len(deps))
+	add := func(d string) {
+		if d == "" {
+			return
 		}
-		result[i] = reanchored
+		if !strings.HasSuffix(d, "/") {
+			d += "/"
+		}
+		if !seen[d] {
+			seen[d] = true
+			out = append(out, d)
+		}
 	}
-	return result
+	for _, d := range deps {
+		add(filepath.ToSlash(filepath.Join(moduleDir, d)))
+	}
+	if rootModule := detectModulePathForFile(root, ""); rootModule != "" {
+		for _, d := range imports.AnalyzeProject(root, file, content, rootModule) {
+			add(filepath.ToSlash(d))
+		}
+	}
+	return out
+}
+
+// goModuleDir returns the directory holding the nearest go.mod above file,
+// relative to root ("." for the root module or when none is found).
+func goModuleDir(root, file string) string {
+	dir := filepath.Dir(file)
+	for {
+		if _, err := os.Stat(filepath.Clean(filepath.Join(root, dir, "go.mod"))); err == nil {
+			return dir
+		}
+		if dir == "." || dir == string(filepath.Separator) {
+			return "."
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "."
+		}
+		dir = parent
+	}
 }
 
 // goPackageName extracts the package name from a Go source file.
