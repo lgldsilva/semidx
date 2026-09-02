@@ -13,6 +13,9 @@ import (
 	"github.com/lgldsilva/semidx/internal/gitexec"
 )
 
+// gitRevParse is the git subcommand used to resolve toplevel and common-dir paths.
+const gitRevParse = "rev-parse"
+
 // Info describes the git context of a directory.
 type Info struct {
 	IsGit    bool
@@ -26,7 +29,7 @@ type Info struct {
 // exists (so clones over https and ssh collapse to one key), otherwise the
 // repository's common git dir (which all local worktrees of a clone share).
 func Resolve(ctx context.Context, dir string) Info {
-	top, err := gitexec.Run(ctx, dir, "rev-parse", "--show-toplevel")
+	top, err := gitexec.Run(ctx, dir, gitRevParse, "--show-toplevel")
 	if err != nil || top == "" {
 		return Info{}
 	}
@@ -50,10 +53,10 @@ func Resolve(ctx context.Context, dir string) Info {
 // both. Older git falls back to resolving the relative answer against dir, and a
 // repo whose common dir cannot be resolved at all falls back to the worktree root.
 func localIdentity(ctx context.Context, dir, top string) string {
-	if common, err := gitexec.Run(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil && filepath.IsAbs(common) {
+	if common, err := gitexec.Run(ctx, dir, gitRevParse, "--path-format=absolute", "--git-common-dir"); err == nil && filepath.IsAbs(common) {
 		return filepath.Clean(common)
 	}
-	common, err := gitexec.Run(ctx, dir, "rev-parse", "--git-common-dir")
+	common, err := gitexec.Run(ctx, dir, gitRevParse, "--git-common-dir")
 	if err != nil {
 		return top
 	}
