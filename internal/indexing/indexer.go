@@ -5,6 +5,7 @@
 package indexing
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -1249,48 +1250,102 @@ func sleepBackoff(ctx context.Context, attempt int) error {
 	}
 }
 
-// runGitLog executes git log -p with an optional --since window and returns the
-// raw output. The projectPath is validated with safeGitDir first. ctx cancels a
-// long-running log when the job or server shuts down.
-func runGitLog(ctx context.Context, projectPath, gitSince string) ([]byte, error) {
-	if !safeGitDir(projectPath) {
-		return nil, fmt.Errorf("unsafe git project path: %q", projectPath)
-	}
-	args := []string{"-C", projectPath, "log", "-p"}
-	if gitSince != "" {
-		if !safeGitRef(gitSince) {
-			return nil, fmt.Errorf("unsafe git since value: %q", gitSince)
+// defaultGitSince bounds git-history indexing when the caller passes no
+// window. An empty value used to mean "the entire history", which — with the
+// old fully-buffered git log — could exhaust RAM on large repos. Empty now
+// falls back to the same default the CLI uses.
+const defaultGitSince = "30.days"
+
+// maxCommitBlock caps how many bytes of a single `git log -p` commit block are
+// held in memory while streaming. indexCommit truncates to maxChunkChars (well
+// under this cap) before hashing/storing, so indexed content is unaffected;
+// the cap only bounds RAM on pathological commits (huge generated diffs).
+const maxCommitBlock = 1 << 20 // 1 MiB
+
+// forEachCommit streams `git log -p` output and invokes fn once per commit
+// block — the bytes from one "commit " line up to (but not including) the next
+// "\ncommit " delimiter, byte-identical to strings.Split(out, "\ncommit ")
+// with the delimiter re-attached. Blocks are capped at maxCommitBlock bytes:
+// past the cap the remaining lines are consumed but discarded, keeping memory
+// flat on pathological diffs while preserving the leading bytes indexCommit
+// hashes and stores.
+func forEachCommit(r io.Reader, fn func(commit []byte)) error {
+	br := bufio.NewReaderSize(r, 64<<10)
+	var block []byte
+	flush := func(trim bool) {
+		if len(block) == 0 {
+			return
 		}
-		args = append(args, "--since="+gitSince)
+		if trim {
+			// Replicate split semantics: the "\ncommit " delimiter consumes
+			// the newline immediately preceding the next commit header.
+			block = bytes.TrimSuffix(block, []byte("\n"))
+		}
+		fn(block)
+		block = nil
 	}
-	cmd := exec.CommandContext(ctx, "git")
-	cmd.Args = append([]string{"git"}, args...)
-	cmd.Env = gitenv.Clean(cmd.Environ())
-	return cmd.Output()
+	for {
+		line, err := br.ReadBytes('\n')
+		if len(line) > 0 {
+			if bytes.HasPrefix(line, []byte("commit ")) {
+				flush(true)
+			}
+			if room := maxCommitBlock - len(block); room > 0 {
+				if len(line) > room {
+					line = line[:room]
+				}
+				block = append(block, line...)
+			}
+		}
+		if err != nil {
+			flush(false)
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+	}
 }
 
 func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectPath, model string) error {
-	out, err := runGitLog(ctx, projectPath, idx.gitSince)
+	since := idx.gitSince
+	if since == "" {
+		since = defaultGitSince
+	}
+	if !safeGitDir(projectPath) {
+		return fmt.Errorf("unsafe git project path: %q", projectPath)
+	}
+	if !safeGitRef(since) {
+		return fmt.Errorf("unsafe git since value: %q", since)
+	}
+
+	// Stream commit-by-commit: buffering the whole `git log -p` window in RAM
+	// (the previous implementation) grew to tens of GB on large repos and got
+	// the process OOM-killed.
+	cmd := exec.CommandContext(ctx, "git", "-C", projectPath, "log", "-p", "--since="+since)
+	cmd.Env = gitenv.Clean(cmd.Environ())
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("git log -p: %w", err)
 	}
-	if len(out) == 0 {
-		return nil
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("git log -p: %w", err)
 	}
-
-	commits := bytes.Split(out, []byte("\ncommit "))
-	for i, commit := range commits {
-		if len(commit) == 0 {
-			continue
-		}
-		if i > 0 {
-			commit = append([]byte("commit "), commit...)
-		}
+	processed := 0
+	scanErr := forEachCommit(stdout, func(commit []byte) {
 		if idx.indexCommit(ctx, projectID, model, commit) {
-			if idx.verbose && i%10 == 0 {
-				idx.log.Info("git indexing progress", "commits_processed", i+1)
+			if idx.verbose && processed%10 == 0 {
+				idx.log.Info("git indexing progress", "commits_processed", processed+1)
 			}
 		}
+		processed++
+	})
+	waitErr := cmd.Wait()
+	if scanErr != nil {
+		return fmt.Errorf("git log -p: %w", scanErr)
+	}
+	if waitErr != nil {
+		return fmt.Errorf("git log -p: %w", waitErr)
 	}
 	return nil
 }

@@ -34,3 +34,20 @@ func TestDecompilerFailsGracefully(t *testing.T) {
 		t.Errorf("missing tool should degrade to empty/false, got %q/%v", out, ok)
 	}
 }
+
+func TestDecompilerCapsStdout(t *testing.T) {
+	// A runaway decompiler must not inflate memory: stdout is truncated to
+	// maxDecompiledSource bytes. `head -c` works on GNU and BSD head.
+	t.Setenv("SEMIDX_JAVA_DECOMPILER", "head -c 2000000 /dev/zero")
+	d := newDecompiler()
+	if d == nil {
+		t.Fatal("expected a decompiler")
+	}
+	out, ok := d.decompile([]byte{0xCA, 0xFE, 0xBA, 0xBE})
+	if !ok {
+		t.Fatal("decompile should succeed; want truncated capture")
+	}
+	if len(out) != maxDecompiledSource {
+		t.Errorf("captured %d bytes, want capped at %d", len(out), maxDecompiledSource)
+	}
+}

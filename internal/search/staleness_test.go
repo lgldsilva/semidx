@@ -128,3 +128,18 @@ func TestContentHashMatchesIndexer(t *testing.T) {
 		t.Fatalf("hex length = %d, want 64", len(empty))
 	}
 }
+
+// TestHashProjectFileMatchesContentHash pins the streaming hash to the exact
+// digest the indexer stores, so staleness comparisons keep working after the
+// O(1)-memory refactor.
+func TestHashProjectFileMatchesContentHash(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	data := []byte("package main\nfunc main() {}\n")
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := hashProjectFile(dir, "a.go"), indexing.ContentHash(data); got != want {
+		t.Errorf("hashProjectFile = %q, want ContentHash %q", got, want)
+	}
+}

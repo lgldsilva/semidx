@@ -14,6 +14,14 @@ import (
 // maxArchiveEntry caps how many bytes we read from a single archive entry.
 const maxArchiveEntry = 1 << 20 // 1 MiB
 
+// JAR/WAR/AAR extraction limits — same zip-bomb/resource rationale as the
+// generic-archive caps (generic_archive.go), but far higher entry counts
+// because legitimate fat JARs ship thousands of classes.
+const (
+	maxJarEntries   = 5000
+	maxJarTotalSize = maxArchiveTotalSize // 100 MiB of extracted text
+)
+
 // textEntryExts inside an archive are indexed as-is (source and text resources).
 var textEntryExts = map[string]bool{
 	".java": true, ".kt": true, ".scala": true, ".groovy": true,
@@ -39,12 +47,17 @@ func extractArchive(name string, data []byte) (docs []Doc, err error) {
 	}
 
 	dec := newDecompiler() // nil unless SEMIDX_JAVA_DECOMPILER is configured
+	totalSize := 0
 	for _, f := range zr.File {
+		if len(docs) >= maxJarEntries || totalSize >= maxJarTotalSize {
+			break
+		}
 		if strings.Contains(f.Name, "..") || !isLocalArchiveEntry(f.Name) {
 			continue
 		}
 		if doc, ok := archiveEntryDoc(name, f, dec); ok {
 			docs = append(docs, doc)
+			totalSize += len(doc.Text)
 		}
 	}
 	return docs, nil
