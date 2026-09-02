@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/extract"
 	"github.com/lgldsilva/semidx/internal/mcpinstall"
+	"github.com/lgldsilva/semidx/internal/pgcheck"
 	"github.com/lgldsilva/semidx/internal/skills"
 )
 
@@ -33,6 +35,7 @@ func runDoctor(cmd *cobra.Command, d *deps) error {
 	fmt.Fprintf(&b, "# semidx doctor\n\n")
 	fmt.Fprintf(&b, "## Binary\n\n- path: `%s`\n\n", bin)
 	reportBackend(&b, d)
+	reportDatabase(cmd.Context(), &b, d)
 	fmt.Fprintf(&b, "## Extractors\n\n")
 	if extract.LegacyOfficeAvailable() {
 		fmt.Fprintf(&b, "- legacy Office (.doc/.xls/.ppt): available\n\n")
@@ -68,6 +71,41 @@ func reportBackend(b *strings.Builder, d *deps) {
 	}
 	if d.hasServerConfig() && !d.remote() {
 		fmt.Fprintf(b, "- note: server credentials exist on disk but this invocation is not using remote mode\n")
+	}
+	b.WriteByte('\n')
+}
+
+// reportDatabase probes the PostgreSQL backend when it is the active one. It is
+// read-only (no migrations, no CREATE EXTENSION), so running doctor against a
+// production database changes nothing.
+func reportDatabase(ctx context.Context, b *strings.Builder, d *deps) {
+	if d.remote() || d.localIndexPath != "" || d.cfg == nil || d.cfg.DatabaseURL == "" {
+		return
+	}
+	fmt.Fprintf(b, "## Database\n\n")
+	report, err := pgcheck.InspectDSN(ctx, d.cfg.DatabaseURL)
+	if err != nil {
+		fmt.Fprintf(b, "- unreachable: %v\n", err)
+		fmt.Fprintf(b, "- run `semidx docker` for a ready-to-use PostgreSQL/pgvector service\n\n")
+		return
+	}
+	fmt.Fprintf(b, "- server: PostgreSQL %s\n", report.ServerVersion)
+	for _, ext := range []pgcheck.Extension{report.Vector, report.Trgm} {
+		if ext.Installed {
+			fmt.Fprintf(b, "- extension `%s`: %s\n", ext.Name, ext.Version)
+			continue
+		}
+		fmt.Fprintf(b, "- extension `%s`: missing\n", ext.Name)
+	}
+	if report.Vector.Installed {
+		if report.HalfvecOpclass {
+			fmt.Fprintf(b, "- halfvec HNSW: supported (models above 2000 dimensions can be indexed)\n")
+		} else {
+			fmt.Fprintf(b, "- halfvec HNSW: unsupported (models above 2000 dimensions cannot be indexed)\n")
+		}
+	}
+	for _, f := range report.Findings() {
+		fmt.Fprintf(b, "- ⚠️  %s\n", f)
 	}
 	b.WriteByte('\n')
 }

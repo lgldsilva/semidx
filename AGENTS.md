@@ -109,7 +109,9 @@ Origin: a homelab PoC (`poc-semantic-indexer`) hardened into an OSS product.
 ```
 cmd/semidx/        CLI (cobra): index, unlock (password docs), search, sgrep,
                    migrate (SQLite→Postgres), config, mcp[/install], skills,
-                   models, repo, login, drop, serve; main.go wires deps.
+                   models, repo, login, drop, serve, doctor (also probes the
+                   Postgres backend), docker (prints a pgvector Compose
+                   service); main.go wires deps.
 pkg/client/        public Go SDK for the HTTP API (DTOs + client).
 internal/
   config/          SEMIDX_* resolution: env > cwd .env > ~/.config/semidx/semidx.env > default
@@ -142,7 +144,7 @@ docs/              architecture.md, api.md, self-hosting.md, CICD.md, ADRs
 |---|---|---|
 | Remote server | `semidx login <url> --token … --tenant <slug>` | CLI/MCP proxy the tenant-scoped HTTP API |
 | Local SQLite  | `--local` / `SEMIDX_LOCAL_INDEX` | one file, brute-force cosine |
-| Postgres      | `SEMIDX_DB_DSN` (or the compose default) | pgvector + HNSW; the server's store |
+| Postgres      | `SEMIDX_DB_DSN` (or the compose default) | pgvector + HNSW; the server's store. Needs the `vector` and `pg_trgm` extensions, and **pgvector ≥ 0.7** for models above 2000 dims (they are indexed through the `halfvec` cast, which older releases lack). `semidx doctor` checks all of it read-only; `semidx docker` prints a ready service. |
 
 `semidx config list` reports the active backend.
 

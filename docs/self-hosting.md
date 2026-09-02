@@ -4,6 +4,27 @@ The server is `semidx serve`: an HTTP API plus a `/admin` UI, backed by
 PostgreSQL with the `pgvector` extension. This guide covers running it with
 Docker Compose, every environment variable it reads, TLS, backups and upgrades.
 
+## What the database must provide
+
+semidx stores embeddings in PostgreSQL, so the database — not just the
+connection string — has to meet a few requirements:
+
+| Requirement | Why | Checked by |
+|---|---|---|
+| `vector` extension (pgvector) | embeddings and the HNSW index | `semidx doctor` |
+| `pg_trgm` extension | trigram keyword search | `semidx doctor` |
+| **pgvector 0.7 or newer** when the embedding model has **more than 2000 dimensions** (e.g. Gemini 3072) | above pgvector's 2000-dimension HNSW limit, semidx indexes the `halfvec` cast, and `halfvec` does not exist before 0.7 | `semidx doctor` |
+| a role allowed to run `CREATE EXTENSION` | the migrations create both extensions on first start | `semidx doctor` |
+
+A plain `postgres:16` image does **not** work — pgvector is not bundled with it.
+
+The last requirement bites late: with a 1024-dimension model everything works on
+old pgvector, and the failure (`type "halfvec" does not exist`) only appears when
+you switch to a larger model. Run `semidx doctor` against the database before
+that happens; it is read-only and reports the server version, both extensions and
+halfvec support. For a database to start from, `semidx docker` prints a
+ready-to-run Compose service.
+
 ## Run it with Docker Compose
 
 The reference deployment in `deploy/docker-compose.yml` brings up the server and
