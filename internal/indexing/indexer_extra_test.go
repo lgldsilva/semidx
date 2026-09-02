@@ -39,6 +39,23 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// writeAndCommit stages a single file and commits it, optionally with extra
+// env (e.g. backdated GIT_AUTHOR_DATE for history-window tests). Shared by the
+// git-history tests so their setup stays identical.
+func writeAndCommit(t *testing.T, dir, name, content, msg string, extraEnv ...string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", ".")
+	cmd := exec.Command("git", "-C", dir, "commit", "-q", "-m", msg)
+	cmd.Env = append(append(gitenv.Clean(os.Environ()),
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null"), extraEnv...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+}
+
 // initRepo creates a temp git repo with a couple of commits and returns its path.
 func initRepo(t *testing.T) string {
 	t.Helper()
@@ -424,11 +441,7 @@ func TestIndexGitHistoryContinuesOnInsertError(t *testing.T) {
 	runGit(t, dir, "config", "user.name", "tester")
 	// A file whose diff exceeds maxChunkChars, to exercise commit truncation.
 	big := strings.Repeat("line of source code\n", 500)
-	if err := os.WriteFile(filepath.Join(dir, "big.go"), []byte("package main\n"+big), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-q", "-m", "big commit")
+	writeAndCommit(t, dir, "big.go", "package main\n"+big, "big commit")
 
 	es := &errStore{insertErr: errors.New("insert boom")}
 	idx := NewIndexer(es, &fakeEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, Verbose: true, GitMode: true})
@@ -531,22 +544,9 @@ func TestIndexGitHistoryEmptySinceFallsBackToDefault(t *testing.T) {
 	runGit(t, dir, "config", "user.email", "t@example.com")
 	runGit(t, dir, "config", "user.name", "tester")
 
-	if err := os.WriteFile(filepath.Join(dir, "old.go"), []byte("package main\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, dir, "add", ".")
 	backdate := []string{"GIT_AUTHOR_DATE=2020-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2020-01-01T00:00:00Z"}
-	cmd := exec.Command("git", "-C", dir, "commit", "-q", "-m", "ancient commit")
-	cmd.Env = append(append(gitenv.Clean(os.Environ()), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null"), backdate...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git commit (ancient): %v\n%s", err, out)
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, "new.go"), []byte("package main\nfunc New() {}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-q", "-m", "recent commit")
+	writeAndCommit(t, dir, "old.go", "package main\n", "ancient commit", backdate...)
+	writeAndCommit(t, dir, "new.go", "package main\nfunc New() {}\n", "recent commit")
 
 	fs := &fakeStore{}
 	idx := NewIndexer(fs, &fakeEmbedder{}, 3, IndexerOpts{Workers: 1, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32, GitMode: true, GitSince: ""})

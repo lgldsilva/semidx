@@ -1271,40 +1271,76 @@ const maxCommitBlock = 1 << 20 // 1 MiB
 // hashes and stores.
 func forEachCommit(r io.Reader, fn func(commit []byte)) error {
 	br := bufio.NewReaderSize(r, 64<<10)
-	var block []byte
-	flush := func(trim bool) {
-		if len(block) == 0 {
-			return
-		}
-		if trim {
-			// Replicate split semantics: the "\ncommit " delimiter consumes
-			// the newline immediately preceding the next commit header.
-			block = bytes.TrimSuffix(block, []byte("\n"))
-		}
-		fn(block)
-		block = nil
-	}
+	sc := &commitSplitter{fn: fn}
 	for {
 		line, err := br.ReadBytes('\n')
-		if len(line) > 0 {
-			if bytes.HasPrefix(line, []byte("commit ")) {
-				flush(true)
-			}
-			if room := maxCommitBlock - len(block); room > 0 {
-				if len(line) > room {
-					line = line[:room]
-				}
-				block = append(block, line...)
-			}
-		}
+		sc.line(line)
 		if err != nil {
-			flush(false)
+			sc.flush(false)
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return err
 		}
 	}
+}
+
+// commitSplitter accumulates `git log -p` lines into per-commit blocks and
+// hands each complete block to fn.
+type commitSplitter struct {
+	block []byte
+	fn    func(commit []byte)
+}
+
+func (s *commitSplitter) line(line []byte) {
+	if len(line) == 0 {
+		return
+	}
+	if bytes.HasPrefix(line, []byte("commit ")) {
+		s.flush(true)
+	}
+	s.appendCapped(line)
+}
+
+func (s *commitSplitter) appendCapped(line []byte) {
+	if room := maxCommitBlock - len(s.block); room > 0 {
+		if len(line) > room {
+			line = line[:room]
+		}
+		s.block = append(s.block, line...)
+	}
+}
+
+func (s *commitSplitter) flush(trim bool) {
+	if len(s.block) == 0 {
+		return
+	}
+	if trim {
+		// Replicate split semantics: the "\ncommit " delimiter consumes the
+		// newline immediately preceding the next commit header.
+		s.block = bytes.TrimSuffix(s.block, []byte("\n"))
+	}
+	s.fn(s.block)
+	s.block = nil
+}
+
+// gitExecutable resolves the absolute path of the host git once. Resolving via
+// LookPath keeps the executed binary fixed (Sonar S4036 PATH hotspot), the same
+// pattern as codeintel/diff.go.
+var (
+	gitPathOnce sync.Once
+	gitPath     string
+)
+
+func gitExecutable() string {
+	gitPathOnce.Do(func() {
+		if p, err := exec.LookPath("git"); err == nil {
+			gitPath = p
+			return
+		}
+		gitPath = "git" // fall back; exec will search PATH at run time
+	})
+	return gitPath
 }
 
 func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectPath, model string) error {
@@ -1322,7 +1358,7 @@ func (idx *Indexer) indexGitHistory(ctx context.Context, projectID int, projectP
 	// Stream commit-by-commit: buffering the whole `git log -p` window in RAM
 	// (the previous implementation) grew to tens of GB on large repos and got
 	// the process OOM-killed.
-	cmd := exec.CommandContext(ctx, "git", "-C", projectPath, "log", "-p", "--since="+since)
+	cmd := exec.CommandContext(ctx, gitExecutable(), "-C", projectPath, "log", "-p", "--since="+since) // #nosec G204 -- path/since validated via safeGitDir/safeGitRef; binary resolved via LookPath
 	cmd.Env = gitenv.Clean(cmd.Environ())
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
