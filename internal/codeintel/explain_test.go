@@ -388,3 +388,57 @@ func TestFindTestFiles_ProjectWidePythonAndTypeScript(t *testing.T) {
 		t.Errorf("FindTestFiles() missing %v; got %v", want, got)
 	}
 }
+
+// TestExplain_MonorepoCrossModuleDependencies guards the dependency list of a
+// file inside a nested module: imports of the nested module must be re-anchored
+// to the project root, and imports of the ROOT module must survive — resolving
+// only against the nested module path silently dropped them, so explain showed
+// fewer dependencies than the indexed graph.
+func TestExplain_MonorepoCrossModuleDependencies(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("go.mod", "module github.com/example/root\n\ngo 1.25\n")
+	write("pkg/shared/shared.go", "package shared\n\nfunc Help() {}\n")
+	write("service-a/go.mod", "module github.com/example/service-a\n\ngo 1.25\n")
+	write("service-a/internal/lib/lib.go", "package lib\n\nfunc Run() {}\n")
+	write("service-a/main.go", `package main
+
+import (
+	"github.com/example/root/pkg/shared"
+	"github.com/example/service-a/internal/lib"
+)
+
+func main() { lib.Run(); shared.Help() }
+`)
+
+	proj := &store.Project{ID: 1, Name: "mono", Path: root}
+	db := &fakeStoreExplain{project: proj, graph: map[string][]string{}}
+
+	result, err := Explain(context.Background(), db, proj, FileLine{File: "service-a/main.go", Line: 8})
+	if err != nil {
+		t.Fatalf("Explain() error = %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, d := range result.Imports {
+		got[d] = true
+	}
+	for _, want := range []string{"service-a/internal/lib/", "pkg/shared/"} {
+		if !got[want] {
+			t.Errorf("dependency %q missing from %v", want, result.Imports)
+		}
+	}
+	if len(result.Imports) != 2 {
+		t.Errorf("dependencies = %v, want exactly the two module-local imports", result.Imports)
+	}
+}

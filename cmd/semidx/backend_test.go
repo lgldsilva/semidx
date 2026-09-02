@@ -3,10 +3,12 @@ package main
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/lgldsilva/semidx/internal/clientconfig"
+	"github.com/lgldsilva/semidx/internal/config"
 )
 
 func TestResolveUseRemote(t *testing.T) {
@@ -179,5 +181,54 @@ func TestLogoutCommandWired(t *testing.T) {
 	cmd, _, err := root.Find([]string{"logout"})
 	if err != nil || cmd == nil || cmd.Name() != "logout" {
 		t.Fatalf("logout not wired: err=%v cmd=%v", err, cmd)
+	}
+}
+
+// TestForcedLocalHonoursExplicitIndexPath is a regression guard: with a Postgres
+// DSN configured, Config.LocalIndexPath is blanked (Postgres wins the automatic
+// choice), and --local used to fall straight through to the DEFAULT index file —
+// silently writing to the wrong index even though SEMIDX_LOCAL_INDEX named one.
+func TestForcedLocalHonoursExplicitIndexPath(t *testing.T) {
+	isolateCLIConfig(t)
+	want := filepath.Join(t.TempDir(), "explicit.db")
+	t.Setenv("SEMIDX_DB_DSN", "postgres://u:p@h:5432/db")
+	t.Setenv("SEMIDX_LOCAL_INDEX", want)
+
+	root := newRootCmd()
+
+	t.Run("--local", func(t *testing.T) {
+		d := &deps{}
+		if err := d.setup(root, true, false, ""); err != nil {
+			t.Fatal(err)
+		}
+		if d.localIndexPath != want {
+			t.Errorf("localIndexPath = %q, want %q", d.localIndexPath, want)
+		}
+	})
+
+	t.Run("--backend local", func(t *testing.T) {
+		d := &deps{}
+		if err := d.setup(root, false, false, "local"); err != nil {
+			t.Fatal(err)
+		}
+		if d.localIndexPath != want {
+			t.Errorf("localIndexPath = %q, want %q", d.localIndexPath, want)
+		}
+	})
+}
+
+// TestForcedLocalWithoutEnvUsesDefault keeps the other half of the contract: no
+// SEMIDX_LOCAL_INDEX means --local still lands on the default index file.
+func TestForcedLocalWithoutEnvUsesDefault(t *testing.T) {
+	isolateCLIConfig(t)
+	t.Setenv("SEMIDX_DB_DSN", "")
+	t.Setenv("SEMIDX_LOCAL_INDEX", "")
+
+	d := &deps{}
+	if err := d.setup(newRootCmd(), true, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if d.localIndexPath != config.DefaultLocalIndexPath() {
+		t.Errorf("localIndexPath = %q, want the default %q", d.localIndexPath, config.DefaultLocalIndexPath())
 	}
 }
