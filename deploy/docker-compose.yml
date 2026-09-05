@@ -32,6 +32,12 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+    # Resource caps (audit 2026-09: stack ran with no limits).
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
 
   semidx:
     image: ${SEMIDX_IMAGE:-semidx:local}
@@ -67,7 +73,11 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${SEMIDX_HTTP_PORT:-8080}:8080" # only the API is exposed
+      # Audit 2026-09: was 0.0.0.0/[::] (exposed the API on global IPv6 and
+      # every tunnel interface). Consumers observed via conntrack: ::1,
+      # 127.0.0.1 and the LAN IP 192.168.0.100 only — bind exactly there.
+      - "127.0.0.1:${SEMIDX_HTTP_PORT:-8080}:8080"
+      - "192.168.0.100:${SEMIDX_HTTP_PORT:-8080}:8080"
     volumes:
       - semidx_data:/data
     healthcheck:
@@ -78,6 +88,13 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
+    # Resource caps (audit 2026-09: stack ran with no limits). GOMEMLIMIT
+    # (900MiB default) keeps the Go GC well under the 4G cgroup ceiling.
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "3.0"
 
 volumes:
   db_data:
