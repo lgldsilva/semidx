@@ -4,7 +4,7 @@ services:
     container_name: semantic-indexer-pg
     environment:
       POSTGRES_USER: semantic
-      POSTGRES_PASSWORD: semantic
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: semantic_indexer
     ports:
       - "55432:5432"
