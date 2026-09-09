@@ -9,7 +9,7 @@ RUN npm ci --ignore-scripts
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.26.6 AS build
+FROM golang:1.27.0 AS build
 # Version metadata for `semidx version`. Without these the image reports
 # dev/none/unknown, which makes a deployed container impossible to identify.
 ARG VERSION=dev

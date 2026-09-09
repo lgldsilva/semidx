@@ -1,4 +1,4 @@
-GOTOOLCHAIN := go1.26.6
+GOTOOLCHAIN := go1.27.0
 export GOTOOLCHAIN
 
 .PHONY: all build web-build test bench lint fmt gosec vulncheck docker-build clean help
@@ -24,7 +24,7 @@ bench:
 	go test -bench=. -benchmem -benchtime=1s ./...
 
 lint:
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run ./...
 
 fmt:
 	gofmt -l . | tee /dev/stderr | test ! -s /dev/stdin
