@@ -153,11 +153,11 @@ docs/              architecture.md, api.md, self-hosting.md, CICD.md, ADRs
 Pin the toolchain — several tools need it and `@latest` may require newer Go:
 
 ```sh
-export GOTOOLCHAIN=go1.26.6
+export GOTOOLCHAIN=go1.27.0
 go build ./...
 go test -race -shuffle=on ./...          # testcontainers tests skip w/o Docker
 gofmt -l .                               # must be empty
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run ./...
 go run github.com/securego/gosec/v2/cmd/gosec@v2.27.1 -quiet ./...
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ```
@@ -230,11 +230,11 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 ## Gotchas (hard-won)
 
-- `GOTOOLCHAIN=go1.26.6` is deliberate: `charm.land/fantasy` (the chat/agent LLM
-  layer) requires Go ≥1.26.5, and the pinned patch release carries the stdlib
-  CVE fixes. Bump
+- `GOTOOLCHAIN=go1.27.0` is deliberate: `charm.land/fantasy` ≥0.42 requires
+  Go 1.27.0, and the pinned patch release carries the stdlib CVE fixes. Bump
   the `golang:` builder image (Dockerfile + deploy/agentics-test) together with
-  the Makefile/go.mod when bumping — the stdlib ships in the binary.
+  the Makefile/go.mod when bumping — the stdlib ships in the binary. golangci-lint
+  must be ≥v2.13.0 (binaries built with Go 1.26 cannot lint a Go 1.27 module).
 - SQLite local store: `journal_mode=WAL`, `busy_timeout`, `MaxOpenConns(1)` —
   serialises writers, avoids "database is locked" and corruption. Never mix
   journal modes across processes. **Note:** with `IndexWorkers` > 1, parallel
