@@ -211,4 +211,9 @@ func TestPushFlagDefaults(t *testing.T) {
 	if cmd.Use != "push" {
 		t.Errorf("Use = %q, want %q", cmd.Use, "push")
 	}
+	// Large pushes must chunk by default: a single enqueue of tens of
+	// thousands of files is rejected server-side (observed as an opaque 400).
+	if flag := cmd.Flags().Lookup("batch-size"); flag == nil || flag.DefValue != "1000" {
+		t.Errorf("batch-size default = %v, want 1000", flag)
+	}
 }

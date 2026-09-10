@@ -864,7 +864,7 @@ func (c *Client) FilesBatchAsyncWithInventory(ctx context.Context, project strin
 	}
 
 	if resp.StatusCode != http.StatusAccepted {
-		return 0, &APIError{Status: resp.StatusCode, Message: "unexpected status for async batch"}
+		return 0, &APIError{Status: resp.StatusCode, Message: serverErrorMessage(resp.Body)}
 	}
 
 	var out EnqueueResponse
@@ -883,6 +883,28 @@ func batchRequest(files []BatchFile, del, projectFiles []string) map[string]any 
 		body["project_files"] = projectFiles
 	}
 	return body
+}
+
+// serverErrorMessage extracts a bounded reason from an error response body —
+// the server's {"error": ...} JSON when parseable, else the trimmed raw body.
+// Without it, rejections from the server or a reverse proxy (payload limits,
+// bad gateways) surface as opaque status codes only.
+func serverErrorMessage(r io.Reader) string {
+	b, err := io.ReadAll(io.LimitReader(r, 512))
+	if err != nil {
+		return ""
+	}
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(b, &payload); err == nil && payload.Error != "" {
+		return payload.Error
+	}
+	s := strings.TrimSpace(string(b))
+	if len(s) == 512 {
+		s += "…"
+	}
+	return s
 }
 
 // WaitForJob polls a job until it completes, fails, or ctx is cancelled.

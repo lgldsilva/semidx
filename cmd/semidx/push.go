@@ -32,7 +32,7 @@ const (
 	pushMaxChunks         = 32
 	embedBatchSize        = 8
 	defaultPushWorkers    = 4
-	defaultAsyncBatchSize = 0 // 0 = single batch (no splitting)
+	defaultAsyncBatchSize = 1000 // chunk large pushes; oversized single enqueues are rejected server-side (0 = single batch)
 	asyncPollInterval     = 2 * time.Second
 	asyncPollTimeout      = 30 * time.Minute
 	doneFmt               = "Done in %v — indexed: %d, chunks: %d, deleted: %d, errors: %d\n"

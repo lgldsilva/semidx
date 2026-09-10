@@ -72,13 +72,25 @@ func resolveCommonDir(dir, top, common string) string {
 		return top
 	}
 	if filepath.IsAbs(common) {
-		return filepath.Clean(common)
+		return resolveReal(common)
 	}
 	abs, err := filepath.Abs(filepath.Join(dir, common))
 	if err != nil {
 		return top
 	}
-	return filepath.Clean(abs)
+	return resolveReal(abs)
+}
+
+// resolveReal resolves symlinks so old-git identities match what
+// --path-format=absolute reports (git answers with the resolved path; the
+// fallback join does not — on macOS /var vs /private/var would split one
+// repository into two identities depending on the git version). On resolution
+// failure it returns the cleaned path unchanged.
+func resolveReal(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(path)
 }
 
 // NormalizeRemote reduces a git remote URL to a canonical "host/path" key so the

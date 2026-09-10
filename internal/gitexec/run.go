@@ -7,6 +7,7 @@ package gitexec
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -19,12 +20,29 @@ import (
 // stdout. It rejects unsafe directories (containing "..", starting with "-" or
 // "~") to prevent path-traversal / injection.
 func Run(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := run(ctx, dir, nil, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// RunStdin executes a git subcommand like Run, feeding input to the process's
+// standard input, for subcommands that read paths from stdin (e.g.
+// "check-ignore -z --stdin"). Unlike Run it returns raw stdout — NUL-separated
+// payloads must not be whitespace-trimmed.
+func RunStdin(ctx context.Context, dir, input string, args ...string) (string, error) {
+	return run(ctx, dir, strings.NewReader(input), args...)
+}
+
+func run(ctx context.Context, dir string, stdin io.Reader, args ...string) (string, error) {
 	if strings.Contains(dir, "..") || strings.HasPrefix(dir, "-") || strings.HasPrefix(dir, "~") {
 		return "", fmt.Errorf("unsafe git directory: %q", dir)
 	}
 	fullArgs := append([]string{"git", "-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, "git")
 	cmd.Args = fullArgs
+	cmd.Stdin = stdin
 	// Strip any inherited GIT_DIR/GIT_WORK_TREE so `git -C dir` resolves the repo
 	// from dir (not an ambient repo leaked by a hook or bare-repo worktree).
 	// os.DevNull is "/dev/null" on Unix and "NUL" on Windows, so hermetic config
@@ -34,5 +52,5 @@ func Run(ctx context.Context, dir string, args ...string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), nil
 }
