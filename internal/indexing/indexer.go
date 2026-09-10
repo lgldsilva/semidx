@@ -586,9 +586,11 @@ func (idx *Indexer) recordWorktree(ctx context.Context, projectID int, manifest 
 }
 
 // ScanFiles walks projectPath, skipping ignored dirs and non-indexable files,
-// and caps the result at maxFiles (0 = unlimited).
+// and caps the result at maxFiles (0 = unlimited). In git repositories the
+// walk additionally drops paths git ignores, so local tooling trees (build
+// output, vendored/cloned dependencies) never reach the index.
 func ScanFiles(projectPath string, maxFiles int) ([]string, error) {
-	var files []string
+	var files, rels []string
 	err := filepath.WalkDir(projectPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
@@ -602,11 +604,21 @@ func ScanFiles(projectPath string, maxFiles int) ([]string, error) {
 		rel, _ := filepath.Rel(projectPath, path)
 		if Eligible(rel) {
 			files = append(files, path)
+			rels = append(rels, rel)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	if ignored := gitIgnoredPaths(projectPath, rels); len(ignored) > 0 {
+		kept := make([]string, 0, len(files))
+		for i, f := range files {
+			if !ignored[filepath.ToSlash(rels[i])] {
+				kept = append(kept, f)
+			}
+		}
+		files = kept
 	}
 	if maxFiles > 0 && len(files) > maxFiles {
 		files = files[:maxFiles]
