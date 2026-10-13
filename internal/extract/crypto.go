@@ -2,6 +2,7 @@ package extract
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -118,7 +119,7 @@ func extractPDFViaPdfcpu(data []byte, password string) (string, error) {
 	conf.UserPW = password
 	conf.OwnerPW = password
 	var buf bytes.Buffer
-	if err := api.Decrypt(bytes.NewReader(data), &buf, conf); err != nil {
+	if err := api.Decrypt(context.Background(), bytes.NewReader(data), &buf, conf); err != nil {
 		return "", ErrWrongPassword
 	}
 	return extractPDF(buf.Bytes())
