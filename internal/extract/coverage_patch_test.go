@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -105,7 +106,7 @@ func TestExtractAllWithPasswordPDF(t *testing.T) {
 	conf.UserPW = "s3cret"
 	conf.OwnerPW = "s3cret"
 	var enc bytes.Buffer
-	if err := api.Encrypt(bytes.NewReader(plain), &enc, conf); err != nil {
+	if err := api.Encrypt(context.Background(), bytes.NewReader(plain), &enc, conf); err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
 

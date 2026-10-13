@@ -3,6 +3,7 @@ package extract
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -342,7 +343,7 @@ func TestExtractPDFEncrypted(t *testing.T) {
 	conf.OwnerPW = "secret"
 
 	var enc bytes.Buffer
-	if err := api.Encrypt(bytes.NewReader(plain), &enc, conf); err != nil {
+	if err := api.Encrypt(context.Background(), bytes.NewReader(plain), &enc, conf); err != nil {
 		t.Fatalf("encrypt pdf: %v", err)
 	}
 
