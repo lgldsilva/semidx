@@ -250,6 +250,26 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
   Re-downloading modules each run is slower but reliable. If you re-enable
   the cache, keep an eye on hit rate and quota.
 
+## Cursor Cloud specific instructions
+
+The Cloud Agent image has Go 1.27.2 on `PATH` (`/usr/local/go`; the distro Go
+1.22 is still at `/usr/bin/go`), Node 22, and Docker with `fuse-overlayfs` and
+`iptables-legacy`. `ubuntu` is in the `docker` group, which testcontainers
+needs; a shell started before that membership existed will not see the socket
+until a new login (or `sg docker`).
+
+Boot already starts the root `docker-compose.yml` Postgres/pgvector and waits
+until it is healthy on `localhost:55432` (user, password, and database are all
+`semantic`). The compiled-in default DSN has no password, so set:
+
+```
+SEMIDX_DB_DSN=postgres://semantic:semantic@localhost:55432/semantic_indexer?sslmode=disable
+```
+
+Keyword-only index and search (`--keyword` or `SEMIDX_EMBED_MODE=none`) need
+no embedding provider. `make test-short`, `make build`, and `cd web && npm test`
+are the local checks; full `make test` also runs the non-short Docker tests.
+
 ## Docs
 
 `docs/architecture.md` · `docs/requirements.md` (product requirements) ·
