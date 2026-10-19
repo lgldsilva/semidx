@@ -259,8 +259,8 @@ needs; a shell started before that membership existed will not see the socket
 until a new login (or `sg docker`).
 
 Boot already starts the root `docker-compose.yml` Postgres/pgvector and waits
-until it is healthy on `localhost:55432` (user, password, and database are all
-`semantic`). The compiled-in default DSN has no password, so set:
+until it is healthy on `localhost:55432` (user and password are `semantic`; the
+database is `semantic_indexer`). The compiled-in default DSN has no password, so set:
 
 ```
 SEMIDX_DB_DSN=postgres://semantic:semantic@localhost:55432/semantic_indexer?sslmode=disable
