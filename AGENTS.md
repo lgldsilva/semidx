@@ -258,9 +258,12 @@ The Cloud Agent image has Go 1.27.2 on `PATH` (`/usr/local/go`; the distro Go
 needs; a shell started before that membership existed will not see the socket
 until a new login (or `sg docker`).
 
-Boot already starts the root `docker-compose.yml` Postgres/pgvector and waits
-until it is healthy on `localhost:55432` (user and password are `semantic`; the
-database is `semantic_indexer`). The compiled-in default DSN has no password, so set:
+Boot starts Docker (there is no systemd) and the root `docker-compose.yml`
+Postgres/pgvector, then waits until it is healthy on `localhost:55432` (user
+and password are `semantic`; the database is `semantic_indexer`). It also
+creates `/var/lib/semidx` owned by `ubuntu`, which is the default
+`SEMIDX_DATA_DIR`; `semidx serve` writes the one-time bootstrap admin token
+there. The compiled-in default DSN has no password, so set:
 
 ```
 SEMIDX_DB_DSN=postgres://semantic:semantic@localhost:55432/semantic_indexer?sslmode=disable
