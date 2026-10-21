@@ -153,7 +153,7 @@ docs/              architecture.md, api.md, self-hosting.md, CICD.md, ADRs
 Pin the toolchain — several tools need it and `@latest` may require newer Go:
 
 ```sh
-export GOTOOLCHAIN=go1.27.2
+export GOTOOLCHAIN=go1.27.3
 go build ./...
 go test -race -shuffle=on ./...          # testcontainers tests skip w/o Docker
 gofmt -l .                               # must be empty
@@ -230,11 +230,11 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 ## Gotchas (hard-won)
 
-- `GOTOOLCHAIN=go1.27.2` is deliberate: `charm.land/fantasy` ≥0.42 requires
+- `GOTOOLCHAIN=go1.27.3` is deliberate: `charm.land/fantasy` ≥0.42 requires
   Go 1.27.0, and the pinned patch release carries the stdlib CVE fixes. Bump
   the `golang:` builder image (Dockerfile + deploy/agentics-test) together with
   the Makefile/go.mod when bumping — the stdlib ships in the binary. golangci-lint
-  must be ≥v2.14.0 (v2.13.2 cannot read Go 1.27.2 export data).
+  must be ≥v2.14.0 (v2.13.2 cannot read Go 1.27.3 export data).
 - SQLite local store: `journal_mode=WAL`, `busy_timeout`, `MaxOpenConns(1)` —
   serialises writers, avoids "database is locked" and corruption. Never mix
   journal modes across processes. **Note:** with `IndexWorkers` > 1, parallel
@@ -252,7 +252,7 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 ## Cursor Cloud specific instructions
 
-The Cloud Agent image has Go 1.27.2 on `PATH` (`/usr/local/go`; the distro Go
+The Cloud Agent image has Go 1.27.3 on `PATH` (`/usr/local/go`; the distro Go
 1.22 is still at `/usr/bin/go`), Node 22, and Docker with `fuse-overlayfs` and
 `iptables-legacy`. `ubuntu` is in the `docker` group, which testcontainers
 needs; a shell started before that membership existed will not see the socket
