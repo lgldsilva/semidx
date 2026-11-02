@@ -26,6 +26,13 @@ jobs:
       - name: Build
         run: go build ./...
       - name: Test (race + shuffle + coverage)
+        env:
+          # go test ./... runs packages in parallel. Each testcontainers
+          # package then waits on the same Ryuk container, and GitHub
+          # runners flake with "wait for reaper: context deadline exceeded"
+          # (seen in internal/store). The runner is thrown away after the
+          # job, and tests terminate their own containers.
+          TESTCONTAINERS_RYUK_DISABLED: "true"
         run: |
           go test -race -shuffle=on -count=1 -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | tee coverage.txt
