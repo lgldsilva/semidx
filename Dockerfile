@@ -28,7 +28,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" \
     -o /out/semidx ./cmd/semidx
 
-FROM alpine:3.20
+FROM alpine:3.24
 # openssh-client provides the `ssh` binary for SSH clone/pull
 # (GIT_SSH_COMMAND); git covers HTTPS. Vaulted per-project/host SSH creds
 # use this once the job-runner resolution lands.
