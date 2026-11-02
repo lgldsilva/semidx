@@ -121,7 +121,12 @@ jobs:
           set -euo pipefail
           CONFIG_FLAGS=""
           TAP_TOKEN="${TAP_GITHUB_TOKEN:-}"
-          if [ -n "$TAP_TOKEN" ]; then
+          if [ -z "$TAP_TOKEN" ]; then
+            # Visible on the job summary. An empty secret used to strip
+            # brews/scoops with no annotation, so releases looked successful
+            # while Homebrew and Scoop stayed on the seeded formula.
+            echo "::warning::TAP_GITHUB_TOKEN is empty; Homebrew and Scoop uploads are skipped. Create a fine-grained PAT with contents:write on lgldsilva/homebrew-tap and lgldsilva/scoop-bucket and save it as the TAP_GITHUB_TOKEN repository secret."
+          else
             # Verify the configured token can actually reach the tap repos.
             # A present-but-invalid/expired secret would otherwise make
             # GoReleaser attempt the upload and fail with 401.
@@ -129,7 +134,7 @@ jobs:
               --header "Authorization: Bearer $TAP_TOKEN" \
               "https://api.github.com/repos/lgldsilva/homebrew-tap")
             if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-              echo "TAP_GITHUB_TOKEN cannot access lgldsilva/homebrew-tap (HTTP $status); disabling tap publish" >&2
+              echo "::warning::TAP_GITHUB_TOKEN cannot access lgldsilva/homebrew-tap (HTTP ${status}); disabling tap publish. Replace it with a valid fine-grained PAT (contents:write on homebrew-tap and scoop-bucket)."
               TAP_TOKEN=""
             fi
           fi
