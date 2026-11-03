@@ -1,0 +1,184 @@
+name: semidx-staging
+
+# gateway -> ui (semidx API + embedded /admin SPA); Postgres and secrets stay
+# off the edge. The external edge network is created by the operator.
+services:
+  gateway:
+    image: caddy:2.10.0-alpine
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    depends_on:
+      ui:
+        condition: service_healthy
+    ports:
+      - "${STAGING_HTTP_PORT:-8080}:8080"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    networks: [edge, internal]
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O - http://127.0.0.1:8080/healthz | grep -q ok"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits: {cpus: "0.50", memory: 128M}
+        reservations: {cpus: "0.10", memory: 32M}
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: semidx
+      POSTGRES_DB: semidx
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - vault_secrets:/run/secrets:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+      - /run/postgresql:rw,nosuid,nodev,size=16m
+    networks:
+      internal:
+        aliases: [postgres]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U semidx -d semidx"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits: {cpus: "1.50", memory: 1536M}
+        reservations: {cpus: "0.25", memory: 256M}
+
+  ui:
+    image: ${SEMIDX_IMAGE:-registry.example.invalid/owner/semidx:staging}
+    pull_policy: ${SEMIDX_PULL_POLICY:-missing}
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      SEMIDX_LISTEN_ADDR: ":8080"
+      SEMIDX_DATA_DIR: /data
+      SEMIDX_SECRETS_DIR: /run/secrets
+      SEMIDX_INDEX_WORKERS: ${SEMIDX_INDEX_WORKERS:-1}
+      SEMIDX_BOOTSTRAP_ADMIN_USER: ${SEMIDX_BOOTSTRAP_ADMIN_USER:-admin}
+      SEMIDX_COOKIE_SECURE: ${SEMIDX_COOKIE_SECURE:-true}
+      SEMIDX_MCP_HTTP: ${SEMIDX_MCP_HTTP:-false}
+      SEMIDX_OLLAMA_URL: ${SEMIDX_OLLAMA_URL:-http://host.docker.internal:11434}
+      GOMEMLIMIT: ${GOMEMLIMIT:-768MiB}
+    extra_hosts: [host.docker.internal:host-gateway]
+    volumes:
+      - semidx_data:/data
+      - vault_secrets:/run/secrets:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m
+    networks:
+      internal:
+        aliases: [ui]
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O - http://127.0.0.1:8080/readyz | grep -q ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    deploy:
+      resources:
+        limits: {cpus: "2.00", memory: 2048M}
+        reservations: {cpus: "0.50", memory: 512M}
+
+  vault-agent:
+    image: hashicorp/vault:1.20.2
+    command: [agent, -config=/vault/config/agent.hcl]
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR:-https://vault.example.invalid}
+    secrets: [vault_role_id, vault_secret_id]
+    volumes:
+      - ./vault/agent.hcl:/vault/config/agent.hcl:ro
+      - vault_secrets:/vault/secrets
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+      - /home/vault:rw,nosuid,nodev,size=16m
+    networks: [edge]
+    healthcheck:
+      test: [CMD-SHELL, "test -s /vault/secrets/db_password"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 256M}
+        reservations: {cpus: "0.05", memory: 64M}
+
+  migrate:
+    image: ${SEMIDX_IMAGE:-registry.example.invalid/owner/semidx:staging}
+    pull_policy: ${SEMIDX_PULL_POLICY:-missing}
+    entrypoint: [/usr/local/bin/semidx-entrypoint.sh]
+    command: [/usr/local/bin/semidx-migrate.sh]
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault-agent:
+        condition: service_healthy
+    environment:
+      SEMIDX_SECRETS_DIR: /run/secrets
+      SEMIDX_MIGRATE_ENABLED: ${SEMIDX_MIGRATE_ENABLED:-false}
+      SEMIDX_MIGRATE_SOURCE: ${SEMIDX_MIGRATE_SOURCE:-/migration/index.db}
+      XDG_CONFIG_HOME: /tmp/xdg
+    volumes:
+      - ./migration-input:/migration:ro
+      - vault_secrets:/run/secrets:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m
+    networks: [internal]
+    deploy:
+      resources:
+        limits: {cpus: "1.00", memory: 1024M}
+        reservations: {cpus: "0.10", memory: 128M}
+
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK_NAME:-edge}
+  internal:
+    internal: true
+    name: ${STAGING_INTERNAL_NETWORK_NAME:-semidx-staging-internal}
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:
+  semidx_data:
+  vault_secrets:
+
+secrets:
+  vault_role_id:
+    external: true
+    name: ${VAULT_ROLE_ID_SECRET_NAME:-semidx-staging-vault-role-id}
+  vault_secret_id:
+    external: true
+    name: ${VAULT_SECRET_ID_SECRET_NAME:-semidx-staging-vault-secret-id}
