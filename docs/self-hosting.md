@@ -42,6 +42,7 @@ bootstrap token before the first start:
 ```bash
 export SEMIDX_DB_PASSWORD='a-strong-db-password'
 export SEMIDX_BOOTSTRAP_TOKEN='semidx_your_choice'   # optional
+export SEMIDX_BIND_ADDR=0.0.0.0                       # optional; default 127.0.0.1
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
@@ -199,8 +200,13 @@ HTTPS — so the admin login works only when the UI is reached over TLS. Keep
 `SEMIDX_COOKIE_SECURE=true` in production; set it to `false` **only** for a
 local plain-HTTP test.
 
-Expose only the API port (`:8080` by default). Never publish the Postgres port
-in production — the compose file intentionally does not.
+Expose only the API port (`:8080` by default). `deploy/docker-compose.yml`
+publishes it on `127.0.0.1` unless `SEMIDX_BIND_ADDR` names another interface
+address (for example the LAN address a reverse proxy or other machines use;
+`0.0.0.0` binds every interface, including global IPv6 and VPN tunnels). Never
+publish the Postgres port in production — the compose file intentionally does
+not. The server is capped at 4 GiB / 3 CPUs and the database at 2 GiB / 2 CPUs;
+adjust the `deploy.resources` limits for larger indexes.
 
 ## Backups
 
