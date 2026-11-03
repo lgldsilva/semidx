@@ -1,0 +1,12 @@
+# TLS is terminated by the operator's edge proxy. Keep the backend HTTP-only
+# unless a local override mounts approved certificates into Caddy.
+http://{$STAGING_PUBLIC_HOST:localhost}:8080 {
+	encode gzip
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+	}
+	reverse_proxy ui:8080
+}
