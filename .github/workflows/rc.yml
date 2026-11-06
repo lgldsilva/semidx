@@ -129,10 +129,10 @@ jobs:
             # (not pushed) so archives get the RC version without publishing.
             git tag -f "$TAG"
             export GORELEASER_CURRENT_TAG="$TAG"
-            go run github.com/goreleaser/goreleaser/v2@v2.13.0 release --clean --skip="$SKIP_FLAGS"
+            go run github.com/goreleaser/goreleaser/v2@v2.20.0 release --clean --skip="$SKIP_FLAGS"
             git tag -d "$TAG"
           else
-            go run github.com/goreleaser/goreleaser/v2@v2.13.0 release --clean --snapshot --skip="$SKIP_FLAGS"
+            go run github.com/goreleaser/goreleaser/v2@v2.20.0 release --clean --snapshot --skip="$SKIP_FLAGS"
           fi
           ls -la dist
       - name: Upload RC artifacts

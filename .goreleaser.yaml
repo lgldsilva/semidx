@@ -95,7 +95,9 @@ release:
 # Package manager taps (lgldsilva/homebrew-tap, lgldsilva/scoop-bucket)
 # enabled using the TAP_GITHUB_TOKEN repository secret.
 # Track: https://github.com/lgldsilva/semidx/issues/16
-brews:
+# brews (Formula) was deprecated in GoReleaser v2.16; casks publish the
+# same two binaries. The cask lands in Casks/, not Formula/.
+homebrew_casks:
   - name: semidx
     # Skip when TAP_GITHUB_TOKEN is absent/empty (secret not yet configured).
     # Always use index — missing map keys make .Env.TAP_GITHUB_TOKEN fail
@@ -106,14 +108,14 @@ brews:
       name: homebrew-tap
       branch: main
       token: '{{ .Env.TAP_GITHUB_TOKEN }}'
-    directory: Formula
+    directory: Casks
     homepage: https://github.com/lgldsilva/semidx
     description: "Self-hosted semantic code search."
     license: Apache-2.0
-    install: |
-      bin.install "semidx"
-      bin.install "chatrag"
-    commit_msg_template: "Brew formula update for {{ .ProjectName }} {{ .Tag }}"
+    binaries:
+      - semidx
+      - chatrag
+    commit_msg_template: "Brew cask update for {{ .ProjectName }} {{ .Tag }}"
 
 scoops:
   - name: semidx

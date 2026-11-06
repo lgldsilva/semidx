@@ -208,7 +208,7 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
   run `scripts/sonar-scan.sh` locally for a coverage-aware gate if needed.
 - **Dependabot** (`dependabot.yml`) opens weekly grouped PRs for Go modules and
   GitHub Actions.
-- goreleaser is pinned to **v2.13.0** and gosec to **v2.27.1**.
+- goreleaser is pinned to **v2.20.0** and gosec to **v2.27.1**.
 
 > **Migration note:** a Gitea mirror may still be alive during cutover. Prefer
 > GitHub as the source of truth for PRs/releases. Homelab deploy pulls from

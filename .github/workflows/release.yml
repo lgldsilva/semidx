@@ -123,8 +123,8 @@ jobs:
           TAP_TOKEN="${TAP_GITHUB_TOKEN:-}"
           if [ -z "$TAP_TOKEN" ]; then
             # Visible on the job summary. An empty secret used to strip
-            # brews/scoops with no annotation, so releases looked successful
-            # while Homebrew and Scoop stayed on the seeded formula.
+            # homebrew_casks/scoops with no annotation, so releases looked successful
+            # while Homebrew and Scoop stayed on the seeded manifests.
             echo "::warning::TAP_GITHUB_TOKEN is empty; Homebrew and Scoop uploads are skipped. Create a fine-grained PAT with contents:write on lgldsilva/homebrew-tap and lgldsilva/scoop-bucket and save it as the TAP_GITHUB_TOKEN repository secret."
           else
             # Verify the configured token can actually reach the tap repos.
@@ -139,13 +139,13 @@ jobs:
             fi
           fi
           if [ -z "$TAP_TOKEN" ]; then
-            # GoReleaser v2 ignores --skip for brews/scoops, and skip_upload
+            # GoReleaser v2 ignores --skip for homebrew/scoop, and skip_upload
             # still evaluates as false when the secret is non-empty but invalid.
-            # Generate a config with the brews/scoops sections removed.
-            awk '/^brews:/ {exit} {print}' .goreleaser.yaml > /tmp/.goreleaser-notaps.yaml
+            # Generate a config with the homebrew_casks/scoops sections removed.
+            awk '/^homebrew_casks:/ {exit} {print}' .goreleaser.yaml > /tmp/.goreleaser-notaps.yaml
             CONFIG_FLAGS="--config /tmp/.goreleaser-notaps.yaml"
           fi
-          go run github.com/goreleaser/goreleaser/v2@v2.13.0 release --clean ${CONFIG_FLAGS}
+          go run github.com/goreleaser/goreleaser/v2@v2.20.0 release --clean ${CONFIG_FLAGS}
       - name: Build and push Docker image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
