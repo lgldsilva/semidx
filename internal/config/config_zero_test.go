@@ -67,35 +67,44 @@ func TestZeroConfigRecommendedKeywordOnly(t *testing.T) {
 	}
 }
 
-// TestZeroConfigRecommendedHonoursUserConfigDSN: a DSN persisted with
+// TestZeroConfigRecommendedHonoursUserConfig: a value persisted with
 // `semidx config set` (user config file, not the process env) must stop the
 // zero-config SQLite keyword-only fallback, just as `config list` reports
-// Postgres as the active backend.
-func TestZeroConfigRecommendedHonoursUserConfigDSN(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Chdir(t.TempDir())
-	t.Setenv("SEMIDX_DB_DSN", "")
-	t.Setenv("SEMIDX_LOCAL_INDEX", "")
-	if err := config.SetUserEnv("SEMIDX_DB_DSN", "postgres://saved/db"); err != nil {
-		t.Fatal(err)
+// that backend as active.
+func TestZeroConfigRecommendedHonoursUserConfig(t *testing.T) {
+	cases := []struct {
+		name  string
+		key   string
+		value string
+		msg   string
+	}{
+		{
+			name:  "DSN",
+			key:   "SEMIDX_DB_DSN",
+			value: "postgres://saved/db",
+			msg:   "DSN from the user config file should disable zero-config",
+		},
+		{
+			name:  "LocalIndex",
+			key:   "SEMIDX_LOCAL_INDEX",
+			value: "1",
+			msg:   "SEMIDX_LOCAL_INDEX from the user config file should disable zero-config",
+		},
 	}
-	cfg := config.LoadWithLookup(func(string) (string, bool) { return "", false })
-	if config.ZeroConfigRecommended(cfg, false) {
-		t.Fatal("DSN from the user config file should disable zero-config")
-	}
-}
-
-func TestZeroConfigRecommendedHonoursUserConfigLocalIndex(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Chdir(t.TempDir())
-	t.Setenv("SEMIDX_DB_DSN", "")
-	t.Setenv("SEMIDX_LOCAL_INDEX", "")
-	if err := config.SetUserEnv("SEMIDX_LOCAL_INDEX", "1"); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.LoadWithLookup(func(string) (string, bool) { return "", false })
-	if config.ZeroConfigRecommended(cfg, false) {
-		t.Fatal("SEMIDX_LOCAL_INDEX from the user config file should disable zero-config")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			t.Chdir(t.TempDir())
+			t.Setenv("SEMIDX_DB_DSN", "")
+			t.Setenv("SEMIDX_LOCAL_INDEX", "")
+			if err := config.SetUserEnv(tc.key, tc.value); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.LoadWithLookup(envOnly(map[string]string{}))
+			if config.ZeroConfigRecommended(cfg, false) {
+				t.Fatal(tc.msg)
+			}
+		})
 	}
 }
 
