@@ -174,27 +174,26 @@ func TestExpandByGraphDecayFactor(t *testing.T) {
 	t.Error("neighbor.go not found in expanded results")
 }
 
+// TestExpandByGraphFloorThreshold pins the floor to the RELATIVE decay
+// (decay^depth), independent of the seed's absolute score: 0.85^7 ≈ 0.32 is
+// kept, 0.85^8 ≈ 0.27 is dropped, even for a seed scored far below 0.3.
 func TestExpandByGraphFloorThreshold(t *testing.T) {
-	g := newGraphFixture(t)
-	ctx := context.Background()
-
-	g.createFile(ctx, t, "low.go", "package x\nfunc X() {}")
-	g.createFile(ctx, t, "dropped.go", "package y\nfunc Y() {}")
-	g.addEdge(ctx, t, "low.go", "dropped.go")
-
-	// Seed score that decays below floor (0.3) after one hop.
-	seeds := []store.SearchResult{{FilePath: "low.go", Score: 0.29}}
-	results, err := g.svc.expandByGraph(ctx, &Request{GraphMaxDepth: 5}, seeds, g.pid, 1)
-	if err != nil {
-		t.Fatalf("expandByGraph: %v", err)
+	graph := make(map[string][]string, 9)
+	for i := range 9 {
+		graph[fmt.Sprintf("n%d.go", i)] = []string{fmt.Sprintf("n%d.go", i+1)}
 	}
-
-	got := collectPaths(results)
-	if hasPath(got, "dropped.go") {
-		t.Errorf("dropped.go should be dropped because 0.29*0.85 < floor 0.3; got %v", got)
+	hops := runGraphBFS(bfsParams{
+		graph:     graph,
+		reverse:   map[string][]string{},
+		seedPaths: map[string]bool{"n0.go": true},
+		seeds:     []store.SearchResult{{FilePath: "n0.go", Score: 0.29}},
+		maxDepth:  10, decay: graphExpandDecay, floor: graphExpandFloor, maxPaths: maxGraphExpandPaths,
+	})
+	if hop, ok := hops["n7.go"]; !ok || hop.Depth != 7 {
+		t.Errorf("depth-7 hop (0.85^7 >= floor) missing: %v", hops)
 	}
-	if len(got) != 0 {
-		t.Errorf("expected no expanded results, got %v", got)
+	if _, ok := hops["n8.go"]; ok {
+		t.Errorf("depth-8 hop (0.85^8 < floor) should be dropped: %v", hops)
 	}
 }
 
@@ -439,12 +438,12 @@ func TestMergeGraphResultsPreservesOriginalScoreOnDedup(t *testing.T) {
 		{FilePath: "c.go", Score: 0.8},
 	}
 
-	merged := mergeGraphResults(original, expanded)
+	merged := mergeGraphResults(original, expanded, 5)
 
 	// a.go: original score 0.9
 	// b.go: original score 0.7 (expanded 0.6 is discarded)
-	// c.go: expanded score 0.8
-	// Sorted desc: a.go(0.9) > c.go(0.8) > b.go(0.7)
+	// c.go: graph neighbour, rescored below the weakest direct hit
+	// Order: a.go(0.9) > b.go(0.7) > c.go(<0.7)
 
 	if len(merged) != 3 {
 		t.Fatalf("len(merged) = %d, want 3", len(merged))
@@ -461,13 +460,15 @@ func TestMergeGraphResultsSortedByScoreDescending(t *testing.T) {
 		{FilePath: "a.go", Score: 0.5},
 	}
 	expanded := []store.SearchResult{
-		{FilePath: "b.go", Score: 0.9},
-		{FilePath: "c.go", Score: 0.3},
+		{FilePath: "b.go", Score: 0.9, GraphDepth: 1},
+		{FilePath: "c.go", Score: 0.3, GraphDepth: 2},
 	}
 
-	merged := mergeGraphResults(original, expanded)
+	merged := mergeGraphResults(original, expanded, 5)
 
-	want := []string{"b.go", "a.go", "c.go"}
+	// Graph neighbours rank below every direct hit regardless of the score
+	// they arrived with; nearer hops first.
+	want := []string{"a.go", "b.go", "c.go"}
 	if len(merged) != 3 {
 		t.Fatalf("len(merged) = %d, want 3", len(merged))
 	}
@@ -488,12 +489,12 @@ func TestMergeGraphResultsEmptyExpanded(t *testing.T) {
 	original := []store.SearchResult{
 		{FilePath: "a.go", Score: 0.9},
 	}
-	merged := mergeGraphResults(original, nil)
+	merged := mergeGraphResults(original, nil, 5)
 	if len(merged) != 1 || merged[0].FilePath != "a.go" {
 		t.Errorf("merge with nil expanded = %+v, want original unchanged", merged)
 	}
 
-	merged = mergeGraphResults(original, []store.SearchResult{})
+	merged = mergeGraphResults(original, []store.SearchResult{}, 5)
 	if len(merged) != 1 || merged[0].FilePath != "a.go" {
 		t.Errorf("merge with empty expanded = %+v, want original unchanged", merged)
 	}

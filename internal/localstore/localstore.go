@@ -959,7 +959,7 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 	// needs the embedding blob. Content is fetched for just the top-K rows in a
 	// second query, avoiding a full-table content transfer per search.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT c.id, f.path, c.start_line, c.end_line, COALESCE(ue.embedding, c.embedding), c.confidence, c.symbol
+		SELECT c.id, f.path, c.start_line, c.end_line, COALESCE(ue.embedding, c.embedding), c.confidence, c.symbol, f.hash, f.indexed_at
 		FROM chunks c `+join+`
 		LEFT JOIN unique_embeddings ue ON ue.emb_hash = c.emb_hash
 		WHERE c.project_id = ? AND COALESCE(ue.embedding, c.embedding) IS NOT NULL
@@ -987,10 +987,12 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 			endLine    sql.NullInt64
 			confidence sql.NullString
 			symbol     sql.NullString
+			indexedAt  sql.NullString
 		)
-		if err := rows.Scan(&hit.id, &hit.res.FilePath, &startLine, &endLine, &blob, &confidence, &symbol); err != nil {
+		if err := rows.Scan(&hit.id, &hit.res.FilePath, &startLine, &endLine, &blob, &confidence, &symbol, &hit.res.FileHash, &indexedAt); err != nil {
 			return nil, err
 		}
+		hit.res.IndexedAt = parseSQLiteTime(indexedAt.String)
 		hit.res.StartLine = int(startLine.Int64)
 		hit.res.EndLine = int(endLine.Int64)
 		hit.res.Score = cosineWithQueryNormFromBlob(embedding, qNorm, blob)
@@ -1184,7 +1186,7 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 	// worktree scope is expressed with EXISTS so the query remains static and
 	// all user-controlled values stay parameters.
 	const ftsSQL = `
-		SELECT f.path, c.content, c.start_line, c.end_line, -bm25(chunks_fts) AS score, c.confidence, c.symbol
+		SELECT f.path, c.content, c.start_line, c.end_line, -bm25(chunks_fts) AS score, c.confidence, c.symbol, f.hash, f.indexed_at
 		FROM chunks c
 		JOIN chunks_fts ft ON ft.rowid = c.id
 		JOIN files f ON f.id = c.file_id
@@ -1219,7 +1221,7 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 	// FTS results. This keeps camelCase/path matches available on SQLite while
 	// ensuring token-ranked matches always win ties.
 	const likeQuery = `
-		SELECT f.path, c.content, c.start_line, c.end_line, 0.0 AS score, c.confidence, c.symbol
+		SELECT f.path, c.content, c.start_line, c.end_line, 0.0 AS score, c.confidence, c.symbol, f.hash, f.indexed_at
 		FROM chunks c
 		JOIN files f ON f.id = c.file_id
 		WHERE c.project_id = ?
@@ -1278,7 +1280,7 @@ func keywordResultKey(result store.SearchResult) string {
 }
 
 // scanChunkResultRows reads the canonical "path, content, start_line, end_line,
-// score, confidence, symbol" row shape shared by keyword search and the
+// score, confidence, symbol, hash, indexed_at" row shape shared by keyword search and the
 // FetchChunksBy{Path,DirPrefix} helpers. Empty confidence is normalized to
 // AMBIGUOUS (the column default) so callers see a stable tag for pre-v2 rows.
 // The caller owns closing the rows.
@@ -1291,10 +1293,12 @@ func scanChunkResultRows(rows *sql.Rows) ([]store.SearchResult, error) {
 			endLine    sql.NullInt64
 			confidence sql.NullString
 			symbol     sql.NullString
+			indexedAt  sql.NullString
 		)
-		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score, &confidence, &symbol); err != nil {
+		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score, &confidence, &symbol, &r.FileHash, &indexedAt); err != nil {
 			return nil, err
 		}
+		r.IndexedAt = parseSQLiteTime(indexedAt.String)
 		r.StartLine = int(startLine.Int64)
 		r.EndLine = int(endLine.Int64)
 		r.Confidence = confidence.String
@@ -1368,7 +1372,7 @@ func (s *SQLiteStore) FetchGraphNeighbors(ctx context.Context, projectID int) (m
 // FetchChunksByPath returns chunks for a specific file path, ordered by
 // chunk_index. Returns an empty slice if the file has no chunks.
 func (s *SQLiteStore) FetchChunksByPath(ctx context.Context, projectID int, filePath string, dims, limit int) ([]store.SearchResult, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path = ? ORDER BY c.chunk_index LIMIT ?`, projectID, filePath, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol, f.hash, f.indexed_at FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path = ? ORDER BY c.chunk_index LIMIT ?`, projectID, filePath, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1379,7 +1383,7 @@ func (s *SQLiteStore) FetchChunksByPath(ctx context.Context, projectID int, file
 // FetchChunksByDirPrefix returns chunks for files whose path starts with the
 // given directory prefix. Returns empty slice if no files match.
 func (s *SQLiteStore) FetchChunksByDirPrefix(ctx context.Context, projectID int, dirPrefix string, dims, limit int) ([]store.SearchResult, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path LIKE (? || '%') ORDER BY c.chunk_index LIMIT ?`, projectID, dirPrefix, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol, f.hash, f.indexed_at FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path LIKE (? || '%') ORDER BY c.chunk_index LIMIT ?`, projectID, dirPrefix, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1402,9 +1406,9 @@ func (s *SQLiteStore) FetchChunksByPaths(ctx context.Context, projectID int, pat
 	if err != nil {
 		return nil, err
 	}
-	const query = `SELECT path, content, start_line, end_line, score, confidence, symbol FROM (
+	const query = `SELECT path, content, start_line, end_line, score, confidence, symbol, hash, indexed_at FROM (
 			SELECT f.path AS path, c.content, c.start_line, c.end_line, 0.5 AS score,
-			       c.confidence, c.symbol,
+			       c.confidence, c.symbol, f.hash AS hash, f.indexed_at AS indexed_at,
 			       ROW_NUMBER() OVER (PARTITION BY f.path ORDER BY c.chunk_index) AS rn
 			FROM chunks c
 			JOIN files f ON f.id = c.file_id
