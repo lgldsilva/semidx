@@ -23,6 +23,11 @@ each GitHub Release.
 
 ### Fixed
 
+- Search staleness compares the file on disk with the hit's own indexed
+  version, so worktrees with divergent versions no longer flag each other's
+  hits as stale.
+- Graph-expanded hits always rank below direct hits, expansion works with
+  keyword-fallback scores, and at most `top_k` graph chunks are added.
 - Pin `aquasecurity/trivy-action` to commit SHA `915b19b` (same as tag
   `v0.28.0`). The previous ref `aquasecurity/trivy-action@0.28.0` failed
   with "unable to find version 0.28.0" because the upstream repo ships
