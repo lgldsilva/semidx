@@ -49,8 +49,7 @@ func newWorkspaceCreateCmd(d *deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			d.client.Workspace = item.Slug
-			if err := clientconfig.Save(d.client); err != nil {
+			if err := selectClientWorkspace(d, item.Slug); err != nil {
 				return err
 			}
 			fmt.Printf("Created and selected workspace %s (%s)\n", item.Slug, item.Name)
@@ -70,12 +69,22 @@ func newWorkspaceUseCmd(d *deps) *cobra.Command {
 			if slug == "" {
 				return fmt.Errorf("workspace slug is required")
 			}
-			d.client.Workspace = slug
-			if err := clientconfig.Save(d.client); err != nil {
+			if err := selectClientWorkspace(d, slug); err != nil {
 				return err
 			}
 			fmt.Printf("Selected workspace %s\n", slug)
 			return nil
 		},
 	}
+}
+
+// selectClientWorkspace persists the workspace choice in the on-disk client
+// config only and mirrors it into the in-memory config (see
+// selectClientTenant).
+func selectClientWorkspace(d *deps, slug string) error {
+	if err := clientconfig.Update(func(c *clientconfig.Config) { c.Workspace = slug }); err != nil {
+		return err
+	}
+	d.client.Workspace = slug
+	return nil
 }

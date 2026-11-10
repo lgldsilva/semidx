@@ -78,8 +78,7 @@ func newTenantCreateCmd(d *deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			d.client.Tenant = t.Slug
-			if err := clientconfig.Save(d.client); err != nil {
+			if err := selectClientTenant(d, t.Slug); err != nil {
 				return err
 			}
 			fmt.Printf("Created and selected tenant %s (%s)\n", t.Slug, t.Name)
@@ -101,12 +100,22 @@ func newTenantUseCmd(d *deps) *cobra.Command {
 			if slug == "" {
 				return fmt.Errorf("tenant slug is required")
 			}
-			d.client.Tenant = slug
-			if err := clientconfig.Save(d.client); err != nil {
+			if err := selectClientTenant(d, slug); err != nil {
 				return err
 			}
 			fmt.Printf("Selected tenant %s\n", slug)
 			return nil
 		},
 	}
+}
+
+// selectClientTenant persists the tenant choice in the on-disk client config
+// only (env overrides such as SEMIDX_TOKEN stay out of the file) and mirrors
+// it into the in-memory config used by the rest of this run.
+func selectClientTenant(d *deps, slug string) error {
+	if err := clientconfig.Update(func(c *clientconfig.Config) { c.Tenant = slug }); err != nil {
+		return err
+	}
+	d.client.Tenant = slug
+	return nil
 }
