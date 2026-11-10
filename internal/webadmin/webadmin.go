@@ -330,6 +330,18 @@ func (a *Admin) withTenantContext(w http.ResponseWriter, r *http.Request, ac *au
 			}
 		}
 		tc.ID = t.ID
+	} else if !tc.GlobalAdmin {
+		// No selector: the default tenant still requires membership.
+		allowed, err := ts.CanAccessTenant(r.Context(), ac.user.ID, tc.ID)
+		if err != nil {
+			a.log.Error("tenant membership lookup failed", "err", err)
+			a.writeInternalError(w, jsonAPI)
+			return nil, false
+		}
+		if !allowed {
+			writeJSONErr(w, http.StatusForbidden, "tenant access denied")
+			return nil, false
+		}
 	}
 	if ws, supported := a.store.(store.WorkspaceStore); supported {
 		workspaceSlug := strings.TrimSpace(r.Header.Get("X-Semidx-Workspace"))
