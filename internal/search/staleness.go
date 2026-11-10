@@ -36,37 +36,69 @@ func (s *Service) annotateStaleness(ctx context.Context, project *store.Project,
 		return
 	}
 
-	var infos map[string]store.FileHashInfo // lazily loaded fallback
-	infosLoaded := false
+	fallback := &fileHashFallback{ctx: ctx, db: s.store, project: project}
 	// Hash each unique hit path once (topK is small).
 	current := make(map[string]string, len(results))
 	for i := range results {
-		r := &results[i]
-		hash := r.FileHash
-		if hash == "" {
-			if !infosLoaded {
-				infos = loadFileHashInfos(ctx, s.store, project)
-				infosLoaded = true
-			}
-			info, ok := infos[r.FilePath]
-			if !ok {
-				continue
-			}
-			hash = info.Hash
-			if r.IndexedAt.IsZero() {
-				r.IndexedAt = info.IndexedAt
-			}
-		}
-		cur, seen := current[r.FilePath]
-		if !seen {
-			cur = hashProjectFile(root, r.FilePath)
-			current[r.FilePath] = cur
-		}
-		if cur == "" || hash == "" {
-			continue
-		}
-		r.Stale = cur != hash
+		markHitStale(&results[i], root, current, fallback)
 	}
+}
+
+// fileHashFallback is the lazily loaded project-wide latest hash per path,
+// used only for hits whose store did not report FileHash.
+type fileHashFallback struct {
+	ctx     context.Context
+	db      store.IndexStore
+	project *store.Project
+
+	infos  map[string]store.FileHashInfo
+	loaded bool
+}
+
+// indexedHash returns the hash to compare against the checkout, and false
+// when the hit has no FileHash and the path is absent from the fallback
+// index. In that case the caller leaves the hit unchecked. A fallback hit
+// with a zero IndexedAt takes the timestamp stored with the hash.
+func (f *fileHashFallback) indexedHash(r *store.SearchResult) (string, bool) {
+	if r.FileHash != "" {
+		return r.FileHash, true
+	}
+	f.load()
+	info, ok := f.infos[r.FilePath]
+	if !ok {
+		return "", false
+	}
+	if r.IndexedAt.IsZero() {
+		r.IndexedAt = info.IndexedAt
+	}
+	return info.Hash, true
+}
+
+func (f *fileHashFallback) load() {
+	if f.loaded {
+		return
+	}
+	f.infos = loadFileHashInfos(f.ctx, f.db, f.project)
+	f.loaded = true
+}
+
+// markHitStale sets r.Stale when the file under root differs from the hit's
+// indexed hash. current caches the on-disk digest per path. An unreadable
+// file, an empty digest, or a hit with no indexed hash leaves Stale false.
+func markHitStale(r *store.SearchResult, root string, current map[string]string, fallback *fileHashFallback) {
+	hash, ok := fallback.indexedHash(r)
+	if !ok {
+		return
+	}
+	cur, seen := current[r.FilePath]
+	if !seen {
+		cur = hashProjectFile(root, r.FilePath)
+		current[r.FilePath] = cur
+	}
+	if cur == "" || hash == "" {
+		return
+	}
+	r.Stale = cur != hash
 }
 
 // loadFileHashInfos is the best-effort fallback lookup for hits without a
