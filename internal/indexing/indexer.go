@@ -297,19 +297,13 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 			created, softErrs, outcome, units, ferr := idx.indexFile(ctx, projectID, path, rel, model)
 
 			mu.Lock()
-			idx.accumulate(stats, manifest, rel, fileResult{
+			idx.trackFileResult(ctx, projectID, rel, fileResult{
 				created:  created,
 				softErrs: softErrs,
 				outcome:  outcome,
 				units:    units,
 				err:      ferr,
-			})
-			if ferr != nil || softErrs > 0 {
-				keep[filepath.ToSlash(rel)] = true
-			}
-			if ferr == nil && softErrs == 0 && outcome == outcomeIndexed {
-				idx.pruneOldVersions(ctx, projectID, units)
-			}
+			}, stats, manifest, keep)
 			processed++
 			done, chunks := processed, stats.ChunksCreated
 			filesIdx, errs := stats.FilesIndexed, stats.Errors
@@ -628,6 +622,20 @@ func (idx *Indexer) finalizeProject(ctx context.Context, projectID int, projectP
 	}
 	if err := idx.db.UpdateProjectStatus(ctx, projectID, status); err != nil {
 		idx.log.Warn("update project status", "project", projectID, "err", err)
+	}
+}
+
+// trackFileResult folds one file's indexing result into the run stats and the
+// worktree manifest. A hard or soft failure marks the file in keep so its
+// previous version survives the run; a clean index prunes superseded versions
+// in a prune-missing project. Callers must hold the stats mutex.
+func (idx *Indexer) trackFileResult(ctx context.Context, projectID int, rel string, r fileResult, stats *IndexStats, manifest map[string]string, keep map[string]bool) {
+	idx.accumulate(stats, manifest, rel, r)
+	if r.err != nil || r.softErrs > 0 {
+		keep[filepath.ToSlash(rel)] = true
+	}
+	if r.err == nil && r.softErrs == 0 && r.outcome == outcomeIndexed {
+		idx.pruneOldVersions(ctx, projectID, r.units)
 	}
 }
 
