@@ -726,21 +726,23 @@ func (s *PgStore) PruneEmbeddingCache(ctx context.Context, dims int) (int64, err
 // via EnsureChunksTable already get the index; this catches tables that existed
 // before the migration was applied.
 func (s *PgStore) applyTrigramIndexes(ctx context.Context) error {
-	rows, err := s.pool.Query(ctx, `SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'chunks_%'`)
+	rows, err := s.pool.Query(ctx, `SELECT table_name FROM information_schema.tables
+		WHERE table_schema = current_schema() AND table_name ~ '^chunks_[0-9]+$'`)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var tbl string
-		if err := rows.Scan(&tbl); err != nil {
-			continue
-		}
+	tables, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	for _, tbl := range tables {
 		idx := pgx.Identifier{tbl + "_content_trgm"}.Sanitize()
 		tblSafe := pgx.Identifier{tbl}.Sanitize()
-		_, _ = s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING gin (content gin_trgm_ops)", idx, tblSafe))
+		if _, err := s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING gin (content gin_trgm_ops)", idx, tblSafe)); err != nil {
+			slog.Warn("trigram index", "table", tbl, "err", err)
+		}
 	}
-	return rows.Err()
+	return nil
 }
 
 // distanceExpr is the cosine-distance SQL expression against query param $1,
