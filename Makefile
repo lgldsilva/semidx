@@ -26,8 +26,10 @@ bench:
 lint:
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
 
+# `test -s /dev/stdin` on a pipe is always false, so the old one-liner never
+# failed; capture the list and fail explicitly instead.
 fmt:
-	gofmt -l . | tee /dev/stderr | test ! -s /dev/stdin
+	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "gofmt needed on:"; echo "$$out"; exit 1; fi
 
 fmt-fix:
 	gofmt -w .

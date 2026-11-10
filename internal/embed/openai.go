@@ -26,6 +26,7 @@ type openAIEmbedRequest struct {
 
 type openAIEmbedResponse struct {
 	Data []struct {
+		Index     *int      `json:"index"` // omitted by some compatible APIs
 		Embedding []float32 `json:"embedding"`
 	} `json:"data"`
 }
@@ -80,8 +81,25 @@ func (c *OpenAIClient) Embed(ctx context.Context, model string, inputs ...string
 		return nil, err
 	}
 
-	embeddings := make([][]float32, len(result.Data))
-	for i, d := range result.Data {
+	return orderByIndex(result, len(inputs))
+}
+
+// orderByIndex places each vector at its declared input index (the API does
+// not promise response order) and rejects a response that does not cover every
+// input exactly once: callers index the result per chunk.
+func orderByIndex(result openAIEmbedResponse, n int) ([][]float32, error) {
+	if len(result.Data) != n {
+		return nil, fmt.Errorf("openai embed: got %d vectors for %d inputs", len(result.Data), n)
+	}
+	embeddings := make([][]float32, n)
+	for pos, d := range result.Data {
+		i := pos // no index field: positional order
+		if d.Index != nil {
+			i = *d.Index
+		}
+		if i < 0 || i >= n || embeddings[i] != nil {
+			return nil, fmt.Errorf("openai embed: invalid or duplicate index %d", i)
+		}
 		embeddings[i] = d.Embedding
 	}
 	return embeddings, nil

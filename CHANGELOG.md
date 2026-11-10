@@ -22,6 +22,13 @@ each GitHub Release.
   URL (`SEMIDX_*_BASE_URL`), swap keys, point the index at an attacker
   database or turn privacy routing off. Ignored keys are reported once on
   stderr; set them in the real environment or with `semidx config set`.
+- In pool mode (`SEMIDX_OLLAMA_URLS` with 2+ URLs) a custom `openai` provider
+  could receive chunks of sensitive files (force-local) and requests made
+  under global privacy mode; restricted requests now only use local lanes.
+- Sensitive-file detection now covers plural keywords (`credentials.json`,
+  `secrets.yaml`, `tokens.json`), SSH private keys (`id_rsa`, `id_ed25519`, …),
+  `.npmrc`, `.netrc`, `.pgpass`, `.pypirc`, `.htpasswd`, keystores
+  (`.p12/.pfx/.jks/.keystore`) and Terraform state/vars.
 
 ### Fixed
 
@@ -47,6 +54,14 @@ each GitHub Release.
 
 ### Fixed
 
+- Code chunking no longer drops the rest of a file after a line longer than
+  64 KiB, and never emits empty chunks (embedding APIs rejected them with
+  400 and the batch retried forever).
+- A circuit-breaker probe that was cancelled or hit an unknown model no
+  longer leaves the provider blocked until restart.
+- Provider responses with fewer vectors than inputs are rejected instead of
+  panicking the indexer; OpenAI-compatible vectors are ordered by `index`.
+- `make fmt` now fails on unformatted files (it always passed).
 - Pin `aquasecurity/trivy-action` to commit SHA `915b19b` (same as tag
   `v0.28.0`). The previous ref `aquasecurity/trivy-action@0.28.0` failed
   with "unable to find version 0.28.0" because the upstream repo ships

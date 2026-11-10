@@ -123,6 +123,22 @@ func isCodeFile(path string) bool {
 // ChunkFile splits a file's content into chunks no larger than maxChars,
 // choosing a code- or prose-oriented strategy from the file extension.
 func ChunkFile(path string, content []byte, maxChars int) []Chunk {
+	return dropEmpty(chunkFile(path, content, maxChars))
+}
+
+// dropEmpty removes whitespace-only chunks: embedding APIs reject empty inputs,
+// which fails (and endlessly retries) the whole batch.
+func dropEmpty(chunks []Chunk) []Chunk {
+	out := chunks[:0]
+	for _, c := range chunks {
+		if strings.TrimSpace(c.Content) != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func chunkFile(path string, content []byte, maxChars int) []Chunk {
 	if isCodeFile(path) {
 		// Prefer symbol/AST-aware chunking when analyzer grammars are available.
 		// Fallback keeps previous blank-line behavior for unsupported languages.
@@ -138,6 +154,10 @@ func chunkCode(content []byte, maxChars int) []Chunk {
 	// Split by blank lines, then merge runs of lines into chunks up to maxChars,
 	// tracking the 1-based source line range of each chunk.
 	scanner := bufio.NewScanner(bytes.NewReader(content))
+	// The default 64 KiB token cap would stop the scan at the first longer line
+	// (minified bundles, generated code) and silently drop the rest of the
+	// file; a line can never exceed the whole content, so size the cap to it.
+	scanner.Buffer(make([]byte, 0, 64*1024), len(content)+1)
 	scanner.Split(scanLines)
 
 	acc := codeAccumulator{maxChars: maxChars}
@@ -152,8 +172,9 @@ func chunkCode(content []byte, maxChars int) []Chunk {
 		line := scanner.Bytes()
 
 		switch {
-		case len(bytes.TrimSpace(line)) == 0 && acc.current.Len() > 0:
-			// Blank line ends the current run.
+		case len(bytes.TrimSpace(line)) == 0:
+			// Blank line ends the current run; leading/consecutive blanks are
+			// skipped so they never seed an empty chunk.
 			acc.flush()
 		case len(line) > maxChars:
 			acc.appendOversizedLine(string(line), lineNum)
@@ -163,6 +184,11 @@ func chunkCode(content []byte, maxChars int) []Chunk {
 	}
 
 	acc.flush()
+	if err := scanner.Err(); err != nil {
+		// Unreachable with the buffer sized above; fall back to the prose
+		// splitter rather than return a truncated file.
+		return chunkText(content, maxChars)
+	}
 
 	// Files without blank lines produce no chunks above; fall back to prose split.
 	if len(acc.chunks) == 0 && len(content) > 0 {
@@ -185,6 +211,10 @@ type codeAccumulator struct {
 // flush emits the pending chunk (if any) and resets the builder.
 func (a *codeAccumulator) flush() {
 	if a.current.Len() == 0 {
+		return
+	}
+	if strings.TrimSpace(a.current.String()) == "" {
+		a.current.Reset()
 		return
 	}
 	a.chunks = append(a.chunks, Chunk{Content: strings.TrimSpace(a.current.String()), StartLine: a.curStart, EndLine: a.curEnd})
