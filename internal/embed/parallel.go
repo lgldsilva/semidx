@@ -116,7 +116,7 @@ func tryLanes[T any](ctx context.Context, p *ParallelEmbedder, call func(Embedde
 // ModelInfo tries entries in order and returns the first successful answer, so
 // one dead pool member cannot hide the dims the others know.
 func (p *ParallelEmbedder) ModelInfo(ctx context.Context, model string) (*ModelInfo, error) {
-	var lastErr error = errNoLocalLane(len(p.entries))
+	lastErr := errNoLocalLane(len(p.entries))
 	for i, e := range p.entries {
 		if p.remote[i] && p.restricted(ctx) {
 			continue
