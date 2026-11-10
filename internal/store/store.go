@@ -1755,7 +1755,13 @@ func (s *PgStore) FetchChunksByPath(ctx context.Context, projectID int, filePath
 	if err != nil {
 		return nil, err
 	}
-	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol, f.hash, f.indexed_at FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path = $2 ORDER BY c.chunk_index LIMIT $3`, table)
+	// Only the most recently indexed content-addressed version of the path:
+	// older versions (other worktrees, pre-edit pushes) must not be blended in.
+	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol, f.hash, f.indexed_at
+		FROM %s c JOIN files f ON f.id = c.file_id
+		WHERE c.project_id = $1 AND f.id = (
+			SELECT id FROM files WHERE project_id = $1 AND path = $2 ORDER BY indexed_at DESC, id DESC LIMIT 1)
+		ORDER BY c.chunk_index LIMIT $3`, table)
 	rows, err := s.pool.Query(ctx, query, projectID, filePath, limit)
 	if err != nil {
 		return nil, err
@@ -1796,8 +1802,14 @@ func (s *PgStore) FetchChunksByPaths(ctx context.Context, projectID int, paths [
 			SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score,
 			       c.confidence, c.symbol, f.hash, f.indexed_at,
 			       ROW_NUMBER() OVER (PARTITION BY f.path ORDER BY c.chunk_index) AS rn
-			FROM %s c JOIN files f ON f.id = c.file_id
-			WHERE c.project_id = $1 AND f.path = ANY($2)
+			FROM %s c
+			JOIN (
+				-- latest content-addressed version per path only
+				SELECT DISTINCT ON (path) id, path, hash, indexed_at FROM files
+				WHERE project_id = $1 AND path = ANY($2)
+				ORDER BY path, indexed_at DESC, id DESC
+			) f ON f.id = c.file_id
+			WHERE c.project_id = $1
 		) ranked
 		WHERE rn <= $3
 		ORDER BY path, start_line`, table)
