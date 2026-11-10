@@ -257,6 +257,16 @@ type WorktreeFileRemover interface {
 	RemoveWorktreeFile(ctx context.Context, projectID int, worktree, path string) error
 }
 
+// WorktreeManifestEditor reads a worktree's manifest and adds single entries
+// to it. The indexer uses it to keep the previous version of files that failed
+// or were not visited in a run, and to reference in-flight versions under a
+// pending manifest so a concurrent prune cannot reclaim them. Optional, like
+// WorktreeFileRemover, so lightweight test stores remain source-compatible.
+type WorktreeManifestEditor interface {
+	WorktreeFiles(ctx context.Context, projectID int, worktree string) (map[string]string, error)
+	AddWorktreeFile(ctx context.Context, projectID int, worktree, path, hash string) error
+}
+
 // ProjectStore groups project lifecycle operations.
 type ProjectStore interface {
 	UpsertProject(ctx context.Context, name, path, model string, dims int) (int, error)
@@ -815,6 +825,35 @@ func (s *PgStore) SetWorktreeFiles(ctx context.Context, projectID int, worktree 
 func (s *PgStore) RemoveWorktreeFile(ctx context.Context, projectID int, worktree, path string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM worktree_files
 		WHERE project_id = $1 AND worktree = $2 AND path = $3`, projectID, worktree, path)
+	return err
+}
+
+// WorktreeFiles returns one worktree's current manifest (path -> hash).
+func (s *PgStore) WorktreeFiles(ctx context.Context, projectID int, worktree string) (map[string]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT path, hash FROM worktree_files
+		WHERE project_id = $1 AND worktree = $2`, projectID, worktree)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() {
+		var path, hash string
+		if err := rows.Scan(&path, &hash); err != nil {
+			return nil, err
+		}
+		out[path] = hash
+	}
+	return out, rows.Err()
+}
+
+// AddWorktreeFile records (or replaces) one path's hash in a worktree's
+// manifest without touching its other entries.
+func (s *PgStore) AddWorktreeFile(ctx context.Context, projectID int, worktree, path, hash string) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO worktree_files (project_id, worktree, path, hash)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (project_id, worktree, path) DO UPDATE SET hash = EXCLUDED.hash`,
+		projectID, worktree, path, hash)
 	return err
 }
 

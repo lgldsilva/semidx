@@ -54,6 +54,15 @@ each GitHub Release.
 
 ### Fixed
 
+- Worktree reindex keeps the previous version of files whose embedding failed
+  or that `--max-files` skipped, instead of pruning them from search; a
+  concurrent prune can no longer delete another run's in-flight versions.
+- `--force` reindex no longer deletes a content-addressed file version shared
+  by other worktrees when re-embedding fails.
+- `--docs` folders inside a git repo get correct incremental diffs
+  (repo-relative paths, uncommitted changes, renames, non-ASCII names) and
+  deleted files are removed from the index.
+- Nested archive extraction shares one size budget across all levels.
 - Search staleness compares the file on disk with the hit's own indexed
   version, so worktrees with divergent versions no longer flag each other's
   hits as stale.

@@ -556,6 +556,35 @@ func (s *SQLiteStore) RemoveWorktreeFile(ctx context.Context, projectID int, wor
 	return err
 }
 
+// WorktreeFiles returns one worktree's current manifest (path -> hash).
+func (s *SQLiteStore) WorktreeFiles(ctx context.Context, projectID int, worktree string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT path, hash FROM worktree_files
+		WHERE project_id = ? AND worktree = ?`, projectID, worktree)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]string)
+	for rows.Next() {
+		var path, hash string
+		if err := rows.Scan(&path, &hash); err != nil {
+			return nil, err
+		}
+		out[path] = hash
+	}
+	return out, rows.Err()
+}
+
+// AddWorktreeFile records (or replaces) one path's hash in a worktree's
+// manifest without touching its other entries.
+func (s *SQLiteStore) AddWorktreeFile(ctx context.Context, projectID int, worktree, path, hash string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO worktree_files (project_id, worktree, path, hash)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(project_id, worktree, path) DO UPDATE SET hash = excluded.hash`,
+		projectID, worktree, path, hash)
+	return err
+}
+
 // PruneUnreferencedFiles deletes files (and, via ON DELETE CASCADE, chunks) that
 // no worktree of the project still references, bounding index growth. Returns the
 // number of files removed.

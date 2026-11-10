@@ -257,3 +257,38 @@ func TestExtractGenericArchiveTarDepth(t *testing.T) {
 		t.Errorf("missing top content: %+v", texts)
 	}
 }
+
+// TestExtractArchiveBudgetSharedAcrossNesting is a regression test: the
+// extracted-text budget used to restart at zero for every nested archive, so
+// an outer archive full of inner archives could emit (entries x total) bytes.
+// The budget must be shared by every nesting level of one top-level archive.
+func TestExtractArchiveBudgetSharedAcrossNesting(t *testing.T) {
+	payload := strings.Repeat("x", 600)
+	inner1 := buildZip(t, map[string]string{"a.txt": payload})
+	inner2 := buildTar(t, map[string]string{"b.txt": payload})
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"outer.zip", buildZip(t, map[string]string{"one.zip": string(inner1), "two.tar": string(inner2), "c.txt": payload})},
+		{"outer.tar", buildTar(t, map[string]string{"one.zip": string(inner1), "two.tar": string(inner2), "c.txt": payload})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			budget := &archiveBudget{remaining: 1000}
+			docs, err := extractArchiveEntries(tc.name, tc.data, 0, budget)
+			if err != nil {
+				t.Fatalf("extract: %v", err)
+			}
+			total := 0
+			for _, d := range docs {
+				total += len(d.Text)
+			}
+			if total > 1000 {
+				t.Fatalf("extracted %d bytes across nesting levels, budget was 1000 (docs=%d)", total, len(docs))
+			}
+			if len(docs) != 1 {
+				t.Fatalf("want exactly 1 doc within budget, got %d", len(docs))
+			}
+		})
+	}
+}

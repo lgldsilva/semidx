@@ -55,12 +55,32 @@ func extractGenericArchive(name string, data []byte) (docs []Doc, err error) {
 		}
 	}()
 
-	return extractArchiveEntries(name, data, 0)
+	return extractArchiveEntries(name, data, 0, &archiveBudget{remaining: maxArchiveTotalSize})
 }
 
+// archiveBudget is the extracted-text allowance of one top-level archive. It is
+// shared by pointer across every nesting level so inner archives draw from the
+// same budget instead of each getting a fresh maxArchiveTotalSize.
+type archiveBudget struct {
+	remaining int
+}
+
+// take reserves n bytes, reporting false (and reserving nothing) when the
+// remaining budget cannot hold them.
+func (b *archiveBudget) take(n int) bool {
+	if n > b.remaining {
+		return false
+	}
+	b.remaining -= n
+	return true
+}
+
+// exhausted reports whether no extracted text can be added any more.
+func (b *archiveBudget) exhausted() bool { return b.remaining <= 0 }
+
 // extractArchiveEntries does the actual archive expansion with depth tracking
-// for nested archive protection.
-func extractArchiveEntries(name string, data []byte, depth int) ([]Doc, error) {
+// for nested archive protection; budget is shared across nesting levels.
+func extractArchiveEntries(name string, data []byte, depth int, budget *archiveBudget) ([]Doc, error) {
 	archType := archiveType(name)
 	if archType == "" {
 		return nil, fmt.Errorf("extract: unknown archive type: %s", name)
@@ -68,43 +88,42 @@ func extractArchiveEntries(name string, data []byte, depth int) ([]Doc, error) {
 
 	switch archType {
 	case ".zip":
-		return extractZipEntries(name, data, depth)
+		return extractZipEntries(name, data, depth, budget)
 	case ".tar":
-		return extractTarEntries(name, data, nil, depth)
+		return extractTarEntries(name, data, nil, depth, budget)
 	case ".tar.gz":
 		gr, err := gzip.NewReader(bytes.NewReader(data))
 		if err != nil {
 			return nil, fmt.Errorf("extract: %s: gzip: %w", name, err)
 		}
 		defer func() { _ = gr.Close() }()
-		return extractTarEntries(name, data, gr, depth)
+		return extractTarEntries(name, data, gr, depth, budget)
 	case ".tar.bz2":
 		bz := bzip2.NewReader(bytes.NewReader(data))
-		return extractTarEntries(name, data, bz, depth)
+		return extractTarEntries(name, data, bz, depth, budget)
 	default:
 		return nil, fmt.Errorf("extract: unsupported archive type: %s", archType)
 	}
 }
 
 // extractZipEntries reads entries from a zip archive.
-func extractZipEntries(name string, data []byte, depth int) ([]Doc, error) {
+func extractZipEntries(name string, data []byte, depth int, budget *archiveBudget) ([]Doc, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, fmt.Errorf("extract: %s: open zip: %w", name, err)
 	}
 
 	var docs []Doc
-	totalSize := 0
 
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
 			continue
 		}
-		if len(docs) >= maxArchiveEntries || totalSize >= maxArchiveTotalSize {
+		if len(docs) >= maxArchiveEntries || budget.exhausted() {
 			break
 		}
 
-		entryDocs := tryProcessZipEntry(f, name, depth, &totalSize)
+		entryDocs := tryProcessZipEntry(f, name, depth, budget)
 		docs = append(docs, entryDocs...)
 	}
 
@@ -119,7 +138,7 @@ func cleanEntryName(entryName string) string {
 	return strings.TrimPrefix(path.Clean("/"+entryName), "/")
 }
 
-func tryProcessZipEntry(f *zip.File, name string, depth int, totalSize *int) []Doc {
+func tryProcessZipEntry(f *zip.File, name string, depth int, budget *archiveBudget) []Doc {
 	entryName := cleanEntryName(f.Name)
 	virtualPath := name + "!" + entryName
 	entryExt := strings.ToLower(path.Ext(entryName))
@@ -129,7 +148,7 @@ func tryProcessZipEntry(f *zip.File, name string, depth int, totalSize *int) []D
 		if err != nil {
 			return nil
 		}
-		innerDocs, _ := extractArchiveEntries(virtualPath, entryData, depth+1)
+		innerDocs, _ := extractArchiveEntries(virtualPath, entryData, depth+1, budget)
 		return innerDocs
 	}
 
@@ -145,17 +164,16 @@ func tryProcessZipEntry(f *zip.File, name string, depth int, totalSize *int) []D
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	if *totalSize+len(text) > maxArchiveTotalSize {
+	if !budget.take(len(text)) {
 		return nil
 	}
-	*totalSize += len(text)
 	return []Doc{{Path: virtualPath, Text: text}}
 }
 
 // extractTarEntries reads entries from a tar archive, optionally wrapped in a
 // decompression reader (gzip or bzip2). The data parameter is the raw bytes of
 // the compressed archive (used for recursive decompression of nested archives).
-func extractTarEntries(name string, data []byte, decompress io.Reader, depth int) ([]Doc, error) {
+func extractTarEntries(name string, data []byte, decompress io.Reader, depth int, budget *archiveBudget) ([]Doc, error) {
 	var tr *tar.Reader
 	if decompress != nil {
 		tr = tar.NewReader(decompress)
@@ -164,7 +182,6 @@ func extractTarEntries(name string, data []byte, decompress io.Reader, depth int
 	}
 
 	var docs []Doc
-	totalSize := 0
 	entryCount := 0
 
 	for {
@@ -182,14 +199,14 @@ func extractTarEntries(name string, data []byte, decompress io.Reader, depth int
 			continue
 		}
 		entryCount++
-		if entryCount > maxArchiveEntries || totalSize >= maxArchiveTotalSize {
+		if entryCount > maxArchiveEntries || budget.exhausted() {
 			break
 		}
 
-		entryDocs := tryProcessTarEntry(tr, hdr, name, depth, &totalSize)
+		entryDocs := tryProcessTarEntry(tr, hdr, name, depth, budget)
 		docs = append(docs, entryDocs...)
 
-		if totalSize >= maxArchiveTotalSize {
+		if budget.exhausted() {
 			break
 		}
 	}
@@ -197,7 +214,7 @@ func extractTarEntries(name string, data []byte, decompress io.Reader, depth int
 	return docs, nil
 }
 
-func tryProcessTarEntry(tr *tar.Reader, hdr *tar.Header, name string, depth int, totalSize *int) []Doc {
+func tryProcessTarEntry(tr *tar.Reader, hdr *tar.Header, name string, depth int, budget *archiveBudget) []Doc {
 	entryName := cleanEntryName(hdr.Name)
 	virtualPath := name + "!" + entryName
 	entryExt := strings.ToLower(path.Ext(entryName))
@@ -207,7 +224,7 @@ func tryProcessTarEntry(tr *tar.Reader, hdr *tar.Header, name string, depth int,
 		if err != nil {
 			return nil
 		}
-		innerDocs, _ := extractArchiveEntries(virtualPath, entryData, depth+1)
+		innerDocs, _ := extractArchiveEntries(virtualPath, entryData, depth+1, budget)
 		return innerDocs
 	}
 
@@ -223,10 +240,9 @@ func tryProcessTarEntry(tr *tar.Reader, hdr *tar.Header, name string, depth int,
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	if *totalSize+len(text) > maxArchiveTotalSize {
+	if !budget.take(len(text)) {
 		return nil
 	}
-	*totalSize += len(text)
 	return []Doc{{Path: virtualPath, Text: text}}
 }
 

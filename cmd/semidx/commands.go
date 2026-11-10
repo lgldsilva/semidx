@@ -332,6 +332,7 @@ func newCLIIndexer(db store.IndexStore, d *deps, tgt indexTarget, opts indexCmdO
 		SetKeywordOnly(d.keywordOnly || opts.astOnly).
 		SetASTOnly(opts.astOnly).
 		SetWorktree(tgt.worktree).
+		SetPruneMissing(tgt.sourceType == "docs").
 		SetSecretScan(tgt.indexPath, d.cfg.SecretScan || d.cfg.SecretBlockEmbedding, d.cfg.SecretBlockEmbedding)
 }
 
