@@ -135,8 +135,10 @@ func originMatches(ctx context.Context, repoPath, url string) bool {
 	if _, err := exec.LookPath("git"); err != nil {
 		return false
 	}
-	// #nosec G204 -- fixed git subcommand; repoPath is DataDir/repos/<IsLocal name>.
-	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "config", "--get", "remote.origin.url")
+	// Same shape as run(): fixed binary and subcommand; repoPath is
+	// DataDir/repos/<tenant_id>/<project_id>.
+	cmd := exec.CommandContext(ctx, "git")
+	cmd.Args = []string{"git", "-C", repoPath, "config", "--get", "remote.origin.url"}
 	cmd.Env = gitenv.Clean(cmd.Environ())
 	out, err := cmd.Output()
 	return err == nil && strings.TrimSpace(string(out)) == url
