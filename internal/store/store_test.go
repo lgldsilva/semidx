@@ -104,16 +104,16 @@ func newTestStore(t *testing.T) *PgStore {
 }
 
 // resetIntegrationDB clears all mutable tables between integration tests.
-// DropAll only truncates projects/files/chunks; auth and job tables need an
-// explicit truncate when tests share one Postgres instance.
+// DropAll is tenant-scoped, so the shared instance is wiped explicitly across
+// every tenant (projects/files/chunks plus auth and job tables).
 func resetIntegrationDB(t *testing.T, s *PgStore) {
 	t.Helper()
 	ctx := context.Background()
-	if err := s.DropAll(ctx); err != nil {
-		t.Errorf("DropAll: %v", err)
+	if _, err := s.pool.Exec(ctx, dropDimensionTablesSQL); err != nil {
+		t.Errorf("drop dimension tables: %v", err)
 	}
 	_, err := s.pool.Exec(ctx, `
-		TRUNCATE api_tokens, index_jobs, web_sessions, users, worktree_files
+		TRUNCATE file_dependencies, files, projects, api_tokens, index_jobs, web_sessions, users, worktree_files
 		RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Errorf("truncate integration tables: %v", err)

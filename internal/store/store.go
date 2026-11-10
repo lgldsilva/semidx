@@ -1764,21 +1764,52 @@ func groupChunksByPath(flat []SearchResult) map[string][]SearchResult {
 	return out
 }
 
+// DropAll deletes every project of the calling tenant (tenant.ID(ctx)); their
+// files, chunks, jobs, worktree manifests, credentials and dependency/runtime
+// rows go with them through ON DELETE CASCADE. Other tenants are untouched.
+// Only when no project is left in any tenant are the per-dimension chunks_*
+// and embedding_cache_* tables dropped, restoring a clean slate.
 func (s *PgStore) DropAll(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `
-		DO $$
-		DECLARE
-			tbl text;
-		BEGIN
-			FOR tbl IN SELECT tablename FROM pg_tables WHERE tablename LIKE 'chunks_%' OR tablename LIKE 'embedding_cache_%'
-			LOOP
-				EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(tbl) || ' CASCADE';
-			END LOOP;
-		END $$;
-		TRUNCATE file_dependencies, files, projects RESTART IDENTITY CASCADE;
-	`)
-	return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful Commit
+
+	// Block concurrent project inserts so the "no project left" check below
+	// cannot race with another tenant registering one.
+	if _, err := tx.Exec(ctx, `LOCK TABLE projects IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM projects WHERE tenant_id = $1`, tenant.ID(ctx)); err != nil {
+		return err
+	}
+	var remaining bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM projects)`).Scan(&remaining); err != nil {
+		return err
+	}
+	if !remaining {
+		if _, err := tx.Exec(ctx, dropDimensionTablesSQL); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
+
+// dropDimensionTablesSQL drops this schema's per-dimension chunk and
+// embedding-cache tables.
+const dropDimensionTablesSQL = `
+	DO $$
+	DECLARE
+		tbl text;
+	BEGIN
+		FOR tbl IN SELECT tablename FROM pg_tables
+			WHERE schemaname = current_schema()
+			  AND (tablename ~ '^chunks_[0-9]+$' OR tablename ~ '^embedding_cache_[0-9]+$')
+		LOOP
+			EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(tbl) || ' CASCADE';
+		END LOOP;
+	END $$;`
 
 func (s *PgStore) SearchSimilarKeywords(ctx context.Context, projectID int, queryText string, dims, topK int) ([]SearchResult, error) {
 	return s.searchKeywords(ctx, projectID, queryText, dims, topK, "")
