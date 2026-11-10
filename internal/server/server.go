@@ -659,8 +659,9 @@ func newRequestID() string {
 func (s *Server) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.observeDBPool()
-		s.activeRequests.WithLabelValues(r.Method).Inc()
-		defer s.activeRequests.WithLabelValues(r.Method).Dec()
+		method := metricMethod(r.Method)
+		s.activeRequests.WithLabelValues(method).Inc()
+		defer s.activeRequests.WithLabelValues(method).Dec()
 
 		reqID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
 		if reqID == "" {
@@ -672,9 +673,31 @@ func (s *Server) instrument(next http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		s.reqs.WithLabelValues(r.Method, http.StatusText(rec.status)).Inc()
-		s.requestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(time.Since(start).Seconds())
+		s.reqs.WithLabelValues(method, http.StatusText(rec.status)).Inc()
+		// r.Pattern is set in place by the ServeMux this middleware wraps; it is
+		// empty for unmatched requests (404/405 probes).
+		s.requestDuration.WithLabelValues(method, metricPath(r.Pattern)).Observe(time.Since(start).Seconds())
 	})
+}
+
+// metricMethod clamps the method label to the standard verbs so arbitrary
+// client-chosen methods cannot mint new Prometheus series.
+func metricMethod(m string) string {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+		http.MethodPatch, http.MethodDelete, http.MethodOptions:
+		return m
+	}
+	return "OTHER"
+}
+
+// metricPath labels by the matched route pattern (bounded set), never the raw
+// URL path.
+func metricPath(pattern string) string {
+	if pattern == "" {
+		return "unmatched"
+	}
+	return pattern
 }
 
 func (s *Server) observeDBPool() {
