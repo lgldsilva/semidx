@@ -267,6 +267,9 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		processed int
 		g         errgroup.Group
 		manifest  = map[string]string{}
+		// keep: files whose previous manifest entries must survive this run —
+		// those not visited (--max-files) and those that failed to index.
+		keep = idx.unvisitedFiles(projectPath, files)
 	)
 	g.SetLimit(idx.workers)
 
@@ -290,6 +293,9 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 				units:    units,
 				err:      ferr,
 			})
+			if ferr != nil || softErrs > 0 {
+				keep[filepath.ToSlash(rel)] = true
+			}
 			processed++
 			done, chunks := processed, stats.ChunksCreated
 			filesIdx, errs := stats.FilesIndexed, stats.Errors
@@ -306,8 +312,30 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		return stats, err
 	}
 
-	idx.finalizeProject(ctx, projectID, projectPath, model, stats, manifest)
+	idx.finalizeProject(ctx, projectID, projectPath, model, stats, manifest, keep)
 	return stats, nil
+}
+
+// unvisitedFiles returns the eligible project files this run will not visit
+// (a --max-files truncation), so a worktree run keeps their previous manifest
+// entries instead of dropping them. Only worktree runs need it.
+func (idx *Indexer) unvisitedFiles(projectPath string, files []string) map[string]bool {
+	out := map[string]bool{}
+	if idx.worktree == "" {
+		return out
+	}
+	visited := make(map[string]bool, len(files))
+	for _, f := range files {
+		if rel, err := filepath.Rel(projectPath, f); err == nil {
+			visited[filepath.ToSlash(rel)] = true
+		}
+	}
+	for _, rel := range idx.projectFiles {
+		if !visited[rel] {
+			out[rel] = true
+		}
+	}
+	return out
 }
 
 // moduleInfoFor returns the go.mod directory and module path for rel, cached by
@@ -514,9 +542,9 @@ func (idx *Indexer) takeChunkBudget(want int) int {
 
 // finalizeProject runs the post-index steps: worktree manifest, git history,
 // commit SHA storage, and status update. All steps are best-effort.
-func (idx *Indexer) finalizeProject(ctx context.Context, projectID int, projectPath, model string, stats *IndexStats, manifest map[string]string) {
+func (idx *Indexer) finalizeProject(ctx context.Context, projectID int, projectPath, model string, stats *IndexStats, manifest map[string]string, keep map[string]bool) {
 	if idx.worktree != "" {
-		idx.recordWorktree(ctx, projectID, manifest)
+		idx.recordWorktree(ctx, projectID, manifest, keep)
 	}
 
 	if idx.gitMode {
@@ -573,15 +601,79 @@ func (idx *Indexer) accumulate(stats *IndexStats, manifest map[string]string, re
 }
 
 // recordWorktree stores this worktree's manifest and then prunes file versions
-// no worktree still references. Best-effort: a manifest failure is logged and
+// no worktree still references. Files in keep (failed or not visited this run)
+// carry their previous manifest entries, so their last good version is neither
+// hidden from search nor pruned. Best-effort: a manifest failure is logged and
 // skips the prune, but never fails an otherwise-successful index.
-func (idx *Indexer) recordWorktree(ctx context.Context, projectID int, manifest map[string]string) {
+func (idx *Indexer) recordWorktree(ctx context.Context, projectID int, manifest map[string]string, keep map[string]bool) {
+	if !idx.carryPreviousVersions(ctx, projectID, manifest, keep) {
+		return
+	}
 	if err := idx.db.SetWorktreeFiles(ctx, projectID, idx.worktree, manifest); err != nil {
 		idx.logf("[warn] worktree manifest: %s", truncateErr(err, 200))
 		return
 	}
+	// The final manifest now references every version this run produced, so
+	// its in-flight (pending) references can go.
+	if err := idx.db.SetWorktreeFiles(ctx, projectID, pendingWorktree(idx.worktree), nil); err != nil {
+		idx.logf("[warn] clear pending manifest: %s", truncateErr(err, 200))
+	}
 	if _, err := idx.db.PruneUnreferencedFiles(ctx, projectID); err != nil {
 		idx.logf("[warn] prune: %s", truncateErr(err, 200))
+	}
+}
+
+// carryPreviousVersions adds to manifest the previous entries of every file in
+// keep that this run did not record (an archive's entries are matched by their
+// "archive!entry" prefix). It reports false when the previous manifest cannot
+// be read although files must be kept: the caller then leaves the stored
+// manifest untouched rather than drop their versions.
+func (idx *Indexer) carryPreviousVersions(ctx context.Context, projectID int, manifest map[string]string, keep map[string]bool) bool {
+	if len(keep) == 0 {
+		return true
+	}
+	editor, ok := idx.db.(store.WorktreeManifestEditor)
+	if !ok {
+		return true // store cannot read manifests: previous behavior
+	}
+	previous, err := editor.WorktreeFiles(ctx, projectID, idx.worktree)
+	if err != nil {
+		idx.logf("[warn] read worktree manifest: %s; keeping it unchanged", truncateErr(err, 200))
+		return false
+	}
+	for path, hash := range previous {
+		if _, recorded := manifest[path]; recorded {
+			continue
+		}
+		owner, _, _ := strings.Cut(path, "!")
+		if keep[filepath.ToSlash(path)] || keep[filepath.ToSlash(owner)] {
+			manifest[path] = hash
+		}
+	}
+	return true
+}
+
+// pendingWorktree names the manifest that references a worktree run's
+// in-flight versions until its final manifest is written. Real worktrees are
+// absolute paths, so the prefix cannot collide with one.
+func pendingWorktree(worktree string) string {
+	return "pending:" + worktree
+}
+
+// markInFlight references a unit's version under the worktree's pending
+// manifest before it is stored or reused, so a concurrent prune (another
+// worktree's run, or the watcher's removeFile) cannot reclaim it before this
+// run writes its final manifest. Best-effort: a failure is only logged.
+func (idx *Indexer) markInFlight(ctx context.Context, projectID int, rel, hash string) {
+	if idx.worktree == "" {
+		return
+	}
+	editor, ok := idx.db.(store.WorktreeManifestEditor)
+	if !ok {
+		return
+	}
+	if err := editor.AddWorktreeFile(ctx, projectID, pendingWorktree(idx.worktree), rel, hash); err != nil {
+		idx.logf("[warn] pending manifest %s: %s", rel, truncateErr(err, 200))
 	}
 }
 
@@ -823,6 +915,7 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		return 0, 0, outcomeSkippedEmpty, "", nil
 	}
 	hash = ContentHash(content)
+	idx.markInFlight(ctx, projectID, rel, hash)
 
 	// Incremental: skip a unit already indexed with this exact content.
 	if !idx.force {

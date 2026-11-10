@@ -769,7 +769,7 @@ func TestRecordWorktreeSetWorktreeFilesError(t *testing.T) {
 	idx.worktree = "/wt"
 
 	// Should not panic — the error is logged and the function returns early.
-	idx.recordWorktree(context.Background(), 1, map[string]string{"a.go": "h1"})
+	idx.recordWorktree(context.Background(), 1, map[string]string{"a.go": "h1"}, nil)
 }
 
 func TestRecordWorktreePruneError(t *testing.T) {
@@ -778,7 +778,7 @@ func TestRecordWorktreePruneError(t *testing.T) {
 	idx.worktree = "/wt"
 
 	// SetWorktreeFiles succeeds, PruneUnreferencedFiles fails — the error is logged.
-	idx.recordWorktree(context.Background(), 1, map[string]string{"a.go": "h1"})
+	idx.recordWorktree(context.Background(), 1, map[string]string{"a.go": "h1"}, nil)
 }
 
 // TestVerboseProgress runs a small verbose index to cover the verbose branches
