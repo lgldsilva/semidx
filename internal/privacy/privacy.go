@@ -44,6 +44,16 @@ var sensitiveKeywords = []string{
 var sensitiveExts = map[string]bool{
 	".env": true, ".pem": true, ".key": true,
 	".conf": true, ".config": true,
+	".p12": true, ".pfx": true, ".jks": true, ".keystore": true,
+	".tfvars": true, ".tfstate": true,
+}
+
+// sensitiveBaseNames are well-known credential files whose names carry no
+// keyword (SSH private keys, package-manager and database auth files).
+var sensitiveBaseNames = map[string]bool{
+	"id_rsa": true, "id_dsa": true, "id_ecdsa": true, "id_ed25519": true,
+	".npmrc": true, ".netrc": true, "_netrc": true, ".pgpass": true,
+	".pypirc": true, ".htpasswd": true, ".dockercfg": true, "kubeconfig": true,
 }
 
 // IsSensitive reports whether a file at the given path likely holds secrets or
@@ -60,14 +70,15 @@ func IsSensitive(path string) bool {
 		}
 	}
 
-	return sensitiveExts[filepath.Ext(path)]
+	return sensitiveBaseNames[filepath.Base(path)] || sensitiveExts[filepath.Ext(path)]
 }
 
 // segmentMatches reports whether a path segment contains kw as a whole
-// sub-segment (e.g. "api_key" matches "key", but "keyboard" does not).
+// sub-segment, singular or plural (e.g. "api_key" and "keys" match "key", but
+// "keyboard" does not).
 func segmentMatches(part, kw string) bool {
 	for _, token := range strings.FieldsFunc(part, func(r rune) bool { return r == '.' || r == '_' || r == '-' }) {
-		if token == kw {
+		if token == kw || token == kw+"s" {
 			return true
 		}
 	}

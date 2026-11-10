@@ -197,7 +197,10 @@ func (c *OllamaClient) Embed(ctx context.Context, model string, inputs ...string
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
-
+	// Callers index the result per chunk; a short response would panic there.
+	if len(result.Embeddings) != len(inputs) {
+		return nil, fmt.Errorf("ollama embed: got %d vectors for %d inputs", len(result.Embeddings), len(inputs))
+	}
 	return result.Embeddings, nil
 }
 
