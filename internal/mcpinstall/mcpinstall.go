@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -538,28 +539,55 @@ func mergeTomlCodex(existing []byte, name, exe string, env map[string]string) []
 	return mergeTomlSection(existing, header, entry)
 }
 
+// tomlHeaderRE matches a table ([a.b]) or array-of-tables ([[a.b]]) header
+// line, optionally followed by a comment, capturing the dotted name.
+var tomlHeaderRE = regexp.MustCompile(`^\[\[?\s*([A-Za-z0-9_\-."' ]+?)\s*\]\]?\s*(?:#.*)?$`)
+
+// tomlTableName returns the normalised dotted name of a header line.
+func tomlTableName(line string) (string, bool) {
+	m := tomlHeaderRE.FindStringSubmatch(strings.TrimSpace(line))
+	if m == nil {
+		return "", false
+	}
+	parts := strings.Split(m[1], ".")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return strings.Join(parts, "."), true
+}
+
 // mergeTomlSection inserts/replaces one TOML section (entry must start with
-// header) and preserves every other section and key.
+// header) and preserves every other section and key. The section is replaced
+// as a whole, including its subtables (e.g. [mcp_servers.semidx.env]), so the
+// new entry never redefines a key a leftover subtable still holds.
 func mergeTomlSection(existing []byte, header, entry string) []byte {
 	if len(existing) == 0 {
 		return []byte(entry)
 	}
-	content := string(existing)
-	// does the section already exist?
-	idx := strings.Index(content, header+"\n")
-	if idx < 0 {
-		idx = strings.Index(content, header+" ") // edge case: inline comment or trailing space
-	}
-	if idx >= 0 {
-		// find the end: next line that starts with [ (a new section) or EOF
-		rest := content[idx+len(header):]
-		next := strings.Index(rest, "\n[")
-		if next >= 0 {
-			return []byte(content[:idx] + entry + rest[next+1:])
+	name, _ := tomlTableName(header)
+	var out strings.Builder
+	inserted, skipping := false, false
+	for _, line := range strings.SplitAfter(string(existing), "\n") {
+		if t, ok := tomlTableName(line); ok {
+			wasSkipping := skipping
+			skipping = t == name || strings.HasPrefix(t, name+".")
+			switch {
+			case skipping && !inserted:
+				out.WriteString(entry)
+				inserted = true
+			case !skipping && wasSkipping:
+				out.WriteString("\n") // keep a blank line after the replaced entry
+			}
 		}
-		return []byte(content[:idx] + strings.TrimRight(entry, "\n"))
+		if !skipping {
+			out.WriteString(line)
+		}
 	}
-	// not found — append at end, with a separating newline if needed
+	if inserted {
+		return []byte(out.String())
+	}
+	content := out.String()
+	// not found — append at end, with a separating blank line
 	if !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
