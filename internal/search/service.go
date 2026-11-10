@@ -6,6 +6,7 @@
 package search
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -271,7 +272,7 @@ func (s *Service) applyGraphExpansion(ctx context.Context, req *Request, resp *R
 		return
 	}
 	if len(expanded) > 0 {
-		resp.Results = mergeGraphResults(resp.Results, expanded)
+		resp.Results = mergeGraphResults(resp.Results, expanded, req.TopK)
 	}
 }
 
@@ -366,6 +367,10 @@ func (s *Service) keywordSearch(ctx context.Context, projectID int, query string
 }
 
 const (
+	// graphExpandDecay is the per-hop multiplier applied to a neighbour's
+	// score. graphExpandFloor is a floor on the RELATIVE decay (decay^depth),
+	// not on absolute scores, so it behaves the same for cosine, RRF and
+	// keyword (bm25/coverage) score scales.
 	graphExpandDecay    = 0.85
 	graphExpandFloor    = 0.3
 	maxGraphExpandPaths = 100 // cap chunk fetches per query (DoS guard)
@@ -406,7 +411,7 @@ func hopsFromCTEPaths(paths map[string]int, maxSeedScore float64) map[string]gra
 			break
 		}
 		score := maxSeedScore * math.Pow(graphExpandDecay, float64(depth))
-		if score < graphExpandFloor {
+		if math.Pow(graphExpandDecay, float64(depth)) < graphExpandFloor {
 			continue
 		}
 		expanded[path] = graphHop{Score: score, Depth: depth}
@@ -628,9 +633,12 @@ func runGraphBFS(p bfsParams) map[string]graphHop {
 	queue := make([]bfsNode, 0, len(p.seeds))
 	visited := make(map[string]float64, len(p.seeds)) // path -> best score seen
 
+	// Seeds start at a relative score of 1.0: the floor then bounds the hop
+	// count regardless of the score scale (keyword fallback scores can be ~0),
+	// and the final neighbour score is assigned by mergeGraphResults.
 	for _, r := range p.seeds {
-		queue = append(queue, bfsNode{path: r.FilePath, depth: 0, score: r.Score})
-		visited[r.FilePath] = r.Score
+		queue = append(queue, bfsNode{path: r.FilePath, depth: 0, score: 1.0})
+		visited[r.FilePath] = 1.0
 	}
 
 	expanded := make(map[string]graphHop)
@@ -687,35 +695,58 @@ func tagResultSource(results []store.SearchResult, source string) []store.Search
 }
 
 // mergeGraphResults merges original search results with graph-expanded results,
-// deduplicating by FilePath. Original results keep their scores; expanded
-// results keep their decayed scores. The combined list is sorted by score
-// descending.
-func mergeGraphResults(original, expanded []store.SearchResult) []store.SearchResult {
+// deduplicating by FilePath. Original (direct) hits keep their scores and
+// order. A graph-expanded hit is a weaker signal than any direct hit, so it is
+// rescored to minSeed·decay^depth (minSeed = the lowest direct-hit score) and
+// therefore always ranks below every direct hit, nearer hops first.
+//
+// Result-size cap: the merged list holds every direct hit plus at most topK
+// graph-expanded chunks (bounded by MaxTopK). Truncating to topK alone would
+// leave no room for expansion; leaving it unbounded let top_k=5 return ~300
+// chunks (100 paths × 3 chunks) to an MCP agent.
+func mergeGraphResults(original, expanded []store.SearchResult, topK int) []store.SearchResult {
 	dedup := make(map[string]bool, len(original))
+	minSeed := math.Inf(1)
 	for _, r := range original {
 		dedup[r.FilePath] = true
+		minSeed = math.Min(minSeed, r.Score)
+	}
+	if len(original) == 0 {
+		minSeed = 1.0
 	}
 
-	results := make([]store.SearchResult, len(original), len(original)+len(expanded))
-	copy(results, original)
-
+	extra := make([]store.SearchResult, 0, len(expanded))
 	for _, r := range expanded {
-		if !dedup[r.FilePath] {
-			results = append(results, r)
-			dedup[r.FilePath] = true
+		if dedup[r.FilePath] {
+			continue
 		}
+		dedup[r.FilePath] = true
+		r.Score = graphNeighbourScore(minSeed, r.GraphDepth)
+		extra = append(extra, r)
+	}
+	// Nearer hops first; path/line make the cut deterministic (expanded hits
+	// arrive in map order).
+	slices.SortStableFunc(extra, func(a, b store.SearchResult) int {
+		return cmp.Or(cmp.Compare(a.GraphDepth, b.GraphDepth),
+			cmp.Compare(a.FilePath, b.FilePath), cmp.Compare(a.StartLine, b.StartLine))
+	})
+	if limit := max(0, min(topK, MaxTopK)); len(extra) > limit {
+		extra = extra[:limit]
 	}
 
-	slices.SortFunc(results, func(a, b store.SearchResult) int {
-		switch {
-		case a.Score > b.Score:
-			return -1
-		case a.Score < b.Score:
-			return 1
-		default:
-			return 0
-		}
-	})
+	results := make([]store.SearchResult, 0, len(original)+len(extra))
+	results = append(results, original...)
+	return append(results, extra...)
+}
 
-	return results
+// graphNeighbourScore scores a graph-expanded hit strictly by hop distance,
+// never above minSeed. With a non-positive minSeed (e.g. keyword LIKE hits
+// scored 0) decaying would raise a negative score or tie at 0, so the hit
+// takes minSeed itself and its position after the direct hits carries the
+// ordering.
+func graphNeighbourScore(minSeed float64, depth int) float64 {
+	if minSeed <= 0 {
+		return minSeed
+	}
+	return minSeed * math.Pow(graphExpandDecay, float64(max(depth, 1)))
 }
