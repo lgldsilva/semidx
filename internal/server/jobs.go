@@ -39,15 +39,9 @@ func (s *Server) StartWorkers(ctx context.Context, n int, dataDir string) {
 	if err := gitsync.SweepTempKeys(dataDir); err != nil {
 		s.log.Warn("sweep leftover git credential temp files", "err", err)
 	}
-	if r, ok := s.store.(interface {
-		RequeueStaleJobs(context.Context, time.Duration) (int64, error)
-	}); ok {
-		if count, err := r.RequeueStaleJobs(ctx, staleJobAge); err != nil {
-			s.log.Warn("requeue stale jobs failed", "err", err)
-		} else if count > 0 {
-			s.jobsQueued.Add(float64(count))
-			s.log.Warn("requeued stale jobs after worker restart", "count", count)
-		}
+	if r, ok := s.store.(staleJobRequeuer); ok {
+		s.requeueStaleJobs(ctx, r)
+		go s.sweepStaleJobs(ctx, r, staleJobSweepInterval)
 	}
 	notifyCh := s.openJobNotify(ctx)
 	for i := 0; i < n; i++ {
@@ -138,6 +132,7 @@ func (s *Server) claimAndRun(ctx context.Context, dataDir string) bool {
 func (s *Server) runJob(ctx context.Context, job *store.Job, dataDir string) {
 	s.jobsRunning.Inc()
 	defer s.jobsRunning.Dec()
+	defer s.startJobHeartbeat(ctx, job.ID)()
 
 	fail := s.jobFailure(ctx, job)
 
