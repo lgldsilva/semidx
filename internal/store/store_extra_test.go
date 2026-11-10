@@ -408,6 +408,10 @@ func TestFailJob(t *testing.T) {
 
 	p, _ := s.CreateProject(ctx, "fail-me", "bge-m3", "push", "", "", 0)
 	id, _ := s.EnqueueJob(ctx, p.ID, "full")
+	// FailJob only transitions running jobs.
+	if claimed, err := s.ClaimJob(ctx); err != nil || claimed == nil || claimed.ID != id {
+		t.Fatalf("ClaimJob = %+v, err %v", claimed, err)
+	}
 
 	if err := s.FailJob(ctx, id, "something went wrong"); err != nil {
 		t.Fatalf("FailJob: %v", err)
@@ -704,7 +708,7 @@ func TestRequeueStaleJobs(t *testing.T) {
 	if err != nil || claimed == nil || claimed.ID != id {
 		t.Fatalf("ClaimJob = %+v, err %v", claimed, err)
 	}
-	if _, err := s.pool.Exec(ctx, `UPDATE index_jobs SET started_at = NOW() - INTERVAL '2 hours' WHERE id = $1`, id); err != nil {
+	if _, err := s.pool.Exec(ctx, `UPDATE index_jobs SET started_at = NOW() - INTERVAL '2 hours', heartbeat_at = NOW() - INTERVAL '2 hours' WHERE id = $1`, id); err != nil {
 		t.Fatalf("age running job: %v", err)
 	}
 

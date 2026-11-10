@@ -139,9 +139,18 @@ func (s *PgStore) GetTenantBySlug(ctx context.Context, slug string) (*Tenant, er
 	return t, err
 }
 
+// CreateTenant inserts the tenant, its default workspace and (when the
+// context carries a user) the owner membership in one transaction, so a
+// failure never leaves a half-created tenant behind.
 func (s *PgStore) CreateTenant(ctx context.Context, slug, name string) (*Tenant, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful Commit
+
 	var t Tenant
-	err := s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO tenants (slug, name) VALUES ($1, $2)
 		RETURNING `+tenantColumns, slug, name).Scan(&t.ID, &t.Slug, &t.Name, &t.CreatedAt)
 	if err != nil {
@@ -151,14 +160,21 @@ func (s *PgStore) CreateTenant(ctx context.Context, slug, name string) (*Tenant,
 		}
 		return nil, err
 	}
-	if _, err := s.pool.Exec(ctx, `INSERT INTO workspaces (tenant_id, slug, name)
+	if _, err := tx.Exec(ctx, `INSERT INTO workspaces (tenant_id, slug, name)
 		VALUES ($1, 'default', 'Default workspace') ON CONFLICT (tenant_id, slug) DO NOTHING`, t.ID); err != nil {
 		return nil, err
 	}
 	if tc, ok := tenant.From(ctx); ok && tc.UserID > 0 {
-		if err := s.UpsertMembership(ctx, Membership{TenantID: t.ID, UserID: tc.UserID, Role: "owner"}); err != nil {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO tenant_memberships (tenant_id, user_id, role)
+			VALUES ($1, $2, 'owner')
+			ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+			t.ID, tc.UserID); err != nil {
 			return nil, err
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return &t, nil
 }

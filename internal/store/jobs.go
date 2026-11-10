@@ -10,21 +10,28 @@ import (
 	"github.com/lgldsilva/semidx/internal/tenant"
 )
 
-// RequeueStaleJobs returns jobs abandoned by a worker process to the queue. It
-// is called on process startup, after workers from the previous process are
-// gone, so a restart does not leave jobs permanently stuck in running state.
+// RequeueStaleJobs returns jobs abandoned by a worker to the queue: running
+// jobs whose last heartbeat (or start, before the first heartbeat) is older
+// than maxAge. The server calls it at startup and periodically, and live
+// workers refresh the heartbeat via TouchJob, so long jobs are not requeued.
 func (s *PgStore) RequeueStaleJobs(ctx context.Context, maxAge time.Duration) (int64, error) {
 	if maxAge <= 0 {
 		maxAge = 30 * time.Minute
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE index_jobs
-		SET status = 'queued', started_at = NULL, finished_at = NULL, error = NULL
+		SET status = 'queued', started_at = NULL, finished_at = NULL, error = NULL, heartbeat_at = NULL
 		WHERE status = 'running' AND started_at IS NOT NULL
-		  AND started_at < NOW() - ($1 * INTERVAL '1 second')`, maxAge.Seconds())
+		  AND COALESCE(heartbeat_at, started_at) < NOW() - ($1 * INTERVAL '1 second')`, maxAge.Seconds())
 	if err != nil {
 		return 0, err
 	}
 	return tag.RowsAffected(), nil
+}
+
+// TouchJob refreshes a running job's heartbeat so the stale sweep keeps it.
+func (s *PgStore) TouchJob(ctx context.Context, id int) error {
+	_, err := s.pool.Exec(ctx, `UPDATE index_jobs SET heartbeat_at = NOW() WHERE id = $1 AND status = 'running'`, id)
+	return err
 }
 
 // Job is a durable indexing job.
@@ -87,7 +94,7 @@ func (s *PgStore) ClaimJob(ctx context.Context) (*Job, error) {
 			SELECT id FROM index_jobs WHERE status = 'queued'
 			ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1
 		)
-		UPDATE index_jobs AS j SET status = 'running', started_at = NOW()
+		UPDATE index_jobs AS j SET status = 'running', started_at = NOW(), heartbeat_at = NOW()
 		FROM next_job
 		WHERE j.id = next_job.id
 		RETURNING j.id, j.project_id,
@@ -152,20 +159,23 @@ func (s *PgStore) UpdateJobProgress(ctx context.Context, id, progressDone, progr
 	return err
 }
 
-// CompleteJob marks a job succeeded with its result counts.
+// CompleteJob marks a running job succeeded with its result counts. A job
+// that is no longer running (requeued by the stale sweep, or already
+// finished) is left untouched.
 func (s *PgStore) CompleteJob(ctx context.Context, id, filesIndexed, chunksCreated, deletedFiles, errorCount int) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE index_jobs SET status = 'succeeded', finished_at = NOW(),
 			files_indexed = $2, chunks_created = $3, deleted_files = $4, error_count = $5
-		WHERE id = $1
+		WHERE id = $1 AND status = 'running'
 	`, id, filesIndexed, chunksCreated, deletedFiles, errorCount)
 	return err
 }
 
-// FailJob marks a job failed with an error message.
+// FailJob marks a running job failed with an error message; like CompleteJob
+// it never rewrites a job that is no longer running.
 func (s *PgStore) FailJob(ctx context.Context, id int, errMsg string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE index_jobs SET status = 'failed', finished_at = NOW(), error = $2 WHERE id = $1`,
+		`UPDATE index_jobs SET status = 'failed', finished_at = NOW(), error = $2 WHERE id = $1 AND status = 'running'`,
 		id, errMsg)
 	return err
 }

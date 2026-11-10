@@ -643,12 +643,48 @@ func scanProject(row interface{ Scan(...any) error }) (*store.Project, error) {
 	return &p, nil
 }
 
+// GetProject resolves a project by name: an exact identity match wins (API
+// projects use the name as identity); otherwise the name must be unique, and a
+// name shared by several projects returns store.ErrProjectAmbiguous.
 func (s *SQLiteStore) GetProject(ctx context.Context, name string) (*store.Project, error) {
-	p, err := scanProject(s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE name = ?`, name))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, store.ErrNotFound
+	id, err := s.projectIDByName(ctx, name)
+	if err != nil {
+		return nil, err
 	}
-	return p, err
+	return s.GetProjectByID(ctx, id)
+}
+
+// projectIDByName implements the by-name resolution shared by GetProject and
+// DeleteProject (see GetProject).
+func (s *SQLiteStore) projectIDByName(ctx context.Context, name string) (int, error) {
+	var id int
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM projects WHERE identity = ?`, name).Scan(&id)
+	if err == nil || !errors.Is(err, sql.ErrNoRows) {
+		return id, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM projects WHERE name = ? LIMIT 2`, name)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []int
+	for rows.Next() {
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	switch len(ids) {
+	case 0:
+		return 0, store.ErrNotFound
+	case 1:
+		return ids[0], nil
+	default:
+		return 0, store.ErrProjectAmbiguous
+	}
 }
 
 func (s *SQLiteStore) GetProjectByID(ctx context.Context, id int) (*store.Project, error) {
@@ -690,10 +726,15 @@ func (s *SQLiteStore) ListProjects(ctx context.Context, limit, offset int) ([]st
 	return projects, rows.Err()
 }
 
-// DeleteProject removes a project; files and chunks cascade. Returns
-// ErrNotFound when no such project exists.
+// DeleteProject removes one project resolved like GetProject; files and
+// chunks cascade. Returns ErrNotFound when no such project exists and
+// ErrProjectAmbiguous when the name matches several projects.
 func (s *SQLiteStore) DeleteProject(ctx context.Context, name string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE name = ?`, name)
+	id, err := s.projectIDByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
@@ -1372,7 +1413,13 @@ func (s *SQLiteStore) FetchGraphNeighbors(ctx context.Context, projectID int) (m
 // FetchChunksByPath returns chunks for a specific file path, ordered by
 // chunk_index. Returns an empty slice if the file has no chunks.
 func (s *SQLiteStore) FetchChunksByPath(ctx context.Context, projectID int, filePath string, dims, limit int) ([]store.SearchResult, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol, f.hash, f.indexed_at FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path = ? ORDER BY c.chunk_index LIMIT ?`, projectID, filePath, limit)
+	// Only the most recently indexed content-addressed version of the path:
+	// older versions (other worktrees, pre-edit pushes) must not be blended in.
+	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol, f.hash, f.indexed_at
+		FROM chunks c JOIN files f ON f.id = c.file_id
+		WHERE c.project_id = ? AND f.id = (
+			SELECT id FROM files WHERE project_id = ? AND path = ? ORDER BY indexed_at DESC, id DESC LIMIT 1)
+		ORDER BY c.chunk_index LIMIT ?`, projectID, projectID, filePath, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1411,10 +1458,16 @@ func (s *SQLiteStore) FetchChunksByPaths(ctx context.Context, projectID int, pat
 			       c.confidence, c.symbol, f.hash AS hash, f.indexed_at AS indexed_at,
 			       ROW_NUMBER() OVER (PARTITION BY f.path ORDER BY c.chunk_index) AS rn
 			FROM chunks c
-			JOIN files f ON f.id = c.file_id
-			WHERE c.project_id = ? AND f.path IN (SELECT value FROM json_each(?))
+			JOIN (
+				-- latest content-addressed version per path only
+				SELECT id, path, hash, indexed_at FROM (
+					SELECT id, path, hash, indexed_at, ROW_NUMBER() OVER (PARTITION BY path ORDER BY indexed_at DESC, id DESC) AS vrn
+					FROM files WHERE project_id = ? AND path IN (SELECT value FROM json_each(?))
+				) WHERE vrn = 1
+			) f ON f.id = c.file_id
+			WHERE c.project_id = ?
 		) WHERE rn <= ? ORDER BY path, start_line`
-	rows, err := s.db.QueryContext(ctx, query, projectID, string(pathsJSON), limitPerPath)
+	rows, err := s.db.QueryContext(ctx, query, projectID, string(pathsJSON), projectID, limitPerPath)
 	if err != nil {
 		return nil, err
 	}

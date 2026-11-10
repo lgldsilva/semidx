@@ -66,6 +66,9 @@ var (
 	ErrNotFound      = errors.New("not found")
 	ErrProjectExists = errors.New("project already exists")
 	ErrUserExists    = errors.New("user already exists")
+	// ErrProjectAmbiguous is returned by by-name project lookups when the name
+	// (not unique since migration 00008) matches more than one project.
+	ErrProjectAmbiguous = errors.New("project name is ambiguous; use its id or identity")
 )
 
 // KeywordDims is the chunk-table dimension bucket used for keyword-only (no
@@ -695,9 +698,13 @@ func (s *PgStore) InsertEmbeddingCache(ctx context.Context, inputHashes []string
 		batch.Queue(query, hash, model, dims, pgvector.NewVector(embeddings[i]))
 	}
 	br := s.pool.SendBatch(ctx, batch)
-	defer func() { _ = br.Close() }()
-	_, err = br.Exec()
-	return err
+	for range inputHashes {
+		if _, err := br.Exec(); err != nil {
+			_ = br.Close()
+			return err
+		}
+	}
+	return br.Close()
 }
 
 // PruneEmbeddingCache removes all cache entries for the given dimension.
@@ -719,21 +726,23 @@ func (s *PgStore) PruneEmbeddingCache(ctx context.Context, dims int) (int64, err
 // via EnsureChunksTable already get the index; this catches tables that existed
 // before the migration was applied.
 func (s *PgStore) applyTrigramIndexes(ctx context.Context) error {
-	rows, err := s.pool.Query(ctx, `SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'chunks_%'`)
+	rows, err := s.pool.Query(ctx, `SELECT table_name FROM information_schema.tables
+		WHERE table_schema = current_schema() AND table_name ~ '^chunks_[0-9]+$'`)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var tbl string
-		if err := rows.Scan(&tbl); err != nil {
-			continue
-		}
+	tables, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	for _, tbl := range tables {
 		idx := pgx.Identifier{tbl + "_content_trgm"}.Sanitize()
 		tblSafe := pgx.Identifier{tbl}.Sanitize()
-		_, _ = s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING gin (content gin_trgm_ops)", idx, tblSafe))
+		if _, err := s.pool.Exec(ctx, fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s USING gin (content gin_trgm_ops)", idx, tblSafe)); err != nil {
+			slog.Warn("trigram index", "table", tbl, "err", err)
+		}
 	}
-	return rows.Err()
+	return nil
 }
 
 // distanceExpr is the cosine-distance SQL expression against query param $1,
@@ -894,12 +903,62 @@ func (s *PgStore) PruneFileVersions(ctx context.Context, projectID int, path, ke
 	return err
 }
 
+// GetProject resolves a project by name within the active tenant/workspace:
+// an exact identity match wins (API projects use the name as identity);
+// otherwise the name must be unique, and a name shared by several projects
+// returns ErrProjectAmbiguous instead of an arbitrary match.
 func (s *PgStore) GetProject(ctx context.Context, name string) (*Project, error) {
-	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) AND name = $3`, tenant.ID(ctx), activeWorkspaceID(ctx), name))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+	id, err := s.projectIDByName(ctx, name)
+	if err != nil {
+		return nil, err
 	}
-	return p, err
+	return s.GetProjectByID(ctx, id)
+}
+
+// projectIDByName implements the by-name resolution shared by GetProject and
+// DeleteProject (see GetProject).
+func (s *PgStore) projectIDByName(ctx context.Context, name string) (int, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, identity = $3 FROM projects
+		WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) AND (identity = $3 OR name = $3)`,
+		tenant.ID(ctx), activeWorkspaceID(ctx), name)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var exact, byName []int
+	for rows.Next() {
+		var id int
+		var isIdentity bool
+		if err := rows.Scan(&id, &isIdentity); err != nil {
+			return 0, err
+		}
+		if isIdentity {
+			exact = append(exact, id)
+		} else {
+			byName = append(byName, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return pickProjectID(exact, byName)
+}
+
+// pickProjectID applies the by-name precedence: a single identity match, else
+// a single name match; several candidates at the deciding level are ambiguous.
+func pickProjectID(exact, byName []int) (int, error) {
+	candidates := exact
+	if len(candidates) == 0 {
+		candidates = byName
+	}
+	switch len(candidates) {
+	case 0:
+		return 0, ErrNotFound
+	case 1:
+		return candidates[0], nil
+	default:
+		return 0, ErrProjectAmbiguous
+	}
 }
 
 // GetProjectByIdentity looks a project up by its stable identity (git identity
@@ -989,10 +1048,15 @@ func (s *PgStore) ListProjects(ctx context.Context, limit, offset int) ([]Projec
 	return projects, rows.Err()
 }
 
-// DeleteProject removes a project (files and chunks cascade). Returns
-// ErrNotFound when no such project exists.
+// DeleteProject removes one project resolved like GetProject (files and
+// chunks cascade). Returns ErrNotFound when no such project exists and
+// ErrProjectAmbiguous when the name matches several projects.
 func (s *PgStore) DeleteProject(ctx context.Context, name string) error {
-	ct, err := s.pool.Exec(ctx, `DELETE FROM projects WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) AND name = $3`, tenant.ID(ctx), activeWorkspaceID(ctx), name)
+	id, err := s.projectIDByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	ct, err := s.pool.Exec(ctx, `DELETE FROM projects WHERE tenant_id = $1 AND id = $2`, tenant.ID(ctx), id)
 	if err != nil {
 		return err
 	}
@@ -1697,7 +1761,13 @@ func (s *PgStore) FetchChunksByPath(ctx context.Context, projectID int, filePath
 	if err != nil {
 		return nil, err
 	}
-	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol, f.hash, f.indexed_at FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path = $2 ORDER BY c.chunk_index LIMIT $3`, table)
+	// Only the most recently indexed content-addressed version of the path:
+	// older versions (other worktrees, pre-edit pushes) must not be blended in.
+	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol, f.hash, f.indexed_at
+		FROM %s c JOIN files f ON f.id = c.file_id
+		WHERE c.project_id = $1 AND f.id = (
+			SELECT id FROM files WHERE project_id = $1 AND path = $2 ORDER BY indexed_at DESC, id DESC LIMIT 1)
+		ORDER BY c.chunk_index LIMIT $3`, table)
 	rows, err := s.pool.Query(ctx, query, projectID, filePath, limit)
 	if err != nil {
 		return nil, err
@@ -1738,8 +1808,14 @@ func (s *PgStore) FetchChunksByPaths(ctx context.Context, projectID int, paths [
 			SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score,
 			       c.confidence, c.symbol, f.hash, f.indexed_at,
 			       ROW_NUMBER() OVER (PARTITION BY f.path ORDER BY c.chunk_index) AS rn
-			FROM %s c JOIN files f ON f.id = c.file_id
-			WHERE c.project_id = $1 AND f.path = ANY($2)
+			FROM %s c
+			JOIN (
+				-- latest content-addressed version per path only
+				SELECT DISTINCT ON (path) id, path, hash, indexed_at FROM files
+				WHERE project_id = $1 AND path = ANY($2)
+				ORDER BY path, indexed_at DESC, id DESC
+			) f ON f.id = c.file_id
+			WHERE c.project_id = $1
 		) ranked
 		WHERE rn <= $3
 		ORDER BY path, start_line`, table)
@@ -1764,21 +1840,52 @@ func groupChunksByPath(flat []SearchResult) map[string][]SearchResult {
 	return out
 }
 
+// DropAll deletes every project of the calling tenant (tenant.ID(ctx)); their
+// files, chunks, jobs, worktree manifests, credentials and dependency/runtime
+// rows go with them through ON DELETE CASCADE. Other tenants are untouched.
+// Only when no project is left in any tenant are the per-dimension chunks_*
+// and embedding_cache_* tables dropped, restoring a clean slate.
 func (s *PgStore) DropAll(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `
-		DO $$
-		DECLARE
-			tbl text;
-		BEGIN
-			FOR tbl IN SELECT tablename FROM pg_tables WHERE tablename LIKE 'chunks_%' OR tablename LIKE 'embedding_cache_%'
-			LOOP
-				EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(tbl) || ' CASCADE';
-			END LOOP;
-		END $$;
-		TRUNCATE file_dependencies, files, projects RESTART IDENTITY CASCADE;
-	`)
-	return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful Commit
+
+	// Block concurrent project inserts so the "no project left" check below
+	// cannot race with another tenant registering one.
+	if _, err := tx.Exec(ctx, `LOCK TABLE projects IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM projects WHERE tenant_id = $1`, tenant.ID(ctx)); err != nil {
+		return err
+	}
+	var remaining bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM projects)`).Scan(&remaining); err != nil {
+		return err
+	}
+	if !remaining {
+		if _, err := tx.Exec(ctx, dropDimensionTablesSQL); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
+
+// dropDimensionTablesSQL drops this schema's per-dimension chunk and
+// embedding-cache tables.
+const dropDimensionTablesSQL = `
+	DO $$
+	DECLARE
+		tbl text;
+	BEGIN
+		FOR tbl IN SELECT tablename FROM pg_tables
+			WHERE schemaname = current_schema()
+			  AND (tablename ~ '^chunks_[0-9]+$' OR tablename ~ '^embedding_cache_[0-9]+$')
+		LOOP
+			EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(tbl) || ' CASCADE';
+		END LOOP;
+	END $$;`
 
 func (s *PgStore) SearchSimilarKeywords(ctx context.Context, projectID int, queryText string, dims, topK int) ([]SearchResult, error) {
 	return s.searchKeywords(ctx, projectID, queryText, dims, topK, "")

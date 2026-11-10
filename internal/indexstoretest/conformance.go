@@ -68,6 +68,7 @@ func Run(t *testing.T, factory func(t *testing.T) store.IndexStore) {
 	}
 
 	runGraphChunkBatch(ctx, t, s, id, dims)
+	runLatestVersionChunks(ctx, t, s, id, dims)
 
 	// DeleteFileByID removes exactly one content-addressed version: upsert a
 	// second version of the same path, delete it by ID, and verify the
@@ -105,6 +106,7 @@ func Run(t *testing.T, factory func(t *testing.T) store.IndexStore) {
 	if len(results) == 0 {
 		t.Fatal("v1 chunks should remain searchable after deleting v2 by ID")
 	}
+	runProjectNameAmbiguity(ctx, t, s, dims)
 }
 
 // runGraphChunkBatch exercises the optional GraphChunkBatchStore extension that
@@ -158,5 +160,39 @@ func runGraphChunkBatch(ctx context.Context, t *testing.T, s store.IndexStore, p
 	// Paths are bound parameters: a LIKE metacharacter matches literally.
 	if out, err := batch.FetchChunksByPaths(ctx, projectID, []string{"pkg/%"}, dims, 2); err != nil || len(out) != 0 {
 		t.Errorf("wildcard path = %+v, err=%v; want no prefix matching", out, err)
+	}
+}
+
+// runLatestVersionChunks guards against mixing content-addressed versions:
+// when a path has several stored versions, the per-path chunk fetchers must
+// return only the most recently indexed one, not a blend of all of them.
+func runLatestVersionChunks(ctx context.Context, t *testing.T, s store.IndexStore, projectID, dims int) {
+	t.Helper()
+	const path = "pkg/versioned.go"
+	for _, v := range []struct{ hash, content string }{{"ver-old", "old body"}, {"ver-new", "new body"}} {
+		fid, err := s.UpsertFile(ctx, projectID, path, v.hash, 10)
+		if err != nil {
+			t.Fatalf("UpsertFile %s: %v", v.hash, err)
+		}
+		if err := s.InsertChunks(ctx, projectID, fid, []chunker.Chunk{{Content: v.content, StartLine: 1, EndLine: 1}},
+			[][]float32{{0.3, 0.2, 0.1}}, dims); err != nil {
+			t.Fatalf("InsertChunks %s: %v", v.hash, err)
+		}
+	}
+	got, err := s.FetchChunksByPath(ctx, projectID, path, dims, 10)
+	if err != nil {
+		t.Fatalf("FetchChunksByPath: %v", err)
+	}
+	if len(got) != 1 || got[0].Content != "new body" {
+		t.Errorf("FetchChunksByPath = %+v, want only the latest version", got)
+	}
+	if batch, ok := s.(store.GraphChunkBatchStore); ok {
+		byPath, err := batch.FetchChunksByPaths(ctx, projectID, []string{path}, dims, 10)
+		if err != nil {
+			t.Fatalf("FetchChunksByPaths: %v", err)
+		}
+		if c := byPath[path]; len(c) != 1 || c[0].Content != "new body" {
+			t.Errorf("FetchChunksByPaths = %+v, want only the latest version", c)
+		}
 	}
 }

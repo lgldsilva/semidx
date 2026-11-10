@@ -585,8 +585,11 @@ func newDropCmd(d *deps) *cobra.Command {
 		Use:   "drop",
 		Short: "Drop all indexed data",
 		Long: `Delete ALL indexed data — every project, file and chunk — from the active
-store. This is destructive and cannot be undone. You must confirm: either type
-"yes" at the interactive prompt, or pass --confirm (e.g. in scripts).`,
+local store (SQLite, or Postgres via SEMIDX_DB_DSN). On a multi-tenant Postgres
+store only the current tenant's projects are deleted (the default tenant for
+the CLI); other tenants are left untouched. This is destructive and cannot be
+undone. You must confirm: either type "yes" at the interactive prompt, or pass
+--confirm (e.g. in scripts).`,
 		Example: "  semidx drop --confirm",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !confirm {
