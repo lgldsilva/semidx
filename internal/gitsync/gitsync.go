@@ -137,7 +137,7 @@ func originMatches(ctx context.Context, repoPath, url string) bool {
 	}
 	// Same shape as run(): fixed binary and subcommand; repoPath is
 	// DataDir/repos/<tenant_id>/<project_id>.
-	cmd := exec.CommandContext(ctx, "git")
+	cmd := exec.CommandContext(ctx, "git") // NOSONAR: git resolves from the server image PATH, exactly like run()
 	cmd.Args = []string{"git", "-C", repoPath, "config", "--get", "remote.origin.url"}
 	cmd.Env = gitenv.Clean(cmd.Environ())
 	out, err := cmd.Output()
