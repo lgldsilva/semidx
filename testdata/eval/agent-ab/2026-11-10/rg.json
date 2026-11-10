@@ -1,0 +1,1002 @@
+[
+ {
+  "id": "behavior-embedding-fallback",
+  "intent": "behavior",
+  "ranked": [
+   "internal/mcpserver/mcpserver.go",
+   "internal/search/service.go",
+   "internal/search/service_test.go",
+   "cmd/semidx/commands.go",
+   "internal/indexing/indexer.go",
+   "internal/store/store.go",
+   "cmd/chatrag/main_test.go",
+   "docs/research/large-scale-semantic-code-search.md",
+   "internal/localstore/localstore.go",
+   "docs/design-decisions.md"
+  ],
+  "ndcg": 0.5787641110093001,
+  "mrr": 0.5,
+  "recall": 0.5,
+  "top1": 0.0
+ },
+ {
+  "id": "behavior-hybrid-fusion",
+  "intent": "behavior",
+  "ranked": [
+   "docs/research/large-scale-semantic-code-search.md",
+   "internal/search/multiscope.go",
+   "internal/search/hybrid.go",
+   "docs/requirements.md",
+   "internal/localstore/localstore.go",
+   "internal/search/service.go",
+   "internal/store/store.go",
+   "cmd/semidx/bench.go",
+   "internal/search/multiscope_test.go",
+   "testdata/eval/semidx-retrieval-v1.json"
+  ],
+  "ndcg": 0.5137444987600056,
+  "mrr": 0.3333333333333333,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "behavior-sensitive-local-routing",
+  "intent": "behavior",
+  "ranked": [
+   "internal/indexing/indexer.go",
+   "internal/localstore/localstore.go",
+   "internal/store/store.go",
+   "cmd/semidx/commands.go",
+   "cmd/semidx/push.go",
+   "docs/design-decisions.md",
+   "docs/architecture.md",
+   "docs/research/large-scale-semantic-code-search.md",
+   "internal/config/config.go",
+   "README.md"
+  ],
+  "ndcg": 0.0,
+  "mrr": 0.0,
+  "recall": 0.0,
+  "top1": 0.0
+ },
+ {
+  "id": "behavior-sqlite-wal",
+  "intent": "behavior",
+  "ranked": [
+   "internal/localstore/localstore.go",
+   "docs/requirements.md",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "cmd/semidx/commands.go",
+   "docs/architecture.md",
+   "internal/config/config.go",
+   "cmd/semidx/config.go",
+   "cmd/semidx/main.go",
+   "internal/search/sym_enrich_validate_test.go"
+  ],
+  "ndcg": 1.0,
+  "mrr": 1.0,
+  "recall": 1.0,
+  "top1": 1.0
+ },
+ {
+  "id": "behavior-incremental-index",
+  "intent": "behavior",
+  "ranked": [
+   "internal/indexing/indexer.go",
+   "internal/indexing/indexer_extra_test.go",
+   "docs/research/large-scale-semantic-code-search.md",
+   "internal/store/store.go",
+   "internal/indexing/indexer_test.go",
+   "internal/localstore/localstore.go",
+   "internal/indexing/indexer_integration_test.go",
+   "cmd/semidx/push.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "cmd/semidx/commands.go"
+  ],
+  "ndcg": 1.0,
+  "mrr": 1.0,
+  "recall": 1.0,
+  "top1": 1.0
+ },
+ {
+  "id": "behavior-project-reference",
+  "intent": "behavior",
+  "ranked": [
+   "cmd/semidx/commands.go",
+   "internal/localstore/localstore.go",
+   "internal/store/store.go",
+   "internal/projectref/resolve.go",
+   "internal/store/store_extra_test.go",
+   "internal/projectref/resolve_test.go",
+   "internal/searchtargets/targets_variants_test.go",
+   "web/package-lock.json",
+   "internal/webui/dist/assets/index-B_Xam2qC.js",
+   "internal/agent/tools_test.go"
+  ],
+  "ndcg": 0.3390090350877799,
+  "mrr": 0.25,
+  "recall": 0.5,
+  "top1": 0.0
+ },
+ {
+  "id": "behavior-http-client-search",
+  "intent": "behavior",
+  "ranked": [
+   "pkg/client/client.go",
+   "docs/openapi.yaml",
+   "docs/api.md",
+   "docs/requirements.md",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "README.md",
+   "internal/mcpserver/mcpserver.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "cmd/semidx/admin_chat.go",
+   "internal/mcpserver/mcpserver_extra_test.go"
+  ],
+  "ndcg": 1.0,
+  "mrr": 1.0,
+  "recall": 1.0,
+  "top1": 1.0
+ },
+ {
+  "id": "behavior-local-mcp-search",
+  "intent": "behavior",
+  "ranked": [
+   "internal/mcpserver/mcpserver.go",
+   "docs/requirements.md",
+   "cmd/semidx/commands.go",
+   "internal/mcpserver/options_test.go",
+   "internal/mcpserver/mcpserver_extra_test.go",
+   "internal/mcpserver/local_test.go",
+   "internal/server/mcp.go",
+   "internal/server/mcp_test.go",
+   "deploy/agentics-test/run.sh",
+   "internal/mcpserver/codeintel_test.go"
+  ],
+  "ndcg": 0.3373519727104165,
+  "mrr": 1.0,
+  "recall": 0.5,
+  "top1": 0.0
+ },
+ {
+  "id": "behavior-password-hash",
+  "intent": "behavior",
+  "ranked": [
+   "testdata/eval/semidx-retrieval-v1.json",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/passwd/passwd_extra_test.go",
+   "internal/passwd/passwd.go",
+   "internal/localstore/localstore.go",
+   "internal/passwd/passwd_test.go",
+   "cmd/semidx/unlock.go",
+   "internal/jwtauth/jwtauth_coverage_patch_test.go",
+   "internal/localstore/localstore_extra_test.go",
+   "internal/store/store.go"
+  ],
+  "ndcg": 0.43067655807339306,
+  "mrr": 0.25,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "behavior-git-identity",
+  "intent": "behavior",
+  "ranked": [
+   "internal/store/store.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/webui/dist/assets/index-B_Xam2qC.js",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/localstore/localstore.go",
+   "internal/searchtargets/targets.go",
+   "internal/store/store_extra_test.go",
+   "internal/gitmeta/gitmeta.go",
+   "cmd/semidx/repo_tools.go",
+   "cmd/semidx/commands.go"
+  ],
+  "ndcg": 0.28938205550465007,
+  "mrr": 0.125,
+  "recall": 0.5,
+  "top1": 0.0
+ },
+ {
+  "id": "behavior-stale-hit",
+  "intent": "behavior",
+  "ranked": [
+   "internal/store/store.go",
+   "internal/localstore/localstore.go",
+   "internal/mcpserver/mcpserver.go",
+   "internal/indexing/indexer.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "cmd/semidx/push.go",
+   "docs/openapi.yaml",
+   "internal/mcpserver/mcpserver_extra_test.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/indexing/indexer_extra_test.go"
+  ],
+  "ndcg": 0.0,
+  "mrr": 0.0,
+  "recall": 0.0,
+  "top1": 0.0
+ },
+ {
+  "id": "behavior-extractor-registry",
+  "intent": "behavior",
+  "ranked": [
+   "web/package-lock.json",
+   "internal/extract/extract.go",
+   "internal/extract/registry.go",
+   "docs/requirements.md",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/imports/imports.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/webui/dist/assets/MarkdownContent-VlZw0IXu.js",
+   "internal/analyzer/analyzer.go",
+   "docs/architecture.md"
+  ],
+  "ndcg": 0.5,
+  "mrr": 0.3333333333333333,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "behavior-dependency-catalog",
+  "intent": "behavior",
+  "ranked": [
+   "internal/indexing/indexer.go",
+   "internal/depcatalog/catalog.go",
+   "docs/api.md",
+   "internal/depresolve/resolve.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/server/jobs_dependency_test.go",
+   "internal/store/dependencies.go",
+   "docs/architecture.md",
+   "internal/localstore/localstore.go"
+  ],
+  "ndcg": 0.6309297535714575,
+  "mrr": 0.5,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "behavior-push-files",
+  "intent": "behavior",
+  "ranked": [
+   "cmd/semidx/commands.go",
+   "cmd/semidx/push.go",
+   "docs/requirements.md",
+   "internal/indexing/indexer.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "docs/api.md",
+   "internal/store/store.go",
+   "internal/mcpserver/mcpserver.go",
+   "cmd/semidx/main.go",
+   "internal/webui/dist/assets/index-B_Xam2qC.js"
+  ],
+  "ndcg": 0.4966392596877323,
+  "mrr": 0.5,
+  "recall": 0.5,
+  "top1": 0.0
+ },
+ {
+  "id": "behavior-config-precedence",
+  "intent": "behavior",
+  "ranked": [
+   "internal/config/config.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/mcpserver/mcpserver.go",
+   "cmd/semidx/commands.go",
+   "internal/webui/dist/assets/index-B_Xam2qC.js",
+   "cmd/semidx/config.go",
+   "docs/requirements.md",
+   "docs/self-hosting.md",
+   "internal/store/store.go"
+  ],
+  "ndcg": 0.7871546029909718,
+  "mrr": 1.0,
+  "recall": 0.5,
+  "top1": 1.0
+ },
+ {
+  "id": "symbol-candidate-top-k",
+  "intent": "symbol",
+  "ranked": [
+   "internal/search/multiscope.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/eval/report.go",
+   "internal/imports/imports.go",
+   "internal/localstore/localstore.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "docs/research/large-scale-semantic-code-search.md",
+   "cmd/semidx/bench.go",
+   "internal/eval/report_test.go",
+   "internal/localstore/localstore_bench_test.go"
+  ],
+  "ndcg": 0.0,
+  "mrr": 0.0,
+  "recall": 0.0,
+  "top1": 0.0
+ },
+ {
+  "id": "symbol-classify-query",
+  "intent": "symbol",
+  "ranked": [
+   "internal/search/routing_test.go",
+   "internal/search/service.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/search/routing.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "docs/requirements.md",
+   "docs/research/large-scale-semantic-code-search.md",
+   "internal/usage/usage_test.go",
+   "web/package-lock.json",
+   "internal/indexing/classify_test.go"
+  ],
+  "ndcg": 0.43067655807339306,
+  "mrr": 0.25,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "symbol-hash-query",
+  "intent": "symbol",
+  "ranked": [
+   "internal/usage/usage_test.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/store/store.go",
+   "internal/usage/usage.go",
+   "internal/localstore/localstore.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/search/service.go",
+   "internal/store/dedup_bench_test.go",
+   "docs/research/large-scale-semantic-code-search.md",
+   "cmd/semidx/alerts.go"
+  ],
+  "ndcg": 0.43067655807339306,
+  "mrr": 0.25,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "symbol-resolve-remote-project",
+  "intent": "symbol",
+  "ranked": [
+   "internal/searchtargets/targets_variants_test.go",
+   "internal/searchtargets/targets_test.go",
+   "internal/searchtargets/targets.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "cmd/semidx/searchtargets.go",
+   "cmd/semidx/commands.go",
+   "internal/mcpserver/mcpserver.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/projectref/resolve_test.go",
+   "internal/agent/coverage_patch_test.go"
+  ],
+  "ndcg": 0.5,
+  "mrr": 0.3333333333333333,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "symbol-chain-embedder",
+  "intent": "symbol",
+  "ranked": [
+   "internal/embed/embed.go",
+   "internal/embed/clients_test.go",
+   "internal/embed/embed_bench_test.go",
+   "internal/embed/chain_test.go",
+   "internal/embed/embed_test.go",
+   "internal/embed/chainerror_test.go",
+   "internal/embed/chain.go",
+   "internal/embed/parallel.go",
+   "docs/architecture.md",
+   "testdata/eval/semidx-retrieval-v1.json"
+  ],
+  "ndcg": 0.8996052605611106,
+  "mrr": 1.0,
+  "recall": 1.0,
+  "top1": 1.0
+ },
+ {
+  "id": "symbol-new-pg-store",
+  "intent": "symbol",
+  "ranked": [
+   "internal/store/store_coverage_patch_test.go",
+   "internal/store/store.go",
+   "internal/store/store_test.go",
+   "internal/store/store_coverage_patch2_test.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/mcpserver/server_integration_test.go",
+   "cmd/semidx/main.go",
+   "cmd/semidx/migrate.go",
+   "internal/gitcredmgr/mgr_test.go",
+   "internal/webadmin/coverage_patch2_test.go"
+  ],
+  "ndcg": 0.6309297535714575,
+  "mrr": 0.5,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "symbol-localstore-new",
+  "intent": "symbol",
+  "ranked": [
+   "internal/localstore/localstore.go",
+   "internal/search/graph_expand_test.go",
+   "internal/localstore/conversations.go",
+   "internal/search/sym_enrich_validate_test.go",
+   "docs/architecture.md",
+   "cmd/semidx/main.go",
+   "cmd/chatrag/build.go",
+   "internal/localstore/localstore_test.go",
+   "cmd/semidx/commands.go",
+   "internal/localstore/runtime.go"
+  ],
+  "ndcg": 1.0,
+  "mrr": 1.0,
+  "recall": 1.0,
+  "top1": 1.0
+ },
+ {
+  "id": "symbol-clamp-graph-depth",
+  "intent": "symbol",
+  "ranked": [
+   "internal/search/service.go",
+   "internal/mcpserver/mcpserver.go",
+   "internal/search/limits_test.go",
+   "internal/server/server.go",
+   "internal/search/limits.go",
+   "internal/webadmin/spa_analyze_api_test.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/codeintel/impact_test.go",
+   "internal/search/graph_expand_test.go",
+   "internal/server/graph.go"
+  ],
+  "ndcg": 0.38685280723454163,
+  "mrr": 0.2,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "symbol-analyzer-symbols",
+  "intent": "symbol",
+  "ranked": [
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/analyzer/analyzer_test.go",
+   "internal/chunker/chunker_ast.go",
+   "internal/analyzer/analyzer_newlang_test.go",
+   "docs/planning/graphify-inspired-features.md",
+   "internal/indexing/indexer.go",
+   "internal/deadcode/deadcode.go",
+   "internal/codeintel/callers.go",
+   "internal/chunker/chunker_ast_test.go",
+   "internal/analyzer/analyzer.go"
+  ],
+  "ndcg": 0.2890648263178878,
+  "mrr": 0.1,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "symbol-active-backend",
+  "intent": "symbol",
+  "ranked": [
+   "cmd/semidx/config_test.go",
+   "cmd/semidx/config.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "cmd/semidx/backend_test.go",
+   "cmd/semidx/commands.go",
+   "internal/mcpserver/mcpserver.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/store/store.go",
+   "cmd/semidx/backend.go",
+   "cmd/semidx/doctor.go"
+  ],
+  "ndcg": 0.6309297535714575,
+  "mrr": 0.5,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "flow-cli-to-search-service",
+  "intent": "flow",
+  "ranked": [
+   "testdata/eval/semidx-retrieval-v1.json",
+   "docs/requirements.md",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/search/service.go",
+   "docs/api.md",
+   "cmd/semidx/commands.go",
+   "docs/architecture.md",
+   "internal/searchtargets/targets.go",
+   "internal/webui/dist/assets/index-B_Xam2qC.js",
+   "cmd/semidx/searchtargets.go"
+  ],
+  "ndcg": 0.42764944506222674,
+  "mrr": 0.25,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "flow-index-command",
+  "intent": "flow",
+  "ranked": [
+   "testdata/eval/semidx-retrieval-v1.json",
+   "cmd/semidx/commands.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "cmd/semidx/main.go",
+   "internal/skills/data/auto-index/SKILL.md",
+   "cmd/semidx/init.go",
+   "internal/indexing/indexer.go",
+   "docs/requirements.md",
+   "README.md",
+   "docs/research/large-scale-semantic-code-search.md"
+  ],
+  "ndcg": 0.5912352048230278,
+  "mrr": 0.5,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "flow-mcp-install",
+  "intent": "flow",
+  "ranked": [
+   "testdata/eval/semidx-retrieval-v1.json",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/mcpinstall/mcpinstall.go",
+   "cmd/semidx/commands.go",
+   "docs/requirements.md",
+   "internal/mcpinstall/mcpinstall_test.go",
+   "cmd/semidx/remote.go",
+   "pkg/client/client.go",
+   "docs/architecture.md",
+   "internal/mcpserver/mcpserver.go"
+  ],
+  "ndcg": 0.5150979874023532,
+  "mrr": 0.3333333333333333,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "flow-web-admin-api",
+  "intent": "flow",
+  "ranked": [
+   "internal/server/server.go",
+   "internal/webadmin/webadmin.go",
+   "internal/webadmin/spa_api.go",
+   "docs/requirements.md",
+   "internal/webadmin/coverage_patch_test.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "docs/openapi.yaml",
+   "internal/config/config.go",
+   "internal/webadmin/webadmin_extra_test.go",
+   "pkg/client/client.go"
+  ],
+  "ndcg": 0.8451593915771352,
+  "mrr": 1.0,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "flow-dependency-resolution",
+  "intent": "flow",
+  "ranked": [
+   "web/package-lock.json",
+   "internal/localstore/localstore.go",
+   "docs/api.md",
+   "internal/mcpserver/mcpserver.go",
+   "pkg/client/client.go",
+   "internal/depresolve/resolve.go",
+   "internal/webui/dist/assets/index-B_Xam2qC.js",
+   "internal/store/dependencies.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "docs/architecture.md"
+  ],
+  "ndcg": 0.2399211845064163,
+  "mrr": 0.16666666666666666,
+  "recall": 0.3333333333333333,
+  "top1": 0.0
+ },
+ {
+  "id": "flow-jwt-authentication",
+  "intent": "flow",
+  "ranked": [
+   "internal/server/server.go",
+   "internal/config/config.go",
+   "docs/openapi.yaml",
+   "internal/store/store.go",
+   "internal/webadmin/spa_settings.go",
+   "internal/server/authz_regression_test.go",
+   "internal/webadmin/webadmin.go",
+   "internal/server/auth.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "docs/api.md"
+  ],
+  "ndcg": 0.3373519727104165,
+  "mrr": 1.0,
+  "recall": 0.5,
+  "top1": 0.0
+ },
+ {
+  "id": "flow-graph-expansion",
+  "intent": "flow",
+  "ranked": [
+   "internal/search/service.go",
+   "internal/search/graph_expand_test.go",
+   "internal/mcpserver/mcpserver.go",
+   "internal/localstore/localstore.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "docs/requirements.md",
+   "docs/openapi.yaml",
+   "pkg/client/client.go",
+   "internal/store/store.go",
+   "internal/indexing/graph_integration_test.go"
+  ],
+  "ndcg": 0.9173194127129571,
+  "mrr": 1.0,
+  "recall": 0.5,
+  "top1": 1.0
+ },
+ {
+  "id": "flow-remote-push",
+  "intent": "flow",
+  "ranked": [
+   "testdata/eval/semidx-retrieval-v1.json",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "docs/requirements.md",
+   "docs/openapi.yaml",
+   "docs/api.md",
+   "internal/webui/dist/assets/index-B_Xam2qC.js",
+   "cmd/semidx/commands.go",
+   "internal/webui/dist/assets/MarkdownContent-VlZw0IXu.js",
+   "pkg/client/client.go",
+   "internal/server/files.go"
+  ],
+  "ndcg": 0.10155306288225219,
+  "mrr": 0.1111111111111111,
+  "recall": 0.5,
+  "top1": 0.0
+ },
+ {
+  "id": "flow-configuration-loading",
+  "intent": "flow",
+  "ranked": [
+   "testdata/eval/semidx-retrieval-v1.json",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/webui/dist/assets/index-B_Xam2qC.js",
+   "internal/config/config.go",
+   "internal/webui/dist/assets/MarkdownContent-VlZw0IXu.js",
+   "docs/requirements.md",
+   "internal/config/config_test.go",
+   "cmd/semidx/commands.go",
+   "internal/localstore/localstore.go",
+   "cmd/semidx/config.go"
+  ],
+  "ndcg": 0.3209627963360124,
+  "mrr": 0.25,
+  "recall": 0.3333333333333333,
+  "top1": 0.0
+ },
+ {
+  "id": "flow-react-search-page",
+  "intent": "flow",
+  "ranked": [
+   "testdata/eval/semidx-retrieval-v1.json",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/webui/dist/assets/MarkdownContent-VlZw0IXu.js",
+   "internal/webui/dist/assets/index-B_Xam2qC.js",
+   "internal/mcpserver/mcpserver_extra_test.go",
+   "docs/openapi.yaml",
+   "docs/api.md",
+   "internal/github/github_test.go",
+   "docs/requirements.md",
+   "web/src/pages/SearchPage.tsx"
+  ],
+  "ndcg": 0.21542629436906158,
+  "mrr": 0.1,
+  "recall": 0.3333333333333333,
+  "top1": 0.0
+ },
+ {
+  "id": "docs-system-architecture",
+  "intent": "documentation",
+  "ranked": [
+   "testdata/eval/semidx-retrieval-v1.json",
+   "docs/requirements.md",
+   "internal/config/config.go",
+   "docs/research/large-scale-semantic-code-search.md",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/mcpserver/mcpserver.go",
+   "cmd/semidx/config.go",
+   "README.md",
+   "cmd/semidx/main.go",
+   "docs/planning/graphify-inspired-features.md"
+  ],
+  "ndcg": 0.04134029364352144,
+  "mrr": 0.125,
+  "recall": 0.5,
+  "top1": 0.0
+ },
+ {
+  "id": "docs-http-api",
+  "intent": "documentation",
+  "ranked": [
+   "internal/webadmin/spa_api.go",
+   "docs/api.md",
+   "internal/server/server.go",
+   "docs/openapi.yaml",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/server/dependencies_api_test.go",
+   "docs/requirements.md",
+   "internal/webchat/server.go",
+   "pkg/client/client_test.go"
+  ],
+  "ndcg": 0.6419288461539238,
+  "mrr": 0.5,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "docs-self-hosting",
+  "intent": "documentation",
+  "ranked": [
+   "docs/self-hosting.md",
+   "cmd/semidx/docker.go",
+   "deploy/docker-compose.yml",
+   "README.md",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "deploy/docker-compose.pull.yml",
+   "docs/requirements.md",
+   "docs/architecture.md",
+   "internal/config/config.go",
+   "docs/DEPLOY-STAGING.md"
+  ],
+  "ndcg": 0.9428729785463599,
+  "mrr": 1.0,
+  "recall": 1.0,
+  "top1": 1.0
+ },
+ {
+  "id": "docs-usage-analytics",
+  "intent": "documentation",
+  "ranked": [
+   "testdata/eval/semidx-retrieval-v1.json",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "docs/audits/2026-07-30-adocao-harnesses.md",
+   "pkg/client/client.go",
+   "docs/usage.md",
+   "internal/webadmin/spa_saas_test.go",
+   "docs/design-decisions.md",
+   "internal/webadmin/spa_api.go",
+   "web/src/api.ts",
+   "internal/server/runtime_saas_test.go"
+  ],
+  "ndcg": 0.30451296789464855,
+  "mrr": 0.2,
+  "recall": 0.5,
+  "top1": 0.0
+ },
+ {
+  "id": "docs-agentics-harness",
+  "intent": "documentation",
+  "ranked": [
+   "deploy/agentics-test/README.md",
+   "deploy/agentics-test/run.sh",
+   "docs/requirements.md",
+   "docs/audits/2026-07-30-adocao-harnesses.md",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/mcpserver/mcpserver.go",
+   "cmd/semidx/commands.go",
+   "docs/planning/graphify-inspired-features.md",
+   "internal/mcpserver/server_integration_test.go"
+  ],
+  "ndcg": 1.0,
+  "mrr": 1.0,
+  "recall": 1.0,
+  "top1": 1.0
+ },
+ {
+  "id": "ambiguous-cache",
+  "intent": "ambiguous",
+  "ranked": [
+   "internal/indexing/indexer.go",
+   "internal/indexing/indexer_extra_test.go",
+   "internal/store/store.go",
+   "internal/store/store_coverage_patch2_test.go",
+   "internal/localstore/localstore_coverage_patch_test.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "cmd/semidx/cache.go",
+   "internal/search/cache_test.go",
+   "internal/search/cache.go",
+   "internal/store/store_extra_test.go"
+  ],
+  "ndcg": 0.27614065883146727,
+  "mrr": 0.1111111111111111,
+  "recall": 0.5,
+  "top1": 0.0
+ },
+ {
+  "id": "ambiguous-config",
+  "intent": "ambiguous",
+  "ranked": [
+   "internal/config/config.go",
+   "internal/mcpinstall/mcpinstall.go",
+   "cmd/semidx/commands.go",
+   "cmd/semidx/config.go",
+   "internal/mcpinstall/mcpinstall_test.go",
+   "internal/xdg/xdg_test.go",
+   "internal/xdg/xdg.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/indexing/indexer_extra_test.go",
+   "cmd/semidx/config_test.go"
+  ],
+  "ndcg": 0.7871546029909718,
+  "mrr": 1.0,
+  "recall": 0.5,
+  "top1": 1.0
+ },
+ {
+  "id": "ambiguous-project-status",
+  "intent": "ambiguous",
+  "ranked": [
+   "internal/webadmin/spa_api.go",
+   "internal/mcpserver/mcpserver.go",
+   "internal/mcpserver/mcpserver_extra_test.go",
+   "internal/webadmin/coverage_patch_test.go",
+   "pkg/client/client.go",
+   "internal/server/server.go",
+   "internal/server/projects.go",
+   "docs/openapi.yaml",
+   "internal/webadmin/coverage_patch2_test.go",
+   "internal/store/store.go"
+  ],
+  "ndcg": 0.2651647767138978,
+  "mrr": 0.1,
+  "recall": 0.5,
+  "top1": 0.0
+ },
+ {
+  "id": "ambiguous-search-page",
+  "intent": "ambiguous",
+  "ranked": [
+   "testdata/eval/semidx-retrieval-v1.json",
+   "docs/research/large-scale-semantic-code-search.md",
+   "web/src/App.tsx",
+   "internal/extract/extract_test.go",
+   "web/src/pages/SearchPage.test.tsx",
+   "internal/github/github_test.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/github/github.go",
+   "internal/localstore/localstore_coverage_patch2_test.go",
+   "internal/webchat/server_test.go"
+  ],
+  "ndcg": 0.0,
+  "mrr": 0.0,
+  "recall": 0.0,
+  "top1": 0.0
+ },
+ {
+  "id": "ambiguous-graph",
+  "intent": "ambiguous",
+  "ranked": [
+   "internal/search/graph_expand_test.go",
+   "internal/search/service.go",
+   "web/src/features/project/AnalyzePanel.tsx",
+   "internal/mcpserver/depgraph.go",
+   "cmd/semidx/depgraph.go",
+   "internal/indexing/graph_integration_test.go",
+   "web/src/features/graph/GraphExplorer.tsx",
+   "internal/webadmin/spa_analyze_api_test.go",
+   "pkg/client/client.go",
+   "internal/mcpserver/mcpserver.go"
+  ],
+  "ndcg": 0.0,
+  "mrr": 0.0,
+  "recall": 0.0,
+  "top1": 0.0
+ },
+ {
+  "id": "resolution-explicit-path",
+  "intent": "project-resolution",
+  "ranked": [
+   "internal/agent/actions.go",
+   "internal/searchtargets/targets_variants_test.go",
+   "internal/mcpserver/mcpserver.go",
+   "cmd/semidx/commands.go",
+   "internal/projectref/resolve.go",
+   "internal/mcpserver/local.go",
+   "internal/search/service.go",
+   "internal/searchtargets/targets.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/store/store.go"
+  ],
+  "ndcg": 0.38685280723454163,
+  "mrr": 0.2,
+  "recall": 1.0,
+  "top1": 0.0
+ },
+ {
+  "id": "resolution-current-worktree",
+  "intent": "project-resolution",
+  "ranked": [
+   "internal/store/store.go",
+   "cmd/semidx/commands.go",
+   "internal/mcpserver/mcpserver.go",
+   "internal/localstore/localstore.go",
+   "docs/requirements.md",
+   "internal/indexing/indexer.go",
+   "internal/repotools/repotools_test.go",
+   "internal/agent/tools_fantasy.go",
+   "internal/mcpserver/local_backend_test.go",
+   "internal/agent/tools.go"
+  ],
+  "ndcg": 0.0,
+  "mrr": 0.0,
+  "recall": 0.0,
+  "top1": 0.0
+ },
+ {
+  "id": "resolution-remote-identity",
+  "intent": "project-resolution",
+  "ranked": [
+   "cmd/semidx/commands.go",
+   "internal/searchtargets/targets_variants_test.go",
+   "internal/agent/coverage_patch_test.go",
+   "internal/mcpserver/mcpserver.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/searchtargets/targets.go",
+   "internal/searchtargets/targets_test.go",
+   "internal/projectref/resolve_test.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/agent/actions.go"
+  ],
+  "ndcg": 0.280390126950546,
+  "mrr": 0.16666666666666666,
+  "recall": 0.5,
+  "top1": 0.0
+ },
+ {
+  "id": "resolution-same-basename",
+  "intent": "project-resolution",
+  "ranked": [
+   "internal/webui/dist/assets/index-B_Xam2qC.js",
+   "internal/indexing/indexer.go",
+   "internal/store/store.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/localstore/localstore_test.go",
+   "internal/localstore/localstore.go",
+   "docs/design-decisions.md",
+   "docs/api.md",
+   "cmd/semidx/push.go"
+  ],
+  "ndcg": 0.0,
+  "mrr": 0.0,
+  "recall": 0.0,
+  "top1": 0.0
+ },
+ {
+  "id": "resolution-no-project",
+  "intent": "project-resolution",
+  "ranked": [
+   "internal/mcpserver/mcpserver.go",
+   "cmd/semidx/commands.go",
+   "testdata/eval/semidx-retrieval-v1.json",
+   "internal/searchtargets/targets.go",
+   "testdata/eval/baselines/96d1c46-keyword.json",
+   "internal/searchtargets/targets_test.go",
+   "internal/projectref/resolve.go",
+   "internal/projectref/resolve_test.go",
+   "internal/agent/tools_test.go",
+   "docs/api.md"
+  ],
+  "ndcg": 0.4514596926579187,
+  "mrr": 0.25,
+  "recall": 1.0,
+  "top1": 0.0
+ }
+]
