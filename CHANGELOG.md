@@ -11,6 +11,18 @@ each GitHub Release.
 
 ## [Unreleased]
 
+### Security
+
+- A `.env` in the working directory (i.e. any cloned repository) can no
+  longer set credentials/DSNs, endpoint or base URLs, or security settings
+  (custom provider, chat provider, TLS/CA overrides, decompiler, MCP client
+  config, agent actions, git TLS/file, cookie flag); privacy and secret
+  scanning settings are honoured from it only when they tighten (`true`).
+  Previously a hostile repo could redirect the user's API key to an attacker
+  URL (`SEMIDX_*_BASE_URL`), swap keys, point the index at an attacker
+  database or turn privacy routing off. Ignored keys are reported once on
+  stderr; set them in the real environment or with `semidx config set`.
+
 ### Changed
 
 - Point public install/upgrade defaults at GitHub Releases (was private Gitea).

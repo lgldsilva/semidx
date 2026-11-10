@@ -31,7 +31,10 @@ func newConfigCmd(d *deps) *cobra.Command {
 			"Note: `semidx index` always writes to a local store; use `semidx push` or\n" +
 			"`semidx index --to-server` to send files to a logged-in server.\n\n" +
 			"Values are stored in the user config file and layered below a project .env\n" +
-			"and the real environment. Run `semidx config keys` for the full key reference.",
+			"and the real environment. A project .env (the working directory's, i.e. any\n" +
+			"cloned repo) cannot set credentials, DSNs, endpoint/base URLs or security\n" +
+			"settings; those are ignored with a warning. Run `semidx config keys` for the\n" +
+			"full key reference.",
 		Example: `  semidx config set GEMINI_API_KEY <key>
   semidx config set SEMIDX_DB_DSN postgres://localhost:5432/semidx
   semidx config list`,

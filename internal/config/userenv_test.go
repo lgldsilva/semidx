@@ -92,24 +92,24 @@ func TestSetUserEnvRejectsBadInput(t *testing.T) {
 func TestUserEnvIsLowestFilePrecedence(t *testing.T) {
 	clearEnv(t) // sets XDG_CONFIG_HOME to a temp dir
 	// Persist a value in the user config file.
-	if err := SetUserEnv("SEMIDX_DB_DSN", "postgres://from-user-file"); err != nil {
+	if err := SetUserEnv("SEMIDX_LOCAL_INDEX", "/from/user-file.db"); err != nil {
 		t.Fatal(err)
 	}
 	// With no project .env and no real env, the user file wins over the default.
 	t.Chdir(t.TempDir())
-	if got := Load().DatabaseURL; got != "postgres://from-user-file" {
-		t.Errorf("DatabaseURL = %q, want the user-file value", got)
+	if got := Load().LocalIndexPath; got != "/from/user-file.db" {
+		t.Errorf("LocalIndexPath = %q, want the user-file value", got)
 	}
 
-	// A project .env overrides the user file.
-	writeDotEnv(t, "SEMIDX_DB_DSN=postgres://from-project-env\n")
-	if got := Load().DatabaseURL; got != "postgres://from-project-env" {
+	// A project .env overrides the user file (for keys it may set).
+	writeDotEnv(t, "SEMIDX_LOCAL_INDEX=/from/project-env.db\n")
+	if got := Load().LocalIndexPath; got != "/from/project-env.db" {
 		t.Errorf("project .env should beat the user file, got %q", got)
 	}
 
 	// A real env var beats both.
-	t.Setenv("SEMIDX_DB_DSN", "postgres://from-real-env")
-	if got := Load().DatabaseURL; got != "postgres://from-real-env" {
+	t.Setenv("SEMIDX_LOCAL_INDEX", "/from/real-env.db")
+	if got := Load().LocalIndexPath; got != "/from/real-env.db" {
 		t.Errorf("real env should win, got %q", got)
 	}
 }

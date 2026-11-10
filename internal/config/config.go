@@ -430,11 +430,7 @@ func Load() *Config {
 // are still read from disk; only the "real environment" level is replaced.
 // Use this in tests with [mapLookup] to avoid depending on OS env vars.
 func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
-	paths := []string{".env"}
-	if p, err := UserEnvPath(); err == nil {
-		paths = append(paths, p)
-	}
-	env := newResolverWithLookup(envLookup, paths...)
+	env := layeredResolver(envLookup)
 	return &Config{
 		DatabaseURL:           env.get("SEMIDX_DB_DSN", defaultDatabaseURL),
 		DatabaseURLConfigured: env.get("SEMIDX_DB_DSN", "") != "",
@@ -680,11 +676,7 @@ func writeUserEnv(m map[string]string) error {
 // EffectiveValue resolves a key through the full precedence chain (real env >
 // project .env > user config file), returning "" when unset at every level.
 func EffectiveValue(key string) string {
-	paths := []string{".env"}
-	if p, err := UserEnvPath(); err == nil {
-		paths = append(paths, p)
-	}
-	return newResolver(paths...).get(key, "")
+	return layeredResolver(os.LookupEnv).get(key, "")
 }
 
 // atoiDefault parses s as a positive int, returning def when empty or invalid.
@@ -730,18 +722,6 @@ func parseCommaSep(s string) []string {
 type resolver struct {
 	lookup func(string) (string, bool) // env var lookup (e.g. os.LookupEnv)
 	layers []map[string]string         // highest file precedence first
-}
-
-func newResolver(paths ...string) *resolver {
-	return newResolverWithLookup(os.LookupEnv, paths...)
-}
-
-func newResolverWithLookup(lookup func(string) (string, bool), paths ...string) *resolver {
-	r := &resolver{lookup: lookup}
-	for _, p := range paths {
-		r.layers = append(r.layers, parseEnvFile(p))
-	}
-	return r
 }
 
 // parseEnvFile reads a KEY=VALUE file into a map. A missing or unreadable file
