@@ -23,6 +23,18 @@ each GitHub Release.
   database or turn privacy routing off. Ignored keys are reported once on
   stderr; set them in the real environment or with `semidx config set`.
 
+### Fixed
+
+- `semidx mcp install --apply` writes the temp file next to the target
+  config (no more EXDEV when `/tmp` is tmpfs), keeps the existing file mode,
+  aborts instead of clobbering an unreadable config, accepts a `null` JSON
+  config, and replaces a Codex `[mcp_servers.semidx]` section together with
+  its subtables (a leftover `.env` subtable made the TOML invalid).
+- A `SEMIDX_DB_DSN` saved with `semidx config set` is now honoured by the
+  zero-config detection instead of falling back to local keyword-only SQLite.
+- `semidx tenant|workspace use|create` no longer persist `SEMIDX_SERVER_URL`
+  / `SEMIDX_TOKEN` env overrides over the saved login.
+
 ### Changed
 
 - Point public install/upgrade defaults at GitHub Releases (was private Gitea).
