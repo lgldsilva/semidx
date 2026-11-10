@@ -23,6 +23,15 @@ each GitHub Release.
 
 ### Fixed
 
+- Worktree reindex keeps the previous version of files whose embedding failed
+  or that `--max-files` skipped, instead of pruning them from search; a
+  concurrent prune can no longer delete another run's in-flight versions.
+- `--force` reindex no longer deletes a content-addressed file version shared
+  by other worktrees when re-embedding fails.
+- `--docs` folders inside a git repo get correct incremental diffs
+  (repo-relative paths, uncommitted changes, renames, non-ASCII names) and
+  deleted files are removed from the index.
+- Nested archive extraction shares one size budget across all levels.
 - Pin `aquasecurity/trivy-action` to commit SHA `915b19b` (same as tag
   `v0.28.0`). The previous ref `aquasecurity/trivy-action@0.28.0` failed
   with "unable to find version 0.28.0" because the upstream repo ships
