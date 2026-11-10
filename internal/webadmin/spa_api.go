@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lgldsilva/semidx/internal/passwd"
 	"github.com/lgldsilva/semidx/internal/privacy"
 	"github.com/lgldsilva/semidx/internal/projectname"
 	"github.com/lgldsilva/semidx/internal/search"
@@ -52,24 +51,26 @@ func (a *Admin) apiLogin(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(body.Username)
 	password := body.Password
 	now := time.Now()
-	if !a.limiter.allowed(username, now) {
+	ip := clientIP(r)
+	if !a.limiter.allowedLogin(ip, username, now) {
 		writeJSONErr(w, http.StatusTooManyRequests, "too many attempts — wait a few minutes and try again")
 		return
 	}
 	user, err := a.store.GetUserByUsername(r.Context(), username)
-	if errors.Is(err, store.ErrNotFound) || (user != nil && user.Disabled) {
-		a.limiter.record(username, now)
-		writeJSONErr(w, http.StatusUnauthorized, spaErrInvalidCredentials)
-		return
-	}
-	if err != nil {
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		a.log.Error("login lookup failed", "err", err)
 		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
 		return
 	}
-	ok, err := passwd.Verify(password, user.PasswordHash)
-	if err != nil || !ok {
-		a.limiter.record(username, now)
+	// Always run one argon2 verification — against a dummy hash for unknown
+	// users — so response time does not reveal which usernames exist.
+	hash := dummyHash()
+	if user != nil {
+		hash = user.PasswordHash
+	}
+	ok, verr := verifyPassword(password, hash)
+	if user == nil || user.Disabled || verr != nil || !ok {
+		a.limiter.recordLogin(ip, username, now)
 		writeJSONErr(w, http.StatusUnauthorized, spaErrInvalidCredentials)
 		return
 	}
@@ -87,7 +88,7 @@ func (a *Admin) apiLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSONErr(w, http.StatusInternalServerError, msgInternalError)
 		return
 	}
-	a.limiter.reset(username)
+	a.limiter.resetLogin(ip, username)
 	a.setSession(w, plaintext, ttl)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user": map[string]any{"id": user.ID, "username": user.Username, "role": user.Role},

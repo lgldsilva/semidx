@@ -443,12 +443,12 @@ type loginLimiter struct {
 	tries map[string][]time.Time
 }
 
-// allowed reports whether key has attempts left in the current window.
-func (l *loginLimiter) allowed(key string, now time.Time) bool {
+// allowedN reports whether key has fewer than max attempts in the window.
+func (l *loginLimiter) allowedN(key string, maxTries int, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.tries[key] = prune(l.tries[key], now.Add(-loginWindow))
-	return len(l.tries[key]) < loginMaxTries
+	return len(l.tries[key]) < maxTries
 }
 
 func (l *loginLimiter) record(key string, now time.Time) {
