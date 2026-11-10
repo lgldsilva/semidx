@@ -68,6 +68,9 @@ func Sync(ctx context.Context, dataDir, name, url, branch string, allowFileURL b
 // image has none) — unless an SSHKey is provided, which keeps the SSH transport
 // (ssh:// URLs are then accepted as-is, e.g. for non-standard ports).
 func SyncWithOptions(ctx context.Context, opts Options) (string, error) {
+	if !filepath.IsLocal(opts.Name) {
+		return "", fmt.Errorf("invalid repo name %q: must be a local relative path", opts.Name)
+	}
 	url := effectiveURL(opts)
 	sshMode := len(opts.SSHKey) > 0
 	sshURLAllowed := sshMode && isSSHURL(url) // key present → ssh:// accepted as-is

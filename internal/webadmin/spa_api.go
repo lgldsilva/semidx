@@ -11,6 +11,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/passwd"
 	"github.com/lgldsilva/semidx/internal/privacy"
+	"github.com/lgldsilva/semidx/internal/projectname"
 	"github.com/lgldsilva/semidx/internal/search"
 	"github.com/lgldsilva/semidx/internal/store"
 	"github.com/lgldsilva/semidx/internal/tenant"
@@ -204,9 +205,14 @@ func normalizePushProjectBody(body *createProjectBody, name string) (string, int
 	return validateProjectName(name)
 }
 
+// validateProjectName applies the shared strict rule: the name later becomes a
+// path segment for server-side clones, so separators and dot-names are refused.
 func validateProjectName(name string) (string, int, string) {
 	if name == "" || name == "." || name == "/" {
 		return "", http.StatusBadRequest, "could not derive project name — set name explicitly"
+	}
+	if err := projectname.Validate(name); err != nil {
+		return "", http.StatusBadRequest, err.Error()
 	}
 	return name, 0, ""
 }

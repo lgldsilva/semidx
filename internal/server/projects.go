@@ -4,30 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/lgldsilva/semidx/internal/gitmeta"
 	"github.com/lgldsilva/semidx/internal/privacy"
+	"github.com/lgldsilva/semidx/internal/projectname"
 	"github.com/lgldsilva/semidx/internal/store"
 )
 
-// validProjectName allows letters, digits, hyphens, underscores, and dots,
-// must start with alphanumeric, and is at most 255 characters.
-var validProjectName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$`)
-
-func validateProjectName(name string) error {
-	if name == "" {
-		return errors.New("project name is required")
-	}
-	if len(name) > 255 {
-		return errors.New("project name must be at most 255 characters")
-	}
-	if !validProjectName.MatchString(name) {
-		return errors.New("project name must start with alphanumeric and contain only letters, digits, hyphens, underscores, and dots")
-	}
-	return nil
-}
+func validateProjectName(name string) error { return projectname.Validate(name) }
 
 type projectView struct {
 	TenantID    int    `json:"tenant_id"`

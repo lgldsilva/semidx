@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lgldsilva/semidx/internal/gitenv"
@@ -77,5 +78,16 @@ func TestSyncRejectsUnsupportedURL(t *testing.T) {
 func TestSyncRejectsFileURLByDefault(t *testing.T) {
 	if _, err := Sync(context.Background(), t.TempDir(), "p", "file:///tmp/repo", "", false); err == nil {
 		t.Error("expected rejection of file:// when allowFileURL is false")
+	}
+}
+
+// Regression: a project name such as "../x" escaped DataDir/repos.
+func TestSyncRejectsNonLocalName(t *testing.T) {
+	data := t.TempDir()
+	for _, name := range []string{"../escape", "/abs", "", "a/../../b"} {
+		_, err := Sync(context.Background(), data, name, "https://example.invalid/r.git", "", false)
+		if err == nil || !strings.Contains(err.Error(), "invalid repo name") {
+			t.Errorf("Sync(%q) err = %v, want invalid repo name", name, err)
+		}
 	}
 }
