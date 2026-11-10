@@ -40,6 +40,14 @@ each GitHub Release.
   existing checkout whose `remote.origin.url` differs is re-cloned instead of
   pulled. Existing git projects re-clone once on their next sync; the old
   `repos/<name>` directories can be deleted.
+- The API rate limit and the admin login limiter are keyed by client IP
+  (previously by the raw `Authorization` header and by username only). New
+  `SEMIDX_TRUSTED_PROXIES` (comma-separated IPs/CIDRs) lets semidx take the
+  client IP from `X-Forwarded-For`, but only when the request comes from a
+  listed proxy. The header is read from right to left, and the first address
+  that is not a trusted proxy wins. Deployments behind a reverse proxy should
+  set it: without it, all clients share the proxy's limits. The staging kit
+  sets it for its Caddy gateway.
 
 ### Fixed
 

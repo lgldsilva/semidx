@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/lgldsilva/semidx/internal/chat"
+	"github.com/lgldsilva/semidx/internal/clientip"
 	embedpkg "github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/jwtauth"
@@ -96,6 +97,7 @@ type Admin struct {
 	githubBaseURL string
 	secrets       *secretbox.Box       // seals git credentials from the admin API
 	indexerOpts   indexing.IndexerOpts // server index caps for SPA ingest (SetIndexerOpts)
+	clientIP      *clientip.Resolver   // login limiter client IP (SEMIDX_TRUSTED_PROXIES); nil = RemoteAddr
 }
 
 // New builds the admin UI. secureCookies must be true when the server is reached

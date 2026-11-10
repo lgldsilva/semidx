@@ -51,7 +51,7 @@ func (a *Admin) apiLogin(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(body.Username)
 	password := body.Password
 	now := time.Now()
-	ip := clientIP(r)
+	ip := a.clientIP.ClientIP(r)
 	if !a.limiter.allowedLogin(ip, username, now) {
 		writeJSONErr(w, http.StatusTooManyRequests, "too many attempts — wait a few minutes and try again")
 		return

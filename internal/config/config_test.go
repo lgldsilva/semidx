@@ -379,3 +379,17 @@ func TestGitTokenHosts(t *testing.T) {
 		t.Fatalf("unset GitTokenHosts = %#v, want empty", cfg.GitTokenHosts)
 	}
 }
+
+func TestTrustedProxies(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg := LoadWithLookup(mapLookup(map[string]string{
+		"SEMIDX_TRUSTED_PROXIES": "172.31.250.10, 10.0.0.0/8",
+	}))
+	if !slicesEqual(cfg.TrustedProxies, []string{"172.31.250.10", "10.0.0.0/8"}) {
+		t.Fatalf("TrustedProxies = %#v", cfg.TrustedProxies)
+	}
+	if cfg = LoadWithLookup(mapLookup(nil)); len(cfg.TrustedProxies) != 0 {
+		t.Fatalf("unset TrustedProxies = %#v, want empty", cfg.TrustedProxies)
+	}
+}

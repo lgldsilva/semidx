@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/clientip"
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
@@ -728,6 +729,11 @@ without that auth in front.`,
 			srv.SetGitAllowFile(d.cfg.GitAllowFile)
 			srv.SetGitAuth(d.cfg.GitSSLNoVerify, d.cfg.GitToken, d.cfg.GitUser)
 			srv.SetGitTokenHosts(d.cfg.GitTokenHosts)
+			proxies, err := clientip.New(d.cfg.TrustedProxies)
+			if err != nil {
+				return fmt.Errorf("SEMIDX_TRUSTED_PROXIES: %w", err)
+			}
+			srv.SetClientIPResolver(proxies)
 			if d.cfg.GitToken != "" && len(d.cfg.GitTokenHosts) == 0 {
 				log.Warn("SEMIDX_GIT_TOKEN is set but SEMIDX_GIT_TOKEN_HOSTS is empty: the token will not be sent to any host")
 			}

@@ -1,11 +1,10 @@
 package webadmin
 
 import (
-	"net"
-	"net/http"
 	"sync"
 	"time"
 
+	"github.com/lgldsilva/semidx/internal/clientip"
 	"github.com/lgldsilva/semidx/internal/passwd"
 )
 
@@ -13,14 +12,9 @@ import (
 // usernames (credential spraying), on top of the per IP+username cap.
 const loginMaxTriesPerIP = 20
 
-// clientIP is the host part of RemoteAddr. Forwarding headers are ignored:
-// without trusted-proxy configuration they are client-controlled.
-func clientIP(r *http.Request) string {
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
-}
+// SetClientIPResolver sets how the login limiter derives the client IP
+// (SEMIDX_TRUSTED_PROXIES). nil keeps the RemoteAddr-only behaviour.
+func (a *Admin) SetClientIPResolver(r *clientip.Resolver) { a.clientIP = r }
 
 // loginKeys returns the limiter keys for an attempt: the IP+username pair
 // (so a remote attacker cannot lock a user out everywhere) and the bare IP

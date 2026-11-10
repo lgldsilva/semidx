@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -23,6 +22,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/lgldsilva/semidx/internal/clientip"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/search"
@@ -67,6 +67,7 @@ type Server struct {
 	jwt             *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
 
 	apiLimiter     *apiRateLimiter
+	clientIP       *clientip.Resolver  // client IP for rate limiting (SEMIDX_TRUSTED_PROXIES); nil = RemoteAddr
 	gitAllowFile   bool                // allow file:// git URLs (SEMIDX_GIT_ALLOW_FILE)
 	gitSSLNoVerify bool                // disable TLS verify on git clone/pull (SEMIDX_GIT_SSL_NO_VERIFY)
 	gitToken       string              // token for private HTTPS clones (SEMIDX_GIT_TOKEN)
@@ -98,6 +99,7 @@ func (s *Server) MountAdmin(secureCookies bool, csrfKey string) (*webadmin.Admin
 		return nil, err
 	}
 	a.SetIndexerOpts(s.indexerOpts())
+	a.SetClientIPResolver(s.clientIP)
 	s.admin = a.Handler()
 	return a, nil
 }
@@ -726,16 +728,10 @@ func (s *Server) limited(maxBytes int64, next http.Handler) http.Handler {
 	})
 }
 
-// clientIP returns the host part of RemoteAddr. There is no trusted-proxy
-// configuration, so forwarding headers (X-Forwarded-For) are ignored: they are
-// client-controlled. Behind a reverse proxy all traffic shares the proxy's
-// bucket.
-func clientIP(r *http.Request) string {
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
-}
+// SetClientIPResolver sets how the client IP is derived for rate limiting
+// (SEMIDX_TRUSTED_PROXIES). nil keeps the RemoteAddr-only behaviour. It also
+// reaches the admin UI when MountAdmin is called afterwards.
+func (s *Server) SetClientIPResolver(r *clientip.Resolver) { s.clientIP = r }
 
 // rateLimit rejects requests that exceed 200 req/s per client IP.
 // Health/ready/metrics/admin paths are excluded.
@@ -748,7 +744,8 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 		}
 		// Keyed by client IP, pre-auth: the Authorization header is
 		// attacker-chosen (random bearers would each get a fresh bucket).
-		if !s.apiLimiter.allow(clientIP(r)) {
+		// X-Forwarded-For counts only from SEMIDX_TRUSTED_PROXIES peers.
+		if !s.apiLimiter.allow(s.clientIP.ClientIP(r)) {
 			writeJSONError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}
