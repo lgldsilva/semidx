@@ -21,6 +21,7 @@ import (
 
 	"github.com/lgldsilva/semidx/internal/chat"
 	embedpkg "github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/rag"
 	"github.com/lgldsilva/semidx/internal/search"
@@ -93,7 +94,8 @@ type Admin struct {
 	// API host (GitHub Enterprise, or a test server) — empty uses the default.
 	githubToken   string
 	githubBaseURL string
-	secrets       *secretbox.Box // seals git credentials from the admin API
+	secrets       *secretbox.Box       // seals git credentials from the admin API
+	indexerOpts   indexing.IndexerOpts // server index caps for SPA ingest (SetIndexerOpts)
 }
 
 // New builds the admin UI. secureCookies must be true when the server is reached
@@ -231,7 +233,7 @@ func (a *Admin) Handler() http.Handler {
 	spa := spaFileServer()
 	mux.Handle("GET /admin/{$}", spa)
 	mux.Handle("GET /admin/", spa)
-	return securityHeaders(mux)
+	return securityHeaders(limitBodies(mux))
 }
 
 // securityHeaders wraps the admin/SPA handler with defence-in-depth response

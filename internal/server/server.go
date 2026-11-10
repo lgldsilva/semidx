@@ -97,6 +97,7 @@ func (s *Server) MountAdmin(secureCookies bool, csrfKey string) (*webadmin.Admin
 	if err != nil {
 		return nil, err
 	}
+	a.SetIndexerOpts(s.indexerOpts())
 	s.admin = a.Handler()
 	return a, nil
 }
