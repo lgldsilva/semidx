@@ -1,5 +1,15 @@
 # TLS is terminated by the operator's edge proxy. Keep the backend HTTP-only
 # unless a local override mounts approved certificates into Caddy.
+
+# Pass the edge proxy's X-Forwarded-For through (Caddy appends the peer it
+# sees); untrusted peers get their XFF replaced. semidx then walks the chain
+# with SEMIDX_TRUSTED_PROXIES (compose: STAGING_TRUSTED_PROXIES).
+{
+	servers {
+		trusted_proxies static {$STAGING_EDGE_PROXY_CIDRS:127.0.0.1/32}
+	}
+}
+
 http://{$STAGING_PUBLIC_HOST:localhost}:8080 {
 	encode gzip
 	header {
