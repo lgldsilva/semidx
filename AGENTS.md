@@ -115,6 +115,8 @@ cmd/semidx/        CLI (cobra): index, unlock (password docs), search, sgrep,
 pkg/client/        public Go SDK for the HTTP API (DTOs + client).
 internal/
   config/          SEMIDX_* resolution: env > cwd .env > ~/.config/semidx/semidx.env > default
+                   (cwd .env is untrusted: secrets, DSNs, URLs and security
+                   settings from it are ignored — internal/config/projectenv.go)
   clientconfig/    ~/.config/semidx/config.yaml (server_url, token, tenant, default project)
   chunker/         line-aware chunking (Chunk{Content,StartLine,EndLine})
   privacy/         deny-list + route-local policy engine

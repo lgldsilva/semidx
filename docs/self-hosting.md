@@ -80,6 +80,21 @@ starts.
 All configuration is read from the environment (a `.env` file in the working
 directory is also honored; real environment variables win over it).
 
+> **Security:** the working-directory `.env` belongs to whatever repository you
+> run semidx in, so it is untrusted. It may tune semidx (workers, limits,
+> `SEMIDX_LOCAL_INDEX`, `SEMIDX_EMBED_MODE`, …) but it **cannot** set
+> credentials or DSNs (anything holding `KEY`, `TOKEN`, `SECRET`, `PASSWORD`,
+> `DSN`, e.g. `GEMINI_API_KEY`, `SEMIDX_DB_DSN`, `SEMIDX_JWT_SECRET`), any
+> endpoint (`*_URL`, `*_URLS`, `*_ENDPOINT`, `*_API`, e.g.
+> `SEMIDX_GEMINI_BASE_URL`, `OLLAMA_URL`), or security settings
+> (`EMBED_PROVIDER`, `SEMIDX_CHAT_PROVIDER`, `SEMIDX_INSECURE`,
+> `SEMIDX_TLS_CA_CERT`, `SEMIDX_JAVA_DECOMPILER`, `SEMIDX_MCP_CLIENT_CONFIG`,
+> `SEMIDX_AGENT_ACTIONS`, `SEMIDX_GIT_*`, `SEMIDX_COOKIE_SECURE`).
+> `EMBED_PRIVACY`, `SEMIDX_SECRET_SCAN` and `SEMIDX_SECRET_BLOCK_EMBEDDING`
+> are honoured only when set to `true`. Ignored keys are reported once on
+> stderr. Set those values in the real environment (e.g. the compose
+> `environment:` block) or with `semidx config set` (user config file).
+
 ### Database
 
 | Variable | Default | Purpose |

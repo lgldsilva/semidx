@@ -83,8 +83,8 @@ func TestDotEnvFile(t *testing.T) {
 	clearEnv(t)
 	writeDotEnv(t, `
 # comment line
-SEMIDX_DB_DSN=postgres://u:p@dbhost:5432/db
-GEMINI_API_KEY=file-key
+SEMIDX_INDEX_WORKERS=5
+SEMIDX_LOCAL_INDEX=/srv/idx.db
 
 malformed line without equals
 EMBED_PRIVACY=true
@@ -92,29 +92,29 @@ EMBED_PRIVACY=true
 
 	cfg := Load()
 
-	if want := "postgres://u:p@dbhost:5432/db"; cfg.DatabaseURL != want {
-		t.Errorf("DatabaseURL = %q, want %q", cfg.DatabaseURL, want)
+	if cfg.IndexWorkers != 5 {
+		t.Errorf("IndexWorkers = %d, want 5 from .env", cfg.IndexWorkers)
 	}
-	if cfg.GeminiAPIKey != "file-key" {
-		t.Errorf("GeminiAPIKey = %q, want %q", cfg.GeminiAPIKey, "file-key")
+	if cfg.LocalIndexPath != "/srv/idx.db" {
+		t.Errorf("LocalIndexPath = %q, want the .env path", cfg.LocalIndexPath)
 	}
 	if !cfg.Privacy {
-		t.Error("Privacy = false, want true from .env")
+		t.Error("Privacy = false, want true from .env (tightening is allowed)")
 	}
 }
 
 func TestRealEnvOverridesDotEnv(t *testing.T) {
 	clearEnv(t)
-	writeDotEnv(t, "GEMINI_API_KEY=file-key\nSEMIDX_DB_DSN=postgres://file/db\n")
-	t.Setenv("GEMINI_API_KEY", "env-key")
+	writeDotEnv(t, "SEMIDX_INDEX_WORKERS=5\nSEMIDX_LOCAL_INDEX=/srv/file.db\n")
+	t.Setenv("SEMIDX_INDEX_WORKERS", "9")
 
 	cfg := Load()
 
-	if cfg.GeminiAPIKey != "env-key" {
-		t.Errorf("GeminiAPIKey = %q, want real env to win over .env", cfg.GeminiAPIKey)
+	if cfg.IndexWorkers != 9 {
+		t.Errorf("IndexWorkers = %d, want real env to win over .env", cfg.IndexWorkers)
 	}
-	if want := "postgres://file/db"; cfg.DatabaseURL != want {
-		t.Errorf("DatabaseURL = %q, want .env value %q", cfg.DatabaseURL, want)
+	if want := "/srv/file.db"; cfg.LocalIndexPath != want {
+		t.Errorf("LocalIndexPath = %q, want .env value %q", cfg.LocalIndexPath, want)
 	}
 }
 

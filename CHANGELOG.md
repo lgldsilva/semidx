@@ -13,6 +13,15 @@ each GitHub Release.
 
 ### Security
 
+- A `.env` in the working directory (i.e. any cloned repository) can no
+  longer set credentials/DSNs, endpoint or base URLs, or security settings
+  (custom provider, chat provider, TLS/CA overrides, decompiler, MCP client
+  config, agent actions, git TLS/file, cookie flag); privacy and secret
+  scanning settings are honoured from it only when they tighten (`true`).
+  Previously a hostile repo could redirect the user's API key to an attacker
+  URL (`SEMIDX_*_BASE_URL`), swap keys, point the index at an attacker
+  database or turn privacy routing off. Ignored keys are reported once on
+  stderr; set them in the real environment or with `semidx config set`.
 - In pool mode (`SEMIDX_OLLAMA_URLS` with 2+ URLs) a custom `openai` provider
   could receive chunks of sensitive files (force-local) and requests made
   under global privacy mode; restricted requests now only use local lanes.
@@ -20,6 +29,18 @@ each GitHub Release.
   `secrets.yaml`, `tokens.json`), SSH private keys (`id_rsa`, `id_ed25519`, …),
   `.npmrc`, `.netrc`, `.pgpass`, `.pypirc`, `.htpasswd`, keystores
   (`.p12/.pfx/.jks/.keystore`) and Terraform state/vars.
+
+### Fixed
+
+- `semidx mcp install --apply` writes the temp file next to the target
+  config (no more EXDEV when `/tmp` is tmpfs), keeps the existing file mode,
+  aborts instead of clobbering an unreadable config, accepts a `null` JSON
+  config, and replaces a Codex `[mcp_servers.semidx]` section together with
+  its subtables (a leftover `.env` subtable made the TOML invalid).
+- A `SEMIDX_DB_DSN` saved with `semidx config set` is now honoured by the
+  zero-config detection instead of falling back to local keyword-only SQLite.
+- `semidx tenant|workspace use|create` no longer persist `SEMIDX_SERVER_URL`
+  / `SEMIDX_TOKEN` env overrides over the saved login.
 
 ### Changed
 
