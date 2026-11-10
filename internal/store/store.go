@@ -698,9 +698,13 @@ func (s *PgStore) InsertEmbeddingCache(ctx context.Context, inputHashes []string
 		batch.Queue(query, hash, model, dims, pgvector.NewVector(embeddings[i]))
 	}
 	br := s.pool.SendBatch(ctx, batch)
-	defer func() { _ = br.Close() }()
-	_, err = br.Exec()
-	return err
+	for range inputHashes {
+		if _, err := br.Exec(); err != nil {
+			_ = br.Close()
+			return err
+		}
+	}
+	return br.Close()
 }
 
 // PruneEmbeddingCache removes all cache entries for the given dimension.
