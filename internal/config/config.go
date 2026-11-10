@@ -49,6 +49,9 @@ const (
 type Config struct {
 	// DatabaseURL is the PostgreSQL/pgvector DSN (SEMIDX_DB_DSN).
 	DatabaseURL string
+	// DatabaseURLConfigured reports whether SEMIDX_DB_DSN was set at any
+	// resolution layer (env, project .env, user config) rather than defaulted.
+	DatabaseURLConfigured bool
 	// OllamaURL is the local Ollama endpoint (SEMIDX_OLLAMA_URL, legacy OLLAMA_URL).
 	OllamaURL string
 	// OllamaURLs, when non-empty, enables parallel embedding mode: each URL
@@ -406,7 +409,9 @@ func ZeroConfigRecommended(cfg *Config, remoteServer bool) bool {
 	if remoteServer {
 		return false
 	}
-	if os.Getenv("SEMIDX_DB_DSN") != "" || os.Getenv("SEMIDX_LOCAL_INDEX") != "" {
+	// Use the layered resolution (env > .env > user config), not the bare
+	// process env: a DSN saved with `semidx config set` must count too.
+	if cfg.DatabaseURLConfigured || cfg.LocalIndexRequested != "" {
 		return false
 	}
 	return !cfg.HasConfiguredEmbeddingProvider()
@@ -431,38 +436,39 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 	}
 	env := newResolverWithLookup(envLookup, paths...)
 	return &Config{
-		DatabaseURL:         env.get("SEMIDX_DB_DSN", defaultDatabaseURL),
-		OllamaURL:           env.first("SEMIDX_OLLAMA_URL", "OLLAMA_URL", defaultOllamaURL),
-		OllamaURLs:          parseCommaSep(env.get("SEMIDX_OLLAMA_URLS", "")),
-		Provider:            env.get("EMBED_PROVIDER", ""),
-		Endpoint:            env.get("EMBED_ENDPOINT", ""),
-		APIKey:              env.get("EMBED_API_KEY", ""),
-		GeminiAPIKey:        env.get("GEMINI_API_KEY", ""),
-		GeminiBaseURL:       env.get("SEMIDX_GEMINI_BASE_URL", defaultGeminiBaseURL),
-		GroqAPIKey:          env.get("GROQ_API_KEY", ""),
-		GroqBaseURL:         env.get("SEMIDX_GROQ_BASE_URL", defaultGroqBaseURL),
-		OpenRouterAPIKey:    env.get("OPENROUTER_API_KEY", ""),
-		OpenRouterBaseURL:   env.get("SEMIDX_OPENROUTER_BASE_URL", defaultOpenRouterURL),
-		OllamaCloudAPIKey:   env.get("OLLAMA_CLOUD_API_KEY", ""),
-		OllamaCloudBaseURL:  env.get("SEMIDX_OLLAMA_CLOUD_BASE_URL", defaultOllamaCloudURL),
-		AnthropicAPIKey:     env.get("ANTHROPIC_API_KEY", ""),
-		ChatProvider:        env.get("SEMIDX_CHAT_PROVIDER", ""),
-		ChatModel:           env.get("SEMIDX_CHAT_MODEL", ""),
-		ChatAPIKey:          env.get("SEMIDX_CHAT_API_KEY", ""),
-		ChatBaseURL:         env.get("SEMIDX_CHAT_BASE_URL", ""),
-		ChatTemperature:     floatDefault(env.get("SEMIDX_CHAT_TEMPERATURE", ""), 0.3),
-		ChatModels:          parseCommaSep(env.get("SEMIDX_CHAT_MODELS", "")),
-		AgentActions:        strings.ToLower(strings.TrimSpace(env.get("SEMIDX_AGENT_ACTIONS", "off"))),
-		Privacy:             env.get("EMBED_PRIVACY", "") == "true",
-		IndexWorkers:        atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
-		EmbedBatchSize:      atoiDefault(env.get("SEMIDX_EMBED_BATCH_SIZE", ""), defaultEmbedBatchSize),
-		MaxFileSize:         atoiDefault(env.get("SEMIDX_MAX_FILE_SIZE", ""), defaultMaxFileSize),
-		MaxChunksPerFile:    atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_FILE", ""), defaultMaxChunksPerFile),
-		MaxChunksPerProject: atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_PROJECT", ""), defaultMaxChunksPerProject),
-		MaxFilesPerProject:  atoiDefault(env.get("SEMIDX_MAX_FILES_PER_PROJECT", ""), defaultMaxFilesPerProject),
-		ListenAddr:          env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
-		BootstrapToken:      env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
-		DataDir:             env.get("SEMIDX_DATA_DIR", defaultDataDir),
+		DatabaseURL:           env.get("SEMIDX_DB_DSN", defaultDatabaseURL),
+		DatabaseURLConfigured: env.get("SEMIDX_DB_DSN", "") != "",
+		OllamaURL:             env.first("SEMIDX_OLLAMA_URL", "OLLAMA_URL", defaultOllamaURL),
+		OllamaURLs:            parseCommaSep(env.get("SEMIDX_OLLAMA_URLS", "")),
+		Provider:              env.get("EMBED_PROVIDER", ""),
+		Endpoint:              env.get("EMBED_ENDPOINT", ""),
+		APIKey:                env.get("EMBED_API_KEY", ""),
+		GeminiAPIKey:          env.get("GEMINI_API_KEY", ""),
+		GeminiBaseURL:         env.get("SEMIDX_GEMINI_BASE_URL", defaultGeminiBaseURL),
+		GroqAPIKey:            env.get("GROQ_API_KEY", ""),
+		GroqBaseURL:           env.get("SEMIDX_GROQ_BASE_URL", defaultGroqBaseURL),
+		OpenRouterAPIKey:      env.get("OPENROUTER_API_KEY", ""),
+		OpenRouterBaseURL:     env.get("SEMIDX_OPENROUTER_BASE_URL", defaultOpenRouterURL),
+		OllamaCloudAPIKey:     env.get("OLLAMA_CLOUD_API_KEY", ""),
+		OllamaCloudBaseURL:    env.get("SEMIDX_OLLAMA_CLOUD_BASE_URL", defaultOllamaCloudURL),
+		AnthropicAPIKey:       env.get("ANTHROPIC_API_KEY", ""),
+		ChatProvider:          env.get("SEMIDX_CHAT_PROVIDER", ""),
+		ChatModel:             env.get("SEMIDX_CHAT_MODEL", ""),
+		ChatAPIKey:            env.get("SEMIDX_CHAT_API_KEY", ""),
+		ChatBaseURL:           env.get("SEMIDX_CHAT_BASE_URL", ""),
+		ChatTemperature:       floatDefault(env.get("SEMIDX_CHAT_TEMPERATURE", ""), 0.3),
+		ChatModels:            parseCommaSep(env.get("SEMIDX_CHAT_MODELS", "")),
+		AgentActions:          strings.ToLower(strings.TrimSpace(env.get("SEMIDX_AGENT_ACTIONS", "off"))),
+		Privacy:               env.get("EMBED_PRIVACY", "") == "true",
+		IndexWorkers:          atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
+		EmbedBatchSize:        atoiDefault(env.get("SEMIDX_EMBED_BATCH_SIZE", ""), defaultEmbedBatchSize),
+		MaxFileSize:           atoiDefault(env.get("SEMIDX_MAX_FILE_SIZE", ""), defaultMaxFileSize),
+		MaxChunksPerFile:      atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_FILE", ""), defaultMaxChunksPerFile),
+		MaxChunksPerProject:   atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_PROJECT", ""), defaultMaxChunksPerProject),
+		MaxFilesPerProject:    atoiDefault(env.get("SEMIDX_MAX_FILES_PER_PROJECT", ""), defaultMaxFilesPerProject),
+		ListenAddr:            env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
+		BootstrapToken:        env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
+		DataDir:               env.get("SEMIDX_DATA_DIR", defaultDataDir),
 
 		BootstrapAdminUser:     env.get("SEMIDX_BOOTSTRAP_ADMIN_USER", "admin"),
 		BootstrapAdminPassword: env.get("SEMIDX_BOOTSTRAP_ADMIN_PASSWORD", ""),
