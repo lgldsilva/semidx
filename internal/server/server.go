@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -724,7 +725,18 @@ func (s *Server) limited(maxBytes int64, next http.Handler) http.Handler {
 	})
 }
 
-// rateLimit rejects requests that exceed 200 req/s per key (bearer token or IP).
+// clientIP returns the host part of RemoteAddr. There is no trusted-proxy
+// configuration, so forwarding headers (X-Forwarded-For) are ignored: they are
+// client-controlled. Behind a reverse proxy all traffic shares the proxy's
+// bucket.
+func clientIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// rateLimit rejects requests that exceed 200 req/s per client IP.
 // Health/ready/metrics/admin paths are excluded.
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -733,11 +745,9 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		key := r.RemoteAddr
-		if tok := r.Header.Get("Authorization"); tok != "" {
-			key = tok
-		}
-		if !s.apiLimiter.allow(key) {
+		// Keyed by client IP, pre-auth: the Authorization header is
+		// attacker-chosen (random bearers would each get a fresh bucket).
+		if !s.apiLimiter.allow(clientIP(r)) {
 			writeJSONError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}
