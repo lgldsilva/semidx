@@ -66,11 +66,12 @@ type Server struct {
 	jwt             *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
 
 	apiLimiter     *apiRateLimiter
-	gitAllowFile   bool   // allow file:// git URLs (SEMIDX_GIT_ALLOW_FILE)
-	gitSSLNoVerify bool   // disable TLS verify on git clone/pull (SEMIDX_GIT_SSL_NO_VERIFY)
-	gitToken       string // token for private HTTPS clones (SEMIDX_GIT_TOKEN)
-	gitUser        string // basic-auth user for gitToken (SEMIDX_GIT_USER)
-	metricsToken   string // when set, /metrics requires Bearer match (SEMIDX_METRICS_TOKEN)
+	gitAllowFile   bool                // allow file:// git URLs (SEMIDX_GIT_ALLOW_FILE)
+	gitSSLNoVerify bool                // disable TLS verify on git clone/pull (SEMIDX_GIT_SSL_NO_VERIFY)
+	gitToken       string              // token for private HTTPS clones (SEMIDX_GIT_TOKEN)
+	gitUser        string              // basic-auth user for gitToken (SEMIDX_GIT_USER)
+	gitTokenHosts  map[string]struct{} // hosts allowed to receive gitToken (SEMIDX_GIT_TOKEN_HOSTS)
+	metricsToken   string              // when set, /metrics requires Bearer match (SEMIDX_METRICS_TOKEN)
 	indexLimits    IndexLimits
 	secrets        *secretbox.Box // decrypts stored git credentials, nil-safe (SetSecretBox)
 }

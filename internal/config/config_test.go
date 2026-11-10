@@ -365,3 +365,17 @@ func TestParseCommaSep(t *testing.T) {
 		}
 	}
 }
+
+func TestGitTokenHosts(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg := LoadWithLookup(mapLookup(map[string]string{
+		"SEMIDX_GIT_TOKEN_HOSTS": " github.com, gitea.lan ,,",
+	}))
+	if !slicesEqual(cfg.GitTokenHosts, []string{"github.com", "gitea.lan"}) {
+		t.Fatalf("GitTokenHosts = %#v", cfg.GitTokenHosts)
+	}
+	if cfg = LoadWithLookup(mapLookup(nil)); len(cfg.GitTokenHosts) != 0 {
+		t.Fatalf("unset GitTokenHosts = %#v, want empty", cfg.GitTokenHosts)
+	}
+}

@@ -123,6 +123,7 @@ directory is also honored; real environment variables win over it).
 | `SEMIDX_GIT_SSL_NO_VERIFY` | `false` | When `true`, disables TLS verification for server-side `git clone`/`pull` (self-signed CA on a private Gitea/GitLab/etc.). Prefer installing a real CA when possible. |
 | `SEMIDX_GIT_TOKEN` | *(unset)* | PAT for private HTTPS clones; injected as an Authorization header (not stored in the repo URL). Falls back to `SEMIDX_GITHUB_TOKEN`. |
 | `SEMIDX_GIT_USER` | `x-access-token` | Basic-auth username paired with `SEMIDX_GIT_TOKEN` (Gitea/GitHub default). |
+| `SEMIDX_GIT_TOKEN_HOSTS` | *(unset)* | Comma-separated hostnames (e.g. `github.com,gitea.lan`) allowed to receive `SEMIDX_GIT_TOKEN`. **Unset = the token is sent to no host.** Project git URLs are tenant-controlled, so an unscoped token would leak to any host a project points at. |
 | `SEMIDX_GIT_ALLOW_FILE` | `false` | When `true`, permits `file://` git URLs for server-side sync. |
 
 #### Stored git credentials (vault + SSH tooling)

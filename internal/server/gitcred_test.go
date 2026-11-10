@@ -165,6 +165,7 @@ func TestResolveGitOptionsEnvFallback(t *testing.T) {
 	cs := &credStore{fakeStore: &fakeStore{}} // no stored credentials at all
 	srv := New(cs, fakeEmbedder{}, nil)
 	srv.SetGitAuth(false, "env-token", "env-user")
+	srv.SetGitTokenHosts([]string{"GITEA.lan"}) // case-insensitive match
 	srv.SetSecretBox(newTestBox(t))
 
 	opts, err := srv.resolveGitOptions(context.Background(), gitProject(), "/data")
@@ -180,6 +181,7 @@ func TestResolveGitOptionsStoreWithoutCredentialSupport(t *testing.T) {
 	t.Parallel()
 	srv := New(&fakeStore{}, fakeEmbedder{}, nil) // fakeStore: no GitCredentialStore
 	srv.SetGitAuth(false, "env-token", "env-user")
+	srv.SetGitTokenHosts([]string{"gitea.lan"})
 
 	opts, err := srv.resolveGitOptions(context.Background(), gitProject(), "/data")
 	if err != nil {
@@ -190,7 +192,9 @@ func TestResolveGitOptionsStoreWithoutCredentialSupport(t *testing.T) {
 	}
 }
 
-func TestResolveGitOptionsUnparseableHostDegradesToEnv(t *testing.T) {
+// A URL without a parseable host can never match the allowlist, so the env
+// token is withheld (file:// clones need no HTTP auth anyway).
+func TestResolveGitOptionsUnparseableHostGetsNoEnvToken(t *testing.T) {
 	t.Parallel()
 	cs := &credStore{fakeStore: &fakeStore{}}
 	srv := New(cs, fakeEmbedder{}, nil)
@@ -206,8 +210,8 @@ func TestResolveGitOptionsUnparseableHostDegradesToEnv(t *testing.T) {
 	if cs.gotHost != "" {
 		t.Errorf("host lookup ran with %q, want none", cs.gotHost)
 	}
-	if opts.Token != "env-token" {
-		t.Errorf("token = %q, want the env fallback", opts.Token)
+	if opts.Token != "" {
+		t.Errorf("token = %q, want none for a host-less URL", opts.Token)
 	}
 }
 
@@ -380,5 +384,31 @@ func TestResolveGitOptionsCloneDirScopedByTenantAndProject(t *testing.T) {
 	}
 	if oa.Name != filepath.Join("1", "3") || ob.Name != filepath.Join("2", "9") {
 		t.Fatalf("clone dirs = %q, %q; want 1/3 and 2/9", oa.Name, ob.Name)
+	}
+}
+
+// Regression: the env-global SEMIDX_GIT_TOKEN was sent as Basic auth to any
+// https URL a tenant wrote, so a project pointing at an attacker host
+// exfiltrated it. It now goes only to hosts in SEMIDX_GIT_TOKEN_HOSTS.
+func TestResolveGitOptionsEnvTokenOnlyForAllowlistedHosts(t *testing.T) {
+	t.Parallel()
+	srv := New(&fakeStore{}, fakeEmbedder{}, nil)
+	srv.SetGitAuth(false, "env-token", "env-user")
+
+	evil := &store.Project{ID: 2, Name: "x", SourceType: "git", GitURL: "https://attacker.example/r.git"}
+	opts, err := srv.resolveGitOptions(context.Background(), evil, "/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Token != "" {
+		t.Fatalf("env token sent to non-allowlisted host (no allowlist): %q", opts.Token)
+	}
+
+	srv.SetGitTokenHosts([]string{"gitea.lan"})
+	if opts, _ = srv.resolveGitOptions(context.Background(), evil, "/data"); opts.Token != "" {
+		t.Fatalf("env token sent to non-allowlisted host: %q", opts.Token)
+	}
+	if opts, _ = srv.resolveGitOptions(context.Background(), gitProject(), "/data"); opts.Token != "env-token" {
+		t.Fatalf("allowlisted host did not get the env token: %q", opts.Token)
 	}
 }

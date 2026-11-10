@@ -727,6 +727,10 @@ without that auth in front.`,
 			srv := server.New(db, d.emb, log)
 			srv.SetGitAllowFile(d.cfg.GitAllowFile)
 			srv.SetGitAuth(d.cfg.GitSSLNoVerify, d.cfg.GitToken, d.cfg.GitUser)
+			srv.SetGitTokenHosts(d.cfg.GitTokenHosts)
+			if d.cfg.GitToken != "" && len(d.cfg.GitTokenHosts) == 0 {
+				log.Warn("SEMIDX_GIT_TOKEN is set but SEMIDX_GIT_TOKEN_HOSTS is empty: the token will not be sent to any host")
+			}
 			box, err := secretbox.New(d.cfg.SecretKey)
 			if err != nil {
 				return fmt.Errorf("SEMIDX_SECRET_KEY: %w", err)
