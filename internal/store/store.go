@@ -114,6 +114,12 @@ type SearchResult struct {
 	Stale bool
 	// IndexedAt is when the file version was last indexed (zero when unknown).
 	IndexedAt time.Time
+	// FileHash is the content hash of the exact file version this hit came
+	// from (files.hash). Staleness compares the on-disk file against it, so a
+	// path whose versions diverge across worktrees is judged against the
+	// version the hit actually belongs to. Empty when the store did not report
+	// it. Internal: not serialised.
+	FileHash string
 	// Source is how this hit was retrieved: "vector", "keyword", or "graph".
 	// Empty means hybrid/unspecified (typical seed hit).
 	Source string
@@ -1221,7 +1227,7 @@ func (s *PgStore) searchSimilar(ctx context.Context, projectID int, embedding []
 		args = append(args, worktree)
 	}
 	query := fmt.Sprintf(`
-		SELECT f.path, c.content, c.start_line, c.end_line, 1 - (%s) AS score, c.confidence, c.symbol
+		SELECT f.path, c.content, c.start_line, c.end_line, 1 - (%s) AS score, c.confidence, c.symbol, f.hash, f.indexed_at
 		FROM %s c
 		%s
 		WHERE c.project_id = $2 AND c.embedding IS NOT NULL
@@ -1239,8 +1245,8 @@ func (s *PgStore) searchSimilar(ctx context.Context, projectID int, embedding []
 }
 
 // scanSearchRows reads (path, content, start_line, end_line, score, confidence,
-// symbol) rows, tolerating NULL line/confidence/symbol columns (rows indexed
-// before the columns existed).
+// symbol, file hash, indexed_at) rows, tolerating NULL line/confidence/symbol/
+// indexed_at columns (rows indexed before the columns existed).
 func scanSearchRows(rows pgx.Rows) ([]SearchResult, error) {
 	var results []SearchResult
 	for rows.Next() {
@@ -1250,9 +1256,13 @@ func scanSearchRows(rows pgx.Rows) ([]SearchResult, error) {
 			endLine    *int
 			confidence *string
 			symbol     *string
+			indexedAt  *time.Time
 		)
-		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score, &confidence, &symbol); err != nil {
+		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score, &confidence, &symbol, &r.FileHash, &indexedAt); err != nil {
 			return nil, err
+		}
+		if indexedAt != nil {
+			r.IndexedAt = *indexedAt
 		}
 		if startLine != nil {
 			r.StartLine = *startLine
@@ -1648,7 +1658,7 @@ func (s *PgStore) FetchChunksByPath(ctx context.Context, projectID int, filePath
 	if err != nil {
 		return nil, err
 	}
-	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path = $2 ORDER BY c.chunk_index LIMIT $3`, table)
+	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol, f.hash, f.indexed_at FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path = $2 ORDER BY c.chunk_index LIMIT $3`, table)
 	rows, err := s.pool.Query(ctx, query, projectID, filePath, limit)
 	if err != nil {
 		return nil, err
@@ -1664,7 +1674,7 @@ func (s *PgStore) FetchChunksByDirPrefix(ctx context.Context, projectID int, dir
 	if err != nil {
 		return nil, err
 	}
-	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path LIKE $2 || '%%' ORDER BY c.chunk_index LIMIT $3`, table)
+	query := fmt.Sprintf(`SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol, f.hash, f.indexed_at FROM %s c JOIN files f ON f.id = c.file_id WHERE c.project_id = $1 AND f.path LIKE $2 || '%%' ORDER BY c.chunk_index LIMIT $3`, table)
 	rows, err := s.pool.Query(ctx, query, projectID, dirPrefix, limit)
 	if err != nil {
 		return nil, err
@@ -1685,9 +1695,9 @@ func (s *PgStore) FetchChunksByPaths(ctx context.Context, projectID int, paths [
 		return nil, err
 	}
 	query := fmt.Sprintf(`
-		SELECT path, content, start_line, end_line, score, confidence, symbol FROM (
+		SELECT path, content, start_line, end_line, score, confidence, symbol, hash, indexed_at FROM (
 			SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score,
-			       c.confidence, c.symbol,
+			       c.confidence, c.symbol, f.hash, f.indexed_at,
 			       ROW_NUMBER() OVER (PARTITION BY f.path ORDER BY c.chunk_index) AS rn
 			FROM %s c JOIN files f ON f.id = c.file_id
 			WHERE c.project_id = $1 AND f.path = ANY($2)
@@ -1805,7 +1815,7 @@ func (s *PgStore) searchKeywords(ctx context.Context, projectID int, queryText s
 	sql := fmt.Sprintf(`
 		SELECT f.path, c.content, c.start_line, c.end_line,
 		       %s AS score,
-		       c.confidence, c.symbol
+		       c.confidence, c.symbol, f.hash, f.indexed_at
 		FROM %s c
 		%s
 		WHERE c.project_id = $1 AND (%s)

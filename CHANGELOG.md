@@ -54,6 +54,11 @@ each GitHub Release.
 
 ### Fixed
 
+- Search staleness compares the file on disk with the hit's own indexed
+  version, so worktrees with divergent versions no longer flag each other's
+  hits as stale.
+- Graph-expanded hits always rank below direct hits, expansion works with
+  keyword-fallback scores, and at most `top_k` graph chunks are added.
 - Code chunking no longer drops the rest of a file after a line longer than
   64 KiB, and never emits empty chunks (embedding APIs rejected them with
   400 and the batch retried forever).

@@ -443,7 +443,7 @@
       "language": "go",
       "project_ref": ".",
       "relevant": [
-        {"file": "internal/search/cache.go", "grade": 3},
+        {"file": "internal/store/store.go", "grade": 2},
         {"file": "internal/embed/circuit.go", "grade": 1}
       ],
       "negative_files": ["deploy/agentics-test/testdata/fixture/cache/cache.go"]
