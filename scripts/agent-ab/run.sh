@@ -45,14 +45,14 @@ echo "== index with $embed_model"
 echo "== retrieval benchmark"
 for mode in keyword vector hybrid hybrid-graph; do
   strict=()
-  [ "$mode" != keyword ] && strict=(--strict-semantic)
+  [[ "$mode" != keyword ]] && strict=(--strict-semantic)
   (cd "$AB_ROOT" && sx --local bench retrieval --dataset "$dataset" \
     --mode "$mode" "${strict[@]}" --output "$work/semidx-$mode.json" >/dev/null)
 done
 python3 "$here/rg_baseline.py" "$dataset" "$AB_ROOT" "$work/rg.json"
 python3 "$here/retrieval_table.py" "$work"
 
-if [ "${AB_SKIP_AGENTS:-0}" = 1 ]; then
+if [[ "${AB_SKIP_AGENTS:-0}" == 1 ]]; then
   echo "AB_SKIP_AGENTS=1: skipping the agent phase. Results in $work"
   exit 0
 fi

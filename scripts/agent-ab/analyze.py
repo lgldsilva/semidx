@@ -8,7 +8,7 @@ CONDS = ["grep", "semidx", "semidx-only"]
 
 
 def main(path):
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:  # NOSONAR: operator-supplied CLI path to a local file; no trust boundary
         rows = [json.loads(line) for line in fh]
     ok = [r for r in rows if "error" not in r]
     print(f"runs {len(rows)}  errors {len(rows) - len(ok)}\n")
