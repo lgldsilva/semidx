@@ -94,13 +94,19 @@ func (s *PgStore) CreateGitCredential(ctx context.Context, c *GitCredential) (*G
 		keyVersion = 1
 	}
 	var out GitCredential
+	// A project-scoped credential is inserted only when the project belongs to
+	// the caller's tenant; otherwise no row is produced and ErrNotFound returned.
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO git_credentials
 			(tenant_id, project_id, host, kind, username, secret_enc, key_version, ssh_known_hosts, label)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		SELECT $1, $2::int, $3, $4, $5, $6, $7, $8, $9
+		WHERE $2::int IS NULL OR EXISTS (SELECT 1 FROM projects WHERE id = $2::int AND tenant_id = $1)
 		RETURNING `+gitCredentialColumns,
 		tenant.ID(ctx), c.ProjectID, c.Host, c.Kind, c.Username, c.SecretEnc, keyVersion,
 		c.SSHKnownHosts, c.Label).Scan(out.scanFields()...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation (scope)
