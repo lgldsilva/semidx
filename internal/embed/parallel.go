@@ -23,14 +23,61 @@ import (
 // chains) are retried against the remaining entries until one succeeds.
 type ParallelEmbedder struct {
 	entries []Embedder
+	// remote[i] marks entries that send data off the machine. They are never
+	// selected for privacy-restricted requests (global privacy or a
+	// force-local context), so sensitive chunks cannot be round-robined onto
+	// a cloud lane.
+	remote  []bool
+	privacy bool
 	mu      sync.Mutex
 	next    int
 }
 
-// NewParallelEmbedder creates a pool over entries. At least one entry is
-// required.
+// NewParallelEmbedder creates a pool over entries, all treated as local. At
+// least one entry is required.
 func NewParallelEmbedder(entries []Embedder) *ParallelEmbedder {
-	return &ParallelEmbedder{entries: entries}
+	return &ParallelEmbedder{entries: entries, remote: make([]bool, len(entries))}
+}
+
+// poolEntry is one lane of a locality-aware pool.
+type poolEntry struct {
+	embedder Embedder
+	remote   bool
+}
+
+func newLocalityPool(lanes []poolEntry, privacy bool) *ParallelEmbedder {
+	p := &ParallelEmbedder{privacy: privacy}
+	for _, l := range lanes {
+		p.entries = append(p.entries, l.embedder)
+		p.remote = append(p.remote, l.remote)
+	}
+	return p
+}
+
+func (p *ParallelEmbedder) restricted(ctx context.Context) bool {
+	return p.privacy || isForceLocal(ctx)
+}
+
+// candidates returns entry indexes in round-robin order starting at the next
+// lane. Normal requests get only that lane (strict round-robin, no retry);
+// restricted requests get every local lane so one failing instance falls
+// through to the others.
+func (p *ParallelEmbedder) candidates(ctx context.Context) []int {
+	start := p.nextEntry()
+	if !p.restricted(ctx) {
+		return []int{start}
+	}
+	out := make([]int, 0, len(p.entries))
+	for i := range p.entries {
+		if idx := (start + i) % len(p.entries); !p.remote[idx] {
+			out = append(out, idx)
+		}
+	}
+	return out
+}
+
+func errNoLocalLane(n int) error {
+	return fmt.Errorf("parallel: privacy-restricted request but none of %d entries is local", n)
 }
 
 func (p *ParallelEmbedder) Embed(ctx context.Context, model string, inputs ...string) ([][]float32, error) {
@@ -38,51 +85,42 @@ func (p *ParallelEmbedder) Embed(ctx context.Context, model string, inputs ...st
 	defer span.End()
 	span.SetAttributes(attribute.String("model", model), attribute.Int("inputs", len(inputs)))
 
-	start := p.nextEntry()
-	res, err := p.entries[start].Embed(ctx, model, inputs...)
-	if err == nil || !isForceLocal(ctx) {
-		// Normal mode: return immediately (don't retry, trust round-robin).
-		// Privacy mode: entry failed (likely non-local cloud) — try remaining.
-		return res, err
-	}
-	return p.embedFallback(ctx, model, inputs, start)
+	return tryLanes(ctx, p, func(e Embedder) ([][]float32, error) { return e.Embed(ctx, model, inputs...) })
 }
 
 func (p *ParallelEmbedder) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
-	start := p.nextEntry()
-	res, err := p.entries[start].EmbedSingle(ctx, model, text)
-	if err == nil || !isForceLocal(ctx) {
-		return res, err
-	}
-	// Privacy fallback for single embedding.
-	for i := 1; i < len(p.entries); i++ {
-		idx := (start + i) % len(p.entries)
-		res, err = p.entries[idx].EmbedSingle(ctx, model, text)
-		if err == nil {
-			return res, nil
-		}
-	}
-	return nil, fmt.Errorf("parallel: all %d entries failed with force-local: %w", len(p.entries), err)
+	return tryLanes(ctx, p, func(e Embedder) ([]float32, error) { return e.EmbedSingle(ctx, model, text) })
 }
 
-func (p *ParallelEmbedder) embedFallback(ctx context.Context, model string, inputs []string, start int) ([][]float32, error) {
+// tryLanes runs call against the candidate lanes until one succeeds.
+func tryLanes[T any](ctx context.Context, p *ParallelEmbedder, call func(Embedder) (T, error)) (T, error) {
+	var zero T
+	lanes := p.candidates(ctx)
+	if len(lanes) == 0 {
+		return zero, errNoLocalLane(len(p.entries))
+	}
 	var lastErr error
-	for i := 1; i < len(p.entries); i++ {
-		idx := (start + i) % len(p.entries)
-		res, err := p.entries[idx].Embed(ctx, model, inputs...)
+	for _, idx := range lanes {
+		res, err := call(p.entries[idx])
 		if err == nil {
 			return res, nil
 		}
 		lastErr = err
 	}
-	return nil, fmt.Errorf("parallel: all %d entries failed with force-local: %w", len(p.entries), lastErr)
+	if len(lanes) == 1 && !p.restricted(ctx) {
+		return zero, lastErr
+	}
+	return zero, fmt.Errorf("parallel: all %d entries failed with force-local: %w", len(lanes), lastErr)
 }
 
 // ModelInfo tries entries in order and returns the first successful answer, so
 // one dead pool member cannot hide the dims the others know.
 func (p *ParallelEmbedder) ModelInfo(ctx context.Context, model string) (*ModelInfo, error) {
-	var lastErr error
-	for _, e := range p.entries {
+	lastErr := errNoLocalLane(len(p.entries))
+	for i, e := range p.entries {
+		if p.remote[i] && p.restricted(ctx) {
+			continue
+		}
 		info, err := e.ModelInfo(ctx, model)
 		if err == nil {
 			return info, nil

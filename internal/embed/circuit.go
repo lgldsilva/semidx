@@ -114,6 +114,28 @@ func (cb *circuitBreaker) recordFailure() {
 	}
 }
 
+// releaseProbe frees the half-open probe slot after an outcome that says
+// nothing about provider health (caller cancelled, deterministic catalog miss).
+// Without it probing stays true and allow() refuses the provider forever.
+func (cb *circuitBreaker) releaseProbe() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.probing = false
+}
+
+// settle records the outcome of a call admitted by allow(): success closes the
+// circuit, a counted failure feeds it, anything else just releases the probe.
+func (cb *circuitBreaker) settle(ctx context.Context, err error, countable bool) {
+	switch {
+	case err == nil:
+		cb.recordSuccess()
+	case countable && ctx.Err() == nil:
+		cb.recordFailure()
+	default:
+		cb.releaseProbe()
+	}
+}
+
 // circuitEmbedder wraps an Embedder with a circuit breaker. When the circuit
 // is open the Embedder is skipped entirely until the cooldown expires.
 type circuitEmbedder struct {
@@ -180,14 +202,11 @@ func (ce *circuitEmbedder) Embed(ctx context.Context, model string, inputs ...st
 		result, e = ce.inner.Embed(ctx, model, inputs...)
 		return e
 	})
-	if err == nil {
-		ce.cb.recordSuccess()
-		return result, nil
+	ce.cb.settle(ctx, err, true)
+	if err != nil {
+		return nil, err
 	}
-	if ctx.Err() == nil {
-		ce.cb.recordFailure()
-	}
-	return nil, err
+	return result, nil
 }
 
 func (ce *circuitEmbedder) EmbedSingle(ctx context.Context, model, text string) ([]float32, error) {
@@ -203,14 +222,11 @@ func (ce *circuitEmbedder) EmbedSingle(ctx context.Context, model, text string) 
 		result, e = ce.inner.EmbedSingle(ctx, model, text)
 		return e
 	})
-	if err == nil {
-		ce.cb.recordSuccess()
-		return result, nil
+	ce.cb.settle(ctx, err, true)
+	if err != nil {
+		return nil, err
 	}
-	if ctx.Err() == nil {
-		ce.cb.recordFailure()
-	}
-	return nil, err
+	return result, nil
 }
 
 func (ce *circuitEmbedder) ModelInfo(ctx context.Context, model string) (*ModelInfo, error) {
@@ -221,18 +237,15 @@ func (ce *circuitEmbedder) ModelInfo(ctx context.Context, model string) (*ModelI
 		}
 	}
 	result, err := ce.inner.ModelInfo(ctx, model)
+	// A dims-catalog miss (UnknownModelError) is deterministic and says
+	// nothing about provider health: counting it would open this provider's
+	// breaker for every other model/project whenever an unknown model is
+	// looked up repeatedly. Only real provider failures feed the breaker.
+	var ume *UnknownModelError
+	ce.cb.settle(ctx, err, !errors.As(err, &ume))
 	if err != nil {
-		// A dims-catalog miss (UnknownModelError) is deterministic and says
-		// nothing about provider health: counting it would open this provider's
-		// breaker for every other model/project whenever an unknown model is
-		// looked up repeatedly. Only real provider failures feed the breaker.
-		var ume *UnknownModelError
-		if !errors.As(err, &ume) && ctx.Err() == nil {
-			ce.cb.recordFailure()
-		}
 		return nil, err
 	}
-	ce.cb.recordSuccess()
 	return result, nil
 }
 
@@ -244,13 +257,10 @@ func (ce *circuitEmbedder) ListModels(ctx context.Context) ([]string, error) {
 		}
 	}
 	result, err := ce.inner.ListModels(ctx)
+	ce.cb.settle(ctx, err, true)
 	if err != nil {
-		if ctx.Err() == nil {
-			ce.cb.recordFailure()
-		}
 		return nil, err
 	}
-	ce.cb.recordSuccess()
 	return result, nil
 }
 

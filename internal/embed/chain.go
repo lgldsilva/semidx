@@ -115,27 +115,28 @@ func NewChainFromConfig(cfg ChainConfig) Embedder {
 // providers (Gemini, Groq, OpenRouter, OllamaCloud) are bundled as one
 // ChainEmbedder entry so they can still fall through to each other.
 func buildPool(cfg ChainConfig) Embedder {
-	var pool []Embedder
+	var pool []poolEntry
+	lane := func(name string, inner Embedder, remote bool) poolEntry {
+		return poolEntry{embedder: wrapWithCircuit(name, inner, cfg.CircuitThreshold, cfg.CircuitCooldown), remote: remote}
+	}
 
-	// One entry per Ollama URL (local or remote).
+	// One entry per Ollama URL (local or remote GPU box, both trusted hosts).
 	for _, url := range cfg.OllamaURLs {
-		pool = append(pool,
-			wrapWithCircuit(url, NewOllamaClient(url), cfg.CircuitThreshold, cfg.CircuitCooldown))
+		pool = append(pool, lane(url, NewOllamaClient(url), false))
 	}
 
 	// Cloud providers bundled as one fallback-chain entry.
 	if cloud := buildCloudChain(cfg); cloud != nil {
-		pool = append(pool,
-			wrapWithCircuit("cloud", cloud, cfg.CircuitThreshold, cfg.CircuitCooldown))
+		pool = append(pool, lane("cloud", cloud, true))
 	}
 
-	// Custom provider, if configured, as its own pool entry.
+	// Custom provider, if configured, as its own pool entry; an openai-style
+	// endpoint is remote like the cloud lane.
 	if custom := customPoolEntry(cfg); custom != nil {
-		pool = append(pool,
-			wrapWithCircuit("custom", custom, cfg.CircuitThreshold, cfg.CircuitCooldown))
+		pool = append(pool, lane("custom", custom, cfg.Provider == "openai"))
 	}
 
-	return NewParallelEmbedder(pool)
+	return newLocalityPool(pool, cfg.Privacy)
 }
 
 // buildCloudChain bundles the configured cloud providers (Gemini, Groq,
