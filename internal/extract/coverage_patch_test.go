@@ -273,7 +273,7 @@ func TestDecodeHeaderFallback(t *testing.T) {
 
 func TestGenericArchiveTarBz2AndPanic(t *testing.T) {
 	// Unknown archive type via extractArchiveEntries.
-	if _, err := extractArchiveEntries("file.unknown", []byte("x"), 0); err == nil {
+	if _, err := extractArchiveEntries("file.unknown", []byte("x"), 0, &archiveBudget{remaining: maxArchiveTotalSize}); err == nil {
 		t.Error("unknown archive type should error")
 	}
 
@@ -305,7 +305,7 @@ func TestGenericArchiveTarBz2AndPanic(t *testing.T) {
 	}
 
 	// Invalid gzip
-	if _, err := extractArchiveEntries("bad.tar.gz", []byte("not-gzip"), 0); err == nil {
+	if _, err := extractArchiveEntries("bad.tar.gz", []byte("not-gzip"), 0, &archiveBudget{remaining: maxArchiveTotalSize}); err == nil {
 		t.Error("bad gzip should error")
 	}
 
