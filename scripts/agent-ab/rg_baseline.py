@@ -54,7 +54,7 @@ def main(dataset, root, out):
                 sc[f] += idf * math.log1p(n)
         ranked = [f for f, _ in sc.most_common(10)]
         rows.append({"id": q["id"], "intent": q["intent"], "ranked": ranked, **score(q, ranked)})
-    with open(out, "w", encoding="utf-8") as fh:  # NOSONAR: operator-supplied CLI path to a local file; no trust boundary
+    with open(out, "w", encoding="utf-8") as fh:
         json.dump(rows, fh, indent=1)
 
 

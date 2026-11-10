@@ -45,5 +45,5 @@ def score(q, ranked, k=10):
 
 
 def load(path):
-    with open(path, encoding="utf-8") as fh:  # NOSONAR: operator-supplied CLI path to a local file; no trust boundary
+    with open(path, encoding="utf-8") as fh:
         return json.load(fh)["queries"]

@@ -8,7 +8,7 @@ MODES = ["keyword", "vector", "hybrid", "hybrid-graph"]
 
 
 def _load(path):
-    with open(path, encoding="utf-8") as fh:  # NOSONAR: operator-supplied CLI path to a local file; no trust boundary
+    with open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 

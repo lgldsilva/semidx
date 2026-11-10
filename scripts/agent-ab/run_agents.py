@@ -110,13 +110,13 @@ def main(dataset, out_path, workers=4):
     mcp_path = mcp_config()
     done = set()
     if os.path.exists(out_path):
-        with open(out_path, encoding="utf-8") as fh:  # NOSONAR: operator-supplied CLI path to a local file; no trust boundary
+        with open(out_path, encoding="utf-8") as fh:
             for line in fh:
                 r = json.loads(line)
                 if "error" not in r:
                     done.add((r["id"], r["cond"]))
     jobs = [(q, c) for q in qs for c in ("grep", "semidx", "semidx-only") if (q["id"], c) not in done]
-    with cf.ThreadPoolExecutor(int(workers)) as ex, open(out_path, "a", encoding="utf-8") as fh:  # NOSONAR: operator-supplied CLI path to a local file; no trust boundary
+    with cf.ThreadPoolExecutor(int(workers)) as ex, open(out_path, "a", encoding="utf-8") as fh:
         futs = {ex.submit(run, q, c, mcp_path): (q["id"], c) for q, c in jobs}
         for f in cf.as_completed(futs):
             try:
