@@ -22,6 +22,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/lgldsilva/semidx/internal/clientip"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/search"
@@ -66,11 +67,13 @@ type Server struct {
 	jwt             *jwtauth.Issuer // JWT control-token verifier, nil unless EnableJWT was called
 
 	apiLimiter     *apiRateLimiter
-	gitAllowFile   bool   // allow file:// git URLs (SEMIDX_GIT_ALLOW_FILE)
-	gitSSLNoVerify bool   // disable TLS verify on git clone/pull (SEMIDX_GIT_SSL_NO_VERIFY)
-	gitToken       string // token for private HTTPS clones (SEMIDX_GIT_TOKEN)
-	gitUser        string // basic-auth user for gitToken (SEMIDX_GIT_USER)
-	metricsToken   string // when set, /metrics requires Bearer match (SEMIDX_METRICS_TOKEN)
+	clientIP       *clientip.Resolver  // client IP for rate limiting (SEMIDX_TRUSTED_PROXIES); nil = RemoteAddr
+	gitAllowFile   bool                // allow file:// git URLs (SEMIDX_GIT_ALLOW_FILE)
+	gitSSLNoVerify bool                // disable TLS verify on git clone/pull (SEMIDX_GIT_SSL_NO_VERIFY)
+	gitToken       string              // token for private HTTPS clones (SEMIDX_GIT_TOKEN)
+	gitUser        string              // basic-auth user for gitToken (SEMIDX_GIT_USER)
+	gitTokenHosts  map[string]struct{} // hosts allowed to receive gitToken (SEMIDX_GIT_TOKEN_HOSTS)
+	metricsToken   string              // when set, /metrics requires Bearer match (SEMIDX_METRICS_TOKEN)
 	indexLimits    IndexLimits
 	secrets        *secretbox.Box // decrypts stored git credentials, nil-safe (SetSecretBox)
 }
@@ -95,6 +98,8 @@ func (s *Server) MountAdmin(secureCookies bool, csrfKey string) (*webadmin.Admin
 	if err != nil {
 		return nil, err
 	}
+	a.SetIndexerOpts(s.indexerOpts())
+	a.SetClientIPResolver(s.clientIP)
 	s.admin = a.Handler()
 	return a, nil
 }
@@ -658,8 +663,9 @@ func newRequestID() string {
 func (s *Server) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.observeDBPool()
-		s.activeRequests.WithLabelValues(r.Method).Inc()
-		defer s.activeRequests.WithLabelValues(r.Method).Dec()
+		method := metricMethod(r.Method)
+		s.activeRequests.WithLabelValues(method).Inc()
+		defer s.activeRequests.WithLabelValues(method).Dec()
 
 		reqID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
 		if reqID == "" {
@@ -671,9 +677,31 @@ func (s *Server) instrument(next http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		s.reqs.WithLabelValues(r.Method, http.StatusText(rec.status)).Inc()
-		s.requestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(time.Since(start).Seconds())
+		s.reqs.WithLabelValues(method, http.StatusText(rec.status)).Inc()
+		// r.Pattern is set in place by the ServeMux this middleware wraps; it is
+		// empty for unmatched requests (404/405 probes).
+		s.requestDuration.WithLabelValues(method, metricPath(r.Pattern)).Observe(time.Since(start).Seconds())
 	})
+}
+
+// metricMethod clamps the method label to the standard verbs so arbitrary
+// client-chosen methods cannot mint new Prometheus series.
+func metricMethod(m string) string {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+		http.MethodPatch, http.MethodDelete, http.MethodOptions:
+		return m
+	}
+	return "OTHER"
+}
+
+// metricPath labels by the matched route pattern (bounded set), never the raw
+// URL path.
+func metricPath(pattern string) string {
+	if pattern == "" {
+		return "unmatched"
+	}
+	return pattern
 }
 
 func (s *Server) observeDBPool() {
@@ -700,7 +728,12 @@ func (s *Server) limited(maxBytes int64, next http.Handler) http.Handler {
 	})
 }
 
-// rateLimit rejects requests that exceed 200 req/s per key (bearer token or IP).
+// SetClientIPResolver sets how the client IP is derived for rate limiting
+// (SEMIDX_TRUSTED_PROXIES). nil keeps the RemoteAddr-only behaviour. It also
+// reaches the admin UI when MountAdmin is called afterwards.
+func (s *Server) SetClientIPResolver(r *clientip.Resolver) { s.clientIP = r }
+
+// rateLimit rejects requests that exceed 200 req/s per client IP.
 // Health/ready/metrics/admin paths are excluded.
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -709,11 +742,10 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		key := r.RemoteAddr
-		if tok := r.Header.Get("Authorization"); tok != "" {
-			key = tok
-		}
-		if !s.apiLimiter.allow(key) {
+		// Keyed by client IP, pre-auth: the Authorization header is
+		// attacker-chosen (random bearers would each get a fresh bucket).
+		// X-Forwarded-For counts only from SEMIDX_TRUSTED_PROXIES peers.
+		if !s.apiLimiter.allow(s.clientIP.ClientIP(r)) {
 			writeJSONError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}

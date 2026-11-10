@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/lgldsilva/semidx/internal/chat"
+	"github.com/lgldsilva/semidx/internal/clientip"
 	embedpkg "github.com/lgldsilva/semidx/internal/embed"
+	"github.com/lgldsilva/semidx/internal/indexing"
 	"github.com/lgldsilva/semidx/internal/jwtauth"
 	"github.com/lgldsilva/semidx/internal/rag"
 	"github.com/lgldsilva/semidx/internal/search"
@@ -93,7 +95,9 @@ type Admin struct {
 	// API host (GitHub Enterprise, or a test server) — empty uses the default.
 	githubToken   string
 	githubBaseURL string
-	secrets       *secretbox.Box // seals git credentials from the admin API
+	secrets       *secretbox.Box       // seals git credentials from the admin API
+	indexerOpts   indexing.IndexerOpts // server index caps for SPA ingest (SetIndexerOpts)
+	clientIP      *clientip.Resolver   // login limiter client IP (SEMIDX_TRUSTED_PROXIES); nil = RemoteAddr
 }
 
 // New builds the admin UI. secureCookies must be true when the server is reached
@@ -231,7 +235,7 @@ func (a *Admin) Handler() http.Handler {
 	spa := spaFileServer()
 	mux.Handle("GET /admin/{$}", spa)
 	mux.Handle("GET /admin/", spa)
-	return securityHeaders(mux)
+	return securityHeaders(limitBodies(mux))
 }
 
 // securityHeaders wraps the admin/SPA handler with defence-in-depth response
@@ -328,6 +332,18 @@ func (a *Admin) withTenantContext(w http.ResponseWriter, r *http.Request, ac *au
 			}
 		}
 		tc.ID = t.ID
+	} else if !tc.GlobalAdmin {
+		// No selector: the default tenant still requires membership.
+		allowed, err := ts.CanAccessTenant(r.Context(), ac.user.ID, tc.ID)
+		if err != nil {
+			a.log.Error("tenant membership lookup failed", "err", err)
+			a.writeInternalError(w, jsonAPI)
+			return nil, false
+		}
+		if !allowed {
+			writeJSONErr(w, http.StatusForbidden, "tenant access denied")
+			return nil, false
+		}
 	}
 	if ws, supported := a.store.(store.WorkspaceStore); supported {
 		workspaceSlug := strings.TrimSpace(r.Header.Get("X-Semidx-Workspace"))
@@ -441,12 +457,12 @@ type loginLimiter struct {
 	tries map[string][]time.Time
 }
 
-// allowed reports whether key has attempts left in the current window.
-func (l *loginLimiter) allowed(key string, now time.Time) bool {
+// allowedN reports whether key has fewer than max attempts in the window.
+func (l *loginLimiter) allowedN(key string, maxTries int, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.tries[key] = prune(l.tries[key], now.Add(-loginWindow))
-	return len(l.tries[key]) < loginMaxTries
+	return len(l.tries[key]) < maxTries
 }
 
 func (l *loginLimiter) record(key string, now time.Time) {

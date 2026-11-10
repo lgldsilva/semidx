@@ -189,6 +189,13 @@ type Config struct {
 	// (default x-access-token).
 	GitToken string
 	GitUser  string
+	// GitTokenHosts (SEMIDX_GIT_TOKEN_HOSTS, comma-separated) lists the hosts
+	// allowed to receive GitToken. Empty: the token is sent to no host.
+	GitTokenHosts []string
+	// TrustedProxies (SEMIDX_TRUSTED_PROXIES, comma-separated IPs/CIDRs) are
+	// the reverse proxies whose X-Forwarded-For is honoured for client-IP rate
+	// limiting. Empty: RemoteAddr only.
+	TrustedProxies []string
 	// GithubToken is a GitHub PAT used for repo discovery via the GitHub API
 	// (SEMIDX_GITHUB_TOKEN). It also seeds the Copilot token exchange and the
 	// server-side private-clone token when their dedicated keys are unset.
@@ -497,6 +504,8 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 		GitSSLNoVerify:  env.get("SEMIDX_GIT_SSL_NO_VERIFY", "") == "true",
 		GitToken:        env.first("SEMIDX_GIT_TOKEN", "SEMIDX_GITHUB_TOKEN", ""),
 		GitUser:         env.get("SEMIDX_GIT_USER", ""),
+		GitTokenHosts:   parseCommaSep(env.get("SEMIDX_GIT_TOKEN_HOSTS", "")),
+		TrustedProxies:  parseCommaSep(env.get("SEMIDX_TRUSTED_PROXIES", "")),
 		GithubToken:     env.get("SEMIDX_GITHUB_TOKEN", ""),
 		CopilotToken:    env.first("SEMIDX_COPILOT_TOKEN", "SEMIDX_GITHUB_TOKEN", ""),
 		MCPClientConfig: env.get("SEMIDX_MCP_CLIENT_CONFIG", ""),
@@ -577,7 +586,9 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_GIT_SSL_NO_VERIFY", "Disable TLS verification for server-side git clone/pull — self-signed hosts (serve)", false},
 	{"SEMIDX_GIT_TOKEN", "Token for private HTTPS git clones server-side (falls back to SEMIDX_GITHUB_TOKEN)", true},
 	{"SEMIDX_GIT_USER", "Basic-auth user for SEMIDX_GIT_TOKEN (default x-access-token)", false},
+	{"SEMIDX_GIT_TOKEN_HOSTS", "Comma-separated hosts allowed to receive SEMIDX_GIT_TOKEN (unset = none)", false},
 	{"SEMIDX_GITHUB_TOKEN", "GitHub PAT for repo discovery (list user/org repos) and private clones", true},
+	{"SEMIDX_TRUSTED_PROXIES", "Comma-separated reverse-proxy IPs/CIDRs whose X-Forwarded-For sets the client IP for rate limits (serve)", false},
 	{"SEMIDX_METRICS_TOKEN", "Bearer token required for GET /metrics when set (serve)", true},
 	// Secret scanning.
 	{"SEMIDX_SECRET_SCAN", "Enable gitleaks secret scanning during indexing (true)", false},

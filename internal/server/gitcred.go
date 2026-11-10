@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/lgldsilva/semidx/internal/gitsync"
 	"github.com/lgldsilva/semidx/internal/secretbox"
@@ -28,7 +31,8 @@ func (s *Server) SetSecretBox(box *secretbox.Box) { s.secrets = box }
 //
 //  1. the project-scoped credential in the store,
 //  2. the host-scoped credential for the repo URL's host (gitsync.HostOf),
-//  3. the server's env-global HTTPS token (SEMIDX_GIT_TOKEN / SEMIDX_GIT_USER).
+//  3. the server's env-global HTTPS token (SEMIDX_GIT_TOKEN / SEMIDX_GIT_USER),
+//     only when the URL host is in SEMIDX_GIT_TOKEN_HOSTS.
 //
 // Stores that do not implement store.GitCredentialStore (e.g. SQLite) degrade
 // straight to (3). Every returned error is CURATED — safe to persist as the
@@ -37,7 +41,7 @@ func (s *Server) SetSecretBox(box *secretbox.Box) { s.secrets = box }
 func (s *Server) resolveGitOptions(ctx context.Context, proj *store.Project, dataDir string) (gitsync.Options, error) {
 	opts := gitsync.Options{
 		DataDir:      dataDir,
-		Name:         proj.Name,
+		Name:         cloneDirName(proj),
 		URL:          proj.GitURL,
 		Branch:       proj.Branch,
 		AllowFileURL: s.gitAllowFile,
@@ -49,8 +53,10 @@ func (s *Server) resolveGitOptions(ctx context.Context, proj *store.Project, dat
 		return gitsync.Options{}, err
 	}
 	if cred == nil {
-		opts.Token = s.gitToken
-		opts.TokenUser = s.gitUser
+		if s.gitTokenAllowed(proj.GitURL) {
+			opts.Token = s.gitToken
+			opts.TokenUser = s.gitUser
+		}
 		return opts, nil
 	}
 
@@ -60,6 +66,37 @@ func (s *Server) resolveGitOptions(ctx context.Context, proj *store.Project, dat
 	}
 	applyGitCredential(&opts, cred, secret)
 	return opts, nil
+}
+
+// SetGitTokenHosts sets the hosts (SEMIDX_GIT_TOKEN_HOSTS) allowed to receive
+// the env-global git token. Empty means the token is sent to no host: project
+// URLs are tenant-controlled, so an unscoped token would be exfiltrated by any
+// project pointing at a foreign host.
+func (s *Server) SetGitTokenHosts(hosts []string) {
+	m := make(map[string]struct{}, len(hosts))
+	for _, h := range hosts {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			m[h] = struct{}{}
+		}
+	}
+	s.gitTokenHosts = m
+}
+
+// gitTokenAllowed reports whether the env-global token may go to gitURL's host.
+func (s *Server) gitTokenAllowed(gitURL string) bool {
+	host := strings.ToLower(gitsync.HostOf(gitURL))
+	if host == "" {
+		return false
+	}
+	_, ok := s.gitTokenHosts[host]
+	return ok
+}
+
+// cloneDirName keys the server-side checkout by stable IDs
+// (repos/<tenant_id>/<project_id>): project names are unique only per
+// workspace, so a name-keyed dir would let two tenants share one clone.
+func cloneDirName(proj *store.Project) string {
+	return filepath.Join(strconv.Itoa(proj.TenantID), strconv.Itoa(proj.ID))
 }
 
 // lookupGitCredential returns the stored credential for proj — project scope

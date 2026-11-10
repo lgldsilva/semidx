@@ -29,6 +29,25 @@ each GitHub Release.
   `secrets.yaml`, `tokens.json`), SSH private keys (`id_rsa`, `id_ed25519`, …),
   `.npmrc`, `.netrc`, `.pgpass`, `.pypirc`, `.htpasswd`, keystores
   (`.p12/.pfx/.jks/.keystore`) and Terraform state/vars.
+- **Breaking:** the env-global `SEMIDX_GIT_TOKEN` is now sent only to hosts
+  listed in the new `SEMIDX_GIT_TOKEN_HOSTS` (comma-separated). When unset, the
+  token is sent to no host — previously it went as Basic auth to any HTTPS URL
+  a tenant configured, letting a project exfiltrate it. Set
+  `SEMIDX_GIT_TOKEN_HOSTS=github.com` (or your Gitea host) to keep private
+  clones working. Stored per-project/per-host credentials are unaffected.
+- Server-side clones now live under `DATA_DIR/repos/<tenant_id>/<project_id>`
+  (was `repos/<project name>`, shared across tenants with equal names) and an
+  existing checkout whose `remote.origin.url` differs is re-cloned instead of
+  pulled. Existing git projects re-clone once on their next sync; the old
+  `repos/<name>` directories can be deleted.
+- The API rate limit and the admin login limiter are keyed by client IP
+  (previously by the raw `Authorization` header and by username only). New
+  `SEMIDX_TRUSTED_PROXIES` (comma-separated IPs/CIDRs) lets semidx take the
+  client IP from `X-Forwarded-For`, but only when the request comes from a
+  listed proxy. The header is read from right to left, and the first address
+  that is not a trusted proxy wins. Deployments behind a reverse proxy should
+  set it: without it, all clients share the proxy's limits. The staging kit
+  sets it for its Caddy gateway.
 
 ### Fixed
 

@@ -61,7 +61,7 @@ func (a *Admin) loadIngestSession(ctx context.Context, w http.ResponseWriter, na
 		writeJSONErr(w, http.StatusInternalServerError, "could not prepare storage")
 		return nil, false
 	}
-	idx := indexing.NewIndexer(a.store, a.emb, dims, indexing.IndexerOpts{})
+	idx := indexing.NewIndexer(a.store, a.emb, dims, a.indexerOpts)
 	return &ingestSession{proj: proj, model: model, dims: dims, idx: idx}, true
 }
 
