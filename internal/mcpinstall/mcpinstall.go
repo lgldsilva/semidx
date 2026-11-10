@@ -8,7 +8,9 @@ package mcpinstall
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -253,7 +255,10 @@ func Apply(o Options) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
 		return "", err
 	}
-	existing, _ := os.ReadFile(configPath)
+	existing, perm, err := readExistingConfig(configPath)
+	if err != nil {
+		return "", err
+	}
 	merged, merr := mergeConfig(c, o, existing)
 	if merr != nil {
 		return "", merr
@@ -263,17 +268,37 @@ func Apply(o Options) (string, error) {
 			return "", fmt.Errorf("backup: %w", berr)
 		}
 	}
-	if err := writeConfigFile(configPath, merged, 0o600); err != nil {
+	if err := writeConfigFile(configPath, merged, perm); err != nil {
 		return "", err
 	}
 	return configPath, nil
 }
 
+// readExistingConfig returns the current config bytes and the mode to keep
+// when rewriting it. A missing file is not an error (nil bytes, 0600: client
+// configs may hold tokens); any other read failure aborts, so an unreadable
+// config is never replaced by one holding only the semidx entry.
+func readExistingConfig(path string) ([]byte, os.FileMode, error) {
+	data, err := os.ReadFile(path) // #nosec G304 -- path is the client config the user asked to update
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, 0o600, nil
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("read existing config %s: %w", path, err)
+	}
+	perm := os.FileMode(0o600)
+	if info, serr := os.Stat(path); serr == nil {
+		perm = info.Mode().Perm()
+	}
+	return data, perm, nil
+}
+
 // writeConfigFile writes data to path with the given permissions. It first writes
-// to a temp file and then renames into place to ensure atomicity and to decouple
-// the write operation from the caller's tainted path analysis.
+// to a temp file in the destination directory (so the rename never crosses a
+// filesystem, e.g. tmpfs /tmp vs $HOME) and then renames into place to ensure
+// atomicity and to decouple the write from the caller's tainted path analysis.
 func writeConfigFile(path string, data []byte, perm os.FileMode) error {
-	tmp, err := os.CreateTemp("", "semidx-mcp-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".semidx-mcp-*")
 	if err != nil {
 		return err
 	}
@@ -469,6 +494,9 @@ func mergeJSONEntry(k kind, existing []byte, name string, entry any) ([]byte, er
 		if err := json.Unmarshal(existing, &root); err != nil {
 			return nil, fmt.Errorf("existing config is not valid JSON: %w", err)
 		}
+	}
+	if root == nil { // the file held the JSON literal null
+		root = map[string]any{}
 	}
 	servers, _ := root[key].(map[string]any)
 	if servers == nil {
