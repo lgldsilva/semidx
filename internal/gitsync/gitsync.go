@@ -18,7 +18,10 @@ import (
 // Options configures a server-side sync, including credentials and TLS handling
 // for private/self-signed hosts (homelab Gitea, GitHub with a token).
 type Options struct {
-	DataDir      string
+	DataDir string
+	// Name is the checkout directory relative to DataDir/repos. It must be a
+	// local path (filepath.IsLocal); callers key it by stable IDs
+	// (<tenant_id>/<project_id>) so equal project names never share a clone.
 	Name         string
 	URL          string
 	Branch       string
@@ -99,10 +102,17 @@ func SyncWithOptions(ctx context.Context, opts Options) (string, error) {
 	cfg := gitConfigArgs(opts, caPath)
 
 	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil {
-		if err := run(ctx, repoPath, extraEnv, append(cfg, "pull", "--ff-only")...); err != nil {
-			return "", fmt.Errorf("git pull: %w", err)
+		if originMatches(ctx, repoPath, url) {
+			if err := run(ctx, repoPath, extraEnv, append(cfg, "pull", "--ff-only")...); err != nil {
+				return "", fmt.Errorf("git pull: %w", err)
+			}
+			return repoPath, nil
 		}
-		return repoPath, nil
+		// The checkout belongs to another remote (the project's URL changed,
+		// or a stale dir from a different owner): never pull it — re-clone.
+		if err := os.RemoveAll(repoPath); err != nil {
+			return "", fmt.Errorf("remove stale checkout: %w", err)
+		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(repoPath), 0o750); err != nil {
@@ -117,6 +127,19 @@ func SyncWithOptions(ctx context.Context, opts Options) (string, error) {
 		return "", fmt.Errorf("git clone: %w", err)
 	}
 	return repoPath, nil
+}
+
+// originMatches reports whether the checkout at repoPath was cloned from url.
+// Any failure to read the remote counts as a mismatch (re-clone is safe).
+func originMatches(ctx context.Context, repoPath, url string) bool {
+	if _, err := exec.LookPath("git"); err != nil {
+		return false
+	}
+	// #nosec G204 -- fixed git subcommand; repoPath is DataDir/repos/<IsLocal name>.
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "config", "--get", "remote.origin.url")
+	cmd.Env = gitenv.Clean(cmd.Environ())
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) == url
 }
 
 // effectiveURL applies the ssh→https rewrite policy: an SSH URL is rewritten

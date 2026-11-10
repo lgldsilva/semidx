@@ -121,7 +121,7 @@ func TestResolveGitOptionsProjectCredentialWins(t *testing.T) {
 	if cs.gotHost != "" {
 		t.Errorf("host lookup ran (%q) despite a project credential", cs.gotHost)
 	}
-	if opts.DataDir != "/data" || opts.Name != "p" || opts.URL != "https://gitea.lan/owner/repo.git" ||
+	if opts.DataDir != "/data" || opts.Name != filepath.Join("0", "1") || opts.URL != "https://gitea.lan/owner/repo.git" ||
 		opts.Branch != "main" || !opts.AllowFileURL || !opts.SSLNoVerify {
 		t.Errorf("base options not propagated: %+v", opts)
 	}
@@ -357,5 +357,28 @@ func TestRunJobGitProjectClonesAndIndexes(t *testing.T) {
 	}
 	if !fs.compCalled || fs.compFiles < 1 {
 		t.Fatalf("CompleteJob files=%d called=%v", fs.compFiles, fs.compCalled)
+	}
+}
+
+// Regression: the clone dir was repos/<project name>; names are unique only per
+// workspace, so two tenants' "app" projects shared one checkout.
+func TestResolveGitOptionsCloneDirScopedByTenantAndProject(t *testing.T) {
+	t.Parallel()
+	srv := New(&fakeStore{}, fakeEmbedder{}, nil)
+	a := &store.Project{ID: 3, TenantID: 1, Name: "app", SourceType: "git", GitURL: "https://h/a.git"}
+	b := &store.Project{ID: 9, TenantID: 2, Name: "app", SourceType: "git", GitURL: "https://h/b.git"}
+	oa, err := srv.resolveGitOptions(context.Background(), a, "/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ob, err := srv.resolveGitOptions(context.Background(), b, "/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oa.Name == ob.Name {
+		t.Fatalf("both tenants share clone dir %q", oa.Name)
+	}
+	if oa.Name != filepath.Join("1", "3") || ob.Name != filepath.Join("2", "9") {
+		t.Fatalf("clone dirs = %q, %q; want 1/3 and 2/9", oa.Name, ob.Name)
 	}
 }

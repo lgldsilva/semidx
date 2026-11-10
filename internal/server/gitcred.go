@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strconv"
 
 	"github.com/lgldsilva/semidx/internal/gitsync"
 	"github.com/lgldsilva/semidx/internal/secretbox"
@@ -37,7 +39,7 @@ func (s *Server) SetSecretBox(box *secretbox.Box) { s.secrets = box }
 func (s *Server) resolveGitOptions(ctx context.Context, proj *store.Project, dataDir string) (gitsync.Options, error) {
 	opts := gitsync.Options{
 		DataDir:      dataDir,
-		Name:         proj.Name,
+		Name:         cloneDirName(proj),
 		URL:          proj.GitURL,
 		Branch:       proj.Branch,
 		AllowFileURL: s.gitAllowFile,
@@ -60,6 +62,13 @@ func (s *Server) resolveGitOptions(ctx context.Context, proj *store.Project, dat
 	}
 	applyGitCredential(&opts, cred, secret)
 	return opts, nil
+}
+
+// cloneDirName keys the server-side checkout by stable IDs
+// (repos/<tenant_id>/<project_id>): project names are unique only per
+// workspace, so a name-keyed dir would let two tenants share one clone.
+func cloneDirName(proj *store.Project) string {
+	return filepath.Join(strconv.Itoa(proj.TenantID), strconv.Itoa(proj.ID))
 }
 
 // lookupGitCredential returns the stored credential for proj — project scope
