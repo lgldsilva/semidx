@@ -844,10 +844,6 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		chunks = chunks[:idx.maxChunksPerFile]
 	}
 
-	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
-		return 0, 0, outcomeSkippedEmpty, "", err
-	}
-
 	var syms []sym.Symbol
 	if !idx.noSymbols && (!idx.keywordOnly || idx.astOnly) {
 		syms = sym.Symbols(rel, content)
@@ -857,7 +853,7 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 	// blockEmbedding is on, the file is stored text-only (no embedding).
 	hasSecrets := idx.detectSecrets(rel, content)
 
-	created, expected, softErrs, err := idx.storeChunks(ctx, chunkStoreParams{
+	params := chunkStoreParams{
 		projectID:  projectID,
 		fileID:     fileID,
 		rel:        rel,
@@ -865,7 +861,16 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		chunks:     chunks,
 		syms:       syms,
 		hasSecrets: hasSecrets,
-	})
+	}
+	if idx.keepExistingOnForce(ctx, params, hash) {
+		return 0, 1, outcomeSkippedUnchanged, hash, nil
+	}
+
+	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
+		return 0, 0, outcomeSkippedEmpty, "", err
+	}
+
+	created, expected, softErrs, err := idx.storeChunks(ctx, params)
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, "", err
 	}
@@ -879,6 +884,76 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		return created, softErrs, outcomeSkippedEmpty, "", nil
 	}
 	return created, softErrs, outcomeIndexed, hash, nil
+}
+
+// keepExistingOnForce protects a complete content-addressed version during a
+// --force pass. UpsertFile returns the existing (path, hash) row — shared by
+// every worktree on that hash — so its chunks must not be deleted until the
+// replacement embeddings are known to be available. It pre-embeds the chunks
+// into the embedding cache first; when that fails it reports true and the
+// caller keeps the existing version untouched (the next pass retries).
+func (idx *Indexer) keepExistingOnForce(ctx context.Context, p chunkStoreParams, hash string) bool {
+	if !idx.force {
+		return false
+	}
+	if ok, err := idx.db.FileUpToDate(ctx, p.projectID, p.rel, hash, idx.dims); err != nil || !ok {
+		return false // nothing complete to protect
+	}
+	if idx.prewarmEmbeddings(ctx, p) {
+		return false
+	}
+	idx.logf("[warn] %s: force re-embed failed; keeping the existing indexed version", p.rel)
+	return true
+}
+
+// prewarmEmbeddings embeds every chunk of p that is not yet in the embedding
+// cache and stores the result there, so the subsequent storeChunks pass is
+// served from the cache. It reports false when any batch cannot be embedded or
+// cached. Units that will be stored text-only need no embedding.
+func (idx *Indexer) prewarmEmbeddings(ctx context.Context, p chunkStoreParams) bool {
+	embedCtx, needsEmbed := idx.embedRoute(ctx, p)
+	if !needsEmbed {
+		return true
+	}
+	for start := 0; start < len(p.chunks); start += idx.embedBatchSize {
+		end := min(start+idx.embedBatchSize, len(p.chunks))
+		inputs := buildChunkInputs(p.chunks[start:end], p.syms)
+		hashes := computeHashes(inputs)
+		cached, err := idx.db.LookupEmbeddingCache(ctx, hashes, p.model, idx.dims)
+		if err != nil {
+			return false
+		}
+		res := resolveBatchEmbeddings(inputs, hashes, cached)
+		if res.uncachedCount == 0 {
+			continue
+		}
+		embeddings, err := idx.embedWithRetry(embedCtx, p.model, res.uncachedInputs)
+		if err != nil {
+			return false
+		}
+		if err := idx.db.InsertEmbeddingCache(ctx, res.uncachedHashes, p.model, embeddings, idx.dims); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// embedRoute mirrors storeChunks' routing: it returns the context embeddings
+// would be requested with and whether the unit is embedded at all (keyword-only
+// mode and sensitive/edge units without a local provider are stored text-only).
+func (idx *Indexer) embedRoute(ctx context.Context, p chunkStoreParams) (context.Context, bool) {
+	if idx.keywordOnly {
+		return ctx, false
+	}
+	sensitive := privacy.IsSensitive(p.rel) || (p.hasSecrets && idx.secretBlockEmbedding)
+	if !sensitive && idx.privacyMode != privacy.Edge {
+		return ctx, true
+	}
+	localCtx := embed.WithForceLocal(ctx, true)
+	if _, err := idx.embedder.ModelInfo(localCtx, p.model); err != nil {
+		return ctx, false
+	}
+	return localCtx, true
 }
 
 // rollbackIncompleteUnit removes the chunks and the file row of an incompletely
