@@ -76,6 +76,15 @@ each GitHub Release.
 - Provider responses with fewer vectors than inputs are rejected instead of
   panicking the indexer; OpenAI-compatible vectors are ordered by `index`.
 - `make fmt` now fails on unformatted files (it always passed).
+- `semidx drop` on Postgres deletes only the current tenant's projects (it
+  truncated every tenant, including stored git credentials).
+- Deleting or resolving a project by a name shared by several projects returns
+  an ambiguity error (409 in the API) instead of acting on all/any of them.
+- Index jobs left `running` by a crash are requeued by heartbeat on a
+  periodic sweep; late completions no longer overwrite requeued jobs.
+- Git credentials can only be bound to projects of the caller's tenant;
+  tenant creation is atomic; embedding-cache batch errors are reported;
+  chunk fetches by path return only the latest version of the file.
 - Pin `aquasecurity/trivy-action` to commit SHA `915b19b` (same as tag
   `v0.28.0`). The previous ref `aquasecurity/trivy-action@0.28.0` failed
   with "unable to find version 0.28.0" because the upstream repo ships
