@@ -18,6 +18,12 @@ import (
 // the project has no local path (remote-only server project) or a file cannot
 // be read, Stale stays false and IndexedAt may still be filled from the store.
 //
+// Each hit is compared against its own file version (SearchResult.FileHash),
+// not the project's most recent version of the path: with several worktrees
+// indexed, a path can hold divergent versions and only the hit's version says
+// whether the checkout under root changed. Hits from stores that do not report
+// a FileHash fall back to the project-wide latest hash per path.
+//
 // root, when non-empty (e.g. a worktree path), is preferred over project.Path.
 func (s *Service) annotateStaleness(ctx context.Context, project *store.Project, root string, results []store.SearchResult) {
 	if project == nil || len(results) == 0 {
@@ -30,33 +36,48 @@ func (s *Service) annotateStaleness(ctx context.Context, project *store.Project,
 		return
 	}
 
-	infos, err := listFileHashInfos(ctx, s.store, project.ID)
-	if err != nil {
-		slog.Debug("staleness: list file hashes failed", "project", project.Name, "err", err)
-		return
-	}
-	if infos == nil {
-		return
-	}
-
+	var infos map[string]store.FileHashInfo // lazily loaded fallback
+	infosLoaded := false
 	// Hash each unique hit path once (topK is small).
 	current := make(map[string]string, len(results))
 	for i := range results {
-		path := results[i].FilePath
-		info, ok := infos[path]
-		if ok {
-			results[i].IndexedAt = info.IndexedAt
+		r := &results[i]
+		hash := r.FileHash
+		if hash == "" {
+			if !infosLoaded {
+				infos = loadFileHashInfos(ctx, s.store, project)
+				infosLoaded = true
+			}
+			info, ok := infos[r.FilePath]
+			if !ok {
+				continue
+			}
+			hash = info.Hash
+			if r.IndexedAt.IsZero() {
+				r.IndexedAt = info.IndexedAt
+			}
 		}
-		cur, seen := current[path]
+		cur, seen := current[r.FilePath]
 		if !seen {
-			cur = hashProjectFile(root, path)
-			current[path] = cur
+			cur = hashProjectFile(root, r.FilePath)
+			current[r.FilePath] = cur
 		}
-		if cur == "" || !ok || info.Hash == "" {
+		if cur == "" || hash == "" {
 			continue
 		}
-		results[i].Stale = cur != info.Hash
+		r.Stale = cur != hash
 	}
+}
+
+// loadFileHashInfos is the best-effort fallback lookup for hits without a
+// FileHash; any failure yields nil (no staleness, search continues).
+func loadFileHashInfos(ctx context.Context, db store.IndexStore, project *store.Project) map[string]store.FileHashInfo {
+	infos, err := listFileHashInfos(ctx, db, project.ID)
+	if err != nil {
+		slog.Debug("staleness: list file hashes failed", "project", project.Name, "err", err)
+		return nil
+	}
+	return infos
 }
 
 // listFileHashInfos loads path→hash(+indexed_at). Incomplete test doubles that
