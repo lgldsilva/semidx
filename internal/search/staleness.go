@@ -36,18 +36,18 @@ func (s *Service) annotateStaleness(ctx context.Context, project *store.Project,
 		return
 	}
 
-	fallback := &fileHashFallback{ctx: ctx, db: s.store, project: project}
+	fallback := &fileHashFallback{db: s.store, project: project}
 	// Hash each unique hit path once (topK is small).
 	current := make(map[string]string, len(results))
 	for i := range results {
-		markHitStale(&results[i], root, current, fallback)
+		markHitStale(ctx, &results[i], root, current, fallback)
 	}
 }
 
 // fileHashFallback is the lazily loaded project-wide latest hash per path,
-// used only for hits whose store did not report FileHash.
+// used only for hits whose store did not report FileHash. Context is passed
+// into the methods that load it, not stored on the struct.
 type fileHashFallback struct {
-	ctx     context.Context
 	db      store.IndexStore
 	project *store.Project
 
@@ -59,11 +59,11 @@ type fileHashFallback struct {
 // when the hit has no FileHash and the path is absent from the fallback
 // index. In that case the caller leaves the hit unchecked. A fallback hit
 // with a zero IndexedAt takes the timestamp stored with the hash.
-func (f *fileHashFallback) indexedHash(r *store.SearchResult) (string, bool) {
+func (f *fileHashFallback) indexedHash(ctx context.Context, r *store.SearchResult) (string, bool) {
 	if r.FileHash != "" {
 		return r.FileHash, true
 	}
-	f.load()
+	f.load(ctx)
 	info, ok := f.infos[r.FilePath]
 	if !ok {
 		return "", false
@@ -74,19 +74,19 @@ func (f *fileHashFallback) indexedHash(r *store.SearchResult) (string, bool) {
 	return info.Hash, true
 }
 
-func (f *fileHashFallback) load() {
+func (f *fileHashFallback) load(ctx context.Context) {
 	if f.loaded {
 		return
 	}
-	f.infos = loadFileHashInfos(f.ctx, f.db, f.project)
+	f.infos = loadFileHashInfos(ctx, f.db, f.project)
 	f.loaded = true
 }
 
 // markHitStale sets r.Stale when the file under root differs from the hit's
 // indexed hash. current caches the on-disk digest per path. An unreadable
 // file, an empty digest, or a hit with no indexed hash leaves Stale false.
-func markHitStale(r *store.SearchResult, root string, current map[string]string, fallback *fileHashFallback) {
-	hash, ok := fallback.indexedHash(r)
+func markHitStale(ctx context.Context, r *store.SearchResult, root string, current map[string]string, fallback *fileHashFallback) {
+	hash, ok := fallback.indexedHash(ctx, r)
 	if !ok {
 		return
 	}
