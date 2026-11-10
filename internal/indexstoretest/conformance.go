@@ -105,6 +105,7 @@ func Run(t *testing.T, factory func(t *testing.T) store.IndexStore) {
 	if len(results) == 0 {
 		t.Fatal("v1 chunks should remain searchable after deleting v2 by ID")
 	}
+	runProjectNameAmbiguity(ctx, t, s, dims)
 }
 
 // runGraphChunkBatch exercises the optional GraphChunkBatchStore extension that

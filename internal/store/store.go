@@ -66,6 +66,9 @@ var (
 	ErrNotFound      = errors.New("not found")
 	ErrProjectExists = errors.New("project already exists")
 	ErrUserExists    = errors.New("user already exists")
+	// ErrProjectAmbiguous is returned by by-name project lookups when the name
+	// (not unique since migration 00008) matches more than one project.
+	ErrProjectAmbiguous = errors.New("project name is ambiguous; use its id or identity")
 )
 
 // KeywordDims is the chunk-table dimension bucket used for keyword-only (no
@@ -894,12 +897,62 @@ func (s *PgStore) PruneFileVersions(ctx context.Context, projectID int, path, ke
 	return err
 }
 
+// GetProject resolves a project by name within the active tenant/workspace:
+// an exact identity match wins (API projects use the name as identity);
+// otherwise the name must be unique, and a name shared by several projects
+// returns ErrProjectAmbiguous instead of an arbitrary match.
 func (s *PgStore) GetProject(ctx context.Context, name string) (*Project, error) {
-	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) AND name = $3`, tenant.ID(ctx), activeWorkspaceID(ctx), name))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+	id, err := s.projectIDByName(ctx, name)
+	if err != nil {
+		return nil, err
 	}
-	return p, err
+	return s.GetProjectByID(ctx, id)
+}
+
+// projectIDByName implements the by-name resolution shared by GetProject and
+// DeleteProject (see GetProject).
+func (s *PgStore) projectIDByName(ctx context.Context, name string) (int, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, identity = $3 FROM projects
+		WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) AND (identity = $3 OR name = $3)`,
+		tenant.ID(ctx), activeWorkspaceID(ctx), name)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var exact, byName []int
+	for rows.Next() {
+		var id int
+		var isIdentity bool
+		if err := rows.Scan(&id, &isIdentity); err != nil {
+			return 0, err
+		}
+		if isIdentity {
+			exact = append(exact, id)
+		} else {
+			byName = append(byName, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return pickProjectID(exact, byName)
+}
+
+// pickProjectID applies the by-name precedence: a single identity match, else
+// a single name match; several candidates at the deciding level are ambiguous.
+func pickProjectID(exact, byName []int) (int, error) {
+	candidates := exact
+	if len(candidates) == 0 {
+		candidates = byName
+	}
+	switch len(candidates) {
+	case 0:
+		return 0, ErrNotFound
+	case 1:
+		return candidates[0], nil
+	default:
+		return 0, ErrProjectAmbiguous
+	}
 }
 
 // GetProjectByIdentity looks a project up by its stable identity (git identity
@@ -989,10 +1042,15 @@ func (s *PgStore) ListProjects(ctx context.Context, limit, offset int) ([]Projec
 	return projects, rows.Err()
 }
 
-// DeleteProject removes a project (files and chunks cascade). Returns
-// ErrNotFound when no such project exists.
+// DeleteProject removes one project resolved like GetProject (files and
+// chunks cascade). Returns ErrNotFound when no such project exists and
+// ErrProjectAmbiguous when the name matches several projects.
 func (s *PgStore) DeleteProject(ctx context.Context, name string) error {
-	ct, err := s.pool.Exec(ctx, `DELETE FROM projects WHERE tenant_id = $1 AND ($2 = 0 OR workspace_id = $2) AND name = $3`, tenant.ID(ctx), activeWorkspaceID(ctx), name)
+	id, err := s.projectIDByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	ct, err := s.pool.Exec(ctx, `DELETE FROM projects WHERE tenant_id = $1 AND id = $2`, tenant.ID(ctx), id)
 	if err != nil {
 		return err
 	}

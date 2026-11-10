@@ -243,3 +243,19 @@ func TestWriteScopedJobWrongProject(t *testing.T) {
 		t.Fatalf("wrong project job = %d body=%s", code, body)
 	}
 }
+
+func TestAPIDeleteProjectAmbiguous(t *testing.T) {
+	srv, es, c := newAdminErrStore(t, nil, &errStore{deleteProjErr: store.ErrProjectAmbiguous})
+	_ = es
+	csrf := csrfFrom(t, c, srv.URL+"/admin/keys")
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/admin/api/projects/dup", nil)
+	req.Header.Set("X-CSRF-Token", csrf)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("ambiguous delete = %d, want 409", resp.StatusCode)
+	}
+}

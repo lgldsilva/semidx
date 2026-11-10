@@ -643,12 +643,48 @@ func scanProject(row interface{ Scan(...any) error }) (*store.Project, error) {
 	return &p, nil
 }
 
+// GetProject resolves a project by name: an exact identity match wins (API
+// projects use the name as identity); otherwise the name must be unique, and a
+// name shared by several projects returns store.ErrProjectAmbiguous.
 func (s *SQLiteStore) GetProject(ctx context.Context, name string) (*store.Project, error) {
-	p, err := scanProject(s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE name = ?`, name))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, store.ErrNotFound
+	id, err := s.projectIDByName(ctx, name)
+	if err != nil {
+		return nil, err
 	}
-	return p, err
+	return s.GetProjectByID(ctx, id)
+}
+
+// projectIDByName implements the by-name resolution shared by GetProject and
+// DeleteProject (see GetProject).
+func (s *SQLiteStore) projectIDByName(ctx context.Context, name string) (int, error) {
+	var id int
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM projects WHERE identity = ?`, name).Scan(&id)
+	if err == nil || !errors.Is(err, sql.ErrNoRows) {
+		return id, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM projects WHERE name = ? LIMIT 2`, name)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []int
+	for rows.Next() {
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	switch len(ids) {
+	case 0:
+		return 0, store.ErrNotFound
+	case 1:
+		return ids[0], nil
+	default:
+		return 0, store.ErrProjectAmbiguous
+	}
 }
 
 func (s *SQLiteStore) GetProjectByID(ctx context.Context, id int) (*store.Project, error) {
@@ -690,10 +726,15 @@ func (s *SQLiteStore) ListProjects(ctx context.Context, limit, offset int) ([]st
 	return projects, rows.Err()
 }
 
-// DeleteProject removes a project; files and chunks cascade. Returns
-// ErrNotFound when no such project exists.
+// DeleteProject removes one project resolved like GetProject; files and
+// chunks cascade. Returns ErrNotFound when no such project exists and
+// ErrProjectAmbiguous when the name matches several projects.
 func (s *SQLiteStore) DeleteProject(ctx context.Context, name string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE name = ?`, name)
+	id, err := s.projectIDByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}

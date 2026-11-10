@@ -358,6 +358,10 @@ func (a *Admin) apiDeleteProject(w http.ResponseWriter, r *http.Request, ac *aut
 			writeJSONErr(w, http.StatusNotFound, spaErrProjectNotFound)
 			return
 		}
+		if errors.Is(err, store.ErrProjectAmbiguous) {
+			writeJSONErr(w, http.StatusConflict, err.Error())
+			return
+		}
 		a.log.Error("delete project failed", "err", err)
 		writeJSONErr(w, http.StatusInternalServerError, "could not delete project")
 		return

@@ -231,6 +231,9 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, msgProjectNotFound)
 		return
+	case errors.Is(err, store.ErrProjectAmbiguous):
+		writeJSONError(w, http.StatusConflict, err.Error())
+		return
 	case err != nil:
 		s.log.Error("delete project", "err", err)
 		writeJSONError(w, http.StatusInternalServerError, "could not delete project")
