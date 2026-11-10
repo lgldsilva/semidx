@@ -72,12 +72,16 @@ func TestFloatDefault(t *testing.T) {
 	}
 }
 
-// TestFirstResolvesLegacyKeyFromDotEnv covers resolver.first's lowest branch:
-// the legacy key present only in the .env file.
-func TestFirstResolvesLegacyKeyFromDotEnv(t *testing.T) {
+// TestFirstResolvesLegacyKeyFromUserFile covers resolver.first's lowest
+// branch: the legacy key present only in a file layer (the user config; a
+// project .env may not set endpoints).
+func TestFirstResolvesLegacyKeyFromUserFile(t *testing.T) {
 	clearEnv(t)
-	writeDotEnv(t, "OLLAMA_URL=http://legacy-file:11434\n")
+	t.Chdir(t.TempDir())
+	if err := SetUserEnv("OLLAMA_URL", "http://legacy-file:11434"); err != nil {
+		t.Fatal(err)
+	}
 	if got := Load().OllamaURL; got != "http://legacy-file:11434" {
-		t.Errorf("OllamaURL = %q, want the legacy key from .env", got)
+		t.Errorf("OllamaURL = %q, want the legacy key from the user file", got)
 	}
 }

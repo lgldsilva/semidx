@@ -8,9 +8,12 @@ package mcpinstall
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -253,7 +256,10 @@ func Apply(o Options) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
 		return "", err
 	}
-	existing, _ := os.ReadFile(configPath)
+	existing, perm, err := readExistingConfig(configPath)
+	if err != nil {
+		return "", err
+	}
 	merged, merr := mergeConfig(c, o, existing)
 	if merr != nil {
 		return "", merr
@@ -263,17 +269,37 @@ func Apply(o Options) (string, error) {
 			return "", fmt.Errorf("backup: %w", berr)
 		}
 	}
-	if err := writeConfigFile(configPath, merged, 0o600); err != nil {
+	if err := writeConfigFile(configPath, merged, perm); err != nil {
 		return "", err
 	}
 	return configPath, nil
 }
 
+// readExistingConfig returns the current config bytes and the mode to keep
+// when rewriting it. A missing file is not an error (nil bytes, 0600: client
+// configs may hold tokens); any other read failure aborts, so an unreadable
+// config is never replaced by one holding only the semidx entry.
+func readExistingConfig(path string) ([]byte, os.FileMode, error) {
+	data, err := os.ReadFile(path) // #nosec G304 -- path is the client config the user asked to update
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, 0o600, nil
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("read existing config %s: %w", path, err)
+	}
+	perm := os.FileMode(0o600)
+	if info, serr := os.Stat(path); serr == nil {
+		perm = info.Mode().Perm()
+	}
+	return data, perm, nil
+}
+
 // writeConfigFile writes data to path with the given permissions. It first writes
-// to a temp file and then renames into place to ensure atomicity and to decouple
-// the write operation from the caller's tainted path analysis.
+// to a temp file in the destination directory (so the rename never crosses a
+// filesystem, e.g. tmpfs /tmp vs $HOME) and then renames into place to ensure
+// atomicity and to decouple the write from the caller's tainted path analysis.
 func writeConfigFile(path string, data []byte, perm os.FileMode) error {
-	tmp, err := os.CreateTemp("", "semidx-mcp-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".semidx-mcp-*")
 	if err != nil {
 		return err
 	}
@@ -470,6 +496,9 @@ func mergeJSONEntry(k kind, existing []byte, name string, entry any) ([]byte, er
 			return nil, fmt.Errorf("existing config is not valid JSON: %w", err)
 		}
 	}
+	if root == nil { // the file held the JSON literal null
+		root = map[string]any{}
+	}
 	servers, _ := root[key].(map[string]any)
 	if servers == nil {
 		servers = map[string]any{}
@@ -510,28 +539,55 @@ func mergeTomlCodex(existing []byte, name, exe string, env map[string]string) []
 	return mergeTomlSection(existing, header, entry)
 }
 
+// tomlHeaderRE matches a table ([a.b]) or array-of-tables ([[a.b]]) header
+// line, optionally followed by a comment, capturing the dotted name.
+var tomlHeaderRE = regexp.MustCompile(`^\[\[?\s*([A-Za-z0-9_\-."' ]+?)\s*\]\]?\s*(?:#.*)?$`)
+
+// tomlTableName returns the normalised dotted name of a header line.
+func tomlTableName(line string) (string, bool) {
+	m := tomlHeaderRE.FindStringSubmatch(strings.TrimSpace(line))
+	if m == nil {
+		return "", false
+	}
+	parts := strings.Split(m[1], ".")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return strings.Join(parts, "."), true
+}
+
 // mergeTomlSection inserts/replaces one TOML section (entry must start with
-// header) and preserves every other section and key.
+// header) and preserves every other section and key. The section is replaced
+// as a whole, including its subtables (e.g. [mcp_servers.semidx.env]), so the
+// new entry never redefines a key a leftover subtable still holds.
 func mergeTomlSection(existing []byte, header, entry string) []byte {
 	if len(existing) == 0 {
 		return []byte(entry)
 	}
-	content := string(existing)
-	// does the section already exist?
-	idx := strings.Index(content, header+"\n")
-	if idx < 0 {
-		idx = strings.Index(content, header+" ") // edge case: inline comment or trailing space
-	}
-	if idx >= 0 {
-		// find the end: next line that starts with [ (a new section) or EOF
-		rest := content[idx+len(header):]
-		next := strings.Index(rest, "\n[")
-		if next >= 0 {
-			return []byte(content[:idx] + entry + rest[next+1:])
+	name, _ := tomlTableName(header)
+	var out strings.Builder
+	inserted, skipping := false, false
+	for _, line := range strings.SplitAfter(string(existing), "\n") {
+		if t, ok := tomlTableName(line); ok {
+			wasSkipping := skipping
+			skipping = t == name || strings.HasPrefix(t, name+".")
+			switch {
+			case skipping && !inserted:
+				out.WriteString(entry)
+				inserted = true
+			case !skipping && wasSkipping:
+				out.WriteString("\n") // keep a blank line after the replaced entry
+			}
 		}
-		return []byte(content[:idx] + strings.TrimRight(entry, "\n"))
+		if !skipping {
+			out.WriteString(line)
+		}
 	}
-	// not found — append at end, with a separating newline if needed
+	if inserted {
+		return []byte(out.String())
+	}
+	content := out.String()
+	// not found — append at end, with a separating blank line
 	if !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
