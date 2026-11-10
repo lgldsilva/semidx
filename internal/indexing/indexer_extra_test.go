@@ -187,12 +187,21 @@ func TestIndexProjectGitHistoryErrorNonRepo(t *testing.T) {
 	}
 }
 
-// TestIndexFileOpenError covers the os.Open failure branch of indexFile.
+// TestIndexFileOpenError covers the os.Open failure branch of indexFile. A
+// missing file is not an error (it is removed from the index); any other open
+// failure (here ENOTDIR) still is.
 func TestIndexFileOpenError(t *testing.T) {
 	idx := NewIndexer(&fakeStore{}, &fakeEmbedder{}, 3, IndexerOpts{Workers: 4, EmbedBatchSize: 8, MaxFileSize: 1024 * 1024, MaxChunksPerFile: 32})
-	_, _, outcome, _, err := idx.indexFile(context.Background(), 1, "/does/not/exist.go", "exist.go", "m")
+	if _, _, _, _, err := idx.indexFile(context.Background(), 1, "/does/not/exist.go", "exist.go", "m"); err != nil {
+		t.Errorf("indexFile on a deleted path = %v, want nil (file removed)", err)
+	}
+	notDir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notDir, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, outcome, _, err := idx.indexFile(context.Background(), 1, filepath.Join(notDir, "child.go"), "child.go", "m")
 	if err == nil {
-		t.Error("indexFile on a missing path should return an error")
+		t.Error("indexFile on an unopenable path should return an error")
 	}
 	if outcome != outcomeSkippedEmpty {
 		t.Errorf("outcome = %v, want outcomeSkippedEmpty", outcome)
