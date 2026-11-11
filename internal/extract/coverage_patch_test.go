@@ -273,7 +273,7 @@ func TestDecodeHeaderFallback(t *testing.T) {
 
 func TestGenericArchiveTarBz2AndPanic(t *testing.T) {
 	// Unknown archive type via extractArchiveEntries.
-	if _, err := extractArchiveEntries("file.unknown", []byte("x"), 0); err == nil {
+	if _, err := extractArchiveEntries("file.unknown", []byte("x"), 0, &archiveBudget{remaining: maxArchiveTotalSize}); err == nil {
 		t.Error("unknown archive type should error")
 	}
 
@@ -305,7 +305,7 @@ func TestGenericArchiveTarBz2AndPanic(t *testing.T) {
 	}
 
 	// Invalid gzip
-	if _, err := extractArchiveEntries("bad.tar.gz", []byte("not-gzip"), 0); err == nil {
+	if _, err := extractArchiveEntries("bad.tar.gz", []byte("not-gzip"), 0, &archiveBudget{remaining: maxArchiveTotalSize}); err == nil {
 		t.Error("bad gzip should error")
 	}
 
@@ -364,18 +364,25 @@ func TestJarEntryDocHelpers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range zr.File {
-		switch {
-		case strings.HasSuffix(f.Name, ".class"):
-			_, _ = classEntryDoc("lib.jar", f, nil)
-		case f.Name == "blank.txt":
-			if _, ok := textEntryDoc("lib.jar", f); ok {
-				t.Error("blank text should be skipped")
-			}
-		case f.Name == "notes.txt":
-			d, ok := textEntryDoc("lib.jar", f)
-			if !ok || !strings.Contains(d.Text, "hello jar text") {
-				t.Errorf("notes = %+v ok=%v", d, ok)
-			}
+		assertJarEntryDoc(t, f)
+	}
+}
+
+// assertJarEntryDoc checks one zip entry of the jar fixture: a broken class is
+// handed to classEntryDoc, blank text is skipped, and notes.txt is extracted.
+func assertJarEntryDoc(t *testing.T, f *zip.File) {
+	t.Helper()
+	switch {
+	case strings.HasSuffix(f.Name, ".class"):
+		_, _ = classEntryDoc("lib.jar", f, nil)
+	case f.Name == "blank.txt":
+		if _, ok := textEntryDoc("lib.jar", f); ok {
+			t.Error("blank text should be skipped")
+		}
+	case f.Name == "notes.txt":
+		d, ok := textEntryDoc("lib.jar", f)
+		if !ok || !strings.Contains(d.Text, "hello jar text") {
+			t.Errorf("notes = %+v ok=%v", d, ok)
 		}
 	}
 }

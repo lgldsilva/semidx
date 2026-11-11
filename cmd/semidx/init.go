@@ -343,7 +343,8 @@ func indexProject(ctx context.Context, d *deps, projectPath, model string, keywo
 		Verbose:          false,
 	}).
 		SetKeywordOnly(keyword).
-		SetWorktree(tgt.worktree)
+		SetWorktree(tgt.worktree).
+		SetPruneMissing(tgt.sourceType == "docs")
 
 	start := time.Now()
 	stats, err := indexer.IndexProject(ctx, projectID, tgt.indexPath, model, 0)

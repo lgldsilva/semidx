@@ -33,16 +33,8 @@ func Path() (string, error) {
 // SEMIDX_TOKEN, SEMIDX_TENANT, SEMIDX_WORKSPACE and SEMIDX_DEFAULT_PROJECT win
 // over the file when set.
 func Load() (*Config, error) {
-	c := &Config{}
-	p, err := Path()
+	c, err := LoadFile()
 	if err != nil {
-		return nil, err
-	}
-	if data, err := os.ReadFile(filepath.Clean(p)); err == nil {
-		if err := yaml.Unmarshal(data, c); err != nil {
-			return nil, err
-		}
-	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
 	if v := os.Getenv("SEMIDX_SERVER_URL"); v != "" {
@@ -61,6 +53,36 @@ func Load() (*Config, error) {
 		c.DefaultProject = v
 	}
 	return c, nil
+}
+
+// LoadFile reads only the config file, without environment overrides (a
+// missing file yields an empty Config). Use it for read-modify-write updates so
+// per-shell SEMIDX_* overrides are never persisted over the saved login.
+func LoadFile() (*Config, error) {
+	c := &Config{}
+	p, err := Path()
+	if err != nil {
+		return nil, err
+	}
+	if data, err := os.ReadFile(filepath.Clean(p)); err == nil {
+		if err := yaml.Unmarshal(data, c); err != nil {
+			return nil, err
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	return c, nil
+}
+
+// Update applies mutate to the on-disk config (file only, no env overrides)
+// and saves it, so a command changes just the field it owns.
+func Update(mutate func(*Config)) error {
+	c, err := LoadFile()
+	if err != nil {
+		return err
+	}
+	mutate(c)
+	return Save(c)
 }
 
 // Save writes the config to disk with 0600 perms (it holds a token) under a 0700

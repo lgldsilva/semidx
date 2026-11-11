@@ -73,6 +73,8 @@ type Indexer struct {
 	force               bool                            // when true, bypass hash fast paths and rebuild every file
 	worktree            string                          // when set, record this worktree's manifest + prune after indexing
 	projectPath         string                          // root path passed to IndexProject
+	pruneMissing        bool                            // when set, remove stored files absent from disk (document folders)
+	inventoryOK         bool                            // projectFiles is a complete scan (safe to prune against)
 
 	// Secret scan: when enabled, every file's content is scanned with gitleaks
 	// before chunking. Files with detected secrets are stored text-only (no
@@ -228,6 +230,15 @@ func (idx *Indexer) SetWorktree(worktree string) *Indexer {
 	return idx
 }
 
+// SetPruneMissing makes IndexProject remove stored files that are no longer on
+// disk. Only for projects whose store rows all come from this one tree
+// (document folders); git projects share rows across worktrees and prune
+// through their manifests instead.
+func (idx *Indexer) SetPruneMissing(prune bool) *Indexer {
+	idx.pruneMissing = prune
+	return idx
+}
+
 // SetForce enables force-reindex mode, bypassing hash fast paths so every file
 // is reprocessed and its derived artifacts (chunks, symbols, dependency edges)
 // are rebuilt.
@@ -253,7 +264,7 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 	// Reset per-directory module cache for each project run so stale entries
 	// from a previous project do not leak into nested-module resolution.
 	idx.modulePathCache = make(map[string]modulePathCacheEntry)
-	idx.projectFiles = projectInventory(projectPath)
+	idx.projectFiles, idx.inventoryOK = projectInventory(projectPath)
 
 	files, err := idx.resolveIndexFiles(ctx, projectID, projectPath, maxFiles)
 	if err != nil {
@@ -267,6 +278,9 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		processed int
 		g         errgroup.Group
 		manifest  = map[string]string{}
+		// keep: files whose previous manifest entries must survive this run —
+		// those not visited (--max-files) and those that failed to index.
+		keep = idx.unvisitedFiles(projectPath, files)
 	)
 	g.SetLimit(idx.workers)
 
@@ -283,13 +297,13 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 			created, softErrs, outcome, units, ferr := idx.indexFile(ctx, projectID, path, rel, model)
 
 			mu.Lock()
-			idx.accumulate(stats, manifest, rel, fileResult{
+			idx.trackFileResult(ctx, projectID, rel, fileResult{
 				created:  created,
 				softErrs: softErrs,
 				outcome:  outcome,
 				units:    units,
 				err:      ferr,
-			})
+			}, stats, manifest, keep)
 			processed++
 			done, chunks := processed, stats.ChunksCreated
 			filesIdx, errs := stats.FilesIndexed, stats.Errors
@@ -306,8 +320,76 @@ func (idx *Indexer) IndexProject(ctx context.Context, projectID int, projectPath
 		return stats, err
 	}
 
-	idx.finalizeProject(ctx, projectID, projectPath, model, stats, manifest)
+	idx.pruneMissingFiles(ctx, projectID)
+	idx.finalizeProject(ctx, projectID, projectPath, model, stats, manifest, keep)
 	return stats, nil
+}
+
+// pruneOldVersions drops the superseded content-addressed versions of freshly
+// indexed units in a prune-missing (document folder) project, where no
+// worktree manifest reclaims them. Best-effort.
+func (idx *Indexer) pruneOldVersions(ctx context.Context, projectID int, units []indexedUnit) {
+	if !idx.pruneMissing {
+		return
+	}
+	pruner, ok := idx.db.(store.FileVersionPruner)
+	if !ok {
+		return
+	}
+	for _, u := range units {
+		if err := pruner.PruneFileVersions(ctx, projectID, u.path, u.hash); err != nil {
+			idx.logf("[warn] prune old versions %s: %s", u.path, truncateErr(err, 200))
+		}
+	}
+}
+
+// pruneMissingFiles removes stored files (and archive entries) whose source is
+// no longer in the project tree. It runs only for prune-missing projects and
+// only against a complete inventory, so a failed scan never empties the index.
+func (idx *Indexer) pruneMissingFiles(ctx context.Context, projectID int) {
+	if !idx.pruneMissing || !idx.inventoryOK {
+		return
+	}
+	onDisk := make(map[string]bool, len(idx.projectFiles))
+	for _, rel := range idx.projectFiles {
+		onDisk[rel] = true
+	}
+	stored, err := idx.db.ListFileHashes(ctx, projectID)
+	if err != nil {
+		idx.logf("[warn] list stored files: %s", truncateErr(err, 200))
+		return
+	}
+	for path := range stored {
+		owner, _, _ := strings.Cut(filepath.ToSlash(path), "!")
+		if strings.HasPrefix(path, "git:") || onDisk[owner] {
+			continue
+		}
+		if err := idx.db.DeleteFileByPath(ctx, projectID, path); err != nil {
+			idx.logf("[warn] remove missing %s: %s", path, truncateErr(err, 200))
+		}
+	}
+}
+
+// unvisitedFiles returns the eligible project files this run will not visit
+// (a --max-files truncation), so a worktree run keeps their previous manifest
+// entries instead of dropping them. Only worktree runs need it.
+func (idx *Indexer) unvisitedFiles(projectPath string, files []string) map[string]bool {
+	out := map[string]bool{}
+	if idx.worktree == "" {
+		return out
+	}
+	visited := make(map[string]bool, len(files))
+	for _, f := range files {
+		if rel, err := filepath.Rel(projectPath, f); err == nil {
+			visited[filepath.ToSlash(rel)] = true
+		}
+	}
+	for _, rel := range idx.projectFiles {
+		if !visited[rel] {
+			out[rel] = true
+		}
+	}
+	return out
 }
 
 // moduleInfoFor returns the go.mod directory and module path for rel, cached by
@@ -469,7 +551,9 @@ func (idx *Indexer) resolveIndexFiles(ctx context.Context, projectID int, projec
 		}
 		files := make([]string, 0, len(changedFiles))
 		for _, rel := range changedFiles {
-			files = append(files, filepath.Join(projectPath, rel))
+			if Eligible(rel) {
+				files = append(files, filepath.Join(projectPath, filepath.FromSlash(rel)))
+			}
 		}
 		return files, nil
 	}
@@ -514,9 +598,9 @@ func (idx *Indexer) takeChunkBudget(want int) int {
 
 // finalizeProject runs the post-index steps: worktree manifest, git history,
 // commit SHA storage, and status update. All steps are best-effort.
-func (idx *Indexer) finalizeProject(ctx context.Context, projectID int, projectPath, model string, stats *IndexStats, manifest map[string]string) {
+func (idx *Indexer) finalizeProject(ctx context.Context, projectID int, projectPath, model string, stats *IndexStats, manifest map[string]string, keep map[string]bool) {
 	if idx.worktree != "" {
-		idx.recordWorktree(ctx, projectID, manifest)
+		idx.recordWorktree(ctx, projectID, manifest, keep)
 	}
 
 	if idx.gitMode {
@@ -538,6 +622,20 @@ func (idx *Indexer) finalizeProject(ctx context.Context, projectID int, projectP
 	}
 	if err := idx.db.UpdateProjectStatus(ctx, projectID, status); err != nil {
 		idx.log.Warn("update project status", "project", projectID, "err", err)
+	}
+}
+
+// trackFileResult folds one file's indexing result into the run stats and the
+// worktree manifest. A hard or soft failure marks the file in keep so its
+// previous version survives the run; a clean index prunes superseded versions
+// in a prune-missing project. Callers must hold the stats mutex.
+func (idx *Indexer) trackFileResult(ctx context.Context, projectID int, rel string, r fileResult, stats *IndexStats, manifest map[string]string, keep map[string]bool) {
+	idx.accumulate(stats, manifest, rel, r)
+	if r.err != nil || r.softErrs > 0 {
+		keep[filepath.ToSlash(rel)] = true
+	}
+	if r.err == nil && r.softErrs == 0 && r.outcome == outcomeIndexed {
+		idx.pruneOldVersions(ctx, projectID, r.units)
 	}
 }
 
@@ -573,15 +671,79 @@ func (idx *Indexer) accumulate(stats *IndexStats, manifest map[string]string, re
 }
 
 // recordWorktree stores this worktree's manifest and then prunes file versions
-// no worktree still references. Best-effort: a manifest failure is logged and
+// no worktree still references. Files in keep (failed or not visited this run)
+// carry their previous manifest entries, so their last good version is neither
+// hidden from search nor pruned. Best-effort: a manifest failure is logged and
 // skips the prune, but never fails an otherwise-successful index.
-func (idx *Indexer) recordWorktree(ctx context.Context, projectID int, manifest map[string]string) {
+func (idx *Indexer) recordWorktree(ctx context.Context, projectID int, manifest map[string]string, keep map[string]bool) {
+	if !idx.carryPreviousVersions(ctx, projectID, manifest, keep) {
+		return
+	}
 	if err := idx.db.SetWorktreeFiles(ctx, projectID, idx.worktree, manifest); err != nil {
 		idx.logf("[warn] worktree manifest: %s", truncateErr(err, 200))
 		return
 	}
+	// The final manifest now references every version this run produced, so
+	// its in-flight (pending) references can go.
+	if err := idx.db.SetWorktreeFiles(ctx, projectID, pendingWorktree(idx.worktree), nil); err != nil {
+		idx.logf("[warn] clear pending manifest: %s", truncateErr(err, 200))
+	}
 	if _, err := idx.db.PruneUnreferencedFiles(ctx, projectID); err != nil {
 		idx.logf("[warn] prune: %s", truncateErr(err, 200))
+	}
+}
+
+// carryPreviousVersions adds to manifest the previous entries of every file in
+// keep that this run did not record (an archive's entries are matched by their
+// "archive!entry" prefix). It reports false when the previous manifest cannot
+// be read although files must be kept: the caller then leaves the stored
+// manifest untouched rather than drop their versions.
+func (idx *Indexer) carryPreviousVersions(ctx context.Context, projectID int, manifest map[string]string, keep map[string]bool) bool {
+	if len(keep) == 0 {
+		return true
+	}
+	editor, ok := idx.db.(store.WorktreeManifestEditor)
+	if !ok {
+		return true // store cannot read manifests: previous behavior
+	}
+	previous, err := editor.WorktreeFiles(ctx, projectID, idx.worktree)
+	if err != nil {
+		idx.logf("[warn] read worktree manifest: %s; keeping it unchanged", truncateErr(err, 200))
+		return false
+	}
+	for path, hash := range previous {
+		if _, recorded := manifest[path]; recorded {
+			continue
+		}
+		owner, _, _ := strings.Cut(path, "!")
+		if keep[filepath.ToSlash(path)] || keep[filepath.ToSlash(owner)] {
+			manifest[path] = hash
+		}
+	}
+	return true
+}
+
+// pendingWorktree names the manifest that references a worktree run's
+// in-flight versions until its final manifest is written. Real worktrees are
+// absolute paths, so the prefix cannot collide with one.
+func pendingWorktree(worktree string) string {
+	return "pending:" + worktree
+}
+
+// markInFlight references a unit's version under the worktree's pending
+// manifest before it is stored or reused, so a concurrent prune (another
+// worktree's run, or the watcher's removeFile) cannot reclaim it before this
+// run writes its final manifest. Best-effort: a failure is only logged.
+func (idx *Indexer) markInFlight(ctx context.Context, projectID int, rel, hash string) {
+	if idx.worktree == "" {
+		return
+	}
+	editor, ok := idx.db.(store.WorktreeManifestEditor)
+	if !ok {
+		return
+	}
+	if err := editor.AddWorktreeFile(ctx, projectID, pendingWorktree(idx.worktree), rel, hash); err != nil {
+		idx.logf("[warn] pending manifest %s: %s", rel, truncateErr(err, 200))
 	}
 }
 
@@ -630,10 +792,10 @@ func ScanFiles(projectPath string, maxFiles int) ([]string, error) {
 // of the incremental file set or --max-files limit used for this run. The
 // inventory lets language analyzers resolve source-root imports to their real
 // on-disk directories even when the current run only visits changed files.
-func projectInventory(projectPath string) []string {
+func projectInventory(projectPath string) ([]string, bool) {
 	files, err := ScanFiles(projectPath, 0)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	inventory := make([]string, 0, len(files))
 	for _, path := range files {
@@ -643,7 +805,7 @@ func projectInventory(projectPath string) []string {
 		}
 		inventory = append(inventory, filepath.ToSlash(rel))
 	}
-	return inventory
+	return inventory, true
 }
 
 // indexFile reads a file from disk and indexes its content. The outcome
@@ -652,6 +814,13 @@ func projectInventory(projectPath string) []string {
 // failed embed sub-batches.
 func (idx *Indexer) indexFile(ctx context.Context, projectID int, path, rel, model string) (created, softErrs int, outcome fileOutcome, units []indexedUnit, hardErr error) {
 	f, err := os.Open(filepath.Clean(path))
+	if errors.Is(err, fs.ErrNotExist) {
+		// Listed by an incremental git diff but deleted since: drop it.
+		if err := idx.removeFile(ctx, projectID, rel); err != nil {
+			return 0, 0, outcomeSkippedEmpty, nil, fmt.Errorf("remove deleted file %s: %w", rel, err)
+		}
+		return 0, 0, outcomeSkippedEmpty, nil, nil
+	}
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, nil, err
 	}
@@ -823,6 +992,7 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		return 0, 0, outcomeSkippedEmpty, "", nil
 	}
 	hash = ContentHash(content)
+	idx.markInFlight(ctx, projectID, rel, hash)
 
 	// Incremental: skip a unit already indexed with this exact content.
 	if !idx.force {
@@ -844,10 +1014,6 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		chunks = chunks[:idx.maxChunksPerFile]
 	}
 
-	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
-		return 0, 0, outcomeSkippedEmpty, "", err
-	}
-
 	var syms []sym.Symbol
 	if !idx.noSymbols && (!idx.keywordOnly || idx.astOnly) {
 		syms = sym.Symbols(rel, content)
@@ -857,7 +1023,7 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 	// blockEmbedding is on, the file is stored text-only (no embedding).
 	hasSecrets := idx.detectSecrets(rel, content)
 
-	created, expected, softErrs, err := idx.storeChunks(ctx, chunkStoreParams{
+	params := chunkStoreParams{
 		projectID:  projectID,
 		fileID:     fileID,
 		rel:        rel,
@@ -865,7 +1031,16 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		chunks:     chunks,
 		syms:       syms,
 		hasSecrets: hasSecrets,
-	})
+	}
+	if idx.keepExistingOnForce(ctx, params, hash) {
+		return 0, 1, outcomeSkippedUnchanged, hash, nil
+	}
+
+	if err := idx.db.DeleteChunksForFile(ctx, projectID, fileID, idx.dims); err != nil {
+		return 0, 0, outcomeSkippedEmpty, "", err
+	}
+
+	created, expected, softErrs, err := idx.storeChunks(ctx, params)
 	if err != nil {
 		return 0, 0, outcomeSkippedEmpty, "", err
 	}
@@ -879,6 +1054,76 @@ func (idx *Indexer) indexUnit(ctx context.Context, projectID int, rel, model str
 		return created, softErrs, outcomeSkippedEmpty, "", nil
 	}
 	return created, softErrs, outcomeIndexed, hash, nil
+}
+
+// keepExistingOnForce protects a complete content-addressed version during a
+// --force pass. UpsertFile returns the existing (path, hash) row — shared by
+// every worktree on that hash — so its chunks must not be deleted until the
+// replacement embeddings are known to be available. It pre-embeds the chunks
+// into the embedding cache first; when that fails it reports true and the
+// caller keeps the existing version untouched (the next pass retries).
+func (idx *Indexer) keepExistingOnForce(ctx context.Context, p chunkStoreParams, hash string) bool {
+	if !idx.force {
+		return false
+	}
+	if ok, err := idx.db.FileUpToDate(ctx, p.projectID, p.rel, hash, idx.dims); err != nil || !ok {
+		return false // nothing complete to protect
+	}
+	if idx.prewarmEmbeddings(ctx, p) {
+		return false
+	}
+	idx.logf("[warn] %s: force re-embed failed; keeping the existing indexed version", p.rel)
+	return true
+}
+
+// prewarmEmbeddings embeds every chunk of p that is not yet in the embedding
+// cache and stores the result there, so the subsequent storeChunks pass is
+// served from the cache. It reports false when any batch cannot be embedded or
+// cached. Units that will be stored text-only need no embedding.
+func (idx *Indexer) prewarmEmbeddings(ctx context.Context, p chunkStoreParams) bool {
+	embedCtx, needsEmbed := idx.embedRoute(ctx, p)
+	if !needsEmbed {
+		return true
+	}
+	for start := 0; start < len(p.chunks); start += idx.embedBatchSize {
+		end := min(start+idx.embedBatchSize, len(p.chunks))
+		inputs := buildChunkInputs(p.chunks[start:end], p.syms)
+		hashes := computeHashes(inputs)
+		cached, err := idx.db.LookupEmbeddingCache(ctx, hashes, p.model, idx.dims)
+		if err != nil {
+			return false
+		}
+		res := resolveBatchEmbeddings(inputs, hashes, cached)
+		if res.uncachedCount == 0 {
+			continue
+		}
+		embeddings, err := idx.embedWithRetry(embedCtx, p.model, res.uncachedInputs)
+		if err != nil {
+			return false
+		}
+		if err := idx.db.InsertEmbeddingCache(ctx, res.uncachedHashes, p.model, embeddings, idx.dims); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// embedRoute mirrors storeChunks' routing: it returns the context embeddings
+// would be requested with and whether the unit is embedded at all (keyword-only
+// mode and sensitive/edge units without a local provider are stored text-only).
+func (idx *Indexer) embedRoute(ctx context.Context, p chunkStoreParams) (context.Context, bool) {
+	if idx.keywordOnly {
+		return ctx, false
+	}
+	sensitive := privacy.IsSensitive(p.rel) || (p.hasSecrets && idx.secretBlockEmbedding)
+	if !sensitive && idx.privacyMode != privacy.Edge {
+		return ctx, true
+	}
+	localCtx := embed.WithForceLocal(ctx, true)
+	if _, err := idx.embedder.ModelInfo(localCtx, p.model); err != nil {
+		return ctx, false
+	}
+	return localCtx, true
 }
 
 // rollbackIncompleteUnit removes the chunks and the file row of an incompletely
@@ -1497,17 +1742,39 @@ func isGitDir(projectPath string) bool {
 	return err == nil
 }
 
-// gitDiffNames returns the list of files (relative to repo root) that differ
-// between baseRef and HEAD.
+// gitDiffNames returns the files under projectPath, relative to it, that
+// changed since baseRef: committed, staged and unstaged changes to tracked
+// files, plus untracked (non-ignored) files. --relative scopes the diff to
+// projectPath when it is a subfolder of the repo; -z keeps non-ASCII names
+// unquoted; --no-renames lists both the old (deleted) and the new path.
 func gitDiffNames(ctx context.Context, projectPath, baseRef string) ([]string, error) {
-	out, err := gitRun(ctx, projectPath, "diff", "--name-only", baseRef+"..HEAD")
+	if !safeGitRef(baseRef) {
+		return nil, fmt.Errorf("unsafe git ref %q", baseRef)
+	}
+	changed, err := gitRunRaw(ctx, projectPath, "diff", "--name-only", "-z", "--no-renames", "--relative", baseRef, "--")
 	if err != nil {
 		return nil, err
 	}
-	if out == "" {
+	untracked, err := gitRunRaw(ctx, projectPath, "ls-files", "-z", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, err
+	}
+	names := append(splitNUL(changed), splitNUL(untracked)...)
+	if len(names) == 0 {
 		return nil, nil
 	}
-	return strings.Split(strings.TrimSpace(out), "\n"), nil
+	return names, nil
+}
+
+// splitNUL splits NUL-terminated git output into its non-empty names.
+func splitNUL(out string) []string {
+	var names []string
+	for _, n := range strings.Split(out, "\x00") {
+		if n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
 }
 
 // safeGitDir checks that a project path does not contain path-traversal
@@ -1536,6 +1803,13 @@ func safeGitRef(ref string) bool {
 // gitRun executes a git subcommand in projectPath with hermetic config and
 // returns trimmed stdout, or an error if the command fails.
 func gitRun(ctx context.Context, projectPath string, args ...string) (string, error) {
+	out, err := gitRunRaw(ctx, projectPath, args...)
+	return strings.TrimSpace(out), err
+}
+
+// gitRunRaw is gitRun without trimming, for NUL-separated (-z) output whose
+// names may legitimately start or end with whitespace.
+func gitRunRaw(ctx context.Context, projectPath string, args ...string) (string, error) {
 	if !safeGitDir(projectPath) {
 		return "", fmt.Errorf("unsafe git project path: %q", projectPath)
 	}
@@ -1547,7 +1821,7 @@ func gitRun(ctx context.Context, projectPath string, args ...string) (string, er
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), nil
 }
 
 func (idx *Indexer) logf(format string, args ...any) {

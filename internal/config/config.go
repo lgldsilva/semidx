@@ -49,6 +49,9 @@ const (
 type Config struct {
 	// DatabaseURL is the PostgreSQL/pgvector DSN (SEMIDX_DB_DSN).
 	DatabaseURL string
+	// DatabaseURLConfigured reports whether SEMIDX_DB_DSN was set at any
+	// resolution layer (env, project .env, user config) rather than defaulted.
+	DatabaseURLConfigured bool
 	// OllamaURL is the local Ollama endpoint (SEMIDX_OLLAMA_URL, legacy OLLAMA_URL).
 	OllamaURL string
 	// OllamaURLs, when non-empty, enables parallel embedding mode: each URL
@@ -186,6 +189,13 @@ type Config struct {
 	// (default x-access-token).
 	GitToken string
 	GitUser  string
+	// GitTokenHosts (SEMIDX_GIT_TOKEN_HOSTS, comma-separated) lists the hosts
+	// allowed to receive GitToken. Empty: the token is sent to no host.
+	GitTokenHosts []string
+	// TrustedProxies (SEMIDX_TRUSTED_PROXIES, comma-separated IPs/CIDRs) are
+	// the reverse proxies whose X-Forwarded-For is honoured for client-IP rate
+	// limiting. Empty: RemoteAddr only.
+	TrustedProxies []string
 	// GithubToken is a GitHub PAT used for repo discovery via the GitHub API
 	// (SEMIDX_GITHUB_TOKEN). It also seeds the Copilot token exchange and the
 	// server-side private-clone token when their dedicated keys are unset.
@@ -406,7 +416,9 @@ func ZeroConfigRecommended(cfg *Config, remoteServer bool) bool {
 	if remoteServer {
 		return false
 	}
-	if os.Getenv("SEMIDX_DB_DSN") != "" || os.Getenv("SEMIDX_LOCAL_INDEX") != "" {
+	// Use the layered resolution (env > .env > user config), not the bare
+	// process env: a DSN saved with `semidx config set` must count too.
+	if cfg.DatabaseURLConfigured || cfg.LocalIndexRequested != "" {
 		return false
 	}
 	return !cfg.HasConfiguredEmbeddingProvider()
@@ -425,44 +437,41 @@ func Load() *Config {
 // are still read from disk; only the "real environment" level is replaced.
 // Use this in tests with [mapLookup] to avoid depending on OS env vars.
 func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
-	paths := []string{".env"}
-	if p, err := UserEnvPath(); err == nil {
-		paths = append(paths, p)
-	}
-	env := newResolverWithLookup(envLookup, paths...)
+	env := layeredResolver(envLookup)
 	return &Config{
-		DatabaseURL:         env.get("SEMIDX_DB_DSN", defaultDatabaseURL),
-		OllamaURL:           env.first("SEMIDX_OLLAMA_URL", "OLLAMA_URL", defaultOllamaURL),
-		OllamaURLs:          parseCommaSep(env.get("SEMIDX_OLLAMA_URLS", "")),
-		Provider:            env.get("EMBED_PROVIDER", ""),
-		Endpoint:            env.get("EMBED_ENDPOINT", ""),
-		APIKey:              env.get("EMBED_API_KEY", ""),
-		GeminiAPIKey:        env.get("GEMINI_API_KEY", ""),
-		GeminiBaseURL:       env.get("SEMIDX_GEMINI_BASE_URL", defaultGeminiBaseURL),
-		GroqAPIKey:          env.get("GROQ_API_KEY", ""),
-		GroqBaseURL:         env.get("SEMIDX_GROQ_BASE_URL", defaultGroqBaseURL),
-		OpenRouterAPIKey:    env.get("OPENROUTER_API_KEY", ""),
-		OpenRouterBaseURL:   env.get("SEMIDX_OPENROUTER_BASE_URL", defaultOpenRouterURL),
-		OllamaCloudAPIKey:   env.get("OLLAMA_CLOUD_API_KEY", ""),
-		OllamaCloudBaseURL:  env.get("SEMIDX_OLLAMA_CLOUD_BASE_URL", defaultOllamaCloudURL),
-		AnthropicAPIKey:     env.get("ANTHROPIC_API_KEY", ""),
-		ChatProvider:        env.get("SEMIDX_CHAT_PROVIDER", ""),
-		ChatModel:           env.get("SEMIDX_CHAT_MODEL", ""),
-		ChatAPIKey:          env.get("SEMIDX_CHAT_API_KEY", ""),
-		ChatBaseURL:         env.get("SEMIDX_CHAT_BASE_URL", ""),
-		ChatTemperature:     floatDefault(env.get("SEMIDX_CHAT_TEMPERATURE", ""), 0.3),
-		ChatModels:          parseCommaSep(env.get("SEMIDX_CHAT_MODELS", "")),
-		AgentActions:        strings.ToLower(strings.TrimSpace(env.get("SEMIDX_AGENT_ACTIONS", "off"))),
-		Privacy:             env.get("EMBED_PRIVACY", "") == "true",
-		IndexWorkers:        atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
-		EmbedBatchSize:      atoiDefault(env.get("SEMIDX_EMBED_BATCH_SIZE", ""), defaultEmbedBatchSize),
-		MaxFileSize:         atoiDefault(env.get("SEMIDX_MAX_FILE_SIZE", ""), defaultMaxFileSize),
-		MaxChunksPerFile:    atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_FILE", ""), defaultMaxChunksPerFile),
-		MaxChunksPerProject: atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_PROJECT", ""), defaultMaxChunksPerProject),
-		MaxFilesPerProject:  atoiDefault(env.get("SEMIDX_MAX_FILES_PER_PROJECT", ""), defaultMaxFilesPerProject),
-		ListenAddr:          env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
-		BootstrapToken:      env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
-		DataDir:             env.get("SEMIDX_DATA_DIR", defaultDataDir),
+		DatabaseURL:           env.get("SEMIDX_DB_DSN", defaultDatabaseURL),
+		DatabaseURLConfigured: env.get("SEMIDX_DB_DSN", "") != "",
+		OllamaURL:             env.first("SEMIDX_OLLAMA_URL", "OLLAMA_URL", defaultOllamaURL),
+		OllamaURLs:            parseCommaSep(env.get("SEMIDX_OLLAMA_URLS", "")),
+		Provider:              env.get("EMBED_PROVIDER", ""),
+		Endpoint:              env.get("EMBED_ENDPOINT", ""),
+		APIKey:                env.get("EMBED_API_KEY", ""),
+		GeminiAPIKey:          env.get("GEMINI_API_KEY", ""),
+		GeminiBaseURL:         env.get("SEMIDX_GEMINI_BASE_URL", defaultGeminiBaseURL),
+		GroqAPIKey:            env.get("GROQ_API_KEY", ""),
+		GroqBaseURL:           env.get("SEMIDX_GROQ_BASE_URL", defaultGroqBaseURL),
+		OpenRouterAPIKey:      env.get("OPENROUTER_API_KEY", ""),
+		OpenRouterBaseURL:     env.get("SEMIDX_OPENROUTER_BASE_URL", defaultOpenRouterURL),
+		OllamaCloudAPIKey:     env.get("OLLAMA_CLOUD_API_KEY", ""),
+		OllamaCloudBaseURL:    env.get("SEMIDX_OLLAMA_CLOUD_BASE_URL", defaultOllamaCloudURL),
+		AnthropicAPIKey:       env.get("ANTHROPIC_API_KEY", ""),
+		ChatProvider:          env.get("SEMIDX_CHAT_PROVIDER", ""),
+		ChatModel:             env.get("SEMIDX_CHAT_MODEL", ""),
+		ChatAPIKey:            env.get("SEMIDX_CHAT_API_KEY", ""),
+		ChatBaseURL:           env.get("SEMIDX_CHAT_BASE_URL", ""),
+		ChatTemperature:       floatDefault(env.get("SEMIDX_CHAT_TEMPERATURE", ""), 0.3),
+		ChatModels:            parseCommaSep(env.get("SEMIDX_CHAT_MODELS", "")),
+		AgentActions:          strings.ToLower(strings.TrimSpace(env.get("SEMIDX_AGENT_ACTIONS", "off"))),
+		Privacy:               env.get("EMBED_PRIVACY", "") == "true",
+		IndexWorkers:          atoiDefault(env.get("SEMIDX_INDEX_WORKERS", ""), defaultIndexWorkers),
+		EmbedBatchSize:        atoiDefault(env.get("SEMIDX_EMBED_BATCH_SIZE", ""), defaultEmbedBatchSize),
+		MaxFileSize:           atoiDefault(env.get("SEMIDX_MAX_FILE_SIZE", ""), defaultMaxFileSize),
+		MaxChunksPerFile:      atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_FILE", ""), defaultMaxChunksPerFile),
+		MaxChunksPerProject:   atoiDefault(env.get("SEMIDX_MAX_CHUNKS_PER_PROJECT", ""), defaultMaxChunksPerProject),
+		MaxFilesPerProject:    atoiDefault(env.get("SEMIDX_MAX_FILES_PER_PROJECT", ""), defaultMaxFilesPerProject),
+		ListenAddr:            env.get("SEMIDX_LISTEN_ADDR", defaultListenAddr),
+		BootstrapToken:        env.get("SEMIDX_BOOTSTRAP_TOKEN", ""),
+		DataDir:               env.get("SEMIDX_DATA_DIR", defaultDataDir),
 
 		BootstrapAdminUser:     env.get("SEMIDX_BOOTSTRAP_ADMIN_USER", "admin"),
 		BootstrapAdminPassword: env.get("SEMIDX_BOOTSTRAP_ADMIN_PASSWORD", ""),
@@ -495,6 +504,8 @@ func LoadWithLookup(envLookup func(string) (string, bool)) *Config {
 		GitSSLNoVerify:  env.get("SEMIDX_GIT_SSL_NO_VERIFY", "") == "true",
 		GitToken:        env.first("SEMIDX_GIT_TOKEN", "SEMIDX_GITHUB_TOKEN", ""),
 		GitUser:         env.get("SEMIDX_GIT_USER", ""),
+		GitTokenHosts:   parseCommaSep(env.get("SEMIDX_GIT_TOKEN_HOSTS", "")),
+		TrustedProxies:  parseCommaSep(env.get("SEMIDX_TRUSTED_PROXIES", "")),
 		GithubToken:     env.get("SEMIDX_GITHUB_TOKEN", ""),
 		CopilotToken:    env.first("SEMIDX_COPILOT_TOKEN", "SEMIDX_GITHUB_TOKEN", ""),
 		MCPClientConfig: env.get("SEMIDX_MCP_CLIENT_CONFIG", ""),
@@ -575,7 +586,9 @@ var KnownKeys = []KeySpec{
 	{"SEMIDX_GIT_SSL_NO_VERIFY", "Disable TLS verification for server-side git clone/pull — self-signed hosts (serve)", false},
 	{"SEMIDX_GIT_TOKEN", "Token for private HTTPS git clones server-side (falls back to SEMIDX_GITHUB_TOKEN)", true},
 	{"SEMIDX_GIT_USER", "Basic-auth user for SEMIDX_GIT_TOKEN (default x-access-token)", false},
+	{"SEMIDX_GIT_TOKEN_HOSTS", "Comma-separated hosts allowed to receive SEMIDX_GIT_TOKEN (unset = none)", false},
 	{"SEMIDX_GITHUB_TOKEN", "GitHub PAT for repo discovery (list user/org repos) and private clones", true},
+	{"SEMIDX_TRUSTED_PROXIES", "Comma-separated reverse-proxy IPs/CIDRs whose X-Forwarded-For sets the client IP for rate limits (serve)", false},
 	{"SEMIDX_METRICS_TOKEN", "Bearer token required for GET /metrics when set (serve)", true},
 	// Secret scanning.
 	{"SEMIDX_SECRET_SCAN", "Enable gitleaks secret scanning during indexing (true)", false},
@@ -674,11 +687,7 @@ func writeUserEnv(m map[string]string) error {
 // EffectiveValue resolves a key through the full precedence chain (real env >
 // project .env > user config file), returning "" when unset at every level.
 func EffectiveValue(key string) string {
-	paths := []string{".env"}
-	if p, err := UserEnvPath(); err == nil {
-		paths = append(paths, p)
-	}
-	return newResolver(paths...).get(key, "")
+	return layeredResolver(os.LookupEnv).get(key, "")
 }
 
 // atoiDefault parses s as a positive int, returning def when empty or invalid.
@@ -724,18 +733,6 @@ func parseCommaSep(s string) []string {
 type resolver struct {
 	lookup func(string) (string, bool) // env var lookup (e.g. os.LookupEnv)
 	layers []map[string]string         // highest file precedence first
-}
-
-func newResolver(paths ...string) *resolver {
-	return newResolverWithLookup(os.LookupEnv, paths...)
-}
-
-func newResolverWithLookup(lookup func(string) (string, bool), paths ...string) *resolver {
-	r := &resolver{lookup: lookup}
-	for _, p := range paths {
-		r.layers = append(r.layers, parseEnvFile(p))
-	}
-	return r
 }
 
 // parseEnvFile reads a KEY=VALUE file into a map. A missing or unreadable file

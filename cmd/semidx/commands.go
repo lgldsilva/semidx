@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lgldsilva/semidx/internal/agent"
+	"github.com/lgldsilva/semidx/internal/clientip"
 	"github.com/lgldsilva/semidx/internal/config"
 	"github.com/lgldsilva/semidx/internal/embed"
 	"github.com/lgldsilva/semidx/internal/gitmeta"
@@ -332,6 +333,7 @@ func newCLIIndexer(db store.IndexStore, d *deps, tgt indexTarget, opts indexCmdO
 		SetKeywordOnly(d.keywordOnly || opts.astOnly).
 		SetASTOnly(opts.astOnly).
 		SetWorktree(tgt.worktree).
+		SetPruneMissing(tgt.sourceType == "docs").
 		SetSecretScan(tgt.indexPath, d.cfg.SecretScan || d.cfg.SecretBlockEmbedding, d.cfg.SecretBlockEmbedding)
 }
 
@@ -584,8 +586,11 @@ func newDropCmd(d *deps) *cobra.Command {
 		Use:   "drop",
 		Short: "Drop all indexed data",
 		Long: `Delete ALL indexed data — every project, file and chunk — from the active
-store. This is destructive and cannot be undone. You must confirm: either type
-"yes" at the interactive prompt, or pass --confirm (e.g. in scripts).`,
+local store (SQLite, or Postgres via SEMIDX_DB_DSN). On a multi-tenant Postgres
+store only the current tenant's projects are deleted (the default tenant for
+the CLI); other tenants are left untouched. This is destructive and cannot be
+undone. You must confirm: either type "yes" at the interactive prompt, or pass
+--confirm (e.g. in scripts).`,
 		Example: "  semidx drop --confirm",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !confirm {
@@ -723,6 +728,15 @@ without that auth in front.`,
 			srv := server.New(db, d.emb, log)
 			srv.SetGitAllowFile(d.cfg.GitAllowFile)
 			srv.SetGitAuth(d.cfg.GitSSLNoVerify, d.cfg.GitToken, d.cfg.GitUser)
+			srv.SetGitTokenHosts(d.cfg.GitTokenHosts)
+			proxies, err := clientip.New(d.cfg.TrustedProxies)
+			if err != nil {
+				return fmt.Errorf("SEMIDX_TRUSTED_PROXIES: %w", err)
+			}
+			srv.SetClientIPResolver(proxies)
+			if d.cfg.GitToken != "" && len(d.cfg.GitTokenHosts) == 0 {
+				log.Warn("SEMIDX_GIT_TOKEN is set but SEMIDX_GIT_TOKEN_HOSTS is empty: the token will not be sent to any host")
+			}
 			box, err := secretbox.New(d.cfg.SecretKey)
 			if err != nil {
 				return fmt.Errorf("SEMIDX_SECRET_KEY: %w", err)

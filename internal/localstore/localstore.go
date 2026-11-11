@@ -556,6 +556,35 @@ func (s *SQLiteStore) RemoveWorktreeFile(ctx context.Context, projectID int, wor
 	return err
 }
 
+// WorktreeFiles returns one worktree's current manifest (path -> hash).
+func (s *SQLiteStore) WorktreeFiles(ctx context.Context, projectID int, worktree string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT path, hash FROM worktree_files
+		WHERE project_id = ? AND worktree = ?`, projectID, worktree)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]string)
+	for rows.Next() {
+		var path, hash string
+		if err := rows.Scan(&path, &hash); err != nil {
+			return nil, err
+		}
+		out[path] = hash
+	}
+	return out, rows.Err()
+}
+
+// AddWorktreeFile records (or replaces) one path's hash in a worktree's
+// manifest without touching its other entries.
+func (s *SQLiteStore) AddWorktreeFile(ctx context.Context, projectID int, worktree, path, hash string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO worktree_files (project_id, worktree, path, hash)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(project_id, worktree, path) DO UPDATE SET hash = excluded.hash`,
+		projectID, worktree, path, hash)
+	return err
+}
+
 // PruneUnreferencedFiles deletes files (and, via ON DELETE CASCADE, chunks) that
 // no worktree of the project still references, bounding index growth. Returns the
 // number of files removed.
@@ -614,12 +643,48 @@ func scanProject(row interface{ Scan(...any) error }) (*store.Project, error) {
 	return &p, nil
 }
 
+// GetProject resolves a project by name: an exact identity match wins (API
+// projects use the name as identity); otherwise the name must be unique, and a
+// name shared by several projects returns store.ErrProjectAmbiguous.
 func (s *SQLiteStore) GetProject(ctx context.Context, name string) (*store.Project, error) {
-	p, err := scanProject(s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE name = ?`, name))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, store.ErrNotFound
+	id, err := s.projectIDByName(ctx, name)
+	if err != nil {
+		return nil, err
 	}
-	return p, err
+	return s.GetProjectByID(ctx, id)
+}
+
+// projectIDByName implements the by-name resolution shared by GetProject and
+// DeleteProject (see GetProject).
+func (s *SQLiteStore) projectIDByName(ctx context.Context, name string) (int, error) {
+	var id int
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM projects WHERE identity = ?`, name).Scan(&id)
+	if err == nil || !errors.Is(err, sql.ErrNoRows) {
+		return id, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM projects WHERE name = ? LIMIT 2`, name)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []int
+	for rows.Next() {
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	switch len(ids) {
+	case 0:
+		return 0, store.ErrNotFound
+	case 1:
+		return ids[0], nil
+	default:
+		return 0, store.ErrProjectAmbiguous
+	}
 }
 
 func (s *SQLiteStore) GetProjectByID(ctx context.Context, id int) (*store.Project, error) {
@@ -661,10 +726,15 @@ func (s *SQLiteStore) ListProjects(ctx context.Context, limit, offset int) ([]st
 	return projects, rows.Err()
 }
 
-// DeleteProject removes a project; files and chunks cascade. Returns
-// ErrNotFound when no such project exists.
+// DeleteProject removes one project resolved like GetProject; files and
+// chunks cascade. Returns ErrNotFound when no such project exists and
+// ErrProjectAmbiguous when the name matches several projects.
 func (s *SQLiteStore) DeleteProject(ctx context.Context, name string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE name = ?`, name)
+	id, err := s.projectIDByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
@@ -930,7 +1000,7 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 	// needs the embedding blob. Content is fetched for just the top-K rows in a
 	// second query, avoiding a full-table content transfer per search.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT c.id, f.path, c.start_line, c.end_line, COALESCE(ue.embedding, c.embedding), c.confidence, c.symbol
+		SELECT c.id, f.path, c.start_line, c.end_line, COALESCE(ue.embedding, c.embedding), c.confidence, c.symbol, f.hash, f.indexed_at
 		FROM chunks c `+join+`
 		LEFT JOIN unique_embeddings ue ON ue.emb_hash = c.emb_hash
 		WHERE c.project_id = ? AND COALESCE(ue.embedding, c.embedding) IS NOT NULL
@@ -958,10 +1028,12 @@ func (s *SQLiteStore) searchSimilar(ctx context.Context, projectID int, embeddin
 			endLine    sql.NullInt64
 			confidence sql.NullString
 			symbol     sql.NullString
+			indexedAt  sql.NullString
 		)
-		if err := rows.Scan(&hit.id, &hit.res.FilePath, &startLine, &endLine, &blob, &confidence, &symbol); err != nil {
+		if err := rows.Scan(&hit.id, &hit.res.FilePath, &startLine, &endLine, &blob, &confidence, &symbol, &hit.res.FileHash, &indexedAt); err != nil {
 			return nil, err
 		}
+		hit.res.IndexedAt = parseSQLiteTime(indexedAt.String)
 		hit.res.StartLine = int(startLine.Int64)
 		hit.res.EndLine = int(endLine.Int64)
 		hit.res.Score = cosineWithQueryNormFromBlob(embedding, qNorm, blob)
@@ -1155,7 +1227,7 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 	// worktree scope is expressed with EXISTS so the query remains static and
 	// all user-controlled values stay parameters.
 	const ftsSQL = `
-		SELECT f.path, c.content, c.start_line, c.end_line, -bm25(chunks_fts) AS score, c.confidence, c.symbol
+		SELECT f.path, c.content, c.start_line, c.end_line, -bm25(chunks_fts) AS score, c.confidence, c.symbol, f.hash, f.indexed_at
 		FROM chunks c
 		JOIN chunks_fts ft ON ft.rowid = c.id
 		JOIN files f ON f.id = c.file_id
@@ -1190,7 +1262,7 @@ func (s *SQLiteStore) searchKeywords(ctx context.Context, projectID int, queryTe
 	// FTS results. This keeps camelCase/path matches available on SQLite while
 	// ensuring token-ranked matches always win ties.
 	const likeQuery = `
-		SELECT f.path, c.content, c.start_line, c.end_line, 0.0 AS score, c.confidence, c.symbol
+		SELECT f.path, c.content, c.start_line, c.end_line, 0.0 AS score, c.confidence, c.symbol, f.hash, f.indexed_at
 		FROM chunks c
 		JOIN files f ON f.id = c.file_id
 		WHERE c.project_id = ?
@@ -1249,7 +1321,7 @@ func keywordResultKey(result store.SearchResult) string {
 }
 
 // scanChunkResultRows reads the canonical "path, content, start_line, end_line,
-// score, confidence, symbol" row shape shared by keyword search and the
+// score, confidence, symbol, hash, indexed_at" row shape shared by keyword search and the
 // FetchChunksBy{Path,DirPrefix} helpers. Empty confidence is normalized to
 // AMBIGUOUS (the column default) so callers see a stable tag for pre-v2 rows.
 // The caller owns closing the rows.
@@ -1262,10 +1334,12 @@ func scanChunkResultRows(rows *sql.Rows) ([]store.SearchResult, error) {
 			endLine    sql.NullInt64
 			confidence sql.NullString
 			symbol     sql.NullString
+			indexedAt  sql.NullString
 		)
-		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score, &confidence, &symbol); err != nil {
+		if err := rows.Scan(&r.FilePath, &r.Content, &startLine, &endLine, &r.Score, &confidence, &symbol, &r.FileHash, &indexedAt); err != nil {
 			return nil, err
 		}
+		r.IndexedAt = parseSQLiteTime(indexedAt.String)
 		r.StartLine = int(startLine.Int64)
 		r.EndLine = int(endLine.Int64)
 		r.Confidence = confidence.String
@@ -1339,7 +1413,13 @@ func (s *SQLiteStore) FetchGraphNeighbors(ctx context.Context, projectID int) (m
 // FetchChunksByPath returns chunks for a specific file path, ordered by
 // chunk_index. Returns an empty slice if the file has no chunks.
 func (s *SQLiteStore) FetchChunksByPath(ctx context.Context, projectID int, filePath string, dims, limit int) ([]store.SearchResult, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path = ? ORDER BY c.chunk_index LIMIT ?`, projectID, filePath, limit)
+	// Only the most recently indexed content-addressed version of the path:
+	// older versions (other worktrees, pre-edit pushes) must not be blended in.
+	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol, f.hash, f.indexed_at
+		FROM chunks c JOIN files f ON f.id = c.file_id
+		WHERE c.project_id = ? AND f.id = (
+			SELECT id FROM files WHERE project_id = ? AND path = ? ORDER BY indexed_at DESC, id DESC LIMIT 1)
+		ORDER BY c.chunk_index LIMIT ?`, projectID, projectID, filePath, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1350,7 +1430,7 @@ func (s *SQLiteStore) FetchChunksByPath(ctx context.Context, projectID int, file
 // FetchChunksByDirPrefix returns chunks for files whose path starts with the
 // given directory prefix. Returns empty slice if no files match.
 func (s *SQLiteStore) FetchChunksByDirPrefix(ctx context.Context, projectID int, dirPrefix string, dims, limit int) ([]store.SearchResult, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path LIKE (? || '%') ORDER BY c.chunk_index LIMIT ?`, projectID, dirPrefix, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT f.path, c.content, c.start_line, c.end_line, 0.5 AS score, c.confidence, c.symbol, f.hash, f.indexed_at FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.project_id = ? AND f.path LIKE (? || '%') ORDER BY c.chunk_index LIMIT ?`, projectID, dirPrefix, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1373,15 +1453,21 @@ func (s *SQLiteStore) FetchChunksByPaths(ctx context.Context, projectID int, pat
 	if err != nil {
 		return nil, err
 	}
-	const query = `SELECT path, content, start_line, end_line, score, confidence, symbol FROM (
+	const query = `SELECT path, content, start_line, end_line, score, confidence, symbol, hash, indexed_at FROM (
 			SELECT f.path AS path, c.content, c.start_line, c.end_line, 0.5 AS score,
-			       c.confidence, c.symbol,
+			       c.confidence, c.symbol, f.hash AS hash, f.indexed_at AS indexed_at,
 			       ROW_NUMBER() OVER (PARTITION BY f.path ORDER BY c.chunk_index) AS rn
 			FROM chunks c
-			JOIN files f ON f.id = c.file_id
-			WHERE c.project_id = ? AND f.path IN (SELECT value FROM json_each(?))
+			JOIN (
+				-- latest content-addressed version per path only
+				SELECT id, path, hash, indexed_at FROM (
+					SELECT id, path, hash, indexed_at, ROW_NUMBER() OVER (PARTITION BY path ORDER BY indexed_at DESC, id DESC) AS vrn
+					FROM files WHERE project_id = ? AND path IN (SELECT value FROM json_each(?))
+				) WHERE vrn = 1
+			) f ON f.id = c.file_id
+			WHERE c.project_id = ?
 		) WHERE rn <= ? ORDER BY path, start_line`
-	rows, err := s.db.QueryContext(ctx, query, projectID, string(pathsJSON), limitPerPath)
+	rows, err := s.db.QueryContext(ctx, query, projectID, string(pathsJSON), projectID, limitPerPath)
 	if err != nil {
 		return nil, err
 	}

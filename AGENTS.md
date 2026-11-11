@@ -115,6 +115,8 @@ cmd/semidx/        CLI (cobra): index, unlock (password docs), search, sgrep,
 pkg/client/        public Go SDK for the HTTP API (DTOs + client).
 internal/
   config/          SEMIDX_* resolution: env > cwd .env > ~/.config/semidx/semidx.env > default
+                   (cwd .env is untrusted: secrets, DSNs, URLs and security
+                   settings from it are ignored — internal/config/projectenv.go)
   clientconfig/    ~/.config/semidx/config.yaml (server_url, token, tenant, default project)
   chunker/         line-aware chunking (Chunk{Content,StartLine,EndLine})
   privacy/         deny-list + route-local policy engine
@@ -279,5 +281,6 @@ are the local checks; full `make test` also runs the non-short Docker tests.
 `docs/api.md` · `docs/self-hosting.md` · `docs/usage.md` (usage analytics + doctor) ·
 `docs/design-decisions.md` (ADRs) ·
 `docs/research/large-scale-semantic-code-search.md` (scale research + roadmap) ·
+`docs/research/agent-ab-semantic-search.md` (agent A/B: does semidx help agents?) ·
 `docs/install.md` (install matrix and CI/private-host setup) ·
 `README.md` (quickstart) · `deploy/agentics-test/README.md` (MCP harness).

@@ -11,6 +11,56 @@ each GitHub Release.
 
 ## [Unreleased]
 
+### Security
+
+- A `.env` in the working directory (i.e. any cloned repository) can no
+  longer set credentials/DSNs, endpoint or base URLs, or security settings
+  (custom provider, chat provider, TLS/CA overrides, decompiler, MCP client
+  config, agent actions, git TLS/file, cookie flag); privacy and secret
+  scanning settings are honoured from it only when they tighten (`true`).
+  Previously a hostile repo could redirect the user's API key to an attacker
+  URL (`SEMIDX_*_BASE_URL`), swap keys, point the index at an attacker
+  database or turn privacy routing off. Ignored keys are reported once on
+  stderr; set them in the real environment or with `semidx config set`.
+- In pool mode (`SEMIDX_OLLAMA_URLS` with 2+ URLs) a custom `openai` provider
+  could receive chunks of sensitive files (force-local) and requests made
+  under global privacy mode; restricted requests now only use local lanes.
+- Sensitive-file detection now covers plural keywords (`credentials.json`,
+  `secrets.yaml`, `tokens.json`), SSH private keys (`id_rsa`, `id_ed25519`, …),
+  `.npmrc`, `.netrc`, `.pgpass`, `.pypirc`, `.htpasswd`, keystores
+  (`.p12/.pfx/.jks/.keystore`) and Terraform state/vars.
+- **Breaking:** the env-global `SEMIDX_GIT_TOKEN` is now sent only to hosts
+  listed in the new `SEMIDX_GIT_TOKEN_HOSTS` (comma-separated). When unset, the
+  token is sent to no host — previously it went as Basic auth to any HTTPS URL
+  a tenant configured, letting a project exfiltrate it. Set
+  `SEMIDX_GIT_TOKEN_HOSTS=github.com` (or your Gitea host) to keep private
+  clones working. Stored per-project/per-host credentials are unaffected.
+- Server-side clones now live under `DATA_DIR/repos/<tenant_id>/<project_id>`
+  (was `repos/<project name>`, shared across tenants with equal names) and an
+  existing checkout whose `remote.origin.url` differs is re-cloned instead of
+  pulled. Existing git projects re-clone once on their next sync; the old
+  `repos/<name>` directories can be deleted.
+- The API rate limit and the admin login limiter are keyed by client IP
+  (previously by the raw `Authorization` header and by username only). New
+  `SEMIDX_TRUSTED_PROXIES` (comma-separated IPs/CIDRs) lets semidx take the
+  client IP from `X-Forwarded-For`, but only when the request comes from a
+  listed proxy. The header is read from right to left, and the first address
+  that is not a trusted proxy wins. Deployments behind a reverse proxy should
+  set it: without it, all clients share the proxy's limits. The staging kit
+  sets it for its Caddy gateway.
+
+### Fixed
+
+- `semidx mcp install --apply` writes the temp file next to the target
+  config (no more EXDEV when `/tmp` is tmpfs), keeps the existing file mode,
+  aborts instead of clobbering an unreadable config, accepts a `null` JSON
+  config, and replaces a Codex `[mcp_servers.semidx]` section together with
+  its subtables (a leftover `.env` subtable made the TOML invalid).
+- A `SEMIDX_DB_DSN` saved with `semidx config set` is now honoured by the
+  zero-config detection instead of falling back to local keyword-only SQLite.
+- `semidx tenant|workspace use|create` no longer persist `SEMIDX_SERVER_URL`
+  / `SEMIDX_TOKEN` env overrides over the saved login.
+
 ### Changed
 
 - Point public install/upgrade defaults at GitHub Releases (was private Gitea).
@@ -23,6 +73,37 @@ each GitHub Release.
 
 ### Fixed
 
+- Worktree reindex keeps the previous version of files whose embedding failed
+  or that `--max-files` skipped, instead of pruning them from search; a
+  concurrent prune can no longer delete another run's in-flight versions.
+- `--force` reindex no longer deletes a content-addressed file version shared
+  by other worktrees when re-embedding fails.
+- `--docs` folders inside a git repo get correct incremental diffs
+  (repo-relative paths, uncommitted changes, renames, non-ASCII names) and
+  deleted files are removed from the index.
+- Nested archive extraction shares one size budget across all levels.
+- Search staleness compares the file on disk with the hit's own indexed
+  version, so worktrees with divergent versions no longer flag each other's
+  hits as stale.
+- Graph-expanded hits always rank below direct hits, expansion works with
+  keyword-fallback scores, and at most `top_k` graph chunks are added.
+- Code chunking no longer drops the rest of a file after a line longer than
+  64 KiB, and never emits empty chunks (embedding APIs rejected them with
+  400 and the batch retried forever).
+- A circuit-breaker probe that was cancelled or hit an unknown model no
+  longer leaves the provider blocked until restart.
+- Provider responses with fewer vectors than inputs are rejected instead of
+  panicking the indexer; OpenAI-compatible vectors are ordered by `index`.
+- `make fmt` now fails on unformatted files (it always passed).
+- `semidx drop` on Postgres deletes only the current tenant's projects (it
+  truncated every tenant, including stored git credentials).
+- Deleting or resolving a project by a name shared by several projects returns
+  an ambiguity error (409 in the API) instead of acting on all/any of them.
+- Index jobs left `running` by a crash are requeued by heartbeat on a
+  periodic sweep; late completions no longer overwrite requeued jobs.
+- Git credentials can only be bound to projects of the caller's tenant;
+  tenant creation is atomic; embedding-cache batch errors are reported;
+  chunk fetches by path return only the latest version of the file.
 - Pin `aquasecurity/trivy-action` to commit SHA `915b19b` (same as tag
   `v0.28.0`). The previous ref `aquasecurity/trivy-action@0.28.0` failed
   with "unable to find version 0.28.0" because the upstream repo ships

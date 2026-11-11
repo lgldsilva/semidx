@@ -58,3 +58,6 @@ coverage*.out
 
 # Homelab-only docs (kept on disk, never tracked for public publish)
 docs/internal/
+
+# Python bytecode (scripts/agent-ab)
+__pycache__/

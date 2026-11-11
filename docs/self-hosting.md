@@ -80,6 +80,21 @@ starts.
 All configuration is read from the environment (a `.env` file in the working
 directory is also honored; real environment variables win over it).
 
+> **Security:** the working-directory `.env` belongs to whatever repository you
+> run semidx in, so it is untrusted. It may tune semidx (workers, limits,
+> `SEMIDX_LOCAL_INDEX`, `SEMIDX_EMBED_MODE`, …) but it **cannot** set
+> credentials or DSNs (anything holding `KEY`, `TOKEN`, `SECRET`, `PASSWORD`,
+> `DSN`, e.g. `GEMINI_API_KEY`, `SEMIDX_DB_DSN`, `SEMIDX_JWT_SECRET`), any
+> endpoint (`*_URL`, `*_URLS`, `*_ENDPOINT`, `*_API`, e.g.
+> `SEMIDX_GEMINI_BASE_URL`, `OLLAMA_URL`), or security settings
+> (`EMBED_PROVIDER`, `SEMIDX_CHAT_PROVIDER`, `SEMIDX_INSECURE`,
+> `SEMIDX_TLS_CA_CERT`, `SEMIDX_JAVA_DECOMPILER`, `SEMIDX_MCP_CLIENT_CONFIG`,
+> `SEMIDX_AGENT_ACTIONS`, `SEMIDX_GIT_*`, `SEMIDX_COOKIE_SECURE`).
+> `EMBED_PRIVACY`, `SEMIDX_SECRET_SCAN` and `SEMIDX_SECRET_BLOCK_EMBEDDING`
+> are honoured only when set to `true`. Ignored keys are reported once on
+> stderr. Set those values in the real environment (e.g. the compose
+> `environment:` block) or with `semidx config set` (user config file).
+
 ### Database
 
 | Variable | Default | Purpose |
@@ -100,6 +115,7 @@ directory is also honored; real environment variables win over it).
 | `SEMIDX_JWT_SECRET` | *(unset)* | HS256 signing key for JWT control tokens. When empty, control tokens are disabled and the UI hides the feature. |
 | `SEMIDX_CSRF_KEY` | *(auto)* | HMAC key for web-admin CSRF tokens. When empty, a random key is generated on each restart. Set it to a persistent value so tokens survive server restarts. |
 | `SEMIDX_SECRET_KEY` | *(unset)* | Master key for the AES-256-GCM vault that encrypts stored git credentials (see below). Exactly 32 bytes, hex or base64. When empty, the credential vault is disabled. Generate with `openssl rand -hex 32`. |
+| `SEMIDX_TRUSTED_PROXIES` | *(unset)* | Comma-separated IPs/CIDRs of reverse proxies in front of semidx. Only when the direct peer is in this list is `X-Forwarded-For` used to find the client IP for the API rate limit and the admin login limiter. See [Reverse proxy and TLS](#reverse-proxy-and-tls). |
 
 ### Server-side git sync (`repo add` / reindex)
 
@@ -108,6 +124,7 @@ directory is also honored; real environment variables win over it).
 | `SEMIDX_GIT_SSL_NO_VERIFY` | `false` | When `true`, disables TLS verification for server-side `git clone`/`pull` (self-signed CA on a private Gitea/GitLab/etc.). Prefer installing a real CA when possible. |
 | `SEMIDX_GIT_TOKEN` | *(unset)* | PAT for private HTTPS clones; injected as an Authorization header (not stored in the repo URL). Falls back to `SEMIDX_GITHUB_TOKEN`. |
 | `SEMIDX_GIT_USER` | `x-access-token` | Basic-auth username paired with `SEMIDX_GIT_TOKEN` (Gitea/GitHub default). |
+| `SEMIDX_GIT_TOKEN_HOSTS` | *(unset)* | Comma-separated hostnames (e.g. `github.com,gitea.lan`) allowed to receive `SEMIDX_GIT_TOKEN`. **Unset = the token is sent to no host.** Project git URLs are tenant-controlled, so an unscoped token would leak to any host a project points at. |
 | `SEMIDX_GIT_ALLOW_FILE` | `false` | When `true`, permits `file://` git URLs for server-side sync. |
 
 #### Stored git credentials (vault + SSH tooling)
@@ -207,6 +224,32 @@ address (for example the LAN address a reverse proxy or other machines use;
 publish the Postgres port in production — the compose file intentionally does
 not. The server is capped at 4 GiB / 3 CPUs and the database at 2 GiB / 2 CPUs;
 adjust the `deploy.resources` limits for larger indexes.
+
+### Client IP behind a proxy (`SEMIDX_TRUSTED_PROXIES`)
+
+The API rate limit (200 req/s) and the admin login limiter (5 failures per
+IP + username, 20 per IP, per 15 min) are keyed by client IP. By default
+that is the TCP peer (`RemoteAddr`) and `X-Forwarded-For` is ignored, because
+any client can send it. Behind a reverse proxy, every client then shares the
+proxy's address: one client's failed logins can lock everyone out.
+
+Set `SEMIDX_TRUSTED_PROXIES` to the proxy addresses (comma-separated IPs or
+CIDRs). When the peer is trusted, semidx reads `X-Forwarded-For` from right to
+left and uses the first valid address that is **not** trusted. It never trusts
+the leftmost entry blindly, skips malformed entries, and falls back to the
+peer address. Every proxy in the chain must be listed, or the innermost
+untrusted proxy becomes "the client". Keep the list tight: a trusted range
+that clients can reach directly lets them spoof their IP.
+
+The staging kit (`deploy/staging`) pins Caddy to `172.31.250.10` on the
+internal network (`STAGING_GATEWAY_IP`, subnet `STAGING_INTERNAL_SUBNET`) and
+sets `SEMIDX_TRUSTED_PROXIES` from `STAGING_TRUSTED_PROXIES` (default
+`172.31.250.10`). If a TLS-terminating edge proxy sits in front of Caddy, set
+both:
+
+- `STAGING_EDGE_PROXY_CIDRS`: the edge proxy addresses, **space-separated**.
+  Caddy's `trusted_proxies` uses them to keep the edge's `X-Forwarded-For`.
+- `STAGING_TRUSTED_PROXIES`: `172.31.250.10,<edge CIDRs>`, comma-separated.
 
 ## Backups
 

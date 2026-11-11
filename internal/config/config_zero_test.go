@@ -32,18 +32,18 @@ func TestZeroConfigRecommended(t *testing.T) {
 }
 
 func TestZeroConfigRecommendedExplicitDSN(t *testing.T) {
-	t.Setenv("SEMIDX_DB_DSN", "postgres://custom/db")
-	t.Setenv("SEMIDX_LOCAL_INDEX", "")
-	cfg := &config.Config{}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+	cfg := config.LoadWithLookup(envOnly(map[string]string{"SEMIDX_DB_DSN": "postgres://custom/db"}))
 	if config.ZeroConfigRecommended(cfg, false) {
 		t.Fatal("explicit SEMIDX_DB_DSN should disable zero-config")
 	}
 }
 
 func TestZeroConfigRecommendedExplicitLocalIndex(t *testing.T) {
-	t.Setenv("SEMIDX_DB_DSN", "")
-	t.Setenv("SEMIDX_LOCAL_INDEX", "1")
-	cfg := &config.Config{}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+	cfg := config.LoadWithLookup(envOnly(map[string]string{"SEMIDX_LOCAL_INDEX": "1"}))
 	if config.ZeroConfigRecommended(cfg, false) {
 		t.Fatal("explicit SEMIDX_LOCAL_INDEX should disable zero-config")
 	}
@@ -65,4 +65,50 @@ func TestZeroConfigRecommendedKeywordOnly(t *testing.T) {
 	if config.ZeroConfigRecommended(cfg, false) {
 		t.Fatal("already keyword-only should not re-trigger zero-config")
 	}
+}
+
+// TestZeroConfigRecommendedHonoursUserConfig: a value persisted with
+// `semidx config set` (user config file, not the process env) must stop the
+// zero-config SQLite keyword-only fallback, just as `config list` reports
+// that backend as active.
+func TestZeroConfigRecommendedHonoursUserConfig(t *testing.T) {
+	cases := []struct {
+		name  string
+		key   string
+		value string
+		msg   string
+	}{
+		{
+			name:  "DSN",
+			key:   "SEMIDX_DB_DSN",
+			value: "postgres://saved/db",
+			msg:   "DSN from the user config file should disable zero-config",
+		},
+		{
+			name:  "LocalIndex",
+			key:   "SEMIDX_LOCAL_INDEX",
+			value: "1",
+			msg:   "SEMIDX_LOCAL_INDEX from the user config file should disable zero-config",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			t.Chdir(t.TempDir())
+			t.Setenv("SEMIDX_DB_DSN", "")
+			t.Setenv("SEMIDX_LOCAL_INDEX", "")
+			if err := config.SetUserEnv(tc.key, tc.value); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.LoadWithLookup(envOnly(map[string]string{}))
+			if config.ZeroConfigRecommended(cfg, false) {
+				t.Fatal(tc.msg)
+			}
+		})
+	}
+}
+
+// envOnly is a lookup over a fixed map, isolating tests from the real env.
+func envOnly(m map[string]string) func(string) (string, bool) {
+	return func(k string) (string, bool) { v, ok := m[k]; return v, ok }
 }
