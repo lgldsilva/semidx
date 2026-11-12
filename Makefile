@@ -1,4 +1,4 @@
-GOTOOLCHAIN := go1.27.3
+GOTOOLCHAIN := go1.27.4
 export GOTOOLCHAIN
 
 .PHONY: all build web-build test bench lint fmt gosec vulncheck docker-build clean help
