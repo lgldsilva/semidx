@@ -10,6 +10,7 @@ from the release checksums.txt; the package managers re-verify at install.
 """
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
@@ -18,6 +19,20 @@ SHA256 = re.compile(r"^[a-f0-9]{64}$")
 def fail(message: str) -> None:
     print(f"error: {message}", file=sys.stderr)
     sys.exit(1)
+
+
+def resolve_root(raw: str) -> Path:
+    """Resolve the rendered-dir argument inside a bounded root.
+
+    SonarCloud S7250 (agentic path injection): the script reads whatever the
+    CLI argument names, so constrain it to the working directory or the system
+    temporary directory. Anything else is refused instead of read.
+    """
+    root = Path(raw).resolve()
+    for base in (Path.cwd().resolve(), Path(tempfile.gettempdir()).resolve()):
+        if root.is_relative_to(base):
+            return root
+    fail(f"{raw}: must live under the working directory or the system temp dir")
 
 
 def load(path: Path):
@@ -100,7 +115,7 @@ def main() -> None:
     if len(sys.argv) != 2:
         print(f"usage: {sys.argv[0]} <rendered-dir>", file=sys.stderr)
         sys.exit(64)
-    root = Path(sys.argv[1])
+    root = resolve_root(sys.argv[1])
     if not root.is_dir():
         fail(f"{root}: not a directory")
     validate_aur(root)

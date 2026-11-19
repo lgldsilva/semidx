@@ -194,7 +194,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          curl --fail --location --retry 3 --silent --show-error \
+          curl --fail --location --proto "=https" --retry 3 --silent --show-error \
             --output checksums.txt \
             "https://github.com/${{ github.repository }}/releases/download/${TAG}/checksums.txt"
       - name: Render AUR, Snap and winget manifests
@@ -235,7 +235,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          curl --fail --location --retry 3 --silent --show-error \
+          curl --fail --location --proto "=https" --retry 3 --silent --show-error \
             --output checksums.txt \
             "https://github.com/${{ github.repository }}/releases/download/${TAG}/checksums.txt"
       - name: Render manifests
