@@ -29,7 +29,9 @@ fi
 
 version="${tag#v}"
 
-for template in packaging/aur/PKGBUILD.in packaging/snap/snapcraft.yaml.in; do
+for template in packaging/aur/PKGBUILD.in packaging/snap/snapcraft.yaml.in \
+  packaging/winget/version.yaml.in packaging/winget/default.yaml.in \
+  packaging/winget/installer.yaml.in; do
   if [ ! -r "$template" ]; then
     echo "package template is not readable: $template" >&2
     exit 66
@@ -49,6 +51,8 @@ checksum_for() {
 
 linux_amd64="$(checksum_for "semidx_${version}_linux_amd64.tar.gz")"
 linux_arm64="$(checksum_for "semidx_${version}_linux_arm64.tar.gz")"
+windows_amd64="$(checksum_for "semidx_${version}_windows_amd64.zip")"
+windows_arm64="$(checksum_for "semidx_${version}_windows_arm64.zip")"
 
 mkdir -p "$output_dir/aur"
 
@@ -71,6 +75,21 @@ for snap_arch in amd64 arm64; do
     packaging/snap/snapcraft.yaml.in >"$output_dir/snap/$snap_arch/snapcraft.yaml"
 done
 
-echo "Rendered AUR and Snap manifests for $tag in $output_dir."
+mkdir -p "$output_dir/winget"
+
+# Render the three winget manifest files with both Windows checksums in one pass.
+render_winget() {
+  sed \
+    -e "s|@VERSION@|$version|g" \
+    -e "s|@WIN_AMD64_SHA256@|$windows_amd64|g" \
+    -e "s|@WIN_ARM64_SHA256@|$windows_arm64|g" \
+    "packaging/winget/$1" >"$output_dir/winget/$2"
+}
+render_winget "version.yaml.in" "Semidx.semidx.version.yaml"
+render_winget "default.yaml.in" "Semidx.semidx.yaml"
+render_winget "installer.yaml.in" "Semidx.semidx.installer.yaml"
+
+echo "Rendered AUR, Snap and winget manifests for $tag in $output_dir."
 echo "AUR: review, generate .SRCINFO with makepkg --printsrcinfo, then push to aur.archlinux.org."
 echo "Snap: build each architecture from snap/{amd64,arm64} with the publisher account."
+echo "winget: submit the winget/ manifests to microsoft/winget-pkgs under manifests/s/Semidx/semidx/<version>/."
