@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Structural validation for rendered package manifests (AUR, Snap, winget).
+
+Used by the release workflow's validate-package-manifests job and locally:
+  python3 scripts/validate-package-manifests.py <rendered-dir>
+
+Checks structure only (parseability, required keys, checksum formats). It does
+not verify the SHA-256 values themselves — the renderer guarantees they came
+from the release checksums.txt; the package managers re-verify at install.
+"""
+import re
+import sys
+from pathlib import Path
+
+SHA256 = re.compile(r"^[a-f0-9]{64}$")
+
+
+def fail(message: str) -> None:
+    print(f"error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def load(path: Path):
+    import yaml
+
+    try:
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - report any parse failure as a gate
+        fail(f"{path}: invalid YAML: {exc}")
+
+
+def validate_aur(root: Path) -> None:
+    pkgbuild = root / "aur" / "PKGBUILD"
+    if not pkgbuild.is_file():
+        fail(f"{pkgbuild}: missing")
+    print(f"ok: {pkgbuild} exists (namcap/makepkg run in the release workflow)")
+
+
+def validate_snap(root: Path) -> None:
+    for arch in ("amd64", "arm64"):
+        manifest = root / "snap" / arch / "snapcraft.yaml"
+        if not manifest.is_file():
+            fail(f"{manifest}: missing")
+        doc = load(manifest)
+        for key in ("name", "version", "summary", "confinement", "parts"):
+            if key not in doc:
+                fail(f"{manifest}: missing key {key}")
+        if doc["name"] != "semidx":
+            fail(f"{manifest}: unexpected snap name {doc['name']}")
+        if not SHA256.fullmatch(str(doc["parts"]["semidx"]["source-checksum"]).split("/", 1)[-1]):
+            fail(f"{manifest}: malformed source-checksum")
+        print(f"ok: {manifest}")
+
+
+def validate_winget(root: Path) -> None:
+    version = root / "winget" / "Semidx.semidx.version.yaml"
+    default_locale = root / "winget" / "Semidx.semidx.yaml"
+    installer = root / "winget" / "Semidx.semidx.installer.yaml"
+    for path in (version, default_locale, installer):
+        if not path.is_file():
+            fail(f"{path}: missing")
+
+    doc = load(version)
+    if doc.get("ManifestType") != "version" or doc.get("ManifestVersion") != "1.6.0":
+        fail(f"{version}: bad ManifestType/ManifestVersion")
+    if doc.get("PackageIdentifier") != "Semidx.semidx" or not doc.get("PackageVersion"):
+        fail(f"{version}: bad PackageIdentifier/PackageVersion")
+
+    doc = load(default_locale)
+    if doc.get("ManifestType") != "defaultLocale" or doc.get("ManifestVersion") != "1.6.0":
+        fail(f"{default_locale}: bad ManifestType/ManifestVersion")
+    for key in ("Publisher", "PackageName", "License", "ShortDescription"):
+        if not doc.get(key):
+            fail(f"{default_locale}: missing key {key}")
+
+    doc = load(installer)
+    if doc.get("ManifestType") != "installer" or doc.get("ManifestVersion") != "1.6.0":
+        fail(f"{installer}: bad ManifestType/ManifestVersion")
+    installers = doc.get("Installers") or []
+    archs = {i.get("Architecture") for i in installers}
+    if archs != {"x64", "arm64"}:
+        fail(f"{installer}: expected x64+arm64 installers, got {sorted(filter(None, archs))}")
+    for entry in installers:
+        label = entry.get("Architecture")
+        if not SHA256.fullmatch(str(entry.get("InstallerSha256", ""))):
+            fail(f"{installer}: malformed InstallerSha256 for {label}")
+        if entry.get("InstallerType") != "zip" or entry.get("NestedInstallerType") != "portable":
+            fail(f"{installer}: expected zip/portable installer for {label}")
+        files = entry.get("NestedInstallerFiles") or []
+        aliases = {f.get("PortableCommandAlias") for f in files}
+        if not {"semidx", "chatrag"} <= aliases:
+            fail(f"{installer}: missing portable command aliases for {label}")
+        for f in files:
+            if not f.get("RelativeFilePath"):
+                fail(f"{installer}: missing RelativeFilePath for {label}")
+        print(f"ok: {installer} ({label})")
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        print(f"usage: {sys.argv[0]} <rendered-dir>", file=sys.stderr)
+        sys.exit(64)
+    root = Path(sys.argv[1])
+    if not root.is_dir():
+        fail(f"{root}: not a directory")
+    validate_aur(root)
+    validate_snap(root)
+    validate_winget(root)
+    print("all package manifests valid")
+
+
+if __name__ == "__main__":
+    main()
