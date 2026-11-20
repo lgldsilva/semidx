@@ -245,11 +245,18 @@ jobs:
           scripts/render-package-manifests.sh "$TAG" checksums.txt package-manifests
       - name: Validate AUR PKGBUILD
         working-directory: package-manifests/aur
+        env:
+          # makepkg refuses to run as root (GitHub Actions containers default
+          # to root), so validation runs as a throwaway unprivileged user.
+          BUILDER_HOME: /tmp/pkgbuild-builder
         run: |
           set -euo pipefail
+          useradd --home-dir "$BUILDER_HOME" --create-home --shell /bin/bash builder
+          chown -R builder:builder .
           # .SRCINFO must generate cleanly (AUR rejects broken metadata).
-          makepkg --printsrcinfo >/dev/null
-          namcap PKGBUILD | tee namcap-report.txt
+          su builder -c "makepkg --printsrcinfo >/dev/null"
+          su builder -c "namcap PKGBUILD > namcap-report.txt"
+          cat namcap-report.txt
           if grep -qE ': E:' namcap-report.txt; then
             echo "namcap reported errors:" >&2
             cat namcap-report.txt >&2
