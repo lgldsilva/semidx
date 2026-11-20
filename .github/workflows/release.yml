@@ -257,7 +257,9 @@ jobs:
           su builder -c "makepkg --printsrcinfo >/dev/null"
           su builder -c "namcap PKGBUILD > namcap-report.txt"
           cat namcap-report.txt
-          if grep -qE ': E:' namcap-report.txt; then
+          # namcap emits "PKGBUILD (pkgname) E: msg" — match " E: " (a ": E:"
+          # never fires; proven with a real broken PKGBUILD in a container).
+          if grep -qE ' E: ' namcap-report.txt; then
             echo "namcap reported errors:" >&2
             cat namcap-report.txt >&2
             exit 1

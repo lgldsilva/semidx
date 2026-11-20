@@ -48,7 +48,31 @@ def validate_aur(root: Path) -> None:
     pkgbuild = root / "aur" / "PKGBUILD"
     if not pkgbuild.is_file():
         fail(f"{pkgbuild}: missing")
-    print(f"ok: {pkgbuild} exists (namcap/makepkg run in the release workflow)")
+    # Cross-check rendered sha256sums_* against checksums.txt: namcap and
+    # makepkg --printsrcinfo do not validate checksum format, so a broken
+    # render would otherwise ship in the release manifests untouched.
+    checksums = (root.parent / "checksums.txt") if (root.parent / "checksums.txt").is_file() else None
+    if checksums is None:
+        # The release workflow renders manifests beside checksums.txt; when
+        # run standalone (repo root), skip the cross-check gracefully.
+        print(f"ok: {pkgbuild} exists (namcap/makepkg run in the release workflow)")
+        return
+    body = pkgbuild.read_text(encoding="utf-8")
+    rendered = {}
+    for match in re.finditer(r"sha256sums(?:_\w+)?=\(([^)]*)\)", body, re.DOTALL):
+        for token in re.findall(r"['\"]?([0-9a-fA-F]{64})['\"]?", match.group(1)):
+            rendered[token.lower()] = True
+    if not rendered:
+        fail(f"{pkgbuild}: no sha256sums entries found")
+    known = {}
+    for line in checksums.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            known[parts[0].lower()] = parts[-1]
+    for digest in rendered:
+        if digest not in known:
+            fail(f"{pkgbuild}: sha256 {digest} not present in {checksums.name}")
+    print(f"ok: {pkgbuild} exists, {len(rendered)} sha256sum(s) cross-checked against {checksums.name}")
 
 
 def validate_snap(root: Path) -> None:
